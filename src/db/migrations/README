@@ -1,0 +1,11 @@
+Yoink Core - Alembic migrations
+
+Single migration chain for core tables + all active plugin tables.
+Plugin models are discovered via YOINK_PLUGINS env var at migration time.
+
+Commands (run via justfile):
+  just migrate up      - apply pending migrations
+  just migrate down    - rollback one step
+  just migrate current - show current revision
+  just migrate history - show migration history
+  just migrate create "message" - generate new migration

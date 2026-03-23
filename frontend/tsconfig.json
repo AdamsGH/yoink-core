@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*":          ["./src/*"],
+      "@core/*":      ["./src/*"],
+      "@dl/*":        ["../plugins/yoink-dl/frontend/src/*"],
+      "@dl-root/*":   ["../plugins/yoink-dl/frontend/*"],
+      "@stats/*":     ["../plugins/yoink-stats/frontend/src/*"],
+      "@stats-root/*": ["../plugins/yoink-stats/frontend/*"]
+    }
+  },
+  "include": [
+    "src",
+    "vite.config.ts",
+    "../plugins/yoink-dl/frontend/**/*.ts",
+    "../plugins/yoink-dl/frontend/**/*.tsx"
+  ],
+  "compileOnSave": false
+}

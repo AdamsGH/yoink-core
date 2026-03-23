@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Yoink Cookie Sync",
+  "version": "1.0.0",
+  "description": "Send your browser cookies to Yoink bot for downloading authenticated content.",
+  "permissions": [
+    "cookies",
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

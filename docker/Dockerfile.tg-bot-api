@@ -1,0 +1,50 @@
+FROM alpine:3.21 AS build
+
+RUN apk add --no-cache \
+    alpine-sdk linux-headers git \
+    zlib-dev openssl-dev gperf cmake
+
+WORKDIR /src
+
+# Clone and init submodule in one layer (cache-friendly: rarely changes)
+RUN git clone --depth=1 https://github.com/tdlight-team/tdlight-telegram-bot-api.git . \
+ && git submodule update --init --recursive --depth=1
+
+# Patch in a separate layer so source clone is cached
+COPY docker/patches/tdlight-forum-extras.patch /tmp/
+COPY docker/patches/tdlight-proxy-before-auth.patch /tmp/
+RUN patch -p1 < /tmp/tdlight-forum-extras.patch \
+ && patch -p1 < /tmp/tdlight-proxy-before-auth.patch
+
+# Configure + build + strip in one layer to avoid intermediate bloat
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+ && cmake --build build --target install -j "$(nproc)" \
+ && strip /usr/local/bin/telegram-bot-api
+
+FROM alpine:3.21
+
+ENV TELEGRAM_WORK_DIR="/var/lib/telegram-bot-api" \
+    TELEGRAM_TEMP_DIR="/tmp/telegram-bot-api"
+
+RUN apk add --no-cache libstdc++ \
+ && addgroup -g 101 -S tba \
+ && adduser -S -D -H -u 101 \
+        -h "${TELEGRAM_WORK_DIR}" \
+        -s /sbin/nologin \
+        -G tba -g tba tba \
+ && mkdir -p "${TELEGRAM_WORK_DIR}" "${TELEGRAM_TEMP_DIR}" \
+ && chown tba:tba "${TELEGRAM_WORK_DIR}" "${TELEGRAM_TEMP_DIR}" \
+ && chmod 700 "${TELEGRAM_TEMP_DIR}"
+
+COPY --from=build /usr/local/bin/telegram-bot-api /usr/local/bin/
+COPY docker/tg-bot-api-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER tba:tba
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=12 --start-period=30s \
+    CMD nc -z 127.0.0.1 "${TELEGRAM_HTTP_PORT:-8081}"
+
+EXPOSE 8081/tcp 8082/tcp
+
+ENTRYPOINT ["/entrypoint.sh"]

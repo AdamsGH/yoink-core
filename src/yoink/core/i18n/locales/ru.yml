@@ -1,0 +1,66 @@
+common:
+  error_unknown: "Что-то пошло не так. Попробуйте ещё раз."
+  access_denied: "Доступ запрещён."
+  toggle_on: "ВКЛ"
+  toggle_off: "ВЫКЛ"
+  cancel: "Отмена"
+  back: "Назад"
+  confirmed: "Да"
+  declined: "Нет"
+  close: "Закрыть"
+  enabled: "Включено"
+  disabled: "Выключено"
+  credits: "Credits"
+  flood_wait: "Слишком много запросов. Подождите {seconds}с."
+
+start:
+  welcome: |
+    <b>Добро пожаловать!</b>
+
+    Используйте /help для просмотра доступных команд.
+  pending: "<b>Добро пожаловать!</b>\n\nВаш аккаунт ожидает подтверждения. Администратор предоставит вам доступ."
+  banned: "Вы заблокированы в этом боте."
+
+help:
+  title: "<b>Справка</b>"
+
+lang:
+  choose: "Выберите язык:"
+  set: "Язык изменён на <b>{lang}</b> ✅"
+  buttons:
+    en: "🇬🇧 English"
+    ru: "🇷🇺 Русский"
+    ar: "🇸🇦 العربية"
+    hi: "🇮🇳 हिन्दी"
+    zh: "🇨🇳 中文"
+    ja: "🇯🇵 日本語"
+
+group:
+  only_groups: "Эта команда работает только в группах."
+  not_available: "Поддержка групп недоступна."
+  info: "<b>Группа:</b> {title}\n<b>Статус:</b> {status}\n<b>Авторолль:</b> <code>{role}</code>\n<b>Разрешить ЛС:</b> {allow_pm}\n<b>NSFW контент:</b> {nsfw_status}"
+  enabled: "✅ Бот включён в этой группе."
+  disabled: "⏸ Бот выключен в этой группе."
+  allow_pm_changed: "Доступ ЛС: {state}."
+  nsfw_on: "✅ NSFW контент разрешён."
+  nsfw_off: "🚫 NSFW контент заблокирован."
+  role_set: "Авторолль установлен: <code>{role}</code>."
+  usage: "Использование:\n/group info\n/group enable|disable\n/group allow_pm <on|off>\n/group nsfw <on|off>\n/group role <role>"
+  usage_allow_pm: "Использование: /group allow_pm <on|off>"
+  usage_nsfw: "Использование: /group nsfw <on|off>"
+  usage_role: "Использование: /group role <role>\nДоступные: {roles}"
+  thread_no_policies: "Политики тредов не настроены. Все треды разрешены по умолчанию."
+  thread_state: "Тред <code>{tid}</code> теперь <b>{state}</b>."
+  thread_policy_removed: "Политика для треда <code>{tid}</code> удалена."
+  thread_policy_not_found: "Политика для треда <code>{tid}</code> не найдена."
+  thread_invalid_id: "Неверный thread_id."
+  thread_usage: "Использование:\n/thread list\n/thread allow [thread_id]\n/thread deny [thread_id]\n/thread reset [thread_id]"
+
+admin:
+  user_blocked: "✅ Пользователь {user_id} заблокирован."
+  user_unblocked: "✅ Пользователь {user_id} разблокирован."
+  ban_set: "✅ Пользователь {user_id} забанен на {duration}."
+  broadcast_started: "📢 Рассылка {count} пользователям..."
+  broadcast_done: "✅ Рассылка завершена: отправлено {sent}, ошибок {failed}."
+  runtime: "⏱ Аптайм бота: <b>{uptime}</b>"
+  invalid_duration: "❌ Неверный формат длительности."

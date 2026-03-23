@@ -1,0 +1,230 @@
+name: yoink
+
+services:
+  yoink-postgres:
+    image: postgres:16-alpine
+    container_name: yoink-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yoink
+      POSTGRES_USER: yoink
+      POSTGRES_PASSWORD: yoink
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - yoink
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yoink -d yoink"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  yoink-proxy-init:
+    image: busybox:latest
+    container_name: yoink-proxy-init
+    restart: "no"
+    env_file: .env
+    environment:
+      BOT_API_URL: "http://yoink-tg-bot-api:8082"
+      socks5_host: "host.docker.internal"
+      socks5_port: "1080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    entrypoint: ["sh", "/init-proxy.sh"]
+    volumes:
+      - ./docker/init-proxy.sh:/init-proxy.sh:ro
+      - ./data/tg-bot-api:/data/tg-bot-api:ro
+    networks:
+      - yoink
+    depends_on:
+      yoink-tg-bot-api:
+        condition: service_healthy
+
+  yoink:
+    image: yoink/yoink:latest
+    container_name: yoink
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      yoink-postgres:
+        condition: service_healthy
+      yoink-tg-bot-api:
+        condition: service_healthy
+        restart: true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/cookies:/app/data/cookies
+      - ./data/kasm/profile/chromium:/app/data/browser-profile:ro
+      - ./data/tg-bot-api:/app/data/tg-bot-api:ro
+    networks:
+      - yoink
+    ports:
+      - "8003:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: local
+      options:
+        max-size: "500M"
+        max-file: "3"
+
+  yoink-frontend:
+    image: yoink/frontend:latest
+    container_name: yoink-frontend
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    restart: unless-stopped
+    networks:
+      - yoink
+    ports:
+      - "3010:80"
+    depends_on:
+      yoink:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: "50M"
+        max-file: "3"
+
+  yoink-tg-bot-api:
+    image: yoink/tg-bot-api:latest
+    container_name: yoink-tg-bot-api
+    restart: unless-stopped
+    entrypoint: ["/entrypoint.sh"]
+    environment:
+      TELEGRAM_API_ID: "${api_id}"
+      TELEGRAM_API_HASH: "${api_hash}"
+      TELEGRAM_LOCAL: "true"
+      TELEGRAM_HTTP_PORT: "8082"
+      TELEGRAM_ALLOW_USERS: "true"
+      TELEGRAM_ALLOW_USERS_REGISTRATION: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./data/tg-bot-api:/var/lib/telegram-bot-api
+      - ./docker/tg-bot-api-entrypoint.sh:/entrypoint.sh:ro
+    networks:
+      - yoink
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -Y off http://127.0.0.1:8082/ 2>&1 | grep -q 'HTTP/'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: "50M"
+        max-file: "3"
+
+  yoink-bgutil:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: yoink-bgutil
+    restart: unless-stopped
+    environment:
+      PROXY: "${bgutil_proxy:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - yoink
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:4416/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - infra
+    logging:
+      driver: local
+      options:
+        max-size: "50M"
+        max-file: "3"
+
+  yoink-backup:
+    image: yoink/backup:latest
+    container_name: yoink-backup
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backup
+    entrypoint: ["/cron-entry.sh"]
+    restart: unless-stopped
+    profiles:
+      - backup
+    environment:
+      TZ: "Europe/Moscow"
+      PGHOST: yoink-postgres
+      PGUSER: yoink
+      PGPASSWORD: yoink
+      PGDATABASE: yoink
+      BACKUP_S3_ENDPOINT: "${backup_s3_endpoint:-}"
+      BACKUP_S3_BUCKET: "${backup_s3_bucket:-yoink-backups}"
+      BACKUP_S3_ACCESS_KEY: "${backup_s3_access_key:-}"
+      BACKUP_S3_SECRET_KEY: "${backup_s3_secret_key:-}"
+      BACKUP_S3_REGION: "${backup_s3_region:-garage}"
+      BACKUP_RETAIN_DAILY: "${backup_retain_daily:-7}"
+      BACKUP_RETAIN_WEEKLY: "${backup_retain_weekly:-4}"
+      BACKUP_CRON_SCHEDULE: "${backup_cron_schedule:-0 3 * * *}"
+    depends_on:
+      yoink-postgres:
+        condition: service_healthy
+    networks:
+      - yoink
+    logging:
+      driver: local
+      options:
+        max-size: "10M"
+        max-file: "3"
+
+  yoink-browser:
+    image: kasmweb/chromium:1.18.0-rolling-daily
+    container_name: yoink-browser
+    profiles:
+      - cookies
+    restart: "no"
+    environment:
+      VNC_PW: "${kasm_vnc_pw}"
+      LAUNCH_URL: "${kasm_launch_url:-https://www.youtube.com}"
+      KASM_RESTRICTED_FILE_CHOOSER: "0"
+      VNCOPTIONS: "-disableBasicAuth -PreferBandwidth -DynamicQualityMin=4 -DynamicQualityMax=7 -DLP_ClipDelay=0"
+    ports:
+      - "6902:6901"
+    shm_size: 1gb
+    volumes:
+      - ./data/cookies:/home/kasm-user/cookies
+      - ./data/kasm/profile:/home/kasm-user/.config
+    networks:
+      - yoink
+    logging:
+      driver: local
+      options:
+        max-size: "50M"
+        max-file: "3"
+
+networks:
+  yoink:
+    name: yoink
+    driver: bridge
+    # ipam:
+    #   config:
+    #     - subnet: 10.10.0.0/24
+
+volumes:
+  postgres-data:

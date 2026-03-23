@@ -1,0 +1,55 @@
+diff --git a/telegram-bot-api/Client.h b/telegram-bot-api/Client.h
+index c4ed405..a540911 100644
+--- a/telegram-bot-api/Client.h
++++ b/telegram-bot-api/Client.h
+@@ -200,6 +200,13 @@ class Client final : public WebhookActor::Callback {
+   class JsonForumTopicCreated;
+   class JsonForumTopicEdited;
+   class JsonForumTopicInfo;
++  class JsonForumTopic;
++  class JsonForumTopics;
++  class JsonMessageViewers;
++  class JsonMessageLink;
++  class JsonMessageReadDate;
++  class JsonFoundChatMessages;
++  class JsonMessageThreadInfo;
+   class JsonGameHighScore;
+   class JsonGift;
+   class JsonGiftBackground;
+@@ -297,6 +304,14 @@ class Client final : public WebhookActor::Callback {
+   class TdOnGetCallbackQueryMessageCallback;
+   class TdOnGetStickerSetCallback;
+   class TdOnGetForumTopicInfoCallback;
++  class TdOnGetForumTopicsCallback;
++  class TdOnGetForumTopicCallback;
++  class TdOnGetMessageViewersCallback;
++  class TdOnGetMessageLinkCallback;
++  class TdOnGetMessageThreadInfoCallback;
++  class TdOnGetMessageReadDateCallback;
++  class TdOnGetFoundChatMessagesCallback;
++  class TdOnGetChatMessageByDateCallback;
+   class TdOnGetMenuButtonCallback;
+   class TdOnGetMyCommandsCallback;
+   class TdOnGetMyDefaultAdministratorRightsCallback;
+@@ -930,6 +945,21 @@ class Client final : public WebhookActor::Callback {
+   td::Status process_reopen_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_delete_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_unpin_all_forum_topic_messages_query(PromisedQueryPtr &query);
++  td::Status process_get_forum_topic_query(PromisedQueryPtr &query);
++  td::Status process_get_forum_topics_query(PromisedQueryPtr &query);
++  td::Status process_get_forum_topic_link_query(PromisedQueryPtr &query);
++  td::Status process_toggle_forum_topic_is_pinned_query(PromisedQueryPtr &query);
++  td::Status process_set_pinned_forum_topics_query(PromisedQueryPtr &query);
++  td::Status process_read_all_forum_topic_mentions_query(PromisedQueryPtr &query);
++  td::Status process_toggle_chat_view_as_topics_query(PromisedQueryPtr &query);
++  td::Status process_get_message_thread_query(PromisedQueryPtr &query);
++  td::Status process_get_message_viewers_query(PromisedQueryPtr &query);
++  td::Status process_get_message_link_query(PromisedQueryPtr &query);
++  td::Status process_get_message_read_date_query(PromisedQueryPtr &query);
++  td::Status process_delete_chat_messages_by_date_query(PromisedQueryPtr &query);
++  td::Status process_delete_chat_messages_by_sender_query(PromisedQueryPtr &query);
++  td::Status process_get_chat_message_by_date_query(PromisedQueryPtr &query);
++  td::Status process_get_chat_history_query(PromisedQueryPtr &query);
+   td::Status process_edit_general_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_close_general_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_reopen_general_forum_topic_query(PromisedQueryPtr &query);

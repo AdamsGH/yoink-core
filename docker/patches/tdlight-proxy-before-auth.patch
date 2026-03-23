@@ -1,0 +1,17 @@
+--- a/telegram-bot-api/Client.cpp	2026-03-20 06:05:46.955596796 +0300
++++ b/telegram-bot-api/Client.cpp	2026-03-20 06:05:46.945691404 +0300
+@@ -13420,6 +13420,14 @@
+     } else if (query->method() == "registeruser" && parameters_->allow_users_registration_) {
+       return process_register_user_query(query);
+     } else {
++      auto m = query->method().str();
++      if (m == "addproxy" || m == "getproxies" || m == "enableproxy" || m == "disableproxy" || m == "deleteproxy") {
++        auto method_it = methods_.find(m);
++        if (method_it != methods_.end()) {
++          (this->*(method_it->second))(query);
++          return;
++        }
++      }
+       return fail_query(404, "Not Found: method not found or login not yet completed", std::move(query));
+     }
+   }

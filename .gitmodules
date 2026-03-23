@@ -1,0 +1,9 @@
+[submodule "plugins/yoink-dl"]
+	path = plugins/yoink-dl
+	url = git@github.com:AdamsGH/yoink-dl.git
+[submodule "plugins/yoink-stats"]
+	path = plugins/yoink-stats
+	url = git@github.com:AdamsGH/yoink-stats.git
+[submodule "plugins/yoink-music"]
+	path = plugins/yoink-music
+	url = git@github.com:AdamsGH/yoink-music.git

@@ -1,0 +1,13 @@
+FROM alpine:3.21
+
+RUN apk add --no-cache \
+    postgresql16-client \
+    gzip \
+    curl \
+    tzdata \
+ && curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc \
+ && chmod +x /usr/local/bin/mc
+
+COPY docker/backup.sh /backup.sh
+COPY docker/restore.sh /restore.sh
+COPY docker/backup-cron-entry.sh /cron-entry.sh

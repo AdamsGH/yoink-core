@@ -1,0 +1,630 @@
+diff --git a/telegram-bot-api/Client.cpp b/telegram-bot-api/Client.cpp
+index 52916b9..9c5bbee 100644
+--- a/telegram-bot-api/Client.cpp
++++ b/telegram-bot-api/Client.cpp
+@@ -347,6 +347,21 @@ bool Client::init_methods() {
+   methods_.emplace("reopenforumtopic", &Client::process_reopen_forum_topic_query);
+   methods_.emplace("deleteforumtopic", &Client::process_delete_forum_topic_query);
+   methods_.emplace("unpinallforumtopicmessages", &Client::process_unpin_all_forum_topic_messages_query);
++  methods_.emplace("getforumtopic", &Client::process_get_forum_topic_query);
++  methods_.emplace("getforumtopics", &Client::process_get_forum_topics_query);
++  methods_.emplace("getforumtopiclink", &Client::process_get_forum_topic_link_query);
++  methods_.emplace("toggleforumtopicispinned", &Client::process_toggle_forum_topic_is_pinned_query);
++  methods_.emplace("setpinnedforumtopics", &Client::process_set_pinned_forum_topics_query);
++  methods_.emplace("readallforumtopicmentions", &Client::process_read_all_forum_topic_mentions_query);
++  methods_.emplace("togglechatviewastopics", &Client::process_toggle_chat_view_as_topics_query);
++  methods_.emplace("getmessagethread", &Client::process_get_message_thread_query);
++  methods_.emplace("getmessageviewers", &Client::process_get_message_viewers_query);
++  methods_.emplace("getmessagelink", &Client::process_get_message_link_query);
++  methods_.emplace("getmessagereaddate", &Client::process_get_message_read_date_query);
++  methods_.emplace("deletechatmessagesbydate", &Client::process_delete_chat_messages_by_date_query);
++  methods_.emplace("deletechatmessagesbysender", &Client::process_delete_chat_messages_by_sender_query);
++  methods_.emplace("getchatmessagebydate", &Client::process_get_chat_message_by_date_query);
++  methods_.emplace("getchathistory", &Client::process_get_chat_history_query);
+   methods_.emplace("editgeneralforumtopic", &Client::process_edit_general_forum_topic_query);
+   methods_.emplace("closegeneralforumtopic", &Client::process_close_general_forum_topic_query);
+   methods_.emplace("reopengeneralforumtopic", &Client::process_reopen_general_forum_topic_query);
+@@ -2913,6 +2928,121 @@ class Client::JsonForumTopicInfo final : public td::Jsonable {
+   const td_api::forumTopicInfo *forum_topic_info_;
+ };
+ 
++class Client::JsonForumTopic final : public td::Jsonable {
++ public:
++  JsonForumTopic(const td_api::forumTopic *topic, const Client *client)
++      : topic_(topic), client_(client) {
++  }
++  void store(td::JsonValueScope *scope) const {
++    auto object = scope->enter_object();
++    CHECK(topic_->info_ != nullptr);
++    object("message_thread_id", topic_->info_->forum_topic_id_);
++    object("name", topic_->info_->name_);
++    object("icon_color", topic_->info_->icon_->color_);
++    if (topic_->info_->icon_->custom_emoji_id_ != 0) {
++      object("icon_custom_emoji_id", td::to_string(topic_->info_->icon_->custom_emoji_id_));
++    }
++    object("is_closed", td::JsonBool(topic_->info_->is_closed_));
++    object("is_hidden", td::JsonBool(topic_->info_->is_hidden_));
++    object("is_general", td::JsonBool(topic_->info_->is_general_));
++    object("is_pinned", td::JsonBool(topic_->is_pinned_));
++    object("unread_count", topic_->unread_count_);
++    object("creation_date", topic_->info_->creation_date_);
++  }
++
++ private:
++  const td_api::forumTopic *topic_;
++  const Client *client_;
++};
++
++class Client::JsonForumTopics final : public td::Jsonable {
++ public:
++  JsonForumTopics(const td_api::forumTopics *topics, const Client *client)
++      : topics_(topics), client_(client) {
++  }
++  void store(td::JsonValueScope *scope) const {
++    auto object = scope->enter_object();
++    object("total_count", topics_->total_count_);
++    object("topics", td::json_array(topics_->topics_, [this](const auto &topic) {
++      return JsonForumTopic(topic.get(), client_);
++    }));
++    if (topics_->next_offset_date_ != 0) {
++      object("next_offset_date", topics_->next_offset_date_);
++      object("next_offset_message_id", topics_->next_offset_message_id_);
++      object("next_offset_forum_topic_id", topics_->next_offset_forum_topic_id_);
++    }
++  }
++
++ private:
++  const td_api::forumTopics *topics_;
++  const Client *client_;
++};
++
++class Client::JsonMessageViewers final : public td::Jsonable {
++ public:
++  explicit JsonMessageViewers(const td_api::messageViewers *viewers) : viewers_(viewers) {
++  }
++  void store(td::JsonValueScope *scope) const {
++    auto array = scope->enter_array();
++    for (const auto &viewer : viewers_->viewers_) {
++      auto object = array.enter_value().enter_object();
++      object("user_id", viewer->user_id_);
++      object("view_date", viewer->view_date_);
++    }
++  }
++
++ private:
++  const td_api::messageViewers *viewers_;
++};
++
++class Client::JsonMessageLink final : public td::Jsonable {
++ public:
++  explicit JsonMessageLink(const td_api::messageLink *link) : link_(link) {
++  }
++  void store(td::JsonValueScope *scope) const {
++    auto object = scope->enter_object();
++    object("link", link_->link_);
++    object("is_public", td::JsonBool(link_->is_public_));
++  }
++
++ private:
++  const td_api::messageLink *link_;
++};
++
++class Client::JsonMessageReadDate final : public td::Jsonable {
++ public:
++  explicit JsonMessageReadDate(const td_api::MessageReadDate *read_date) : read_date_(read_date) {
++  }
++  void store(td::JsonValueScope *scope) const {
++    auto object = scope->enter_object();
++    switch (read_date_->get_id()) {
++      case td_api::messageReadDateRead::ID: {
++        const auto *d = static_cast<const td_api::messageReadDateRead *>(read_date_);
++        object("status", "read");
++        object("read_date", d->read_date_);
++        break;
++      }
++      case td_api::messageReadDateUnread::ID:
++        object("status", "unread");
++        break;
++      case td_api::messageReadDateTooOld::ID:
++        object("status", "too_old");
++        break;
++      case td_api::messageReadDateUserPrivacyRestricted::ID:
++        object("status", "user_privacy_restricted");
++        break;
++      case td_api::messageReadDateMyPrivacyRestricted::ID:
++        object("status", "my_privacy_restricted");
++        break;
++      default:
++        object("status", "unknown");
++    }
++  }
++
++ private:
++  const td_api::MessageReadDate *read_date_;
++};
++
+ class Client::JsonAddress final : public td::Jsonable {
+  public:
+   explicit JsonAddress(const td_api::address *address) : address_(address) {
+@@ -7514,6 +7644,185 @@ class Client::TdOnGetForumTopicInfoCallback final : public TdQueryCallback {
+   PromisedQueryPtr query_;
+ };
+ 
++
++class Client::JsonFoundChatMessages final : public td::Jsonable {
++ public:
++  JsonFoundChatMessages(td_api::foundChatMessages *found, Client *client)
++      : found_(found), client_(client) {}
++  void store(td::JsonValueScope *scope) const {
++    auto object = scope->enter_object();
++    object("total_count", found_->total_count_);
++    object("next_from_message_id", found_->next_from_message_id_);
++    object("messages", JsonMessagesArray(found_->messages_, client_));
++  }
++ private:
++  td_api::foundChatMessages *found_;
++  Client *client_;
++};
++
++class Client::JsonMessageThreadInfo final : public td::Jsonable {
++ public:
++  JsonMessageThreadInfo(td_api::messageThreadInfo *info, Client *client)
++      : info_(info), client_(client) {
++  }
++  void store(td::JsonValueScope *scope) const {
++    auto object = scope->enter_object();
++    object("chat_id", info_->chat_id_);
++    object("message_thread_id", info_->message_thread_id_);
++    object("unread_message_count", info_->unread_message_count_);
++    object("messages", JsonMessagesArray(info_->messages_, client_));
++  }
++
++ private:
++  td_api::messageThreadInfo *info_;
++  Client *client_;
++};
++
++class Client::TdOnGetFoundChatMessagesCallback final : public TdQueryCallback {
++ public:
++  TdOnGetFoundChatMessagesCallback(Client *client, PromisedQueryPtr query)
++      : client_(client), query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    CHECK(result->get_id() == td_api::foundChatMessages::ID);
++    auto found = move_object_as<td_api::foundChatMessages>(result);
++    answer_query(JsonFoundChatMessages(found.get(), client_), std::move(query_));
++  }
++
++ private:
++  Client *client_;
++  PromisedQueryPtr query_;
++};
++
++class Client::TdOnGetForumTopicsCallback final : public TdQueryCallback {
++ public:
++  TdOnGetForumTopicsCallback(const Client *client, PromisedQueryPtr query)
++      : client_(client), query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    CHECK(result->get_id() == td_api::forumTopics::ID);
++    auto topics = move_object_as<td_api::forumTopics>(result);
++    answer_query(JsonForumTopics(topics.get(), client_), std::move(query_));
++  }
++
++ private:
++  const Client *client_;
++  PromisedQueryPtr query_;
++};
++
++class Client::TdOnGetForumTopicCallback final : public TdQueryCallback {
++ public:
++  TdOnGetForumTopicCallback(const Client *client, PromisedQueryPtr query)
++      : client_(client), query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    CHECK(result->get_id() == td_api::forumTopic::ID);
++    auto topic = move_object_as<td_api::forumTopic>(result);
++    answer_query(JsonForumTopic(topic.get(), client_), std::move(query_));
++  }
++
++ private:
++  const Client *client_;
++  PromisedQueryPtr query_;
++};
++
++class Client::TdOnGetMessageViewersCallback final : public TdQueryCallback {
++ public:
++  explicit TdOnGetMessageViewersCallback(PromisedQueryPtr query) : query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    CHECK(result->get_id() == td_api::messageViewers::ID);
++    auto viewers = move_object_as<td_api::messageViewers>(result);
++    answer_query(JsonMessageViewers(viewers.get()), std::move(query_));
++  }
++
++ private:
++  PromisedQueryPtr query_;
++};
++
++class Client::TdOnGetMessageLinkCallback final : public TdQueryCallback {
++ public:
++  explicit TdOnGetMessageLinkCallback(PromisedQueryPtr query) : query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    CHECK(result->get_id() == td_api::messageLink::ID);
++    auto link = move_object_as<td_api::messageLink>(result);
++    answer_query(JsonMessageLink(link.get()), std::move(query_));
++  }
++
++ private:
++  PromisedQueryPtr query_;
++};
++
++class Client::TdOnGetMessageThreadInfoCallback final : public TdQueryCallback {
++ public:
++  TdOnGetMessageThreadInfoCallback(Client *client, PromisedQueryPtr query)
++      : client_(client), query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    CHECK(result->get_id() == td_api::messageThreadInfo::ID);
++    auto info = move_object_as<td_api::messageThreadInfo>(result);
++    answer_query(JsonMessageThreadInfo(info.get(), client_), std::move(query_));
++  }
++
++ private:
++  Client *client_;
++  PromisedQueryPtr query_;
++};
++
++class Client::TdOnGetMessageReadDateCallback final : public TdQueryCallback {
++ public:
++  explicit TdOnGetMessageReadDateCallback(PromisedQueryPtr query) : query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    answer_query(JsonMessageReadDate(static_cast<const td_api::MessageReadDate *>(result.get())), std::move(query_));
++  }
++
++ private:
++  PromisedQueryPtr query_;
++};
++
++class Client::TdOnGetChatMessageByDateCallback final : public TdQueryCallback {
++ public:
++  TdOnGetChatMessageByDateCallback(Client *client, PromisedQueryPtr query)
++      : client_(client), query_(std::move(query)) {
++  }
++  void on_result(object_ptr<td_api::Object> result) final {
++    if (result->get_id() == td_api::error::ID) {
++      return fail_query_with_error(std::move(query_), move_object_as<td_api::error>(result));
++    }
++    CHECK(result->get_id() == td_api::message::ID);
++    auto full_message_id = client_->add_message(move_object_as<td_api::message>(result));
++    const auto *message_info = client_->get_message(full_message_id.chat_id, full_message_id.message_id, true);
++    answer_query(JsonMessage(message_info, false, "found message", client_), std::move(query_));
++  }
++
++ private:
++  Client *client_;
++  PromisedQueryPtr query_;
++};
++
+ class Client::TdOnGetMenuButtonCallback final : public TdQueryCallback {
+  public:
+   explicit TdOnGetMenuButtonCallback(PromisedQueryPtr query) : query_(std::move(query)) {
+@@ -15373,6 +15682,194 @@ td::Status Client::process_unpin_all_general_forum_topic_messages_query(Promised
+   return td::Status::OK();
+ }
+ 
++td::Status Client::process_get_forum_topic_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto forum_topic_id = get_forum_topic_id(query.get(), "message_thread_id");
++  check_chat(chat_id, AccessRights::Read, std::move(query), [this, forum_topic_id](int64 chat_id, PromisedQueryPtr query) {
++    send_request(make_object<td_api::getForumTopic>(chat_id, forum_topic_id),
++                 td::make_unique<TdOnGetForumTopicCallback>(this, std::move(query)));
++  });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_forum_topics_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto query_str = query->arg("query");
++  td::int32 offset_date = get_integer_arg(query.get(), "offset_date", 0);
++  td::int64 offset_message_id = get_int64_arg(query.get(), "offset_message_id", 0);
++  td::int32 offset_forum_topic_id = get_integer_arg(query.get(), "offset_forum_topic_id", 0);
++  td::int32 limit = get_integer_arg(query.get(), "limit", 100, 1, 100);
++  check_chat(chat_id, AccessRights::Read, std::move(query),
++             [this, query_str = query_str.str(), offset_date, offset_message_id, offset_forum_topic_id, limit](
++                 int64 chat_id, PromisedQueryPtr query) {
++               send_request(
++                   make_object<td_api::getForumTopics>(
++                       chat_id, query_str, offset_date, offset_message_id, offset_forum_topic_id, limit),
++                   td::make_unique<TdOnGetForumTopicsCallback>(this, std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_forum_topic_link_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto forum_topic_id = get_forum_topic_id(query.get(), "message_thread_id");
++  check_chat(chat_id, AccessRights::Read, std::move(query), [this, forum_topic_id](int64 chat_id, PromisedQueryPtr query) {
++    send_request(make_object<td_api::getForumTopicLink>(chat_id, forum_topic_id),
++                 td::make_unique<TdOnGetMessageLinkCallback>(std::move(query)));
++  });
++  return td::Status::OK();
++}
++
++td::Status Client::process_toggle_forum_topic_is_pinned_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto forum_topic_id = get_forum_topic_id(query.get(), "message_thread_id");
++  bool is_pinned = to_bool(query->arg("is_pinned"));
++  check_chat(chat_id, AccessRights::Write, std::move(query),
++             [this, forum_topic_id, is_pinned](int64 chat_id, PromisedQueryPtr query) {
++               send_request(make_object<td_api::toggleForumTopicIsPinned>(chat_id, forum_topic_id, is_pinned),
++                            td::make_unique<TdOnOkQueryCallback>(std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++td::Status Client::process_set_pinned_forum_topics_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto ids_str = query->arg("forum_topic_ids");
++  td::vector<td::int32> topic_ids;
++  for (auto id_str : td::full_split(ids_str, ',')) {
++    topic_ids.push_back(td::to_integer<td::int32>(td::trim(id_str)));
++  }
++  check_chat(chat_id, AccessRights::Write, std::move(query),
++             [this, topic_ids = std::move(topic_ids)](int64 chat_id, PromisedQueryPtr query) mutable {
++               send_request(make_object<td_api::setPinnedForumTopics>(chat_id, std::move(topic_ids)),
++                            td::make_unique<TdOnOkQueryCallback>(std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++td::Status Client::process_read_all_forum_topic_mentions_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto forum_topic_id = get_forum_topic_id(query.get(), "message_thread_id");
++  check_chat(chat_id, AccessRights::Read, std::move(query), [this, forum_topic_id](int64 chat_id, PromisedQueryPtr query) {
++    send_request(make_object<td_api::readAllForumTopicMentions>(chat_id, forum_topic_id),
++                 td::make_unique<TdOnOkQueryCallback>(std::move(query)));
++  });
++  return td::Status::OK();
++}
++
++td::Status Client::process_toggle_chat_view_as_topics_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  bool view_as_topics = to_bool(query->arg("view_as_topics"));
++  check_chat(chat_id, AccessRights::Read, std::move(query),
++             [this, view_as_topics](int64 chat_id, PromisedQueryPtr query) {
++               send_request(make_object<td_api::toggleChatViewAsTopics>(chat_id, view_as_topics),
++                            td::make_unique<TdOnOkQueryCallback>(std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_message_thread_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto message_id = get_message_id(query.get(), "message_id");
++  check_message(chat_id, message_id, false, AccessRights::Read, "message", std::move(query),
++                [this](int64 chat_id, int64 message_id, PromisedQueryPtr query) {
++                  send_request(make_object<td_api::getMessageThread>(chat_id, message_id),
++                               td::make_unique<TdOnGetMessageThreadInfoCallback>(this, std::move(query)));
++                });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_message_viewers_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto message_id = get_message_id(query.get(), "message_id");
++  check_message(chat_id, message_id, false, AccessRights::Read, "message", std::move(query),
++                [this](int64 chat_id, int64 message_id, PromisedQueryPtr query) {
++                  send_request(make_object<td_api::getMessageViewers>(chat_id, message_id),
++                               td::make_unique<TdOnGetMessageViewersCallback>(std::move(query)));
++                });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_message_link_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto message_id = get_message_id(query.get(), "message_id");
++  td::int32 media_timestamp = get_integer_arg(query.get(), "media_timestamp", 0);
++  bool for_album = to_bool(query->arg("for_album"));
++  bool in_message_thread = to_bool(query->arg("in_message_thread"));
++  check_message(chat_id, message_id, false, AccessRights::Read, "message", std::move(query),
++                [this, media_timestamp, for_album, in_message_thread](
++                    int64 chat_id, int64 message_id, PromisedQueryPtr query) {
++                  send_request(
++                      make_object<td_api::getMessageLink>(
++                          chat_id, message_id, media_timestamp, for_album, in_message_thread),
++                      td::make_unique<TdOnGetMessageLinkCallback>(std::move(query)));
++                });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_message_read_date_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  auto message_id = get_message_id(query.get(), "message_id");
++  check_message(chat_id, message_id, false, AccessRights::Read, "message", std::move(query),
++                [this](int64 chat_id, int64 message_id, PromisedQueryPtr query) {
++                  send_request(make_object<td_api::getMessageReadDate>(chat_id, message_id),
++                               td::make_unique<TdOnGetMessageReadDateCallback>(std::move(query)));
++                });
++  return td::Status::OK();
++}
++
++td::Status Client::process_delete_chat_messages_by_date_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  td::int32 min_date = get_integer_arg(query.get(), "min_date", 0);
++  td::int32 max_date = get_integer_arg(query.get(), "max_date", 0);
++  bool revoke = to_bool(query->arg("revoke"));
++  check_chat(chat_id, AccessRights::Write, std::move(query),
++             [this, min_date, max_date, revoke](int64 chat_id, PromisedQueryPtr query) {
++               send_request(make_object<td_api::deleteChatMessagesByDate>(chat_id, min_date, max_date, revoke),
++                            td::make_unique<TdOnOkQueryCallback>(std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++td::Status Client::process_delete_chat_messages_by_sender_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  TRY_RESULT(user_id, get_user_id(query.get()));
++  check_chat(chat_id, AccessRights::Write, std::move(query),
++             [this, user_id](int64 chat_id, PromisedQueryPtr query) {
++               send_request(
++                   make_object<td_api::deleteChatMessagesBySender>(
++                       chat_id, make_object<td_api::messageSenderUser>(user_id)),
++                   td::make_unique<TdOnOkQueryCallback>(std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_chat_message_by_date_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  td::int32 date = get_integer_arg(query.get(), "date", 0);
++  check_chat(chat_id, AccessRights::Read, std::move(query),
++             [this, date](int64 chat_id, PromisedQueryPtr query) {
++               send_request(make_object<td_api::getChatMessageByDate>(chat_id, date),
++                            td::make_unique<TdOnGetChatMessageByDateCallback>(this, std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++td::Status Client::process_get_chat_history_query(PromisedQueryPtr &query) {
++  auto chat_id = query->arg("chat_id");
++  td::int64 from_message_id = get_message_id(query.get(), "from_message_id");
++  td::int32 offset = get_integer_arg(query.get(), "offset", 0);
++  td::int32 limit = get_integer_arg(query.get(), "limit", 50, 1, 100);
++  bool only_local = to_bool(query->arg("only_local"));
++  check_chat(chat_id, AccessRights::Read, std::move(query),
++             [this, from_message_id, offset, limit, only_local](int64 chat_id, PromisedQueryPtr query) {
++               send_request(make_object<td_api::getChatHistory>(chat_id, from_message_id, offset, limit, only_local),
++                            td::make_unique<TdOnReturnMessagesCallback>(this, std::move(query)));
++             });
++  return td::Status::OK();
++}
++
++
+ td::Status Client::process_get_chat_member_query(PromisedQueryPtr &query) {
+   auto chat_id = query->arg("chat_id");
+   TRY_RESULT(user_id, get_user_id(query.get()));
+@@ -16441,23 +16938,35 @@ td::Status Client::process_search_messages_query(PromisedQueryPtr &query) {
+ }
+ 
+ td::Status Client::process_search_chat_messages_query(PromisedQueryPtr &query) {
+-  CHECK_IS_USER();
+   auto chat_id = query->arg("chat_id");
+-  auto query_ = query->arg("query");
++  auto query_str = query->arg("query");
++  td::int32 forum_topic_id_raw = get_integer_arg(query.get(), "message_thread_id", 0);
++  td::int64 from_message_id = get_message_id(query.get(), "from_message_id");
++  td::int32 offset = get_integer_arg(query.get(), "offset", 0);
++  td::int32 limit = get_integer_arg(query.get(), "limit", 50, 1, 100);
++
++  object_ptr<td_api::MessageTopic> topic;
++  if (forum_topic_id_raw != 0) {
++    topic = make_object<td_api::messageTopicForum>(forum_topic_id_raw);
++  }
++
+   auto sender_user_id = get_integer_arg(query.get(), "sender_user_id", 0);
+-  auto sender = make_object<td_api::messageSenderUser>(sender_user_id);
+-  if (sender_user_id == 0) {
+-    sender = nullptr;
++  object_ptr<td_api::MessageSender> sender;
++  if (sender_user_id != 0) {
++    sender = make_object<td_api::messageSenderUser>(sender_user_id);
+   }
+-  auto from_message_id = get_int64_arg(query.get(), "from_message_id", 0);
++
+   TRY_RESULT(filter, get_search_messages_filter(query.get()));
+ 
+   check_chat(chat_id, AccessRights::Read, std::move(query),
+-             [this, query_, sender = std::move(sender), from_message_id, filter = std::move(filter)](
++             [this, query_str = query_str.str(), topic = std::move(topic), sender = std::move(sender),
++              from_message_id, offset, limit, filter = std::move(filter)](
+                  int64 chat_id, PromisedQueryPtr query) mutable {
+-               send_request(make_object<td_api::searchChatMessages>(chat_id, nullptr, query_.str(), std::move(sender),
+-                                                                    from_message_id, 0, 100, std::move(filter)),
+-                            td::make_unique<TdOnFoundMessagesCallback>(this, std::move(query)));
++               send_request(
++                   make_object<td_api::searchChatMessages>(
++                       chat_id, std::move(topic), query_str, std::move(sender),
++                       from_message_id, offset, limit, std::move(filter)),
++                   td::make_unique<TdOnGetFoundChatMessagesCallback>(this, std::move(query)));
+              });
+   return td::Status::OK();
+ }
+diff --git a/telegram-bot-api/Client.h b/telegram-bot-api/Client.h
+index c4ed405..a540911 100644
+--- a/telegram-bot-api/Client.h
++++ b/telegram-bot-api/Client.h
+@@ -200,6 +200,13 @@ class Client final : public WebhookActor::Callback {
+   class JsonForumTopicCreated;
+   class JsonForumTopicEdited;
+   class JsonForumTopicInfo;
++  class JsonForumTopic;
++  class JsonForumTopics;
++  class JsonMessageViewers;
++  class JsonMessageLink;
++  class JsonMessageReadDate;
++  class JsonFoundChatMessages;
++  class JsonMessageThreadInfo;
+   class JsonGameHighScore;
+   class JsonGift;
+   class JsonGiftBackground;
+@@ -297,6 +304,14 @@ class Client final : public WebhookActor::Callback {
+   class TdOnGetCallbackQueryMessageCallback;
+   class TdOnGetStickerSetCallback;
+   class TdOnGetForumTopicInfoCallback;
++  class TdOnGetForumTopicsCallback;
++  class TdOnGetForumTopicCallback;
++  class TdOnGetMessageViewersCallback;
++  class TdOnGetMessageLinkCallback;
++  class TdOnGetMessageThreadInfoCallback;
++  class TdOnGetMessageReadDateCallback;
++  class TdOnGetFoundChatMessagesCallback;
++  class TdOnGetChatMessageByDateCallback;
+   class TdOnGetMenuButtonCallback;
+   class TdOnGetMyCommandsCallback;
+   class TdOnGetMyDefaultAdministratorRightsCallback;
+@@ -930,6 +945,21 @@ class Client final : public WebhookActor::Callback {
+   td::Status process_reopen_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_delete_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_unpin_all_forum_topic_messages_query(PromisedQueryPtr &query);
++  td::Status process_get_forum_topic_query(PromisedQueryPtr &query);
++  td::Status process_get_forum_topics_query(PromisedQueryPtr &query);
++  td::Status process_get_forum_topic_link_query(PromisedQueryPtr &query);
++  td::Status process_toggle_forum_topic_is_pinned_query(PromisedQueryPtr &query);
++  td::Status process_set_pinned_forum_topics_query(PromisedQueryPtr &query);
++  td::Status process_read_all_forum_topic_mentions_query(PromisedQueryPtr &query);
++  td::Status process_toggle_chat_view_as_topics_query(PromisedQueryPtr &query);
++  td::Status process_get_message_thread_query(PromisedQueryPtr &query);
++  td::Status process_get_message_viewers_query(PromisedQueryPtr &query);
++  td::Status process_get_message_link_query(PromisedQueryPtr &query);
++  td::Status process_get_message_read_date_query(PromisedQueryPtr &query);
++  td::Status process_delete_chat_messages_by_date_query(PromisedQueryPtr &query);
++  td::Status process_delete_chat_messages_by_sender_query(PromisedQueryPtr &query);
++  td::Status process_get_chat_message_by_date_query(PromisedQueryPtr &query);
++  td::Status process_get_chat_history_query(PromisedQueryPtr &query);
+   td::Status process_edit_general_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_close_general_forum_topic_query(PromisedQueryPtr &query);
+   td::Status process_reopen_general_forum_topic_query(PromisedQueryPtr &query);

@@ -1,0 +1,69 @@
+@import "tailwindcss";
+@import "./themes/catppuccin.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@source "../components/ui/calendar.tsx";
+@source "../../../plugins/yoink-dl/frontend/src/**/*.tsx";
+@source "../../../plugins/yoink-stats/frontend/src/**/*.tsx";
+
+/* Calendar cell size utilities — Tailwind v4 doesn't generate h/w-[--cell-size] automatically */
+.h-\[--cell-size\] { height: var(--cell-size); }
+.w-\[--cell-size\] { width: var(--cell-size); }
+.min-w-\[--cell-size\] { min-width: var(--cell-size); }
+.px-\[--cell-size\] { padding-left: var(--cell-size); padding-right: var(--cell-size); }
+.size-\[--cell-size\] { width: var(--cell-size); height: var(--cell-size); }
+
+@theme {
+  /* Fallback tokens — overridden by data-theme / .dark at runtime */
+  --color-background:         #24273a;
+  --color-foreground:         #cad3f5;
+  --color-card:               #1e2030;
+  --color-card-foreground:    #cad3f5;
+  --color-popover:            #1e2030;
+  --color-popover-foreground: #cad3f5;
+  --color-primary:            #c6a0f6;
+  --color-primary-foreground: #181926;
+  --color-secondary:          #363a4f;
+  --color-secondary-foreground: #cad3f5;
+  --color-muted:              #363a4f;
+  --color-muted-foreground:   #a5adcb;
+  --color-accent:             #494d64;
+  --color-accent-foreground:  #cad3f5;
+  --color-destructive:        #ed8796;
+  --color-destructive-foreground: #181926;
+  --color-border:             #494d64;
+  --color-input:              #363a4f;
+  --color-ring:               #c6a0f6;
+  --color-success:            #a6da95;
+  --color-warning:            #eed49f;
+  --radius: 0.5rem;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--color-border);
+  }
+  html {
+    /* Macchiato by default — overridable via data-theme */
+    background-color: #24273a;
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@theme inline {
+  --color-sidebar:                    var(--color-background);
+  --color-sidebar-foreground:         var(--color-foreground);
+  --color-sidebar-primary:            var(--color-primary);
+  --color-sidebar-primary-foreground: var(--color-primary-foreground);
+  --color-sidebar-accent:             var(--color-accent);
+  --color-sidebar-accent-foreground:  var(--color-accent-foreground);
+  --color-sidebar-border:             var(--color-border);
+  --color-sidebar-ring:               var(--color-ring);
+}

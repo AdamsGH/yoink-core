@@ -1,0 +1,66 @@
+common:
+  error_unknown: "Something went wrong. Please try again."
+  access_denied: "Access denied."
+  toggle_on: "ON"
+  toggle_off: "OFF"
+  cancel: "Cancel"
+  back: "Back"
+  confirmed: "Yes"
+  declined: "No"
+  close: "Close"
+  enabled: "Enabled"
+  disabled: "Disabled"
+  credits: "Credits"
+  flood_wait: "Too many requests. Please wait {seconds}s."
+
+start:
+  welcome: |
+    <b>Welcome!</b>
+
+    Use /help to see available commands.
+  pending: "<b>Welcome!</b>\n\nYour account is pending approval. An admin will grant you access shortly."
+  banned: "You are banned from using this bot."
+
+help:
+  title: "<b>Help</b>"
+
+lang:
+  choose: "Choose your language:"
+  set: "Language set to <b>{lang}</b> ✅"
+  buttons:
+    en: "🇬🇧 English"
+    ru: "🇷🇺 Russian"
+    ar: "🇸🇦 Arabic"
+    hi: "🇮🇳 Hindi"
+    zh: "🇨🇳 Chinese"
+    ja: "🇯🇵 Japanese"
+
+group:
+  only_groups: "This command only works in groups."
+  not_available: "Group support not available."
+  info: "<b>Group:</b> {title}\n<b>Status:</b> {status}\n<b>Auto role:</b> <code>{role}</code>\n<b>Allow PM:</b> {allow_pm}\n<b>NSFW content:</b> {nsfw_status}"
+  enabled: "✅ Bot enabled in this group."
+  disabled: "⏸ Bot disabled in this group."
+  allow_pm_changed: "PM access: {state}."
+  nsfw_on: "✅ NSFW content allowed."
+  nsfw_off: "🚫 NSFW content blocked."
+  role_set: "Auto role set to <code>{role}</code>."
+  usage: "Usage:\n/group info\n/group enable|disable\n/group allow_pm <on|off>\n/group nsfw <on|off>\n/group role <role>"
+  usage_allow_pm: "Usage: /group allow_pm <on|off>"
+  usage_nsfw: "Usage: /group nsfw <on|off>"
+  usage_role: "Usage: /group role <role>\nValid: {roles}"
+  thread_no_policies: "No thread policies set. All threads allowed by default."
+  thread_state: "Thread <code>{tid}</code> is now <b>{state}</b>."
+  thread_policy_removed: "Policy for thread <code>{tid}</code> removed."
+  thread_policy_not_found: "No policy found for thread <code>{tid}</code>."
+  thread_invalid_id: "Invalid thread_id."
+  thread_usage: "Usage:\n/thread list\n/thread allow [thread_id]\n/thread deny [thread_id]\n/thread reset [thread_id]"
+
+admin:
+  user_blocked: "✅ User {user_id} blocked."
+  user_unblocked: "✅ User {user_id} unblocked."
+  ban_set: "✅ User {user_id} banned for {duration}."
+  broadcast_started: "📢 Broadcasting to {count} users..."
+  broadcast_done: "✅ Broadcast complete: {sent} sent, {failed} failed."
+  runtime: "⏱ Bot uptime: <b>{uptime}</b>"
+  invalid_duration: "❌ Invalid duration format."
