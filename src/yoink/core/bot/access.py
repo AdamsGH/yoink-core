@@ -92,32 +92,11 @@ class PermissionChecker:
             user_id, username=username, first_name=first_name,
         )
 
-        if user.is_blocked:
-            return PermissionResult(
-                allowed=False,
-                deny_reason="blocked",
-                effective_role=user.role,
-            )
-
         is_group = chat is not None and chat.type in ("group", "supergroup")
         is_private = chat is not None and chat.type == "private"
 
-        # Scope check
-        if "all" not in policy.scopes:
-            if is_private and "private" not in policy.scopes:
-                return PermissionResult(
-                    allowed=False,
-                    deny_reason="scope_private_not_allowed",
-                    effective_role=user.role,
-                )
-            if is_group and "group" not in policy.scopes:
-                return PermissionResult(
-                    allowed=False,
-                    deny_reason="scope_group_not_allowed",
-                    effective_role=user.role,
-                )
-
-        # Resolve effective role: global role + optional UserGroupPolicy override
+        # Resolve effective role first: a group's auto_grant_role can lift a
+        # restricted user before any block/role check is applied.
         effective_role = user.role
         if is_group and chat is not None:
             group_repo = context.bot_data.get("group_repo")
@@ -132,6 +111,31 @@ class PermissionChecker:
                         user.role = effective_role
                     except Exception as exc:
                         logger.debug("Could not persist role grant: %s", exc)
+
+        # Banned users are always blocked regardless of group grants.
+        # Restricted users are NOT blocked here — they are handled by the role
+        # check below (role_gte will deny them unless a grant elevated them).
+        if user.is_blocked:
+            return PermissionResult(
+                allowed=False,
+                deny_reason="blocked",
+                effective_role=effective_role,
+            )
+
+        # Scope check
+        if "all" not in policy.scopes:
+            if is_private and "private" not in policy.scopes:
+                return PermissionResult(
+                    allowed=False,
+                    deny_reason="scope_private_not_allowed",
+                    effective_role=effective_role,
+                )
+            if is_group and "group" not in policy.scopes:
+                return PermissionResult(
+                    allowed=False,
+                    deny_reason="scope_group_not_allowed",
+                    effective_role=effective_role,
+                )
 
         if not role_gte(effective_role, policy.min_role):
             return PermissionResult(

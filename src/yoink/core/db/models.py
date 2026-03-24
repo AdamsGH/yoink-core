@@ -45,7 +45,7 @@ class User(Base):
     def is_blocked(self) -> bool:
         from datetime import timezone
         now = datetime.now(timezone.utc)
-        if self.role in (UserRole.banned, UserRole.restricted):
+        if self.role == UserRole.banned:
             return True
         if self.ban_until is not None:
             bu = self.ban_until
