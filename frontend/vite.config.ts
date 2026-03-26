@@ -17,10 +17,12 @@ export default defineConfig({
     alias: {
       '@':           resolve(__dirname, 'src'),
       '@core':       resolve(__dirname, 'src'),
-      '@dl':         resolve(__dirname, '../plugins/yoink-dl/frontend/src'),
-      '@dl-root':    resolve(__dirname, '../plugins/yoink-dl/frontend'),
-      '@stats':      resolve(__dirname, '../plugins/yoink-stats/frontend/src'),
-      '@stats-root': resolve(__dirname, '../plugins/yoink-stats/frontend'),
+      '@dl':           resolve(__dirname, '../plugins/yoink-dl/frontend/src'),
+      '@dl-root':      resolve(__dirname, '../plugins/yoink-dl/frontend'),
+      '@stats':        resolve(__dirname, '../plugins/yoink-stats/frontend/src'),
+      '@stats-root':   resolve(__dirname, '../plugins/yoink-stats/frontend'),
+      '@insight':      resolve(__dirname, '../plugins/yoink-insight/frontend/src'),
+      '@insight-root': resolve(__dirname, '../plugins/yoink-insight/frontend'),
     },
   },
 

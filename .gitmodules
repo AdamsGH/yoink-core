@@ -7,3 +7,6 @@
 [submodule "plugins/yoink-music"]
 	path = plugins/yoink-music
 	url = git@github.com:AdamsGH/yoink-music.git
+[submodule "plugins/yoink-insight"]
+	path = plugins/yoink-insight
+	url = git@github.com:AdamsGH/yoink-insight.git

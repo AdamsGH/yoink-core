@@ -7,12 +7,14 @@ RUN npm install
 
 WORKDIR /build
 
-COPY frontend/                    ./frontend/
-COPY plugins/yoink-dl/frontend/   ./plugins/yoink-dl/frontend/
-COPY plugins/yoink-stats/frontend/ ./plugins/yoink-stats/frontend/
+COPY frontend/                      ./frontend/
+COPY plugins/yoink-dl/frontend/     ./plugins/yoink-dl/frontend/
+COPY plugins/yoink-stats/frontend/  ./plugins/yoink-stats/frontend/
+COPY plugins/yoink-insight/frontend/ ./plugins/yoink-insight/frontend/
 
 RUN ln -s /build/frontend/node_modules /build/plugins/yoink-dl/frontend/node_modules \
  && ln -s /build/frontend/node_modules /build/plugins/yoink-stats/frontend/node_modules \
+ && ln -s /build/frontend/node_modules /build/plugins/yoink-insight/frontend/node_modules \
  && cd frontend && npx vite build
 
 FROM nginx:alpine AS runtime

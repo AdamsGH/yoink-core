@@ -24,10 +24,14 @@ COPY plugins/yoink-stats/src/ /app/plugins/yoink-stats/src/
 COPY plugins/yoink-music/pyproject.toml /app/plugins/yoink-music/
 COPY plugins/yoink-music/src/ /app/plugins/yoink-music/src/
 
+COPY plugins/yoink-insight/pyproject.toml /app/plugins/yoink-insight/
+COPY plugins/yoink-insight/src/ /app/plugins/yoink-insight/src/
+
 RUN uv pip install --system --no-cache \
     -e /app/plugins/yoink-dl \
     -e /app/plugins/yoink-stats \
-    -e /app/plugins/yoink-music
+    -e /app/plugins/yoink-music \
+    -e /app/plugins/yoink-insight
 
 FROM python:3.12-alpine
 
@@ -43,9 +47,12 @@ RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     libpq \
+    nodejs \
+    npm \
  && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
  && echo "${TZ}" > /etc/timezone \
- && apk del tzdata
+ && apk del tzdata \
+ && npm install -g @google/gemini-cli --no-fund --no-audit 2>&1 | tail -1
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY --from=builder-plugins /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
@@ -58,6 +65,7 @@ COPY src/ ./src/
 COPY plugins/yoink-dl/src/ /app/plugins/yoink-dl/src/
 COPY plugins/yoink-stats/src/ /app/plugins/yoink-stats/src/
 COPY plugins/yoink-music/src/ /app/plugins/yoink-music/src/
+COPY plugins/yoink-insight/src/ /app/plugins/yoink-insight/src/
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
