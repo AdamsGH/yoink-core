@@ -10,6 +10,8 @@ import type { UserStats } from '../../types/plugin'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
+import { useSidebar } from '../ui/sidebar'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 
 const ROLE_VARIANT: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
   owner:      'warning',
@@ -81,6 +83,9 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
       .catch(() => {})
   }, [open, statsEndpoint])
 
+  const { state } = useSidebar()
+  const collapsed = state === 'collapsed'
+
   const name = identity?.name ?? tgUser?.first_name ?? '...'
   const role = identity?.role ?? ''
   const photoUrl = tgUser?.photo_url
@@ -89,7 +94,18 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
     ? Object.entries(stats.by_category).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
     : []
 
-  const trigger = (
+  const avatarOnly = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full p-0">
+          <Avatar photoUrl={photoUrl} name={name} size={32} />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{name}</TooltipContent>
+    </Tooltip>
+  )
+
+  const fullTrigger = (
     <Button variant="ghost" className="w-full flex items-center gap-3 rounded-md px-3 py-2 text-left h-auto">
       <Avatar photoUrl={photoUrl} name={name} size={32} />
       <div className="min-w-0 flex-1">
@@ -101,10 +117,8 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
     </Button>
   )
 
-  return (
-    <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger asChild>{trigger}</SheetTrigger>
-      <SheetContent side="bottom" className="rounded-t-xl max-h-[80vh] overflow-y-auto pb-8">
+  const sheetContent = (
+    <SheetContent side="bottom" className="rounded-t-xl max-h-[80vh] overflow-y-auto pb-8">
         <SheetHeader className="mb-5">
           <div className="flex items-center gap-4">
             <Avatar photoUrl={photoUrl} name={name} size={56} />
@@ -178,6 +192,14 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
           )
         )}
       </SheetContent>
+  )
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
+        {collapsed ? avatarOnly : fullTrigger}
+      </SheetTrigger>
+      {sheetContent}
     </Sheet>
   )
 }

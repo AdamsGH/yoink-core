@@ -280,7 +280,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
             ))}
           </SidebarContent>
 
-          <SidebarFooter className="group-data-[collapsible=icon]:hidden">
+          <SidebarFooter className="group-data-[collapsible=icon]:items-center">
             <UserPanel statsEndpoint={userStatsEndpoint} />
           </SidebarFooter>
 
