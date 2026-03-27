@@ -16,7 +16,7 @@ from yoink.core.db.models import User, UserRole
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], responses={401: {"description": "Invalid or expired token"}})
 
 
 def _parse_tg_user(params: dict) -> tuple[int, str | None, str | None]:
@@ -41,7 +41,16 @@ def _parse_tg_user(params: dict) -> tuple[int, str | None, str | None]:
     )
 
 
-@router.post("/token", response_model=TokenResponse)
+@router.post(
+    "/token",
+    response_model=TokenResponse,
+    summary="Authenticate via Telegram WebApp",
+    description=(
+        "Verify Telegram WebApp `initData` HMAC signature and return a JWT.\n\n"
+        "New users are auto-created. The owner (configured `OWNER_ID`) always gets the `owner` role. "
+        "If `bot_access_mode=approved_only`, new users start as `restricted`."
+    ),
+)
 async def auth_token(
     body: TelegramInitDataRequest,
     request: Request,
@@ -93,7 +102,13 @@ async def auth_token(
     return TokenResponse(access_token=token, user_id=user.id, role=user.role.value)
 
 
-@router.post("/dev", response_model=TokenResponse)
+@router.post(
+    "/dev",
+    response_model=TokenResponse,
+    summary="Dev token (disabled in production)",
+    description="Generate a token for any `user_id` without Telegram verification. Only available when `DEV_AUTH_ENABLED=true`.",
+    include_in_schema=True,
+)
 async def auth_dev(
     request: Request,
     user_id: int = Query(...),

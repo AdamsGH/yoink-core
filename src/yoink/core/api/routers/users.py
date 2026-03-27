@@ -14,7 +14,7 @@ from yoink.core.api.schemas import UserResponse, UserUpdateRequest
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter(prefix="/users", tags=["users"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
 
 class UserStatsResponse(BaseModel):
@@ -55,7 +55,7 @@ def _categorize_domain(domain: str | None) -> str:
     return "other"
 
 
-@router.get("/me/stats", response_model=UserStatsResponse)
+@router.get("/me/stats", response_model=UserStatsResponse, summary="My download statistics")
 async def get_my_stats(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -113,7 +113,7 @@ async def get_my_stats(
     )
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=UserResponse, summary="Current user profile")
 async def get_me(current_user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse(
         id=current_user.id,
@@ -128,7 +128,7 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserResponse
     )
 
 
-@router.get("", response_model=dict)
+@router.get("", response_model=dict, summary="List all users (admin+)", description="Paginated user list with optional search by username and filter by role/status.")
 async def list_users(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -172,7 +172,7 @@ async def list_users(
     }
 
 
-@router.get("/{user_id}/stats", response_model=UserStatsResponse)
+@router.get("/{user_id}/stats", response_model=UserStatsResponse, summary="Download statistics for any user (admin+)")
 async def get_user_stats(
     user_id: int,
     session: AsyncSession = Depends(get_db),
@@ -234,7 +234,7 @@ async def get_user_stats(
     )
 
 
-@router.get("/{user_id}", response_model=UserResponse)
+@router.get("/{user_id}", response_model=UserResponse, summary="Get user by ID (admin+)")
 async def get_user(
     user_id: int,
     session: AsyncSession = Depends(get_db),
@@ -250,7 +250,7 @@ async def get_user(
     )
 
 
-@router.patch("/{user_id}", response_model=UserResponse)
+@router.patch("/{user_id}", response_model=UserResponse, summary="Update user role / language / ban (admin+)", description="Changing role triggers `refresh_member_commands` for all groups where the bot is present.")
 async def update_user(
     user_id: int,
     body: UserUpdateRequest,

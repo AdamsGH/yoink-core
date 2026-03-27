@@ -57,7 +57,7 @@ class UserGroupPolicyResponse(BaseModel):
     role_override: UserRole | None
     allow_pm_override: bool | None
 
-router = APIRouter(prefix="/groups", tags=["groups"])
+router = APIRouter(prefix="/groups", tags=["groups"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
 
 def _thread_policies(group: Group) -> list[ThreadPolicyInline]:
@@ -82,7 +82,7 @@ def _group_response(group: Group) -> GroupResponse:
     )
 
 
-@router.post("", response_model=GroupResponse, status_code=201)
+@router.post("", response_model=GroupResponse, status_code=201, summary="Register a group (admin+)")
 async def create_group(
     body: GroupCreateRequest,
     session: AsyncSession = Depends(get_db),
@@ -107,7 +107,7 @@ async def create_group(
     return _group_response(group)
 
 
-@router.get("", response_model=list[GroupResponse])
+@router.get("", response_model=list[GroupResponse], summary="List all registered groups (admin+)")
 async def list_groups(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
@@ -121,7 +121,7 @@ async def list_groups(
     return [_group_response(g) for g in result.scalars().all()]
 
 
-@router.get("/{group_id}", response_model=GroupResponse)
+@router.get("/{group_id}", response_model=GroupResponse, summary="Get group by ID (admin+)")
 async def get_group(
     group_id: int,
     session: AsyncSession = Depends(get_db),
@@ -138,7 +138,7 @@ async def get_group(
     return _group_response(group)
 
 
-@router.patch("/{group_id}", response_model=GroupResponse)
+@router.patch("/{group_id}", response_model=GroupResponse, summary="Update group settings (admin+)")
 async def update_group(
     group_id: int,
     body: GroupUpdateRequest,
@@ -158,7 +158,7 @@ async def update_group(
     return _group_response(group)
 
 
-@router.delete("/{group_id}", status_code=204)
+@router.delete("/{group_id}", status_code=204, summary="Remove group (admin+)")
 async def delete_group(
     group_id: int,
     session: AsyncSession = Depends(get_db),
@@ -173,7 +173,7 @@ async def delete_group(
 
 # Thread policies
 
-@router.get("/{group_id}/threads", response_model=list[ThreadPolicyResponse])
+@router.get("/{group_id}/threads", response_model=list[ThreadPolicyResponse], summary="List thread download policies for group (admin+)")
 async def list_thread_policies(
     group_id: int,
     session: AsyncSession = Depends(get_db),
@@ -189,7 +189,7 @@ async def list_thread_policies(
     ) for p in rows]
 
 
-@router.post("/{group_id}/threads", response_model=ThreadPolicyResponse, status_code=201)
+@router.post("/{group_id}/threads", response_model=ThreadPolicyResponse, status_code=201, summary="Create thread policy (admin+)")
 async def set_thread_policy(
     group_id: int,
     body: ThreadPolicyRequest,
@@ -221,7 +221,7 @@ async def set_thread_policy(
     )
 
 
-@router.delete("/{group_id}/threads/{thread_policy_id}", status_code=204)
+@router.delete("/{group_id}/threads/{thread_policy_id}", status_code=204, summary="Delete thread policy (admin+)")
 async def delete_thread_policy(
     group_id: int,
     thread_policy_id: int,
@@ -237,7 +237,7 @@ async def delete_thread_policy(
 
 # Per-user group overrides
 
-@router.get("/{group_id}/members", response_model=list[UserGroupPolicyResponse])
+@router.get("/{group_id}/members", response_model=list[UserGroupPolicyResponse], summary="List per-user group overrides (admin+)")
 async def list_member_overrides(
     group_id: int,
     session: AsyncSession = Depends(get_db),
@@ -254,7 +254,7 @@ async def list_member_overrides(
     ) for p in rows]
 
 
-@router.put("/{group_id}/members/{user_id}", response_model=UserGroupPolicyResponse)
+@router.put("/{group_id}/members/{user_id}", response_model=UserGroupPolicyResponse, summary="Set per-user group override (admin+)", description="Upsert a `UserGroupPolicy` record. `can_download=null` means inherit group default.")
 async def set_member_override(
     group_id: int,
     user_id: int,
@@ -288,7 +288,7 @@ async def set_member_override(
     )
 
 
-@router.delete("/{group_id}/members/{user_id}", status_code=204)
+@router.delete("/{group_id}/members/{user_id}", status_code=204, summary="Remove per-user group override (admin+)")
 async def remove_member_override(
     group_id: int,
     user_id: int,

@@ -22,7 +22,7 @@ class SettingsUpdateRequest(BaseModel):
     theme: str | None = None
 
 
-@router.get("", response_model=SettingsResponse)
+@router.get("", response_model=SettingsResponse, summary="Get my settings")
 async def get_settings(
     current_user: User = Depends(get_current_user),
 ) -> SettingsResponse:
@@ -33,7 +33,7 @@ async def get_settings(
     )
 
 
-@router.patch("", response_model=SettingsResponse)
+@router.patch("", response_model=SettingsResponse, summary="Update my settings", description="Update `language` (`en`/`ru`) and/or `theme` (`dark`/`light`/`system`).")
 async def update_settings(
     body: SettingsUpdateRequest,
     session: AsyncSession = Depends(get_db),

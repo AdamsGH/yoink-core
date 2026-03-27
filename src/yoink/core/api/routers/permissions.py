@@ -21,7 +21,7 @@ from yoink.core.api.exceptions import NotFoundError
 from yoink.core.db.models import User, UserPermission, UserRole
 from yoink.core.plugin import get_all_features
 
-router = APIRouter(tags=["permissions"])
+router = APIRouter(tags=["permissions"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
 
 class FeatureResponse(BaseModel):
@@ -64,7 +64,7 @@ class GrantRequest(BaseModel):
     expires_at: datetime | None = None
 
 
-@router.get("/features", response_model=list[FeatureResponse])
+@router.get("/features", response_model=list[FeatureResponse], summary="List all declared plugin features (admin+)")
 async def list_features(
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> list[FeatureResponse]:
@@ -128,7 +128,7 @@ async def _compute_feature_access(
     return rows
 
 
-@router.get("/feature-access/me", response_model=list[EffectiveFeatureAccess])
+@router.get("/feature-access/me", response_model=list[EffectiveFeatureAccess], summary="My effective feature access matrix")
 async def get_my_feature_access(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -137,7 +137,7 @@ async def get_my_feature_access(
     return await _compute_feature_access(session, current_user)
 
 
-@router.get("/users/{user_id}/feature-access", response_model=list[EffectiveFeatureAccess])
+@router.get("/users/{user_id}/feature-access", response_model=list[EffectiveFeatureAccess], summary="Effective feature access for any user (admin+)")
 async def get_user_feature_access(
     user_id: int,
     session: AsyncSession = Depends(get_db),
@@ -150,7 +150,7 @@ async def get_user_feature_access(
     return await _compute_feature_access(session, user)
 
 
-@router.get("/permissions/all", response_model=list[PermissionResponse])
+@router.get("/permissions/all", response_model=list[PermissionResponse], summary="All active grants across all users (admin+)")
 async def list_all_permissions(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
@@ -166,7 +166,7 @@ async def list_all_permissions(
     return [PermissionResponse.model_validate(r) for r in rows]
 
 
-@router.get("/users/{user_id}/permissions", response_model=list[PermissionResponse])
+@router.get("/users/{user_id}/permissions", response_model=list[PermissionResponse], summary="List grants for a user (admin+)")
 async def list_user_permissions(
     user_id: int,
     session: AsyncSession = Depends(get_db),
@@ -183,7 +183,7 @@ async def list_user_permissions(
     return [PermissionResponse.model_validate(r) for r in rows]
 
 
-@router.post("/users/{user_id}/permissions", response_model=PermissionResponse)
+@router.post("/users/{user_id}/permissions", response_model=PermissionResponse, summary="Grant a feature to a user (admin+)", description="Idempotent upsert. Triggers `refresh_user_commands` so bot command list updates immediately.")
 async def grant_permission(
     user_id: int,
     body: GrantRequest,
@@ -232,7 +232,7 @@ async def grant_permission(
     return PermissionResponse.model_validate(row)
 
 
-@router.delete("/users/{user_id}/permissions/{plugin}/{feature}", response_model=dict)
+@router.delete("/users/{user_id}/permissions/{plugin}/{feature}", response_model=dict, summary="Revoke a feature from a user (admin+)", description="Tag-sourced grants can only be revoked by the owner.")
 async def revoke_permission(
     user_id: int,
     plugin: str,

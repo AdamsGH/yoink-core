@@ -28,7 +28,7 @@ class TagMapEntry(BaseModel):
     features: list[str]
 
 
-@router.get("")
+@router.get("", summary="Get all bot settings (admin+)")
 async def get_bot_settings(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
@@ -41,7 +41,7 @@ async def get_bot_settings(
     return result
 
 
-@router.patch("")
+@router.patch("", summary="Update bot settings (admin+)", description="Partial update of key-value bot settings. Available keys: `bot_access_mode` (`open`/`approved_only`), `welcome_message`, etc.")
 async def update_bot_settings(
     body: BotSettingsUpdateRequest,
     session: AsyncSession = Depends(get_db),
@@ -58,7 +58,7 @@ async def update_bot_settings(
     return {"ok": True}
 
 
-@router.get("/tag-map", response_model=list[TagMapEntry])
+@router.get("/tag-map", response_model=list[TagMapEntry], summary="Get tag-to-feature mapping (admin+)", description="Returns the current mapping of Telegram member tags to feature grants.")
 async def get_tag_map(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
@@ -77,7 +77,7 @@ async def get_tag_map(
     return [TagMapEntry(tag=tag, features=feats) for tag, feats in sorted(data.items())]
 
 
-@router.put("/tag-map", response_model=list[TagMapEntry])
+@router.put("/tag-map", response_model=list[TagMapEntry], summary="Replace tag-to-feature mapping (admin+)", description="Full replacement. Each entry maps a Telegram member tag label to a list of `plugin:feature` strings.")
 async def set_tag_map(
     entries: list[TagMapEntry],
     session: AsyncSession = Depends(get_db),
@@ -96,7 +96,7 @@ async def set_tag_map(
     return [TagMapEntry(tag=tag, features=feats) for tag, feats in sorted(mapping.items())]
 
 
-@router.get("/available-features", response_model=list[dict])
+@router.get("/available-features", response_model=list[dict], summary="List features available for tag mapping (admin+)")
 async def get_available_features(
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> list[dict]:

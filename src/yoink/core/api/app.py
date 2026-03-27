@@ -52,9 +52,70 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
     app = FastAPI(
         title="Yoink API",
         version="1.0.0",
+        description=(
+            "REST API for the Yoink Telegram bot.\n\n"
+            "**Authentication:** all endpoints (except `/health` and `/api/v1/auth/token`) "
+            "require a Bearer JWT obtained from `POST /api/v1/auth/token` using Telegram WebApp `initData`.\n\n"
+            "**Roles:** `owner > admin > moderator > user > restricted > banned`. "
+            "Each endpoint documents the minimum role required."
+        ),
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,
+        openapi_tags=[
+            {
+                "name": "auth",
+                "description": "Obtain JWT tokens. Use `POST /token` with Telegram WebApp `initData`.",
+            },
+            {
+                "name": "users",
+                "description": "User profiles, roles, and personal statistics.",
+            },
+            {
+                "name": "groups",
+                "description": "Telegram group (chat) management: settings, thread policies, member overrides.",
+            },
+            {
+                "name": "permissions",
+                "description": "Feature-level RBAC: grant or revoke plugin features per user.",
+            },
+            {
+                "name": "settings",
+                "description": "Personal user settings: language, theme.",
+            },
+            {
+                "name": "bot-settings",
+                "description": "Global bot configuration: access mode, tag map, feature flags.",
+            },
+            {
+                "name": "api-keys",
+                "description": "Programmatic API keys for non-Telegram clients.",
+            },
+            {
+                "name": "forum",
+                "description": "Forum topic proxy via user-mode Telegram session (owner only).",
+            },
+            {
+                "name": "threads",
+                "description": "Thread (forum topic) download policies per group.",
+            },
+            {
+                "name": "messages",
+                "description": "Message-level proxy via user-mode Telegram session (owner only).",
+            },
+            {
+                "name": "downloader",
+                "description": "Download history, cookies, NSFW filter, and downloader settings.",
+            },
+            {
+                "name": "insight",
+                "description": "AI-powered video summary access control and per-user settings.",
+            },
+            {
+                "name": "stats",
+                "description": "Chat analytics: activity, top users, word frequency, member events, import.",
+            },
+        ],
     )
 
     from yoink.core.metrics import metrics

@@ -49,14 +49,14 @@ class ApiKeyScopesResponse(BaseModel):
     scopes: list[str]
 
 
-@router.get("/scopes", response_model=ApiKeyScopesResponse)
+@router.get("/scopes", response_model=ApiKeyScopesResponse, summary="List available API key scopes (admin+)")
 async def list_available_scopes(
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> ApiKeyScopesResponse:
     return ApiKeyScopesResponse(scopes=ALL_SCOPES)
 
 
-@router.post("", response_model=ApiKeyCreateResponse, status_code=201)
+@router.post("", response_model=ApiKeyCreateResponse, status_code=201, summary="Create API key (admin+)", description="The raw key is returned **once** and never stored. Scope `*` grants all permissions.")
 async def create_api_key(
     body: ApiKeyCreateRequest,
     session: AsyncSession = Depends(get_db),
@@ -93,7 +93,7 @@ async def create_api_key(
     )
 
 
-@router.get("", response_model=list[ApiKeyResponse])
+@router.get("", response_model=list[ApiKeyResponse], summary="List my API keys (admin+)")
 async def list_api_keys(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
@@ -117,7 +117,7 @@ async def list_api_keys(
     ]
 
 
-@router.delete("/{key_id}", status_code=204)
+@router.delete("/{key_id}", status_code=204, summary="Revoke API key (admin+)")
 async def revoke_api_key(
     key_id: int,
     session: AsyncSession = Depends(get_db),
