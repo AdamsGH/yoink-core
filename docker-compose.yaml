@@ -119,7 +119,7 @@ services:
       yoink-frontend:
         condition: service_started
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/api/v1/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
