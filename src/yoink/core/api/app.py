@@ -118,6 +118,17 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
         ],
     )
 
+    # Inject global security into OpenAPI schema so Scalar shows auth UI
+    # and pre-fills Bearer token for all protected endpoints.
+    _original_openapi = app.openapi
+
+    def _openapi_with_security():
+        schema = _original_openapi()
+        schema.setdefault("security", [{"HTTPBearer": []}, {"APIKeyHeader": []}])
+        return schema
+
+    app.openapi = _openapi_with_security  # type: ignore[method-assign]
+
     from yoink.core.metrics import metrics
 
     class MetricsMiddleware:
