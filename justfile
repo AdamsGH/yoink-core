@@ -349,29 +349,54 @@ clean:
     rm -rf .venv frontend/dist
     echo "Host artifacts cleaned."
 
-# Run TypeScript type-check inside a container (no host node_modules needed).
+# Run Vite dev server with HMR on the host. Access at http://localhost:5173
+# Prerequisites: run `just setup-dev` once to install node_modules on host.
+# API is proxied to the running yoink backend at port 8000.
+dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d frontend/node_modules ] || [ "$(stat -c %U frontend/node_modules 2>/dev/null)" = "root" ]; then
+        echo "node_modules missing or owned by root - run: just setup-dev"
+        exit 1
+    fi
+    echo "Starting Vite dev server at http://localhost:5173"
+    cd frontend && npm run dev
+
+# Install host-side node_modules and plugin symlinks for local dev (run once).
+setup-dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd frontend && npm install
+    for p in yoink-dl yoink-stats yoink-insight; do
+        rm -rf "$(pwd)/../plugins/$p/frontend/node_modules"
+        ln -sf "$(pwd)/node_modules" "$(pwd)/../plugins/$p/frontend/node_modules"
+        echo "linked $p"
+    done
+    echo "Dev setup complete. Run: just dev"
+
+# Run TypeScript type-check using host node_modules (requires just setup-dev).
 tsc *args="":
     #!/usr/bin/env bash
     set -euo pipefail
-    docker run --rm \
-        -v "$(pwd)/frontend":/build/frontend \
-        -v "$(pwd)/plugins/yoink-dl/frontend":/build/plugins/yoink-dl/frontend \
-        -v "$(pwd)/plugins/yoink-stats/frontend":/build/plugins/yoink-stats/frontend \
-        -v "$(pwd)/plugins/yoink-insight/frontend":/build/plugins/yoink-insight/frontend \
-        -w /build/frontend \
-        node:22-alpine sh -c "
-            npm install --silent 2>/dev/null
-            ln -sf /build/frontend/node_modules /build/plugins/yoink-dl/frontend/node_modules 2>/dev/null || true
-            ln -sf /build/frontend/node_modules /build/plugins/yoink-stats/frontend/node_modules 2>/dev/null || true
-            ln -sf /build/frontend/node_modules /build/plugins/yoink-insight/frontend/node_modules 2>/dev/null || true
-            npx tsc --noEmit {{args}}
-        "
+    if [ ! -d frontend/node_modules ] || [ "$(stat -c %U frontend/node_modules 2>/dev/null)" = "root" ]; then
+        echo "node_modules missing or owned by root - running in container..."
+        docker run --rm \
+            -v "$(pwd)/frontend":/build/frontend \
+            -v "$(pwd)/plugins/yoink-dl/frontend":/build/plugins/yoink-dl/frontend \
+            -v "$(pwd)/plugins/yoink-stats/frontend":/build/plugins/yoink-stats/frontend \
+            -v "$(pwd)/plugins/yoink-insight/frontend":/build/plugins/yoink-insight/frontend \
+            -w /build/frontend \
+            node:22-alpine sh -c "
+                npm install --silent 2>/dev/null
+                ln -sf /build/frontend/node_modules /build/plugins/yoink-dl/frontend/node_modules 2>/dev/null || true
+                ln -sf /build/frontend/node_modules /build/plugins/yoink-stats/frontend/node_modules 2>/dev/null || true
+                ln -sf /build/frontend/node_modules /build/plugins/yoink-insight/frontend/node_modules 2>/dev/null || true
+                npx tsc --noEmit {{args}}
+            "
+    else
+        cd frontend && npx tsc --noEmit {{args}}
+    fi
 
-# Run npm commands inside a container for frontend (e.g. just npm 'add some-pkg').
+# Run npm commands for frontend (e.g. just npm 'add some-pkg').
 npm *args="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker run --rm \
-        -v "$(pwd)/frontend":/build/frontend \
-        -w /build/frontend \
-        node:22-alpine sh -c "npm {{args}}"
+    cd frontend && npm {{args}}

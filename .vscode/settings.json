@@ -1,0 +1,6 @@
+{
+  "vite.root": "frontend",
+  "vite.port": 5173,
+  "vite.autoStart": true,
+  "browse-lite.startUrl": "http://localhost:5173"
+}
