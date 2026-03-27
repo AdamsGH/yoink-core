@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 LOCALES_DIR = Path(__file__).parent / "locales"
 DEFAULT_LANG = "en"
-SUPPORTED = {"en", "ru", "ar", "hi", "zh", "ja"}
+SUPPORTED = {"en", "ru"}
 
 _extra_locale_dirs: list[Path] = []
 

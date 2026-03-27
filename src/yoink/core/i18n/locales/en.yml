@@ -30,10 +30,6 @@ lang:
   buttons:
     en: "🇬🇧 English"
     ru: "🇷🇺 Russian"
-    ar: "🇸🇦 Arabic"
-    hi: "🇮🇳 Hindi"
-    zh: "🇨🇳 Chinese"
-    ja: "🇯🇵 Japanese"
 
 group:
   only_groups: "This command only works in groups."

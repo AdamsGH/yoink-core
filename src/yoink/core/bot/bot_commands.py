@@ -35,16 +35,16 @@ _ROLE_RANK: dict[str, int] = {
 }
 
 _CORE_COMMANDS: list[CommandSpec] = [
-    CommandSpec("start",     "Welcome",                  scope="default"),
-    CommandSpec("help",      "Show help",                scope="default"),
-    CommandSpec("lang",      "Interface language",       scope="private"),
-    CommandSpec("block",     "Block a user",             scope="private", min_role="admin"),
-    CommandSpec("unblock",   "Unblock a user",           scope="private", min_role="admin"),
-    CommandSpec("ban_time",  "Temporarily ban a user",   scope="private", min_role="admin"),
-    CommandSpec("broadcast", "Broadcast a message",      scope="private", min_role="admin"),
-    CommandSpec("group",     "Group access control",     scope="groups",  min_role="admin"),
-    CommandSpec("thread",    "Thread access control",    scope="groups",  min_role="admin"),
-    CommandSpec("runtime",   "Bot runtime info",         scope="private", min_role="owner"),
+    CommandSpec("start",     "Welcome",                  scope="default",  descriptions={"ru": "Начало работы"}),
+    CommandSpec("help",      "Show help",                scope="default",  descriptions={"ru": "Список команд"}),
+    CommandSpec("lang",      "Interface language",       scope="private",  descriptions={"ru": "Язык интерфейса"}),
+    CommandSpec("block",     "Block a user",             scope="private",  min_role="admin", descriptions={"ru": "Заблокировать пользователя"}),
+    CommandSpec("unblock",   "Unblock a user",           scope="private",  min_role="admin", descriptions={"ru": "Разблокировать пользователя"}),
+    CommandSpec("ban_time",  "Temporarily ban a user",   scope="private",  min_role="admin", descriptions={"ru": "Временная блокировка"}),
+    CommandSpec("broadcast", "Broadcast a message",      scope="private",  min_role="admin", descriptions={"ru": "Рассылка сообщения"}),
+    CommandSpec("group",     "Group access control",     scope="groups",   min_role="admin", descriptions={"ru": "Управление группой"}),
+    CommandSpec("thread",    "Thread access control",    scope="groups",   min_role="admin", descriptions={"ru": "Управление тредом"}),
+    CommandSpec("runtime",   "Bot runtime info",         scope="private",  min_role="owner", descriptions={"ru": "Информация о боте"}),
 ]
 
 

@@ -30,7 +30,7 @@ target_metadata = Base.metadata
 
 
 def _get_url() -> str:
-    url = os.environ.get("DATABASE_URL", "postgresql+psycopg://yoink:yoink@localhost:5432/yoink")
+    url = os.environ.get("database_url", os.environ.get("DATABASE_URL", "postgresql+psycopg://yoink:yoink@localhost:5432/yoink"))
     url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
     url = url.replace("postgresql://", "postgresql+psycopg://")
     return url
