@@ -55,6 +55,7 @@ class EffectiveFeatureAccess(BaseModel):
     access_via_grant: bool
     effective: bool
     grant_expires_at: datetime | None
+    grant_source: str = "manual"
 
 
 class GrantRequest(BaseModel):
@@ -121,6 +122,7 @@ async def _compute_feature_access(
             access_via_grant=via_grant,
             effective=via_role or via_grant,
             grant_expires_at=grant.expires_at if grant else None,
+            grant_source=getattr(grant, "grant_source", "manual") if grant else "manual",
         ))
 
     return rows

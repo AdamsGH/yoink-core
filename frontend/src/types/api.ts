@@ -43,6 +43,7 @@ export interface EffectiveFeatureAccess {
   access_via_grant: boolean
   effective: boolean
   grant_expires_at: string | null
+  grant_source: 'manual' | 'tag'
 }
 
 export interface ThreadPolicy {

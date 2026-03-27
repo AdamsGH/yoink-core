@@ -55,6 +55,9 @@ function AccessBadge({ f }: { f: EffectiveFeatureAccess }) {
   if (f.access_via_role && !f.access_via_grant) {
     return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500/50 text-blue-600">role</Badge>
   }
+  if (f.access_via_grant && f.grant_source === 'tag') {
+    return <Badge variant="secondary" className="text-[10px] px-1.5 py-0">tag</Badge>
+  }
   if (!f.access_via_role && f.access_via_grant) {
     return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">grant</Badge>
   }
@@ -253,8 +256,14 @@ function UserSheet({
                                   </div>
                                   <Switch
                                     checked={f.effective}
-                                    disabled={togglingId === key || f.access_via_role}
-                                    title={f.access_via_role ? t('permissions.granted_by_role') : undefined}
+                                    disabled={togglingId === key || f.access_via_role || f.grant_source === 'tag'}
+                                    title={
+                                      f.access_via_role
+                                        ? t('permissions.granted_by_role')
+                                        : f.grant_source === 'tag'
+                                          ? t('permissions.source_tag_no_revoke')
+                                          : undefined
+                                    }
                                     onCheckedChange={(v) => void toggleFeature(f, v)}
                                   />
                                 </div>
