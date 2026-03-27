@@ -8,13 +8,15 @@
     "cookies": "Cookies",
     "nsfw": "NSFW Filter",
     "bot_settings": "Bot Settings",
-    "admin_stats": "Stats",
+    "admin_stats": "Download Stats",
     "unauthorized": "Unauthorized",
     "admin": "Admin",
     "chat_stats": "Chat Stats",
     "import_history": "Import History",
     "ai_settings": "AI Settings",
-    "api_docs": "API Docs"
+    "ai": "AI",
+    "api_docs": "API Docs",
+    "more": "More"
   },
   "common": {
     "loading": "Loading…",
@@ -506,5 +508,23 @@
     "cat_other": "Other",
     "top_sources": "Top sources",
     "member_since": "Member since"
+  },
+  "mystats": {
+    "downloads": "Downloads",
+    "music": "Music",
+    "ai_summaries": "AI Summaries",
+    "total": "Total",
+    "this_week": "This week",
+    "today": "Today",
+    "last_30d": "Last 30 days",
+    "top_sources": "Top sources",
+    "top_artists": "Top artists",
+    "platforms": "Platforms",
+    "no_data": "No data yet",
+    "no_music": "No music links shared yet",
+    "no_ai": "No AI summaries yet",
+    "cat_video": "Video",
+    "cat_music": "Music",
+    "cat_other": "Other"
   }
 }

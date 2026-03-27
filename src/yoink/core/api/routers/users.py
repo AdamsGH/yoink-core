@@ -103,6 +103,30 @@ async def get_my_stats(
         top_domains = []
         by_category = {}
 
+    # Include music resolves (from yoink-music plugin) in the music category
+    try:
+        from yoink_music.storage.models import MusicResolveLog  # noqa: PLC0415
+        music_count = (await session.execute(
+            select(func.count()).select_from(MusicResolveLog)
+            .where(MusicResolveLog.user_id == current_user.id)
+        )).scalar_one()
+        if music_count:
+            by_category.setdefault("music", 0)
+            by_category["music"] += music_count
+            total += music_count
+            music_today = (await session.execute(
+                select(func.count()).select_from(MusicResolveLog)
+                .where(MusicResolveLog.user_id == current_user.id, MusicResolveLog.created_at >= today_start)
+            )).scalar_one()
+            today_count += music_today
+            music_week = (await session.execute(
+                select(func.count()).select_from(MusicResolveLog)
+                .where(MusicResolveLog.user_id == current_user.id, MusicResolveLog.created_at >= week_start)
+            )).scalar_one()
+            week_count += music_week
+    except ImportError:
+        pass
+
     return UserStatsResponse(
         total=total,
         today=today_count,

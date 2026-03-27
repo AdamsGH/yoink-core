@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
-import { ChevronDown, Palette, Shield } from 'lucide-react'
+import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
 
 import { usePermissions } from '@/hooks/usePermissions'
 import { apiClient } from '@core/lib/api-client'
@@ -147,7 +147,7 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
                     <SidebarMenuSubItem key={item.path}>
                       <SidebarMenuSubButton
                         asChild
-                        isActive={currentPath === item.path || currentPath.startsWith(item.path + '/')}
+                        isActive={currentPath === item.path || (!item.exact && currentPath.startsWith(item.path + '/'))}
                       >
                         <NavLink to={item.path}>
                           {item.icon}
@@ -175,7 +175,7 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
             <SidebarMenuItem key={item.path}>
               <SidebarMenuButton
                 asChild
-                isActive={currentPath === item.path || currentPath.startsWith(item.path + '/')}
+                isActive={currentPath === item.path || (!item.exact && currentPath.startsWith(item.path + '/'))}
                 tooltip={getLabel(item)}
               >
                 <NavLink to={item.path}>
@@ -191,9 +191,10 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
   )
 }
 
-function AdminDrawer({ open, onClose, items, currentPath }: {
+function BottomDrawer({ open, onClose, title, items, currentPath }: {
   open: boolean
   onClose: () => void
+  title: string
   items: NavItem[]
   currentPath: string
 }) {
@@ -206,13 +207,13 @@ function AdminDrawer({ open, onClose, items, currentPath }: {
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
       <SheetContent side="bottom" className="rounded-t-xl pb-8">
         <SheetHeader className="mb-4">
-          <SheetTitle>{t('nav.admin', { defaultValue: 'Admin' })}</SheetTitle>
+          <SheetTitle>{title}</SheetTitle>
         </SheetHeader>
         <div className="grid grid-cols-2 gap-2">
           {items.map((item) => (
             <Button
               key={item.path}
-              variant={currentPath.startsWith(item.path) ? 'default' : 'outline'}
+              variant={currentPath === item.path ? 'default' : 'outline'}
               className="h-auto flex-col gap-2 py-4"
               onClick={() => go(item.path)}
             >
@@ -248,6 +249,13 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
 
   const isAdmin = role && ADMIN_ROLES.includes(role as UserRole)
   const isAdminPath = adminItems.some((i) => location.pathname.startsWith(i.path))
+
+  // Mobile bottom nav: max 4 slots for regular items (5th slot = admin or more)
+  const MAX_BOTTOM_NAV = isAdmin && adminItems.length > 0 ? 4 : 5
+  const pinnedItems = regularItems.slice(0, MAX_BOTTOM_NAV)
+  const overflowItems = regularItems.slice(MAX_BOTTOM_NAV)
+  const hasOverflow = overflowItems.length > 0
+  const [moreDrawerOpen, setMoreDrawerOpen] = useState(false)
 
   return (
     <>
@@ -306,30 +314,44 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
         </SidebarInset>
       </SidebarProvider>
 
-      {/* Mobile bottom nav */}
+      {/* Mobile bottom nav — max 5 slots total */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 flex border-t bg-background md:hidden">
-        {regularItems.map((item) => {
-          const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/')
+        {pinnedItems.map((item) => {
+          const isActive = location.pathname === item.path
           return (
             <NavLink
               key={item.path}
               to={item.path}
               className={cn(
-                'flex flex-1 flex-col items-center justify-center gap-1 py-3 text-xs transition-colors',
+                'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] transition-colors min-w-0',
                 isActive ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
               )}
             >
               <span className="[&>svg]:h-5 [&>svg]:w-5">{item.icon}</span>
-              <span className="leading-none">{getLabel(item)}</span>
+              <span className="leading-none truncate max-w-full px-1">{getLabel(item)}</span>
             </NavLink>
           )
         })}
+        {hasOverflow && (
+          <Button
+            variant="ghost"
+            onClick={() => setMoreDrawerOpen(true)}
+            className={cn(
+              'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 h-auto rounded-none text-[10px] transition-colors min-w-0',
+              overflowItems.some((i) => location.pathname === i.path)
+                ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Ellipsis className="h-5 w-5" />
+            <span className="leading-none">{t('nav.more', { defaultValue: 'More' })}</span>
+          </Button>
+        )}
         {isAdmin && adminItems.length > 0 && (
           <Button
             variant="ghost"
             onClick={() => setAdminDrawerOpen(true)}
             className={cn(
-              'flex flex-1 flex-col items-center justify-center gap-1 py-2 h-auto rounded-none text-xs transition-colors',
+              'flex flex-1 flex-col items-center justify-center gap-0.5 py-2 h-auto rounded-none text-[10px] transition-colors min-w-0',
               isAdminPath ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
             )}
           >
@@ -339,10 +361,19 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
         )}
       </nav>
 
+      <BottomDrawer
+        open={moreDrawerOpen}
+        onClose={() => setMoreDrawerOpen(false)}
+        title={t('nav.more', { defaultValue: 'More' })}
+        items={overflowItems}
+        currentPath={location.pathname}
+      />
+
       {isAdmin && (
-        <AdminDrawer
+        <BottomDrawer
           open={adminDrawerOpen}
           onClose={() => setAdminDrawerOpen(false)}
+          title={t('nav.admin', { defaultValue: 'Admin' })}
           items={adminItems}
           currentPath={location.pathname}
         />

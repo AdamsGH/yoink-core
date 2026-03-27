@@ -105,7 +105,7 @@
 }
 
 /* ── Macchiato (default dark) ───────────────────────────────────── */
-[data-theme="macchiato"], .dark {
+[data-theme="macchiato"] {
   --ctp-rosewater: #f4dbd6;
   --ctp-flamingo:  #f0c6c6;
   --ctp-pink:      #f5bde6;

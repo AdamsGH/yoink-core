@@ -7,10 +7,3 @@ services:
       traefik.http.routers.yoink.tls: "true"
       traefik.http.services.yoink.loadbalancer.server.port: "8081"
 
-  yoink-frontend:
-    labels:
-      traefik.enable: "false"
-
-  yoink:
-    labels:
-      traefik.enable: "false"

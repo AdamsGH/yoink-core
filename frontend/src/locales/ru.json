@@ -14,7 +14,9 @@
     "chat_stats": "Статистика чатов",
     "import_history": "Импорт истории",
     "ai_settings": "Настройки AI",
-    "api_docs": "Документация API"
+    "ai": "AI",
+    "api_docs": "Документация API",
+    "more": "Ещё"
   },
   "common": {
     "loading": "Загрузка…",
@@ -506,5 +508,23 @@
     "cat_other": "Другое",
     "top_sources": "Топ источников",
     "member_since": "В боте с"
+  },
+  "mystats": {
+    "downloads": "Загрузки",
+    "music": "Музыка",
+    "ai_summaries": "AI Саммари",
+    "total": "Всего",
+    "this_week": "За неделю",
+    "today": "Сегодня",
+    "last_30d": "Последние 30 дней",
+    "top_sources": "Топ источников",
+    "top_artists": "Топ артистов",
+    "platforms": "Платформы",
+    "no_data": "Пока нет данных",
+    "no_music": "Ещё нет музыкальных ссылок",
+    "no_ai": "Ещё нет AI саммари",
+    "cat_video": "Видео",
+    "cat_music": "Музыка",
+    "cat_other": "Другое"
   }
 }

@@ -11,6 +11,8 @@ export interface NavItem {
   path: string
   icon: ReactNode
   minRole?: string[]
+  /** If true, only exact path match triggers isActive (no startsWith). */
+  exact?: boolean
 }
 
 export interface NavGroup {
