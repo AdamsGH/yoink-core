@@ -36,7 +36,8 @@
     "no_data": "No data",
     "load_error": "Failed to load data",
     "saving": "Saving...",
-    "no_results": "No results"
+    "no_results": "No results",
+    "saved": "Saved"
   },
   "permissions": {
     "title": "Permissions",
@@ -329,7 +330,10 @@
     "remove_error": "Failed to remove",
     "saved": "Saved",
     "save_error": "Failed to save",
-    "check_desc_label": "Description snippet"
+    "check_desc_label": "Description snippet",
+    "domains_count": "{{count}} domains",
+    "keywords_count": "{{count}} keywords",
+    "export": "Export"
   },
   "bot_settings": {
     "title": "Bot Settings",
@@ -434,7 +438,8 @@
     "grant_btn_busy": "Granting...",
     "grant_no_user": "Select a user first",
     "lang_en": "English",
-    "lang_ru": "Russian"
+    "lang_ru": "Russian",
+    "settings_access_active": "Access active"
   },
   "stats": {
     "title": "Group statistics",

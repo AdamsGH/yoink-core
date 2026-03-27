@@ -66,20 +66,20 @@ export default function AdminBotSettingsPage() {
   if (loading) return <div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div>
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <Card>
         <CardHeader>
           <CardTitle>{t('bot_settings.access_mode')}</CardTitle>
           <CardDescription>{t('bot_settings.access_mode_desc')}</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
+        <CardContent className="space-y-3">
+          <div className="space-y-1.5">
             <Label>{t('bot_settings.access_label')}</Label>
             <Select
               value={settings['bot_access_mode'] ?? 'open'}
               onValueChange={(v) => update('bot_access_mode', v)}
             >
-              <SelectTrigger className="w-64">
+              <SelectTrigger className="w-full max-w-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -97,14 +97,14 @@ export default function AdminBotSettingsPage() {
           <CardTitle>{t('bot_settings.browser_cookies')}</CardTitle>
           <CardDescription>{t('bot_settings.browser_cookies_desc')}</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
+        <CardContent className="space-y-3">
+          <div className="space-y-1.5">
             <Label>{t('bot_settings.browser_cookies_role')}</Label>
             <Select
               value={settings['browser_cookies_min_role'] ?? 'owner'}
               onValueChange={(v) => update('browser_cookies_min_role', v)}
             >
-              <SelectTrigger className="w-64">
+              <SelectTrigger className="w-full max-w-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -148,7 +148,7 @@ export default function AdminBotSettingsPage() {
               <p className="text-xs text-muted-foreground">{t('bot_settings.storage_thread_hint')}</p>
             </div>
           </div>
-          <Button onClick={saveStorage} disabled={storageSaving} size="sm">
+          <Button onClick={saveStorage} disabled={storageSaving} size="sm" className="w-full sm:w-auto">
             {storageSaving ? t('bot_settings.saving') : t('bot_settings.save_storage')}
           </Button>
         </CardContent>

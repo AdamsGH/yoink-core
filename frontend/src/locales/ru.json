@@ -36,7 +36,8 @@
     "no_data": "Нет данных",
     "load_error": "Не удалось загрузить данные",
     "saving": "Сохранение...",
-    "no_results": "Ничего не найдено"
+    "no_results": "Ничего не найдено",
+    "saved": "Сохранено"
   },
   "permissions": {
     "title": "Права доступа",
@@ -329,7 +330,10 @@
     "remove_error": "Не удалось удалить",
     "saved": "Сохранено",
     "save_error": "Не удалось сохранить",
-    "check_desc_label": "Фрагмент описания"
+    "check_desc_label": "Фрагмент описания",
+    "domains_count": "{{count}} доменов",
+    "keywords_count": "{{count}} ключевых слов",
+    "export": "Экспорт"
   },
   "bot_settings": {
     "title": "Настройки бота",
@@ -434,7 +438,8 @@
     "grant_btn_busy": "Выдаю...",
     "grant_no_user": "Выберите пользователя",
     "lang_en": "English",
-    "lang_ru": "Русский"
+    "lang_ru": "Русский",
+    "settings_access_active": "Доступ активен"
   },
   "stats": {
     "title": "Статистика группы",
