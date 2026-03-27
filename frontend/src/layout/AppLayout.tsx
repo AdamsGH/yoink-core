@@ -235,30 +235,32 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
     <>
       {/* Desktop sidebar */}
       <SidebarProvider>
-        <Sidebar collapsible="icon" className="hidden md:flex">
-          <SidebarHeader>
-            <div className="flex h-10 items-center gap-2 px-2">
-              <span className="font-bold text-base truncate flex-1">{appName}</span>
-              {!isTelegramApp && <ThemePicker />}
-            </div>
-          </SidebarHeader>
+        <div className="hidden md:contents">
+          <Sidebar collapsible="icon">
+            <SidebarHeader>
+              <div className="flex h-10 items-center gap-2 px-2">
+                <span className="font-bold text-base truncate flex-1">{appName}</span>
+                {!isTelegramApp && <ThemePicker />}
+              </div>
+            </SidebarHeader>
 
-          <SidebarContent>
-            {visibleGroups.map((group, i) => (
-              <SidebarNavGroup
-                key={group.label ?? i}
-                group={group}
-                role={role ?? null}
-                grantedFeatures={grantedFeatures}
-                currentPath={location.pathname}
-              />
-            ))}
-          </SidebarContent>
+            <SidebarContent>
+              {visibleGroups.map((group, i) => (
+                <SidebarNavGroup
+                  key={group.label ?? i}
+                  group={group}
+                  role={role ?? null}
+                  grantedFeatures={grantedFeatures}
+                  currentPath={location.pathname}
+                />
+              ))}
+            </SidebarContent>
 
-          <SidebarFooter>
-            <UserPanel statsEndpoint={userStatsEndpoint} />
-          </SidebarFooter>
-        </Sidebar>
+            <SidebarFooter>
+              <UserPanel statsEndpoint={userStatsEndpoint} />
+            </SidebarFooter>
+          </Sidebar>
+        </div>
 
         <SidebarInset>
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
