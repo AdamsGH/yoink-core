@@ -215,7 +215,9 @@
     "banned": "User banned",
     "unbanned": "User unbanned",
     "update_success": "User updated",
-    "col_language": "Language"
+    "col_language": "Language",
+    "ban_until_placeholder": "Pick date…",
+    "ban_until_time": "Time"
   },
   "groups": {
     "title": "Groups",

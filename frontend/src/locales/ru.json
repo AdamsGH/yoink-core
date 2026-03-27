@@ -215,7 +215,9 @@
     "banned": "Пользователь заблокирован",
     "unbanned": "Пользователь разблокирован",
     "update_success": "Пользователь обновлён",
-    "col_language": "Язык"
+    "col_language": "Язык",
+    "ban_until_placeholder": "Выберите дату…",
+    "ban_until_time": "Время"
   },
   "groups": {
     "title": "Группы",

@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { format } from 'date-fns'
+import { CalendarIcon, X } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
-import { formatDate } from '@core/lib/utils'
+import { cn, formatDate } from '@core/lib/utils'
 import type { EffectiveFeatureAccess, User, UserRole, UserUpdateRequest } from '@core/types/api'
 import { Badge, type BadgeProps } from '@core/components/ui/badge'
 import { Button } from '@core/components/ui/button'
+import { Calendar } from '@core/components/ui/calendar'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
 import { Input } from '@core/components/ui/input'
 import { Label } from '@core/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@core/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@core/components/ui/select'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@core/components/ui/sheet'
 import { Skeleton } from '@core/components/ui/skeleton'
@@ -18,6 +22,82 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@core/components/ui/ta
 import { toast } from '@core/components/ui/toast'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
+
+function BanDatePicker({
+  value,
+  onChange,
+}: {
+  value: string   // ISO string or empty
+  onChange: (iso: string) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [time, setTime] = useState('23:59')
+
+  const selected = value ? new Date(value) : undefined
+
+  const handleDaySelect = (day: Date | undefined) => {
+    if (!day) { onChange(''); setOpen(false); return }
+    const [h, m] = time.split(':').map(Number)
+    day.setHours(h ?? 23, m ?? 59, 0, 0)
+    onChange(day.toISOString())
+    setOpen(false)
+  }
+
+  const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTime(e.target.value)
+    if (selected) {
+      const [h, m] = e.target.value.split(':').map(Number)
+      const d = new Date(selected)
+      d.setHours(h ?? 0, m ?? 0, 0, 0)
+      onChange(d.toISOString())
+    }
+  }
+
+  const label = selected
+    ? format(selected, 'MMM d, yyyy HH:mm')
+    : t('users.ban_until_placeholder', { defaultValue: 'Pick date…' })
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          className={cn('w-full justify-start gap-2 font-normal', !selected && 'text-muted-foreground')}
+        >
+          <CalendarIcon className="h-4 w-4 shrink-0" />
+          <span className="flex-1 text-left truncate">{label}</span>
+          {selected && (
+            <X
+              className="h-3.5 w-3.5 shrink-0 opacity-50 hover:opacity-100"
+              onClick={(e) => { e.stopPropagation(); onChange('') }}
+            />
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          selected={selected}
+          onSelect={handleDaySelect}
+          disabled={(d) => d < new Date()}
+          initialFocus
+        />
+        <div className="border-t p-3 flex items-center gap-2">
+          <Label className="text-xs text-muted-foreground shrink-0">
+            {t('users.ban_until_time', { defaultValue: 'Time' })}
+          </Label>
+          <Input
+            type="time"
+            value={time}
+            onChange={handleTimeChange}
+            className="h-8 w-full"
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
 const SUPPORTED_LANGS = ['en', 'ru']
 const PAGE_SIZE = 30
 type StatusFilter = 'all' | 'active' | 'restricted' | 'banned'
@@ -92,7 +172,7 @@ function UserSheet({
 
     setEditRole(user.role)
     setEditLang(user.language ?? 'en')
-    setBanUntil(user.ban_until ? user.ban_until.slice(0, 16) : '')
+    setBanUntil(user.ban_until ?? '')
 
     setStatsLoading(true)
     apiClient
@@ -138,8 +218,7 @@ function UserSheet({
       const body: UserUpdateRequest = {}
       if (editRole !== user.role) body.role = editRole
       if (editLang !== user.language) body.language = editLang
-      if (banUntil) body.ban_until = new Date(banUntil).toISOString()
-      else body.ban_until = null
+      body.ban_until = banUntil || null
       const res = await apiClient.patch<User>(`/users/${user.id}`, body)
       toast.success(t('users.update_success'))
       onUpdated(res.data)
@@ -305,13 +384,8 @@ function UserSheet({
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="ban-until">{t('users.ban_until_label')}</Label>
-                    <Input
-                      id="ban-until"
-                      type="datetime-local"
-                      value={banUntil}
-                      onChange={(e) => setBanUntil(e.target.value)}
-                    />
+                    <Label>{t('users.ban_until_label')}</Label>
+                    <BanDatePicker value={banUntil} onChange={setBanUntil} />
                     <p className="text-xs text-muted-foreground">{t('users.ban_until_hint')}</p>
                   </div>
                   <Button className="w-full" onClick={saveUser} disabled={saving}>
