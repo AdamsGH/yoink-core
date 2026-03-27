@@ -19,6 +19,8 @@ function syncTokenToScalar() {
         HTTPBearer: {
           type: 'http',
           'x-scalar-secret-token': token,
+          'x-scalar-secret-username': '',
+          'x-scalar-secret-password': '',
         },
       },
       selected: { document: null, path: null },
