@@ -8,6 +8,7 @@ import { authProvider } from './lib/auth-provider'
 import { dataProvider } from './lib/data-provider'
 import { AppLayout } from './layout/AppLayout'
 import { useTelegram } from './layout/TelegramProvider'
+import { usePermissions } from './hooks/usePermissions'
 import { Button } from './components/ui/button'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { plugins } from './plugin-registry'
@@ -82,12 +83,33 @@ function _guardRoute(r: PluginRoute): ReactNode {
   return <ProtectedRoute minRole={r.minRole}>{r.element}</ProtectedRoute>
 }
 
+const ROLE_WEIGHT: Record<string, number> = {
+  owner: 0, admin: 1, moderator: 2, user: 3, restricted: 4, banned: 5,
+}
+
+function firstAccessiblePath(navGroups: NavGroup[], role: string | null): string {
+  for (const g of navGroups) {
+    if (g.minRole) {
+      const w = ROLE_WEIGHT[role ?? ''] ?? 99
+      const allowed = Array.isArray(g.minRole) ? g.minRole : [g.minRole]
+      if (!allowed.some((r) => w <= (ROLE_WEIGHT[r] ?? 99))) continue
+    }
+    for (const item of g.items) {
+      if (!item.minRole) return item.path
+      const w = ROLE_WEIGHT[role ?? ''] ?? 99
+      const allowed = Array.isArray(item.minRole) ? item.minRole : [item.minRole]
+      if (allowed.some((r) => w <= (ROLE_WEIGHT[r] ?? 99))) return item.path
+    }
+  }
+  return '/'
+}
+
 function RefineApp() {
   const navGroups     = buildNavGroups(plugins)
   const resources     = plugins.flatMap((p) => p.resources ?? [])
   const routes        = plugins.flatMap((p) => p.routes)
-  const defaultPath   = plugins.flatMap((p) => p.navGroups ?? []).flatMap((g) => g.items)[0]?.path ?? '/'
   const statsEndpoint = resolveStatsEndpoint(plugins)
+  const { role, isLoading: roleLoading } = usePermissions()
 
   return (
     <BrowserRouter>
@@ -99,7 +121,11 @@ function RefineApp() {
       >
         <Routes>
           <Route element={<AppLayout navGroups={navGroups} userStatsEndpoint={statsEndpoint} />}>
-            <Route index element={<Navigate to={defaultPath} replace />} />
+            <Route index element={
+              roleLoading
+                ? <div className="flex min-h-[60vh] items-center justify-center"><div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" /></div>
+                : <Navigate to={firstAccessiblePath(navGroups, role)} replace />
+            } />
             {routes.map((r) => (
               <Route
                 key={r.path}
