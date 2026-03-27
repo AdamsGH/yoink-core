@@ -91,7 +91,10 @@ export function JsonEditor({
   const extensions = useMemo(
     () => [
       json(),
-      ...(readOnly ? [] : [lintGutter(), linter(jsonParseLinter())]),
+      ...(readOnly
+        ? [EditorView.editable.of(false)]
+        : [lintGutter(), linter(jsonParseLinter())]
+      ),
       syntaxHighlighting(appHighlight),
       appTheme,
       EditorView.lineWrapping,
