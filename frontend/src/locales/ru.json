@@ -5,7 +5,7 @@
     "settings": "Настройки",
     "users": "Пользователи",
     "groups": "Группы",
-    "cookies": "Куки",
+    "cookies": "Cookies",
     "nsfw": "NSFW-фильтр",
     "bot_settings": "Настройки бота",
     "admin_stats": "Статистика",
@@ -13,7 +13,7 @@
     "admin": "Администрирование",
     "chat_stats": "Статистика чатов",
     "import_history": "Импорт истории",
-    "ai_settings": "AI Настройки"
+    "ai_settings": "Настройки AI"
   },
   "common": {
     "loading": "Загрузка…",

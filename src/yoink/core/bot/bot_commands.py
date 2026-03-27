@@ -169,11 +169,18 @@ async def set_user_commands(
     all_commands = _CORE_COMMANDS + (plugin_commands or [])
     scope = BotCommandScopeChat(chat_id=chat_id)
 
+    # Always clear all known per-language scopes to remove stale entries from
+    # previous language settings or old bot versions.
+    _KNOWN_LANGS = ("en", "ru")
+    for stale_lang in _KNOWN_LANGS:
+        try:
+            await bot.delete_my_commands(scope=scope, language_code=stale_lang)
+        except TelegramError:
+            pass
+
     if role == "banned":
         try:
             await bot.delete_my_commands(scope=scope)
-            if lang:
-                await bot.delete_my_commands(scope=scope, language_code=lang)
         except TelegramError as e:
             logger.warning("Failed to clear commands for chat %d: %s", chat_id, e)
         return
