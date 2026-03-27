@@ -51,9 +51,8 @@ export const authProvider: AuthProvider = {
 
     // Fallback: fetch from API (old tokens without name fields)
     try {
-      const apiBase = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8003/api/v1' : '/api/v1')
       const res = await axios.get<{ first_name: string | null; username: string | null }>(
-        `${apiBase}/users/me`,
+        '/api/v1/users/me',
         { headers: { Authorization: `Bearer ${token}` } },
       )
       const { first_name, username: uname } = res.data
