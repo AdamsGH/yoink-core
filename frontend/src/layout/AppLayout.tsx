@@ -229,8 +229,8 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
       <SidebarProvider>
         <Sidebar collapsible="icon">
           <SidebarHeader>
-            <div className="flex h-10 items-center gap-2 px-2">
-              <SidebarTrigger className="-ml-1" />
+            <div className="flex h-10 items-center gap-2 px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+              <SidebarTrigger />
               <span className="font-bold text-sm truncate flex-1 group-data-[collapsible=icon]:hidden">
                 {appName}
               </span>
