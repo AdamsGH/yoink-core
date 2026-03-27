@@ -9,8 +9,9 @@ Telegram bot for media downloading, music link aggregation, and group chat analy
 | [yoink-dl](plugins/yoink-dl) | `plugins/yoink-dl` | Media downloader (yt-dlp + gallery-dl) |
 | [yoink-music](plugins/yoink-music) | `plugins/yoink-music` | Music link aggregator (Spotify / Deezer / YM / YTM / SoundCloud / Apple Music) |
 | [yoink-stats](plugins/yoink-stats) | `plugins/yoink-stats` | Group chat analytics with web dashboard |
+| [yoink-insight](plugins/yoink-insight) | `plugins/yoink-insight` | AI YouTube video summaries via Gemini API |
 
-Enable plugins via `yoink_plugins=dl,music,stats` in `.env`.
+Enable plugins via `yoink_plugins=dl,music,stats,insight` in `.env`.
 
 ## Quick start
 
@@ -75,6 +76,15 @@ just backup-up / backup-down / backup-logs
 
 See `.env.example` for the full list with defaults. Plugin-specific variables are documented in each plugin's README.
 
+#### yoink-insight plugin variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `gemini_api_key` | yes | Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `gemini_model` | no | Model name (default: `gemini-3-flash-preview`) |
+| `insight_default_lang` | no | Default response language (default: `en`) |
+| `insight_transcript_langs` | no | Transcript language preference order (default: `en,ru`) |
+
 ## REST API
 
 Base path: `/api/v1`. Docs (Scalar): `http://localhost:8003/docs`.
@@ -133,6 +143,18 @@ API key management: `GET/POST /api/v1/api-keys`, `DELETE /api/v1/api-keys/{id}` 
 
 Plugin routes are mounted at `/api/v1/{plugin_name}/`.
 
+#### yoink-insight routes (`/api/v1/insight/`)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | /access | admin | List users with Insight access |
+| POST | /access/{uid} | admin | Grant access |
+| PATCH | /access/{uid} | admin | Update language |
+| DELETE | /access/{uid} | admin | Revoke access |
+| GET | /access/lookup?q= | admin | Search users by @username or ID |
+| GET | /settings/me | user | Get own language setting |
+| PATCH | /settings/me | user | Update own language |
+
 ## Plugin system
 
 Plugins are Python packages declared via entry points:
@@ -176,6 +198,7 @@ Single Alembic chain covering core and all plugins:
 0006_user_is_premium       - premium flag
 0007_dl_dm_topic           - DM topic thread ID
 0008_api_keys              - M2M API keys
+0009_insight_plugin_schema - insight_access table
 ```
 
 ## Role hierarchy
