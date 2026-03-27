@@ -9,7 +9,11 @@
     "nsfw": "NSFW-фильтр",
     "bot_settings": "Настройки бота",
     "admin_stats": "Статистика",
-    "unauthorized": "Нет доступа"
+    "unauthorized": "Нет доступа",
+    "admin": "Администрирование",
+    "chat_stats": "Статистика чатов",
+    "import_history": "Импорт истории",
+    "ai_settings": "AI Настройки"
   },
   "common": {
     "loading": "Загрузка…",

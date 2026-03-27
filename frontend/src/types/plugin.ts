@@ -5,6 +5,8 @@ export interface NavItem {
   /** If set, item is only visible when user has effective access to this feature.
    *  Format: "plugin:feature", e.g. "insight:summary" */
   requiredFeature?: string
+  /** i18n key for the label, e.g. "nav.settings". Falls back to `label`. */
+  i18nKey?: string
   label: string
   path: string
   icon: ReactNode

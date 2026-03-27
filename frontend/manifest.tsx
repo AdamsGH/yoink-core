@@ -23,9 +23,9 @@ export const corePlugin: PluginManifest = {
       defaultOpen: true,
       minRole: ['owner', 'admin'],
       items: [
-        { label: 'Users',        path: '/admin/users',        icon: <Users      className="h-4 w-4" />, minRole: ['owner', 'admin'] },
-        { label: 'Groups',       path: '/admin/groups',       icon: <UsersRound className="h-4 w-4" />, minRole: ['owner', 'admin'] },
-        { label: 'Bot Settings', path: '/admin/bot-settings', icon: <Settings2  className="h-4 w-4" />, minRole: ['owner', 'admin'] },
+        { label: 'Users',        i18nKey: 'nav.users',        path: '/admin/users',        icon: <Users      className="h-4 w-4" />, minRole: ['owner', 'admin'] },
+        { label: 'Groups',       i18nKey: 'nav.groups',       path: '/admin/groups',       icon: <UsersRound className="h-4 w-4" />, minRole: ['owner', 'admin'] },
+        { label: 'Bot Settings', i18nKey: 'nav.bot_settings', path: '/admin/bot-settings', icon: <Settings2  className="h-4 w-4" />, minRole: ['owner', 'admin'] },
       ],
     },
   ],

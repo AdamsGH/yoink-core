@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Moon, Palette, Shield, Sun } from 'lucide-react'
 
@@ -119,8 +120,12 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
   grantedFeatures: Set<string>
   currentPath: string
 }) {
+  const { t } = useTranslation()
   const visible = group.items.filter((i) => canSeeItem(i, role, grantedFeatures))
   if (visible.length === 0) return null
+
+  const getLabel = (item: NavItem) =>
+    item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label
 
   const items = (
     <SidebarMenu>
@@ -129,11 +134,11 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
           <SidebarMenuButton
             asChild
             isActive={currentPath === item.path || currentPath.startsWith(item.path + '/')}
-            tooltip={item.label}
+            tooltip={getLabel(item)}
           >
             <NavLink to={item.path}>
               {item.icon}
-              <span>{item.label}</span>
+              <span>{getLabel(item)}</span>
             </NavLink>
           </SidebarMenuButton>
         </SidebarMenuItem>
@@ -173,13 +178,16 @@ function AdminDrawer({ open, onClose, items, currentPath }: {
   items: NavItem[]
   currentPath: string
 }) {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const go = (path: string) => { void navigate(path); onClose() }
+  const getLabel = (item: NavItem) =>
+    item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
       <SheetContent side="bottom" className="rounded-t-xl pb-8">
         <SheetHeader className="mb-4">
-          <SheetTitle>Admin</SheetTitle>
+          <SheetTitle>{t('nav.admin', { defaultValue: 'Admin' })}</SheetTitle>
         </SheetHeader>
         <div className="grid grid-cols-2 gap-2">
           {items.map((item) => (
@@ -190,7 +198,7 @@ function AdminDrawer({ open, onClose, items, currentPath }: {
               onClick={() => go(item.path)}
             >
               {item.icon}
-              <span className="text-xs font-medium">{item.label}</span>
+              <span className="text-xs font-medium">{getLabel(item)}</span>
             </Button>
           ))}
         </div>
@@ -201,8 +209,11 @@ function AdminDrawer({ open, onClose, items, currentPath }: {
 
 
 export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: AppLayoutProps) {
+  const { t } = useTranslation()
   const { role } = usePermissions()
   const grantedFeatures = useGrantedFeatures()
+  const getLabel = (item: NavItem) =>
+    item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label
   const location = useLocation()
   const { isTelegramApp } = useTelegram()
   const [adminDrawerOpen, setAdminDrawerOpen] = useState(false)
@@ -280,7 +291,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
               )}
             >
               <span className="[&>svg]:h-5 [&>svg]:w-5">{item.icon}</span>
-              <span className="leading-none">{item.label}</span>
+              <span className="leading-none">{getLabel(item)}</span>
             </NavLink>
           )
         })}

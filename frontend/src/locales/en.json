@@ -9,7 +9,11 @@
     "nsfw": "NSFW Filter",
     "bot_settings": "Bot Settings",
     "admin_stats": "Stats",
-    "unauthorized": "Unauthorized"
+    "unauthorized": "Unauthorized",
+    "admin": "Admin",
+    "chat_stats": "Chat Stats",
+    "import_history": "Import History",
+    "ai_settings": "AI Settings"
   },
   "common": {
     "loading": "Loading…",

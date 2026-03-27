@@ -9,7 +9,7 @@ from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes, filters,
 )
 
-from yoink.core.bot.bot_commands import set_user_commands
+from yoink.core.bot.bot_commands import refresh_user_commands
 from yoink.core.bot.middleware import get_user_repo
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import SUPPORTED, t
@@ -33,13 +33,18 @@ async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_html(t("start.banned", user.language))
         return
 
-    plugin_commands = context.bot_data.get("plugin_commands", [])
-    await set_user_commands(
-        context.bot,
+    session_factory = context.bot_data.get("session_factory")
+
+    class _AppState:
+        bot = context.bot
+        bot_data = context.bot_data
+
+    await refresh_user_commands(
+        _AppState(),
         update.effective_user.id,
         role=user.role.value,
-        plugin_commands=plugin_commands,
         lang=user.language,
+        session_factory=session_factory,
     )
 
     await update.message.reply_html(
