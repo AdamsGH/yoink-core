@@ -14,8 +14,8 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i] ?? 'B'}`
 }
 
-export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-US', {
+export function formatDate(iso: string, locale?: string): string {
+  return new Date(iso).toLocaleString(locale ?? navigator.language, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

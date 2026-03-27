@@ -136,24 +136,43 @@ async def set_user_commands(
     plugin_commands: list[CommandSpec] | None = None,
     lang: str | None = None,
 ) -> None:
-    """Set per-chat command list for a private chat based on user role and language."""
+    """Set per-chat command list for a private chat based on user role and language.
+
+    Registers two scopes:
+    - BotCommandScopeChat (no lang) - base fallback for this chat
+    - BotCommandScopeChat + language_code - highest priority per Telegram docs
+
+    This ensures the per-user role-filtered list always wins over
+    BotCommandScopeDefault+language_code which would otherwise show generic commands.
+    """
     all_commands = _CORE_COMMANDS + (plugin_commands or [])
     scope = BotCommandScopeChat(chat_id=chat_id)
 
     if role == "banned":
         try:
             await bot.delete_my_commands(scope=scope)
+            if lang:
+                await bot.delete_my_commands(scope=scope, language_code=lang)
         except TelegramError as e:
             logger.warning("Failed to clear commands for chat %d: %s", chat_id, e)
         return
 
     visible = _filter_by_role(all_commands, role)
-    cmds = _make_bot_commands(
-        [c for c in visible if c.scope in ("default", "private")],
-        lang=lang,
-    )
+    private_cmds = [c for c in visible if c.scope in ("default", "private")]
+
+    # Base scope (no lang) - covers clients with unsupported language
+    base_cmds = _make_bot_commands(private_cmds)
     try:
-        await bot.set_my_commands(cmds, scope=scope)
-        logger.debug("Commands set for chat %d (role=%s lang=%s): %d", chat_id, role, lang, len(cmds))
+        await bot.set_my_commands(base_cmds, scope=scope)
+        logger.debug("Commands set for chat %d (role=%s no-lang): %d", chat_id, role, len(base_cmds))
     except TelegramError as e:
         logger.warning("Failed to set commands for chat %d: %s", chat_id, e)
+
+    # Language-specific scope - highest priority in Telegram's lookup chain
+    if lang:
+        lang_cmds = _make_bot_commands(private_cmds, lang=lang)
+        try:
+            await bot.set_my_commands(lang_cmds, scope=scope, language_code=lang)
+            logger.debug("Commands set for chat %d (role=%s lang=%s): %d", chat_id, role, lang, len(lang_cmds))
+        except TelegramError as e:
+            logger.warning("Failed to set commands for chat %d lang=%s: %s", chat_id, lang, e)

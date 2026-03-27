@@ -149,6 +149,28 @@ def build_app(
         application.bot_data["plugin_commands"] = plugin_commands
         await set_default_commands(application.bot, plugin_commands=plugin_commands)
 
+        # Refresh owner's per-chat command list on every startup so new plugins
+        # appear immediately without requiring /start.
+        if config.owner_id:
+            try:
+                from sqlalchemy import select as sa_select
+                from yoink.core.db.models import User
+                async with session_factory() as _s:
+                    owner = (await _s.execute(
+                        sa_select(User).where(User.id == config.owner_id)
+                    )).scalar_one_or_none()
+                if owner:
+                    await set_user_commands(
+                        application.bot,
+                        config.owner_id,
+                        role=owner.role.value,
+                        plugin_commands=plugin_commands,
+                        lang=owner.language,
+                    )
+                    logger.info("Refreshed commands for owner %d (lang=%s)", config.owner_id, owner.language)
+            except Exception as exc:
+                logger.warning("Failed to refresh owner commands: %s", exc)
+
         await _kick_proxy(application.bot)
 
         me = await application.bot.get_me()
