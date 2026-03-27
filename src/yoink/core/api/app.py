@@ -113,6 +113,32 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
 
     @app.get("/docs", include_in_schema=False)
     async def scalar_html():
-        return get_scalar_api_reference(openapi_url="/openapi.json", title="Yoink API")
+        return get_scalar_api_reference(
+            openapi_url="/openapi.json",
+            title="Yoink API",
+            force_dark_mode_state="dark",
+            hide_dark_mode_toggle=True,
+            custom_css="""
+                :root.dark-mode {
+                    --scalar-color-1: #cad3f5;
+                    --scalar-color-2: #a5adcb;
+                    --scalar-color-3: #8087a2;
+                    --scalar-color-accent: #c6a0f6;
+                    --scalar-background-1: #24273a;
+                    --scalar-background-2: #1e2030;
+                    --scalar-background-3: #363a4f;
+                    --scalar-background-accent: #1e1e2e;
+                    --scalar-border-color: #363a4f;
+                    --scalar-color-green: #a6da95;
+                    --scalar-color-red: #ed8796;
+                    --scalar-color-yellow: #eed49f;
+                    --scalar-color-blue: #8aadf4;
+                    --scalar-color-orange: #f5a97f;
+                    --scalar-color-purple: #c6a0f6;
+                }
+                .sidebar { background: #1e2030 !important; }
+                .darklight-reference-promo { display: none !important; }
+            """,
+        )
 
     return app
