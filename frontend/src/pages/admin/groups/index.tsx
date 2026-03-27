@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
+import { MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
-import { cn, formatDate } from '@core/lib/utils'
+import { cn } from '@core/lib/utils'
 import type { Group, GroupCreateRequest, GroupUpdateRequest, ThreadPolicy, UserRole } from '@core/types/api'
 import { Badge } from '@core/components/ui/badge'
-import { SuccessBadge, WarningBadge } from '@core/components/app/StatusBadge'
+import { SuccessBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
 import {
@@ -392,51 +392,51 @@ export default function AdminGroupsPage() {
             ) : items.length === 0 ? (
               <div className="flex justify-center py-12 text-muted-foreground text-sm">{t('groups.no_groups')}</div>
             ) : (
-              <div className="divide-y divide-border">
+              <div className="divide-y divide-border px-3 py-1">
                 {items.map((group) => (
                   <div key={group.id}>
-                    <div className="px-3 py-1">
-                      <Item size="sm" className="py-2.5 rounded-none border-0">
-                        <ItemMedia
-                          variant="icon"
-                          className={cn(
-                            'size-8 rounded-md cursor-pointer',
-                            group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
-                          )}
-                          onClick={() => setExpanded((p) => p === group.id ? null : group.id)}
-                        >
-                          {expanded === group.id
-                            ? <ChevronDown className="size-4" />
-                            : <ChevronRight className="size-4" />}
-                        </ItemMedia>
-                        <ItemContent>
-                          <ItemTitle>
-                            {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
-                          </ItemTitle>
-                          <ItemDescription>
-                            <span className="font-mono">{group.id}</span>
-                            <span className="text-muted-foreground/60"> · {formatDate(group.created_at)}</span>
-                          </ItemDescription>
-                        </ItemContent>
-                        <ItemActions>
-                          <div className="flex flex-wrap gap-1">
-                            {group.enabled
-                              ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
-                              : <Badge variant="outline">{t('groups.disabled')}</Badge>}
-                            <Badge variant="secondary">{group.auto_grant_role}</Badge>
-                            {group.nsfw_allowed && <WarningBadge>NSFW</WarningBadge>}
-                          </div>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEdit(defaultEdit(group))}>
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{t('common.edit')}</TooltipContent>
-                          </Tooltip>
-                        </ItemActions>
-                      </Item>
-                    </div>
+                    <Item
+                      size="sm"
+                      className="py-2.5 rounded-none border-0 cursor-pointer"
+                      onClick={() => setExpanded((p) => p === group.id ? null : group.id)}
+                    >
+                      <ItemMedia
+                        variant="icon"
+                        className={cn(
+                          'size-8 rounded-md',
+                          group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
+                        )}
+                      >
+                        <MessageSquare className="size-4" />
+                      </ItemMedia>
+                      <ItemContent>
+                        <ItemTitle>
+                          {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
+                        </ItemTitle>
+                        <ItemDescription>
+                          <span className="font-mono text-[11px]">{group.id}</span>
+                          {group.nsfw_allowed && <span className="text-amber-500"> · NSFW</span>}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions>
+                        {group.enabled
+                          ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
+                          : <Badge variant="outline">{t('groups.disabled')}</Badge>}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={(e) => { e.stopPropagation(); setEdit(defaultEdit(group)) }}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('common.edit')}</TooltipContent>
+                        </Tooltip>
+                      </ItemActions>
+                    </Item>
                     {expanded === group.id && <ThreadRows groupId={group.id} />}
                   </div>
                 ))}
