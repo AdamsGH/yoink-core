@@ -122,28 +122,20 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
     item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label
   const getGroupLabel = () =>
     group.i18nKey ? t(group.i18nKey, { defaultValue: group.label }) : group.label
-
   const isGroupActive = visible.some(
     (i) => currentPath === i.path || currentPath.startsWith(i.path + '/')
   )
 
-  // Group with icon: renders as collapsible parent + SidebarMenuSub children.
-  // Collapsed sidebar shows only the parent icon button (sidebar-07 pattern).
+  // Group with icon: collapsible parent button + SidebarMenuSub children.
+  // When sidebar is collapsed only the parent icon is visible (sidebar-07 pattern).
   if (group.icon) {
     return (
       <SidebarGroup className="px-2 py-1">
         <SidebarMenu>
-          <Collapsible
-            asChild
-            defaultOpen={group.defaultOpen ?? true}
-            className="group/collapsible"
-          >
+          <Collapsible asChild defaultOpen={group.defaultOpen ?? true} className="group/collapsible">
             <SidebarMenuItem>
               <CollapsibleTrigger asChild>
-                <SidebarMenuButton
-                  tooltip={getGroupLabel()}
-                  isActive={isGroupActive}
-                >
+                <SidebarMenuButton tooltip={getGroupLabel()} isActive={isGroupActive}>
                   {group.icon}
                   <span>{getGroupLabel()}</span>
                   <ChevronDown className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-180" />
@@ -173,7 +165,7 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
     )
   }
 
-  // Flat group: all items at top level, optional text label header.
+  // Flat group: items at top level with optional label header.
   return (
     <SidebarGroup>
       {group.label && <SidebarGroupLabel>{getGroupLabel()}</SidebarGroupLabel>}
@@ -264,6 +256,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
         <Sidebar collapsible="icon">
           <SidebarHeader>
             <div className="flex h-10 items-center gap-2 px-2">
+              <SidebarTrigger className="-ml-1" />
               <span className="font-bold text-sm truncate flex-1 group-data-[collapsible=icon]:hidden">
                 {appName}
               </span>
@@ -296,7 +289,6 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
 
         <SidebarInset>
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-            <SidebarTrigger className="-ml-1" />
             <span className="text-sm font-medium">
               {(() => {
                 const item = visibleGroups.flatMap((g) => g.items).find((i) =>
