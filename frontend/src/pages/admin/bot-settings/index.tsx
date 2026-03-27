@@ -1,38 +1,80 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Globe, HardDrive, Shield, Tag } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { Button } from '@core/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@core/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
 import { Input } from '@core/components/ui/input'
-import { Label } from '@core/components/ui/label'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@core/components/ui/select'
+import { Separator } from '@core/components/ui/separator'
+import { Skeleton } from '@core/components/ui/skeleton'
 import { toast } from '@core/components/ui/toast'
+import { useTelegramSaveButton, useTelegramWebApp } from '@core/hooks/useTelegramWebApp'
 import TagMapEditor from './TagMapEditor'
 
 const ROLES = ['owner', 'admin', 'moderator', 'user'] as const
 
+function SectionSkeleton() {
+  return (
+    <Card>
+      <CardHeader className="px-4 py-3">
+        <Skeleton className="h-5 w-36" />
+      </CardHeader>
+      <CardContent className="px-4 pb-4 space-y-3">
+        <Skeleton className="h-4 w-64" />
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-3 w-48" />
+      </CardContent>
+    </Card>
+  )
+}
+
+function SettingRow({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-4">
+      <div className="sm:w-48 shrink-0 pt-0.5">
+        <p className="text-sm font-medium leading-none">{label}</p>
+        {hint && <p className="mt-1 text-xs text-muted-foreground leading-snug">{hint}</p>}
+      </div>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  )
+}
+
 export default function AdminBotSettingsPage() {
   const { t } = useTranslation()
+  const { hapticSelection, haptic } = useTelegramWebApp()
+
   const [settings, setSettings] = useState<Record<string, string | null>>({})
   const [loading, setLoading] = useState(true)
+
   const [storageChat, setStorageChat] = useState('')
   const [storageThread, setStorageThread] = useState('')
   const [storageSaving, setStorageSaving] = useState(false)
+  const [storageDirty, setStorageDirty] = useState(false)
+  const originalStorage = useRef({ chat: '', thread: '' })
 
   useEffect(() => {
     apiClient
       .get<Record<string, string | null>>('/bot-settings')
       .then((r) => {
         setSettings(r.data)
-        setStorageChat(r.data['inline_storage_chat_id'] ?? '')
-        setStorageThread(r.data['inline_storage_thread_id'] ?? '')
+        const chat = r.data['inline_storage_chat_id'] ?? ''
+        const thread = r.data['inline_storage_thread_id'] ?? ''
+        setStorageChat(chat)
+        setStorageThread(thread)
+        originalStorage.current = { chat, thread }
       })
       .catch(() => toast.error(t('bot_settings.load_error')))
       .finally(() => setLoading(false))
@@ -45,36 +87,73 @@ export default function AdminBotSettingsPage() {
         inline_storage_chat_id: storageChat || null,
         inline_storage_thread_id: storageThread || null,
       })
+      originalStorage.current = { chat: storageChat, thread: storageThread }
+      setStorageDirty(false)
+      haptic('success')
       toast.success(t('bot_settings.save_ok'))
     } catch {
+      haptic('error')
       toast.error(t('bot_settings.save_error'))
     } finally {
       setStorageSaving(false)
     }
   }
 
+  useTelegramSaveButton({
+    dirty: storageDirty,
+    saving: storageSaving,
+    text: t('bot_settings.save_storage'),
+    onSave: saveStorage,
+  })
+
+  const updateStorageChat = (v: string) => {
+    setStorageChat(v)
+    setStorageDirty(v !== originalStorage.current.chat || storageThread !== originalStorage.current.thread)
+  }
+  const updateStorageThread = (v: string) => {
+    setStorageThread(v)
+    setStorageDirty(storageChat !== originalStorage.current.chat || v !== originalStorage.current.thread)
+  }
+
   const update = async (key: string, value: string) => {
+    hapticSelection()
     try {
       await apiClient.patch('/bot-settings', { [key]: value })
       setSettings((prev) => ({ ...prev, [key]: value }))
+      haptic('success')
       toast.success(t('bot_settings.save_ok'))
     } catch {
+      haptic('error')
       toast.error(t('bot_settings.save_error'))
     }
   }
 
-  if (loading) return <div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div>
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <SectionSkeleton />
+        <SectionSkeleton />
+        <SectionSkeleton />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
+
+      {/* Access Mode */}
       <Card>
         <CardHeader className="px-4 py-3">
-          <CardTitle>{t('bot_settings.access_mode')}</CardTitle>
-          <CardDescription>{t('bot_settings.access_mode_desc')}</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Globe className="h-4 w-4 text-muted-foreground" />
+            {t('bot_settings.access_mode')}
+          </CardTitle>
         </CardHeader>
-        <CardContent className="px-4 py-3 space-y-3">
-          <div className="space-y-1.5">
-            <Label>{t('bot_settings.access_label')}</Label>
+        <CardContent className="px-4 pb-4">
+          <SettingRow
+            label={t('bot_settings.access_label')}
+            hint={t('bot_settings.access_hint')}
+          >
             <Select
               value={settings['bot_access_mode'] ?? 'open'}
               onValueChange={(v) => update('bot_access_mode', v)}
@@ -87,19 +166,23 @@ export default function AdminBotSettingsPage() {
                 <SelectItem value="approved_only">{t('bot_settings.access_approved')}</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">{t('bot_settings.access_hint')}</p>
-          </div>
+          </SettingRow>
         </CardContent>
       </Card>
 
+      {/* Browser Cookies */}
       <Card>
         <CardHeader className="px-4 py-3">
-          <CardTitle>{t('bot_settings.browser_cookies')}</CardTitle>
-          <CardDescription>{t('bot_settings.browser_cookies_desc')}</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Shield className="h-4 w-4 text-muted-foreground" />
+            {t('bot_settings.browser_cookies')}
+          </CardTitle>
         </CardHeader>
-        <CardContent className="px-4 py-3 space-y-3">
-          <div className="space-y-1.5">
-            <Label>{t('bot_settings.browser_cookies_role')}</Label>
+        <CardContent className="px-4 pb-4">
+          <SettingRow
+            label={t('bot_settings.browser_cookies_role')}
+            hint={t('bot_settings.browser_cookies_hint')}
+          >
             <Select
               value={settings['browser_cookies_min_role'] ?? 'owner'}
               onValueChange={(v) => update('browser_cookies_min_role', v)}
@@ -115,50 +198,74 @@ export default function AdminBotSettingsPage() {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">{t('bot_settings.browser_cookies_hint')}</p>
-          </div>
+          </SettingRow>
         </CardContent>
       </Card>
 
+      {/* Inline Storage */}
       <Card>
         <CardHeader className="px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <CardTitle>{t('bot_settings.inline_storage')}</CardTitle>
-              <CardDescription>{t('bot_settings.inline_storage_desc')}</CardDescription>
-            </div>
-            <Button onClick={saveStorage} disabled={storageSaving} size="sm" className="shrink-0">
-              {storageSaving ? t('bot_settings.saving') : t('bot_settings.save_storage')}
-            </Button>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <HardDrive className="h-4 w-4 text-muted-foreground" />
+              {t('bot_settings.inline_storage')}
+            </CardTitle>
+            {storageDirty && (
+              <Button
+                onClick={saveStorage}
+                disabled={storageSaving}
+                size="sm"
+                className="shrink-0"
+              >
+                {storageSaving ? t('bot_settings.saving') : t('common.save')}
+              </Button>
+            )}
           </div>
+          <p className="text-xs text-muted-foreground leading-snug mt-1">
+            {t('bot_settings.inline_storage_desc')}
+          </p>
         </CardHeader>
-        <CardContent className="px-4 py-3 space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="storage-chat">{t('bot_settings.storage_chat_id')}</Label>
-              <Input
-                id="storage-chat"
-                placeholder={t('bot_settings.storage_chat_placeholder')}
-                value={storageChat}
-                onChange={(e) => setStorageChat(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">{t('bot_settings.storage_chat_hint')}</p>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="storage-thread">{t('bot_settings.storage_thread_id')}</Label>
-              <Input
-                id="storage-thread"
-                placeholder={t('bot_settings.storage_thread_placeholder')}
-                value={storageThread}
-                onChange={(e) => setStorageThread(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">{t('bot_settings.storage_thread_hint')}</p>
-            </div>
-          </div>
+        <CardContent className="px-4 pb-4 space-y-4">
+          <SettingRow
+            label={t('bot_settings.storage_chat_id')}
+            hint={t('bot_settings.storage_chat_hint')}
+          >
+            <Input
+              placeholder={t('bot_settings.storage_chat_placeholder')}
+              value={storageChat}
+              onChange={(e) => updateStorageChat(e.target.value)}
+            />
+          </SettingRow>
+          <Separator />
+          <SettingRow
+            label={t('bot_settings.storage_thread_id')}
+            hint={t('bot_settings.storage_thread_hint')}
+          >
+            <Input
+              placeholder={t('bot_settings.storage_thread_placeholder')}
+              value={storageThread}
+              onChange={(e) => updateStorageThread(e.target.value)}
+            />
+          </SettingRow>
         </CardContent>
       </Card>
 
-      <TagMapEditor />
+      {/* Tag Map */}
+      <Card>
+        <CardHeader className="px-4 py-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Tag className="h-4 w-4 text-muted-foreground" />
+            {t('tag_map.title')}
+          </CardTitle>
+          <p className="text-xs text-muted-foreground leading-snug mt-1">
+            {t('tag_map.description')}
+          </p>
+        </CardHeader>
+        <CardContent className="px-4 pb-4">
+          <TagMapEditor embedded />
+        </CardContent>
+      </Card>
+
     </div>
   )
 }

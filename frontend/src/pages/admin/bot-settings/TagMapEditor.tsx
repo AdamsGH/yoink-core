@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@core
 import { Input } from '@core/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@core/components/ui/popover'
 import { Separator } from '@core/components/ui/separator'
+import { Skeleton } from '@core/components/ui/skeleton'
 import { toast } from '@core/components/ui/toast'
 import type { AvailableFeature, TagMapEntry } from '@core/types/api'
 
@@ -150,7 +151,7 @@ function TagRow({ entry, available, onChange, onDelete }: TagRowProps) {
   )
 }
 
-export default function TagMapEditor() {
+export default function TagMapEditor({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation()
   const [entries, setEntries] = useState<TagMapEntry[]>([])
   const [available, setAvailable] = useState<AvailableFeature[]>([])
@@ -196,8 +197,46 @@ export default function TagMapEditor() {
     }
   }
 
-  if (loading)
-    return <div className="py-4 text-sm text-muted-foreground">{t('common.loading')}</div>
+  const content = (
+    <div className="space-y-4">
+      {loading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      ) : entries.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t('tag_map.empty')}</p>
+      ) : (
+        <div className="space-y-2">
+          <div className="grid grid-cols-[144px_1fr_36px] gap-2 px-0.5 text-xs font-medium text-muted-foreground">
+            <span>{t('tag_map.col_tag')}</span>
+            <span>{t('tag_map.col_features')}</span>
+            <span />
+          </div>
+          {entries.map((entry, i) => (
+            <TagRow
+              key={i}
+              entry={entry}
+              available={available}
+              onChange={(e) => updateRow(i, e)}
+              onDelete={() => deleteRow(i)}
+            />
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2 pt-1">
+        <Button type="button" variant="outline" size="sm" onClick={addRow} className="w-full">
+          <Plus className="mr-1.5 h-4 w-4" />
+          {t('tag_map.add_rule')}
+        </Button>
+        <Button type="button" size="sm" onClick={save} disabled={saving || loading} className="w-full">
+          {saving ? t('tag_map.saving') : t('tag_map.save')}
+        </Button>
+      </div>
+    </div>
+  )
+
+  if (embedded) return content
 
   return (
     <Card>
@@ -205,37 +244,7 @@ export default function TagMapEditor() {
         <CardTitle>{t('tag_map.title')}</CardTitle>
         <CardDescription>{t('tag_map.description')}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {entries.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('tag_map.empty')}</p>
-        ) : (
-          <div className="space-y-2">
-            <div className="grid grid-cols-[144px_1fr_36px] gap-2 px-0.5 text-xs font-medium text-muted-foreground">
-              <span>{t('tag_map.col_tag')}</span>
-              <span>{t('tag_map.col_features')}</span>
-              <span />
-            </div>
-            {entries.map((entry, i) => (
-              <TagRow
-                key={i}
-                entry={entry}
-                available={available}
-                onChange={(e) => updateRow(i, e)}
-                onDelete={() => deleteRow(i)}
-              />
-            ))}
-          </div>
-        )}
-        <div className="grid grid-cols-2 gap-2 pt-1">
-          <Button type="button" variant="outline" size="sm" onClick={addRow} className="w-full">
-            <Plus className="mr-1.5 h-4 w-4" />
-            {t('tag_map.add_rule')}
-          </Button>
-          <Button type="button" size="sm" onClick={save} disabled={saving} className="w-full">
-            {saving ? t('tag_map.saving') : t('tag_map.save')}
-          </Button>
-        </div>
-      </CardContent>
+      <CardContent className="px-4 pb-4">{content}</CardContent>
     </Card>
   )
 }
