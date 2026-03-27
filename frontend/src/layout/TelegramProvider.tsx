@@ -11,7 +11,7 @@ const STORAGE_KEY = 'ctp-flavor'
 const TOKEN_KEY = 'access_token'
 const DEFAULT_FLAVOR: CatppuccinFlavor = 'macchiato'
 
-const API_BASE = import.meta.env.VITE_API_URL ?? '/api/v1'
+const API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8003/api/v1' : '/api/v1')
 
 interface TelegramUser {
   id: number
@@ -72,7 +72,7 @@ function getDevParam(): string | null {
   return (
     new URLSearchParams(window.location.search).get('dev_token') ??
     (import.meta.env.VITE_DEV_TOKEN as string | undefined) ??
-    null
+    (import.meta.env.DEV ? '273863879:owner' : null)
   )
 }
 
