@@ -91,13 +91,12 @@ export function JsonEditor({
   const extensions = useMemo(
     () => [
       json(),
-      lintGutter(),
-      linter(jsonParseLinter()),
+      ...(readOnly ? [] : [lintGutter(), linter(jsonParseLinter())]),
       syntaxHighlighting(appHighlight),
       appTheme,
       EditorView.lineWrapping,
     ],
-    []
+    [readOnly]
   )
 
   return (
@@ -111,12 +110,12 @@ export function JsonEditor({
         theme="none"
         readOnly={readOnly}
         basicSetup={{
-          lineNumbers: true,
-          foldGutter: true,
+          lineNumbers: !readOnly,
+          foldGutter: false,
           highlightActiveLine: !readOnly,
           autocompletion: false,
-          bracketMatching: true,
-          indentOnInput: true,
+          bracketMatching: !readOnly,
+          indentOnInput: !readOnly,
           syntaxHighlighting: false,
         }}
         style={{ minHeight }}
