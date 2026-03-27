@@ -188,15 +188,18 @@ async def set_user_commands(
     visible = _filter_by_role(all_commands, role, granted_features=granted_features)
     private_cmds = [c for c in visible if c.scope in ("default", "private")]
 
-    # Base scope (no lang) - covers clients with unsupported language
-    base_cmds = _make_bot_commands(private_cmds)
+    # Base scope (no lang) - shown to clients whose Telegram language has no
+    # explicit scope set. Use the user's preferred language so that regardless
+    # of Telegram client locale the user sees their chosen language.
+    base_cmds = _make_bot_commands(private_cmds, lang=lang)
     try:
         await bot.set_my_commands(base_cmds, scope=scope)
-        logger.debug("Commands set for chat %d (role=%s no-lang): %d", chat_id, role, len(base_cmds))
+        logger.debug("Commands set for chat %d (role=%s no-lang→%s): %d", chat_id, role, lang or "en", len(base_cmds))
     except TelegramError as e:
         logger.warning("Failed to set commands for chat %d: %s", chat_id, e)
 
-    # Language-specific scope - highest priority in Telegram's lookup chain
+    # Language-specific scope - explicit match for clients whose Telegram locale
+    # matches the user's preferred language (highest priority in lookup chain).
     if lang:
         lang_cmds = _make_bot_commands(private_cmds, lang=lang)
         try:
