@@ -145,3 +145,21 @@ class GroupRepo(BaseRepo[Group]):
             group.storage_chat_id = storage_chat_id
             group.storage_thread_id = storage_thread_id
             await s.commit()
+
+    async def touch_member(self, group_id: int, user_id: int) -> None:
+        """Ensure a UserGroupPolicy row exists for this (group, user) pair.
+
+        Creates a bare row with no overrides if not yet present.
+        This allows refresh_member_commands to find the group via
+        UserGroupPolicy when iterating a user's groups.
+        """
+        async with self._sf() as s:
+            result = await s.execute(
+                select(UserGroupPolicy).where(
+                    UserGroupPolicy.user_id == user_id,
+                    UserGroupPolicy.group_id == group_id,
+                )
+            )
+            if result.scalar_one_or_none() is None:
+                s.add(UserGroupPolicy(user_id=user_id, group_id=group_id))
+                await s.commit()

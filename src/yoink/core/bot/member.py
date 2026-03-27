@@ -139,6 +139,7 @@ async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         set_member_commands,
         clear_member_commands,
         refresh_user_commands,
+        refresh_member_commands,
     )
 
     if _is_join(cmu):
@@ -180,13 +181,27 @@ async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 user_id, new_tag, None, perm_repo, bot_settings_repo, owner_id
             )
             if tag_changed:
+                sf = context.bot_data.get("session_factory")
                 await refresh_user_commands(
                     context.application,
                     user_id,
                     role=user.role.value,
                     lang=user.language,
-                    session_factory=context.bot_data.get("session_factory"),
+                    session_factory=sf,
                 )
+                await refresh_member_commands(
+                    context.application,
+                    user_id,
+                    role=user.role.value,
+                    lang=user.language,
+                    session_factory=sf,
+                )
+
+        # Record membership so refresh_member_commands can find this group later.
+        try:
+            await group_repo.touch_member(group_id=group_id, user_id=user_id)
+        except Exception as exc:
+            logger.debug("touch_member failed user=%d group=%d: %s", user_id, group_id, exc)
 
         # Set BotCommandScopeChatMember for this group.
         try:
@@ -219,12 +234,20 @@ async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 user_id, new_tag, old_tag, perm_repo, bot_settings_repo, owner_id
             )
             if tag_changed and user:
+                sf = context.bot_data.get("session_factory")
                 await refresh_user_commands(
                     context.application,
                     user_id,
                     role=user.role.value,
                     lang=user.language,
-                    session_factory=context.bot_data.get("session_factory"),
+                    session_factory=sf,
+                )
+                await refresh_member_commands(
+                    context.application,
+                    user_id,
+                    role=user.role.value,
+                    lang=user.language,
+                    session_factory=sf,
                 )
 
 
