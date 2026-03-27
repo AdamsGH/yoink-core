@@ -33,6 +33,7 @@ export interface UserStats {
   today: number
   top_domains: Array<{ domain: string; count: number }>
   member_since: string
+  by_category?: Record<string, number>
 }
 
 export interface PluginManifest {

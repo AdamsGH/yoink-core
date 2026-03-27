@@ -23,6 +23,36 @@ class UserStatsResponse(BaseModel):
     today: int
     top_domains: list[dict]
     member_since: datetime
+    # Breakdown by category - present only when dl plugin is loaded
+    by_category: dict[str, int] = {}
+
+
+_MUSIC_DOMAINS = frozenset({
+    "open.spotify.com", "spotify.com",
+    "music.yandex.ru", "music.yandex.com",
+    "deezer.com", "www.deezer.com",
+    "music.apple.com",
+    "soundcloud.com",
+    "music.youtube.com",
+})
+_VIDEO_DOMAINS = frozenset({
+    "youtube.com", "youtu.be", "m.youtube.com", "www.youtube.com",
+    "tiktok.com", "vimeo.com", "twitch.tv",
+    "instagram.com", "ig.me",
+    "twitter.com", "x.com",
+    "reddit.com", "redd.it",
+})
+
+
+def _categorize_domain(domain: str | None) -> str:
+    if not domain:
+        return "other"
+    d = domain.lower().removeprefix("www.")
+    if d in _MUSIC_DOMAINS:
+        return "music"
+    if d in _VIDEO_DOMAINS:
+        return "video"
+    return "other"
 
 
 @router.get("/me/stats", response_model=UserStatsResponse)
@@ -59,9 +89,19 @@ async def get_my_stats(
             .limit(5)
         )
         top_domains = [{"domain": r.domain, "count": r.cnt} for r in top_result]
+        # Per-category counts
+        cat_result = await session.execute(
+            select(DownloadLog.domain, func.count().label("cnt"))
+            .where(base, DownloadLog.domain.isnot(None))
+            .group_by(DownloadLog.domain)
+        )
+        by_category: dict[str, int] = {"video": 0, "music": 0, "other": 0}
+        for r in cat_result:
+            by_category[_categorize_domain(r.domain)] += r.cnt
     except ImportError:
         total = today_count = week_count = 0
         top_domains = []
+        by_category = {}
 
     return UserStatsResponse(
         total=total,
@@ -69,6 +109,7 @@ async def get_my_stats(
         this_week=week_count,
         top_domains=top_domains,
         member_since=current_user.created_at,
+        by_category=by_category,
     )
 
 
@@ -165,10 +206,19 @@ async def get_user_stats(
             .limit(5)
         )
         top_domains = [{"domain": r.domain, "count": r.cnt} for r in top_result]
+        cat_result2 = await session.execute(
+            select(DownloadLog.domain, func.count().label("cnt"))
+            .where(base, DownloadLog.domain.isnot(None))
+            .group_by(DownloadLog.domain)
+        )
+        by_category: dict[str, int] = {"video": 0, "music": 0, "other": 0}
+        for r in cat_result2:
+            by_category[_categorize_domain(r.domain)] += r.cnt
         user = await session.get(User, user_id)
     except ImportError:
         total = today_count = week_count = 0
         top_domains = []
+        by_category = {}
         user = await session.get(User, user_id)
 
     if user is None:
@@ -180,6 +230,7 @@ async def get_user_stats(
         this_week=week_count,
         top_domains=top_domains,
         member_since=user.created_at,
+        by_category=by_category,
     )
 
 

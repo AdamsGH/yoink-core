@@ -262,11 +262,14 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
 
         <SidebarInset>
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-            <SidebarTrigger className="-ml-1" />
+            <SidebarTrigger className="-ml-1 hidden md:flex" />
             <span className="text-sm font-medium">
-              {visibleGroups.flatMap((g) => g.items).find((i) =>
-                location.pathname === i.path || location.pathname.startsWith(i.path + '/')
-              )?.label ?? appName}
+              {(() => {
+                const item = visibleGroups.flatMap((g) => g.items).find((i) =>
+                  location.pathname === i.path || location.pathname.startsWith(i.path + '/')
+                )
+                return item ? getLabel(item) : appName
+              })()}
             </span>
           </header>
           <div className="flex-1 overflow-y-auto pb-16 md:pb-0">

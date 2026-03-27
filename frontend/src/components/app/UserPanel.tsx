@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useGetIdentity } from '@refinedev/core'
-import { Download, UserCircle } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { Download, Music, Film, Package, UserCircle } from 'lucide-react'
 
 import { apiClient } from '../../lib/api-client'
 import { formatDate } from '../../lib/utils'
@@ -19,12 +20,17 @@ const ROLE_VARIANT: Record<string, 'default' | 'secondary' | 'success' | 'warnin
   banned:     'destructive',
 }
 
+const CATEGORY_ICONS: Record<string, React.ReactNode> = {
+  video: <Film className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />,
+  music: <Music className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />,
+  other: <Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />,
+}
+
 function Avatar({ photoUrl, name, size = 40 }: { photoUrl?: string; name: string; size?: number }) {
   const [error, setError] = useState(false)
   const initials = name.replace(/^@/, '').slice(0, 2).toUpperCase()
 
   if (photoUrl && !error) {
-    // width/height/style are dynamic from size prop
     return (
       <img
         src={photoUrl}
@@ -38,7 +44,6 @@ function Avatar({ photoUrl, name, size = 40 }: { photoUrl?: string; name: string
     )
   }
 
-  // width/height/fontSize/UserCircle size are dynamic from size prop
   return (
     <div
       className="rounded-full bg-muted flex items-center justify-center shrink-0 text-muted-foreground font-semibold select-none"
@@ -65,6 +70,7 @@ interface UserPanelProps {
 export function UserPanel({ statsEndpoint }: UserPanelProps) {
   const { data: identity } = useGetIdentity<{ id: string; name: string; role: string }>()
   const { user: tgUser } = useTelegram()
+  const { t } = useTranslation()
   const [stats, setStats] = useState<UserStats | null>(null)
   const [open, setOpen] = useState(false)
 
@@ -75,9 +81,13 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
       .catch(() => {})
   }, [open, statsEndpoint])
 
-  const name = identity?.name ?? tgUser?.first_name ?? '…'
+  const name = identity?.name ?? tgUser?.first_name ?? '...'
   const role = identity?.role ?? ''
   const photoUrl = tgUser?.photo_url
+
+  const categoryEntries = stats?.by_category
+    ? Object.entries(stats.by_category).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
+    : []
 
   const trigger = (
     <Button variant="ghost" className="w-full flex items-center gap-3 rounded-md px-3 py-2 text-left h-auto">
@@ -116,14 +126,35 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
           stats ? (
             <div className="space-y-5">
               <div className="flex gap-2">
-                <StatCard label="Today" value={stats.today} />
-                <StatCard label="This week" value={stats.this_week} />
-                <StatCard label="All time" value={stats.total} />
+                <StatCard label={t('userpanel.today', { defaultValue: 'Today' })} value={stats.today} />
+                <StatCard label={t('userpanel.this_week', { defaultValue: 'This week' })} value={stats.this_week} />
+                <StatCard label={t('userpanel.total', { defaultValue: 'All time' })} value={stats.total} />
               </div>
+
+              {categoryEntries.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {t('userpanel.by_category', { defaultValue: 'By type' })}
+                  </p>
+                  <div className="space-y-1">
+                    {categoryEntries.map(([cat, count]) => (
+                      <div key={cat} className="flex items-center gap-2 text-sm">
+                        {CATEGORY_ICONS[cat] ?? <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                        <span className="flex-1 capitalize text-muted-foreground">
+                          {t(`userpanel.cat_${cat}`, { defaultValue: cat })}
+                        </span>
+                        <span className="tabular-nums">{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {stats.top_domains.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Top sources</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {t('userpanel.top_sources', { defaultValue: 'Top sources' })}
+                  </p>
                   <div className="space-y-1">
                     {stats.top_domains.map((d) => (
                       <div key={d.domain} className="flex items-center gap-2 text-sm">
@@ -137,11 +168,13 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
               )}
 
               <p className="text-xs text-muted-foreground">
-                Member since {formatDate(stats.member_since)}
+                {t('userpanel.member_since', { defaultValue: 'Member since' })} {formatDate(stats.member_since)}
               </p>
             </div>
           ) : (
-            <div className="flex justify-center py-8 text-muted-foreground text-sm">Loading…</div>
+            <div className="flex justify-center py-8 text-muted-foreground text-sm">
+              {t('common.loading')}
+            </div>
           )
         )}
       </SheetContent>

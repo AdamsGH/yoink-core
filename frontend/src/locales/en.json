@@ -413,5 +413,16 @@
     "save_ok": "Tag mapping saved",
     "save_error": "Failed to save tag mapping",
     "load_error": "Failed to load tag mapping"
+  },
+  "userpanel": {
+    "today": "Today",
+    "this_week": "This week",
+    "total": "All time",
+    "by_category": "By type",
+    "cat_video": "Video",
+    "cat_music": "Music",
+    "cat_other": "Other",
+    "top_sources": "Top sources",
+    "member_since": "Member since"
   }
 }
