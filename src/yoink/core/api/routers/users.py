@@ -237,13 +237,19 @@ async def update_user(
     await session.refresh(user)
 
     if role_changed or body.language is not None:
-        from yoink.core.bot.bot_commands import refresh_user_commands
+        from yoink.core.bot.bot_commands import refresh_user_commands, refresh_member_commands
         sf = getattr(request.app.state, "bot_data", {}).get("session_factory")
         await refresh_user_commands(
             request.app.state, user_id,
             role=user.role.value, lang=user.language,
             session_factory=sf,
         )
+        if role_changed:
+            await refresh_member_commands(
+                request.app.state, user_id,
+                role=user.role.value, lang=user.language,
+                session_factory=sf,
+            )
 
     return UserResponse(
         id=user.id, username=user.username, first_name=user.first_name,

@@ -1,6 +1,7 @@
 """BotSetting key-value repository."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy import select
@@ -13,6 +14,7 @@ DEFAULTS: dict[str, Any] = {
     "bot_access_mode": "open",
     "inline_storage_chat_id": None,
     "inline_storage_thread_id": None,
+    "tag_map": "{}",
 }
 
 
@@ -54,6 +56,22 @@ class BotSettingsRepo:
     async def get_bot_access_mode(self) -> str:
         val = await self.get("bot_access_mode")
         return val if val in ("open", "approved_only") else "open"
+
+    async def get_tag_map(self) -> dict[str, list[str]]:
+        """Return tag -> list[plugin:feature] mapping from bot_settings."""
+        raw = await self.get("tag_map")
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return {}
+
+    async def set_tag_map(self, mapping: dict[str, list[str]]) -> None:
+        await self.set("tag_map", json.dumps(mapping, ensure_ascii=False))
 
     async def get_inline_storage(self) -> tuple[int | None, int | None]:
         """Return (chat_id, thread_id) for global inline storage, or (None, None)."""

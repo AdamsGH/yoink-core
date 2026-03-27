@@ -34,7 +34,8 @@
     "refresh": "Refresh",
     "no_data": "No data",
     "load_error": "Failed to load data",
-    "saving": "Saving..."
+    "saving": "Saving...",
+    "no_results": "No results"
   },
   "permissions": {
     "title": "Permissions",
@@ -393,5 +394,21 @@
     "message_history": "Message history",
     "activity_by_month": "Activity by month",
     "top_mentions": "Top mentions"
+  },
+  "tag_map": {
+    "title": "Tag → Permission Mapping",
+    "description": "Automatically grant or revoke plugin features when a member receives a tag in a group chat. Tags are set by admins with the can_manage_tags right (Bot API 9.5).",
+    "col_tag": "Tag",
+    "col_features": "Features granted",
+    "tag_placeholder": "e.g. VIP",
+    "select_features": "Select features...",
+    "search_features": "Search...",
+    "empty": "No rules yet. Click \"Add rule\" to create one.",
+    "add_rule": "Add rule",
+    "save": "Save mapping",
+    "saving": "Saving...",
+    "save_ok": "Tag mapping saved",
+    "save_error": "Failed to save tag mapping",
+    "load_error": "Failed to load tag mapping"
   }
 }

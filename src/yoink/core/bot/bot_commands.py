@@ -20,6 +20,7 @@ from telegram import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
+    BotCommandScopeChatMember,
     BotCommandScopeDefault,
 )
 from telegram.error import TelegramError
@@ -322,3 +323,156 @@ async def refresh_user_commands(
         logger.debug("Refreshed commands for user %d (role=%s lang=%s features=%s)", user_id, role, lang, granted_features)
     except Exception as exc:
         logger.warning("Failed to refresh commands for user %d: %s", user_id, exc)
+
+
+_KNOWN_LANGS = ("en", "ru")
+
+
+async def set_member_commands(
+    bot: Bot,
+    group_id: int,
+    user_id: int,
+    role: str,
+    plugin_commands: list[CommandSpec] | None = None,
+    lang: str | None = None,
+    granted_features: set[str] | None = None,
+) -> None:
+    """Set BotCommandScopeChatMember for a user in a specific group.
+
+    Shows only group-scoped commands filtered by role and feature grants.
+    Called on member join and on role change via PATCH /users/{id}.
+    """
+    all_commands = _CORE_COMMANDS + (plugin_commands or [])
+    scope = BotCommandScopeChatMember(chat_id=group_id, user_id=user_id)
+
+    if role in ("banned", "restricted"):
+        for stale in _KNOWN_LANGS:
+            try:
+                await bot.delete_my_commands(scope=scope, language_code=stale)
+            except TelegramError:
+                pass
+        try:
+            await bot.delete_my_commands(scope=scope)
+        except TelegramError:
+            pass
+        return
+
+    visible = _filter_by_role(all_commands, role, granted_features=granted_features)
+    group_cmds = [c for c in visible if c.scope in ("default", "groups")]
+
+    for stale in _KNOWN_LANGS:
+        try:
+            await bot.delete_my_commands(scope=scope, language_code=stale)
+        except TelegramError:
+            pass
+
+    base_cmds = _make_bot_commands(group_cmds, lang=lang)
+    try:
+        await bot.set_my_commands(base_cmds, scope=scope)
+        logger.debug(
+            "Member commands set group=%d user=%d role=%s lang=%s: %d",
+            group_id, user_id, role, lang or "en", len(base_cmds),
+        )
+    except TelegramError as e:
+        logger.warning("Failed to set member commands group=%d user=%d: %s", group_id, user_id, e)
+
+    if lang:
+        lang_cmds = _make_bot_commands(group_cmds, lang=lang)
+        try:
+            await bot.set_my_commands(lang_cmds, scope=scope, language_code=lang)
+        except TelegramError as e:
+            logger.warning(
+                "Failed to set member commands group=%d user=%d lang=%s: %s",
+                group_id, user_id, lang, e,
+            )
+
+
+async def clear_member_commands(bot: Bot, group_id: int, user_id: int) -> None:
+    """Remove BotCommandScopeChatMember for a user who left or was banned."""
+    scope = BotCommandScopeChatMember(chat_id=group_id, user_id=user_id)
+    for stale in _KNOWN_LANGS:
+        try:
+            await bot.delete_my_commands(scope=scope, language_code=stale)
+        except TelegramError:
+            pass
+    try:
+        await bot.delete_my_commands(scope=scope)
+    except TelegramError as e:
+        logger.debug("Could not clear member commands group=%d user=%d: %s", group_id, user_id, e)
+
+
+async def refresh_member_commands(
+    app_state: object,
+    user_id: int,
+    role: str,
+    lang: str = "en",
+    session_factory: object = None,
+) -> None:
+    """Re-register BotCommandScopeChatMember for all groups a user belongs to.
+
+    Called from PATCH /users/{id} after a role change so group command menus
+    reflect the new role across every group the user has a policy entry in.
+    """
+    bot = getattr(app_state, "bot", None)
+    if bot is None:
+        return
+
+    plugin_commands: list[CommandSpec] = (
+        getattr(app_state, "bot_data", {}).get("plugin_commands", [])
+    )
+
+    if session_factory is None:
+        return
+
+    try:
+        from datetime import datetime, timezone
+        from sqlalchemy import select
+        from yoink.core.db.models import UserGroupPolicy, UserPermission
+        from yoink.core.plugin import get_all_features
+
+        now = datetime.now(timezone.utc)
+        async with session_factory() as session:
+            perm_result = await session.execute(
+                select(UserPermission.plugin, UserPermission.feature).where(
+                    UserPermission.user_id == user_id,
+                    (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
+                )
+            )
+            explicit = {f"{r.plugin}:{r.feature}" for r in perm_result.all()}
+
+            ugp_result = await session.execute(
+                select(UserGroupPolicy.group_id).where(UserGroupPolicy.user_id == user_id)
+            )
+            group_ids = [r.group_id for r in ugp_result.all()]
+
+        from yoink.core.auth.rbac import ROLE_ORDER
+        from yoink.core.db.models import UserRole
+        try:
+            role_idx = ROLE_ORDER.index(UserRole(role))
+        except ValueError:
+            role_idx = 0
+
+        for spec in get_all_features():
+            if spec.default_min_role is not None:
+                try:
+                    min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
+                    if role_idx >= min_idx:
+                        explicit.add(f"{spec.plugin}:{spec.feature}")
+                except ValueError:
+                    pass
+
+        for gid in group_ids:
+            try:
+                await set_member_commands(
+                    bot, gid, user_id,
+                    role=role,
+                    plugin_commands=plugin_commands,
+                    lang=lang,
+                    granted_features=explicit,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to refresh member commands group=%d user=%d: %s", gid, user_id, exc
+                )
+    except Exception as exc:
+        logger.warning("refresh_member_commands failed for user %d: %s", user_id, exc)

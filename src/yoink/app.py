@@ -11,6 +11,7 @@ from yoink.core.bot.bot_commands import refresh_user_commands, set_default_comma
 from yoink.core.bot.commands import register as register_core_commands
 from yoink.core.bot.forum import register as register_forum_handlers
 from yoink.core.bot.group import register as register_group_commands
+from yoink.core.bot.member import register as register_member_handlers
 from yoink.core.config import CoreSettings
 from yoink.core.db.engine import create_tables, get_session_factory, init_engine
 from yoink.core.db.repos.bot_settings import BotSettingsRepo
@@ -186,6 +187,7 @@ def build_app(
     register_admin_commands(app)
     register_group_commands(app)
     register_forum_handlers(app)
+    register_member_handlers(app)
     app.add_error_handler(_error_handler)
     return app
 

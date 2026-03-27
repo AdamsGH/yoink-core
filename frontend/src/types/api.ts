@@ -110,3 +110,16 @@ export interface GrantPermissionRequest {
   feature: string
   expires_at?: string | null
 }
+
+export interface TagMapEntry {
+  tag: string
+  features: string[]
+}
+
+export interface AvailableFeature {
+  key: string
+  plugin: string
+  feature: string
+  label: string
+  description: string
+}

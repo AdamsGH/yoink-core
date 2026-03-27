@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@core/components/ui/select'
 import { toast } from '@core/components/ui/toast'
+import TagMapEditor from './TagMapEditor'
 
 const ROLES = ['owner', 'admin', 'moderator', 'user'] as const
 
@@ -154,6 +155,8 @@ export default function AdminBotSettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <TagMapEditor />
     </div>
   )
 }
