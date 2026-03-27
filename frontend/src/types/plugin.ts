@@ -2,6 +2,9 @@ import type { ReactNode } from 'react'
 import type { ResourceProps } from '@refinedev/core'
 
 export interface NavItem {
+  /** If set, item is only visible when user has effective access to this feature.
+   *  Format: "plugin:feature", e.g. "insight:summary" */
+  requiredFeature?: string
   label: string
   path: string
   icon: ReactNode

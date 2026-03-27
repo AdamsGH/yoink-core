@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Moon, Palette, Shield, Sun } from 'lucide-react'
 
 import { usePermissions } from '@/hooks/usePermissions'
+import { apiClient } from '@core/lib/api-client'
 import { useTelegram, type CatppuccinFlavor } from './TelegramProvider'
 import { UserPanel } from '../components/app/UserPanel'
 import { Button } from '../components/ui/button'
@@ -43,14 +44,34 @@ function hasRole(role: string | null, minRole: string[]): boolean {
   return minRole.some((r) => w <= (ROLE_WEIGHT[r] ?? 99))
 }
 
-function canSeeItem(item: NavItem, role: string | null): boolean {
-  if (!item.minRole) return true
-  return hasRole(role, item.minRole)
+function canSeeItem(item: NavItem, role: string | null, grantedFeatures: Set<string>): boolean {
+  if (item.minRole && !hasRole(role, item.minRole)) return false
+  if (item.requiredFeature && !grantedFeatures.has(item.requiredFeature)) return false
+  return true
 }
 
-function canSeeGroup(group: NavGroup, role: string | null): boolean {
+function canSeeGroup(group: NavGroup, role: string | null, grantedFeatures: Set<string>): boolean {
   if (group.minRole && !hasRole(role, group.minRole)) return false
-  return group.items.some((i) => canSeeItem(i, role))
+  return group.items.some((i) => canSeeItem(i, role, grantedFeatures))
+}
+
+function useGrantedFeatures() {
+  const [features, setFeatures] = useState<Set<string>>(new Set())
+  const { role } = usePermissions()
+
+  useEffect(() => {
+    if (!role) return
+    apiClient
+      .get<Array<{ plugin: string; feature: string; effective: boolean }>>('/feature-access/me')
+      .then((r) => {
+        setFeatures(new Set(
+          r.data.filter((f) => f.effective).map((f) => `${f.plugin}:${f.feature}`)
+        ))
+      })
+      .catch(() => {}) // silent - nav just won't show feature-gated items
+  }, [role])
+
+  return features
 }
 
 const FLAVORS: { value: CatppuccinFlavor; label: string; color: string }[] = [
@@ -92,12 +113,13 @@ function ThemePicker() {
   )
 }
 
-function SidebarNavGroup({ group, role, currentPath }: {
+function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
   group: NavGroup
   role: string | null
+  grantedFeatures: Set<string>
   currentPath: string
 }) {
-  const visible = group.items.filter((i) => canSeeItem(i, role))
+  const visible = group.items.filter((i) => canSeeItem(i, role, grantedFeatures))
   if (visible.length === 0) return null
 
   const items = (
@@ -180,19 +202,20 @@ function AdminDrawer({ open, onClose, items, currentPath }: {
 
 export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: AppLayoutProps) {
   const { role } = usePermissions()
+  const grantedFeatures = useGrantedFeatures()
   const location = useLocation()
   const { isTelegramApp } = useTelegram()
   const [adminDrawerOpen, setAdminDrawerOpen] = useState(false)
 
-  const visibleGroups = navGroups.filter((g) => canSeeGroup(g, role ?? null))
+  const visibleGroups = navGroups.filter((g) => canSeeGroup(g, role ?? null, grantedFeatures))
 
   const regularItems = visibleGroups
     .filter((g) => !g.minRole)
-    .flatMap((g) => g.items.filter((i) => canSeeItem(i, role ?? null)))
+    .flatMap((g) => g.items.filter((i) => canSeeItem(i, role ?? null, grantedFeatures)))
 
   const adminItems = visibleGroups
     .filter((g) => g.minRole)
-    .flatMap((g) => g.items.filter((i) => canSeeItem(i, role ?? null)))
+    .flatMap((g) => g.items.filter((i) => canSeeItem(i, role ?? null, grantedFeatures)))
 
   const isAdmin = role && ADMIN_ROLES.includes(role as UserRole)
   const isAdminPath = adminItems.some((i) => location.pathname.startsWith(i.path))
@@ -215,6 +238,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
                 key={group.label ?? i}
                 group={group}
                 role={role ?? null}
+                grantedFeatures={grantedFeatures}
                 currentPath={location.pathname}
               />
             ))}

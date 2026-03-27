@@ -79,21 +79,14 @@ async def list_features(
     ]
 
 
-@router.get("/users/{user_id}/feature-access", response_model=list[EffectiveFeatureAccess])
-async def get_user_feature_access(
-    user_id: int,
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+async def _compute_feature_access(
+    session: AsyncSession,
+    user: User,
 ) -> list[EffectiveFeatureAccess]:
-    """Return effective access matrix for a user across all declared features."""
-    user = await session.get(User, user_id)
-    if user is None:
-        raise NotFoundError("User not found")
-
     now = datetime.now(timezone.utc)
     result = await session.execute(
         select(UserPermission).where(
-            UserPermission.user_id == user_id,
+            UserPermission.user_id == user.id,
             (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
         )
     )
@@ -130,6 +123,28 @@ async def get_user_feature_access(
         ))
 
     return rows
+
+
+@router.get("/feature-access/me", response_model=list[EffectiveFeatureAccess])
+async def get_my_feature_access(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[EffectiveFeatureAccess]:
+    """Return effective feature access for the currently authenticated user."""
+    return await _compute_feature_access(session, current_user)
+
+
+@router.get("/users/{user_id}/feature-access", response_model=list[EffectiveFeatureAccess])
+async def get_user_feature_access(
+    user_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> list[EffectiveFeatureAccess]:
+    """Return effective access matrix for a user across all declared features."""
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFoundError("User not found")
+    return await _compute_feature_access(session, user)
 
 
 @router.get("/permissions/all", response_model=list[PermissionResponse])
