@@ -10,6 +10,11 @@ Usage in handlers:
     @require_access(AccessPolicy(min_role=UserRole.admin, silent_deny=True))
     async def _cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ...
+
+    # Feature-gated: explicit grant OR role >= FeatureSpec.default_min_role
+    @require_access(AccessPolicy(plugin="dl", feature="download"))
+    async def _cmd_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        ...
 """
 from __future__ import annotations
 
@@ -45,7 +50,16 @@ def role_gte(user_role: UserRole, min_role: UserRole) -> bool:
 
 @dataclass
 class AccessPolicy:
-    """Declarative access rules for a single bot handler."""
+    """Declarative access rules for a single bot handler.
+
+    When ``plugin`` and ``feature`` are both set, access is evaluated via
+    UserPermissionRepo.has() which checks:
+      1. Explicit non-expired grant in user_permissions.
+      2. user.role >= FeatureSpec.default_min_role (role threshold).
+    The ``min_role`` field still acts as an independent floor that must also
+    be satisfied - set it to UserRole.banned to make it a no-op when you only
+    want feature-gate logic.
+    """
 
     min_role: UserRole = UserRole.user
     # Allowed chat scopes: "private", "group", "all"
@@ -59,6 +73,9 @@ class AccessPolicy:
     silent_deny: bool = True
     # Always log denials at DEBUG level
     log_deny: bool = True
+    # Optional feature gate: both fields must be set together
+    plugin: str | None = None
+    feature: str | None = None
 
 
 @dataclass
@@ -113,7 +130,7 @@ class PermissionChecker:
                         logger.debug("Could not persist role grant: %s", exc)
 
         # Banned users are always blocked regardless of group grants.
-        # Restricted users are NOT blocked here — they are handled by the role
+        # Restricted users are NOT blocked here - they are handled by the role
         # check below (role_gte will deny them unless a grant elevated them).
         if user.is_blocked:
             return PermissionResult(
@@ -143,6 +160,25 @@ class PermissionChecker:
                 deny_reason=f"role_{effective_role.value}_below_{policy.min_role.value}",
                 effective_role=effective_role,
             )
+
+        # Feature gate: explicit grant OR role threshold from FeatureSpec
+        if policy.plugin and policy.feature:
+            perm_repo = context.bot_data.get("perm_repo")
+            if perm_repo is None:
+                return PermissionResult(
+                    allowed=False,
+                    deny_reason="no_perm_repo",
+                    effective_role=effective_role,
+                )
+            allowed = await perm_repo.has(
+                user_id, policy.plugin, policy.feature, user=user
+            )
+            if not allowed:
+                return PermissionResult(
+                    allowed=False,
+                    deny_reason=f"feature_{policy.plugin}_{policy.feature}_denied",
+                    effective_role=effective_role,
+                )
 
         # Group-specific checks
         if is_group and chat is not None:

@@ -17,12 +17,13 @@ import UnauthorizedPage from './pages/unauthorized'
 
 function buildNavGroups(ps: PluginManifest[]): NavGroup[] {
   const all = ps.flatMap((p) => p.navGroups ?? [])
-  // Merge groups with the same label: items are concatenated, first group's meta wins
+  // Merge groups with the same label. Unlabelled groups all merge into one.
   const merged = new Map<string, NavGroup>()
-  const unlabelled: NavGroup[] = []
+  let unlabelled: NavGroup | null = null
   for (const g of all) {
     if (!g.label) {
-      unlabelled.push(g)
+      if (!unlabelled) unlabelled = { items: [...g.items] }
+      else unlabelled.items = [...unlabelled.items, ...g.items]
       continue
     }
     const existing = merged.get(g.label)
@@ -32,7 +33,7 @@ function buildNavGroups(ps: PluginManifest[]): NavGroup[] {
       merged.set(g.label, { ...g, items: [...g.items] })
     }
   }
-  return [...unlabelled, ...merged.values()]
+  return [...(unlabelled ? [unlabelled] : []), ...merged.values()]
 }
 
 function resolveStatsEndpoint(ps: PluginManifest[]): string | undefined {

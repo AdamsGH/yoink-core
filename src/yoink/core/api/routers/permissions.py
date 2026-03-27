@@ -1,9 +1,10 @@
 """Permission management API endpoints.
 
-GET  /features                                         - list declared features (admin)
-GET  /users/{user_id}/permissions                      - list grants for a user (admin)
-POST /users/{user_id}/permissions                      - grant a feature (admin)
-DELETE /users/{user_id}/permissions/{plugin}/{feature} - revoke a feature (admin)
+GET  /features                                              - list declared features (admin)
+GET  /users/{user_id}/feature-access                        - effective access matrix (admin)
+GET  /users/{user_id}/permissions                           - list grants for a user (admin)
+POST /users/{user_id}/permissions                           - grant a feature (admin)
+DELETE /users/{user_id}/permissions/{plugin}/{feature}      - revoke a feature (admin)
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_current_user, get_db
-from yoink.core.auth.rbac import require_role
+from yoink.core.auth.rbac import require_role, ROLE_ORDER
 from yoink.core.api.exceptions import NotFoundError
 from yoink.core.db.models import User, UserPermission, UserRole
 from yoink.core.plugin import get_all_features
@@ -43,6 +44,18 @@ class PermissionResponse(BaseModel):
     expires_at: datetime | None
 
 
+class EffectiveFeatureAccess(BaseModel):
+    plugin: str
+    feature: str
+    label: str
+    description: str
+    default_min_role: str | None
+    access_via_role: bool
+    access_via_grant: bool
+    effective: bool
+    grant_expires_at: datetime | None
+
+
 class GrantRequest(BaseModel):
     plugin: str
     feature: str
@@ -64,6 +77,59 @@ async def list_features(
         )
         for f in get_all_features()
     ]
+
+
+@router.get("/users/{user_id}/feature-access", response_model=list[EffectiveFeatureAccess])
+async def get_user_feature_access(
+    user_id: int,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> list[EffectiveFeatureAccess]:
+    """Return effective access matrix for a user across all declared features."""
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFoundError("User not found")
+
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(UserPermission).where(
+            UserPermission.user_id == user_id,
+            (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
+        )
+    )
+    grants: dict[tuple[str, str], UserPermission] = {
+        (r.plugin, r.feature): r for r in result.scalars().all()
+    }
+
+    rows: list[EffectiveFeatureAccess] = []
+    for spec in get_all_features():
+        key = (spec.plugin, spec.feature)
+        grant = grants.get(key)
+
+        via_role = False
+        if user.role == UserRole.owner:
+            via_role = True
+        elif spec.default_min_role is not None and not user.is_blocked:
+            try:
+                min_role = UserRole(spec.default_min_role)
+                via_role = ROLE_ORDER.index(user.role) >= ROLE_ORDER.index(min_role)
+            except ValueError:
+                pass
+
+        via_grant = grant is not None
+        rows.append(EffectiveFeatureAccess(
+            plugin=spec.plugin,
+            feature=spec.feature,
+            label=spec.label,
+            description=spec.description,
+            default_min_role=spec.default_min_role,
+            access_via_role=via_role,
+            access_via_grant=via_grant,
+            effective=via_role or via_grant,
+            grant_expires_at=grant.expires_at if grant else None,
+        ))
+
+    return rows
 
 
 @router.get("/permissions/all", response_model=list[PermissionResponse])

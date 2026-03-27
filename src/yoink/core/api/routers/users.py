@@ -79,7 +79,9 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserResponse
         username=current_user.username,
         first_name=current_user.first_name,
         role=current_user.role,
+        language=current_user.language,
         theme=current_user.theme,
+        ban_until=current_user.ban_until,
         created_at=current_user.created_at,
         updated_at=current_user.updated_at,
     )
@@ -120,7 +122,8 @@ async def list_users(
     return {
         "items": [UserResponse(
             id=u.id, username=u.username, first_name=u.first_name,
-            role=u.role, theme=u.theme, created_at=u.created_at, updated_at=u.updated_at,
+            role=u.role, language=u.language, theme=u.theme,
+            ban_until=u.ban_until, created_at=u.created_at, updated_at=u.updated_at,
         ) for u in users],
         "total": total,
         "offset": offset,
@@ -191,7 +194,8 @@ async def get_user(
         raise NotFoundError("User not found")
     return UserResponse(
         id=user.id, username=user.username, first_name=user.first_name,
-        role=user.role, theme=user.theme, created_at=user.created_at, updated_at=user.updated_at,
+        role=user.role, language=user.language, theme=user.theme,
+        ban_until=user.ban_until, created_at=user.created_at, updated_at=user.updated_at,
     )
 
 
@@ -221,6 +225,13 @@ async def update_user(
 
     if body.ban_until is not None:
         user.ban_until = body.ban_until
+    elif body.ban_until is None and "ban_until" in (body.model_fields_set or set()):
+        user.ban_until = None
+
+    if body.language is not None:
+        from yoink.core.i18n.loader import SUPPORTED
+        if body.language in SUPPORTED:
+            user.language = body.language
 
     await session.commit()
     await session.refresh(user)
@@ -230,7 +241,8 @@ async def update_user(
 
     return UserResponse(
         id=user.id, username=user.username, first_name=user.first_name,
-        role=user.role, theme=user.theme, created_at=user.created_at, updated_at=user.updated_at,
+        role=user.role, language=user.language, theme=user.theme,
+        ban_until=user.ban_until, created_at=user.created_at, updated_at=user.updated_at,
     )
 
 

@@ -3,11 +3,10 @@ import { useTranslation } from 'react-i18next'
 
 import { apiClient } from '@core/lib/api-client'
 import { formatDate } from '@core/lib/utils'
-import type { Feature, Permission, User, UserRole, UserUpdateRequest } from '@core/types/api'
+import type { EffectiveFeatureAccess, User, UserRole, UserUpdateRequest } from '@core/types/api'
 import { Badge, type BadgeProps } from '@core/components/ui/badge'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@core/components/ui/dialog'
 import { Input } from '@core/components/ui/input'
 import { Label } from '@core/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@core/components/ui/select'
@@ -19,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@core/components/ui/ta
 import { toast } from '@core/components/ui/toast'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
+const SUPPORTED_LANGS = ['en', 'ru']
 const PAGE_SIZE = 30
 type StatusFilter = 'all' | 'active' | 'restricted' | 'banned'
 
@@ -48,6 +48,19 @@ function StatCell({ label, value }: { label: string; value: string | number }) {
   )
 }
 
+function AccessBadge({ f }: { f: EffectiveFeatureAccess }) {
+  if (!f.effective) {
+    return <span className="text-xs text-muted-foreground">-</span>
+  }
+  if (f.access_via_role && !f.access_via_grant) {
+    return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500/50 text-blue-600">role</Badge>
+  }
+  if (!f.access_via_role && f.access_via_grant) {
+    return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">grant</Badge>
+  }
+  return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">role+grant</Badge>
+}
+
 function UserSheet({
   user,
   onClose,
@@ -62,19 +75,20 @@ function UserSheet({
   const [stats, setStats] = useState<UserStats | null>(null)
   const [statsLoading, setStatsLoading] = useState(false)
 
-  const [features, setFeatures] = useState<Feature[]>([])
-  const [permissions, setPermissions] = useState<Permission[]>([])
+  const [features, setFeatures] = useState<EffectiveFeatureAccess[]>([])
   const [permsLoading, setPermsLoading] = useState(false)
   const [togglingId, setTogglingId] = useState<string | null>(null)
 
   const [editRole, setEditRole] = useState<UserRole>('user')
+  const [editLang, setEditLang] = useState('en')
   const [banUntil, setBanUntil] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (!user) { setStats(null); setPermissions([]); return }
+    if (!user) { setStats(null); setFeatures([]); return }
 
     setEditRole(user.role)
+    setEditLang(user.language ?? 'en')
     setBanUntil(user.ban_until ? user.ban_until.slice(0, 16) : '')
 
     setStatsLoading(true)
@@ -85,35 +99,28 @@ function UserSheet({
       .finally(() => setStatsLoading(false))
 
     setPermsLoading(true)
-    Promise.all([
-      apiClient.get<Feature[]>('/features'),
-      apiClient.get<Permission[]>(`/users/${user.id}/permissions`),
-    ])
-      .then(([fRes, pRes]) => {
-        setFeatures(fRes.data)
-        setPermissions(pRes.data)
-      })
+    apiClient
+      .get<EffectiveFeatureAccess[]>(`/users/${user.id}/feature-access`)
+      .then((r) => setFeatures(r.data))
       .catch(() => {})
       .finally(() => setPermsLoading(false))
   }, [user?.id])
 
-  const hasPermission = (plugin: string, feature: string) =>
-    permissions.some((p) => p.plugin === plugin && p.feature === feature)
-
-  const togglePermission = async (plugin: string, feature: string, grant: boolean) => {
+  const toggleFeature = async (f: EffectiveFeatureAccess, grant: boolean) => {
     if (!user) return
-    const key = `${plugin}.${feature}`
+    const key = `${f.plugin}.${f.feature}`
     setTogglingId(key)
     try {
       if (grant) {
-        const res = await apiClient.post<Permission>(`/users/${user.id}/permissions`, { plugin, feature })
-        setPermissions((prev) => [...prev, res.data])
+        await apiClient.post(`/users/${user.id}/permissions`, { plugin: f.plugin, feature: f.feature })
         toast.success(t('permissions.granted'))
       } else {
-        await apiClient.delete(`/users/${user.id}/permissions/${plugin}/${feature}`)
-        setPermissions((prev) => prev.filter((p) => !(p.plugin === plugin && p.feature === feature)))
+        await apiClient.delete(`/users/${user.id}/permissions/${f.plugin}/${f.feature}`)
         toast.success(t('permissions.revoked'))
       }
+      // Refresh feature-access to get updated effective state
+      const r = await apiClient.get<EffectiveFeatureAccess[]>(`/users/${user.id}/feature-access`)
+      setFeatures(r.data)
     } catch {
       toast.error(grant ? t('permissions.grant_error') : t('permissions.revoke_error'))
     } finally {
@@ -127,8 +134,9 @@ function UserSheet({
     try {
       const body: UserUpdateRequest = {}
       if (editRole !== user.role) body.role = editRole
+      if (editLang !== user.language) body.language = editLang
       if (banUntil) body.ban_until = new Date(banUntil).toISOString()
-      else if (user.ban_until) body.ban_until = null
+      else body.ban_until = null
       const res = await apiClient.patch<User>(`/users/${user.id}`, body)
       toast.success(t('users.update_success'))
       onUpdated(res.data)
@@ -139,7 +147,7 @@ function UserSheet({
     }
   }
 
-  const groupedFeatures = features.reduce<Record<string, Feature[]>>((acc, f) => {
+  const groupedFeatures = features.reduce<Record<string, EffectiveFeatureAccess[]>>((acc, f) => {
     (acc[f.plugin] ??= []).push(f)
     return acc
   }, {})
@@ -215,31 +223,46 @@ function UserSheet({
                 <TabsContent value="access" className="px-4 py-3 space-y-4 mt-0">
                   {permsLoading ? (
                     <div className="space-y-3">
-                      {[0, 1].map((i) => <Skeleton key={i} className="h-12 w-full rounded-md" />)}
+                      {[0, 1].map((i) => <Skeleton key={i} className="h-16 w-full rounded-md" />)}
                     </div>
                   ) : features.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-4">{t('permissions.no_features')}</p>
                   ) : (
                     Object.entries(groupedFeatures).map(([plugin, feats]) => (
-                      <div key={plugin} className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{plugin}</p>
+                      <div key={plugin} className="space-y-1.5">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{plugin}</p>
                         <div className="rounded-md border divide-y">
                           {feats.map((f) => {
                             const key = `${f.plugin}.${f.feature}`
-                            const active = hasPermission(f.plugin, f.feature)
                             return (
-                              <div key={key} className="flex items-center justify-between px-3 py-2.5 gap-3">
-                                <div className="min-w-0">
-                                  <p className="text-sm font-medium">{f.label}</p>
-                                  {f.description && (
-                                    <p className="text-xs text-muted-foreground truncate">{f.description}</p>
-                                  )}
+                              <div key={key} className="px-3 py-2.5 space-y-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-sm font-medium">{f.label}</p>
+                                      <AccessBadge f={f} />
+                                    </div>
+                                    {f.description && (
+                                      <p className="text-xs text-muted-foreground">{f.description}</p>
+                                    )}
+                                    {f.default_min_role && (
+                                      <p className="text-xs text-muted-foreground">
+                                        {t('permissions.default_role')}: <span className="font-mono">{f.default_min_role}+</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                  <Switch
+                                    checked={f.effective}
+                                    disabled={togglingId === key || f.access_via_role}
+                                    title={f.access_via_role ? t('permissions.granted_by_role') : undefined}
+                                    onCheckedChange={(v) => void toggleFeature(f, v)}
+                                  />
                                 </div>
-                                <Switch
-                                  checked={active}
-                                  disabled={togglingId === key}
-                                  onCheckedChange={(v) => void togglePermission(f.plugin, f.feature, v)}
-                                />
+                                {f.access_via_grant && f.grant_expires_at && (
+                                  <p className="text-xs text-muted-foreground pl-0">
+                                    {t('permissions.expires')}: {formatDate(f.grant_expires_at)}
+                                  </p>
+                                )}
                               </div>
                             )
                           })}
@@ -257,6 +280,17 @@ function UserSheet({
                       <SelectContent>
                         {ROLES.filter((r) => r !== 'owner').map((r) => (
                           <SelectItem key={r} value={r}>{r}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>{t('users.col_language')}</Label>
+                    <Select value={editLang} onValueChange={setEditLang}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {SUPPORTED_LANGS.map((l) => (
+                          <SelectItem key={l} value={l}>{l.toUpperCase()}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -386,7 +420,7 @@ export default function AdminUsersPage() {
                 <Select value={draftFilters.role} onValueChange={(v) => setDraftFilters((f) => ({ ...f, role: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">{t('common.no_data')}</SelectItem>
+                    <SelectItem value="all">{t('users.filter_all_roles')}</SelectItem>
                     {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                   </SelectContent>
                 </Select>
@@ -396,7 +430,7 @@ export default function AdminUsersPage() {
                 <Select value={draftFilters.status} onValueChange={(v) => setDraftFilters((f) => ({ ...f, status: v as StatusFilter }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">{t('common.no_data')}</SelectItem>
+                    <SelectItem value="all">{t('users.filter_all')}</SelectItem>
                     <SelectItem value="active">{t('users.filter_active')}</SelectItem>
                     <SelectItem value="restricted">{t('users.filter_restricted')}</SelectItem>
                     <SelectItem value="banned">{t('users.filter_banned')}</SelectItem>
@@ -421,7 +455,7 @@ export default function AdminUsersPage() {
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <div className="flex justify-center py-10 text-muted-foreground">
+            <div className="flex justify-center py-10">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" />
             </div>
           ) : items.length === 0 ? (

@@ -5,10 +5,11 @@ export interface User {
   username: string | null
   first_name: string | null
   role: UserRole
+  language: string
   theme: string
+  ban_until: string | null
   created_at: string
   updated_at: string
-  ban_until?: string | null
 }
 
 export interface PaginatedResponse<T> {
@@ -28,7 +29,20 @@ export interface TokenResponse {
 
 export interface UserUpdateRequest {
   role?: UserRole
+  language?: string
   ban_until?: string | null
+}
+
+export interface EffectiveFeatureAccess {
+  plugin: string
+  feature: string
+  label: string
+  description: string
+  default_min_role: string | null
+  access_via_role: boolean
+  access_via_grant: boolean
+  effective: boolean
+  grant_expires_at: string | null
 }
 
 export interface ThreadPolicy {

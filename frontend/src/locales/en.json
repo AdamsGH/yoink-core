@@ -61,7 +61,10 @@
     "select_plugin": "Select plugin",
     "grant_feature": "Feature",
     "select_feature": "Select feature",
-    "no_features": "No features declared by loaded plugins"
+    "no_features": "No features declared by loaded plugins",
+    "default_role": "Default for",
+    "granted_by_role": "Access granted by role - cannot revoke without changing role",
+    "expires": "Expires"
   },
   "auth": {
     "loading": "Authorizing…",
@@ -182,7 +185,8 @@
     "search_placeholder": "@username or ID",
     "banned": "User banned",
     "unbanned": "User unbanned",
-    "update_success": "User updated"
+    "update_success": "User updated",
+    "col_language": "Language"
   },
   "groups": {
     "title": "Groups",

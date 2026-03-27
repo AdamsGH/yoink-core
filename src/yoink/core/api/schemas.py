@@ -32,13 +32,16 @@ class UserResponse(BaseModel):
     username: str | None
     first_name: str | None
     role: UserRole
+    language: str
     theme: str
+    ban_until: datetime | None
     created_at: datetime
     updated_at: datetime
 
 
 class UserUpdateRequest(BaseModel):
     role: UserRole | None = None
+    language: str | None = None
     ban_until: datetime | None = None
 
 

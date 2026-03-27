@@ -13,9 +13,31 @@ class UserPermissionRepo:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
 
-    async def has(self, user_id: int, plugin: str, feature: str) -> bool:
-        """Return True if a non-expired grant exists."""
+    async def has(
+        self,
+        user_id: int,
+        plugin: str,
+        feature: str,
+        user: User | None = None,
+    ) -> bool:
+        """Return True if the user has access to plugin/feature.
+
+        Two paths are evaluated in order:
+
+        1. Explicit grant: a non-expired row in user_permissions.
+        2. Role threshold: user.role >= FeatureSpec.default_min_role,
+           provided the user is not blocked and default_min_role is not None.
+
+        Passing ``user`` avoids a second DB round-trip when the caller already
+        has the User object (e.g. inside a request that authenticated the user).
+        When ``user`` is None, only path (1) is evaluated.
+
+        The owner role sits at the top of the hierarchy so it satisfies any
+        non-None default_min_role automatically via role_gte.
+        """
         now = datetime.now(timezone.utc)
+
+        # Path 1: explicit grant
         async with self._sf() as s:
             result = await s.execute(
                 select(UserPermission.id).where(
@@ -26,7 +48,22 @@ class UserPermissionRepo:
                     | (UserPermission.expires_at > now),
                 )
             )
-            return result.scalar_one_or_none() is not None
+            if result.scalar_one_or_none() is not None:
+                return True
+
+        # Path 2: role threshold (requires caller to supply the User object)
+        if user is not None and not user.is_blocked:
+            spec = _feature_spec(plugin, feature)
+            if spec is not None and spec.default_min_role is not None:
+                from yoink.core.bot.access import ROLE_ORDER
+                from yoink.core.db.models import UserRole
+                try:
+                    min_role = UserRole(spec.default_min_role)
+                except ValueError:
+                    return False
+                return ROLE_ORDER.index(user.role) >= ROLE_ORDER.index(min_role)
+
+        return False
 
     async def list_for_user(self, user_id: int) -> list[UserPermission]:
         now = datetime.now(timezone.utc)
@@ -126,3 +163,12 @@ class UserPermissionRepo:
             )
             await s.commit()
             return result.rowcount
+
+
+def _feature_spec(plugin: str, feature: str):
+    """Look up a FeatureSpec from the global registry. Returns None if not found."""
+    from yoink.core.plugin import get_all_features
+    for spec in get_all_features():
+        if spec.plugin == plugin and spec.feature == feature:
+            return spec
+    return None

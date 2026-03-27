@@ -93,6 +93,8 @@ def build_app(
         application.bot_data["user_repo"] = UserRepo(session_factory, owner_id=config.owner_id)
         application.bot_data["group_repo"] = GroupRepo(session_factory)
         application.bot_data["bot_settings_repo"] = BotSettingsRepo(session_factory)
+        from yoink.core.db.repos.permissions import UserPermissionRepo
+        application.bot_data["perm_repo"] = UserPermissionRepo(session_factory)
 
         # User-mode session - available if data/tg-bot-api/user.token exists.
         # Token is read fresh on every call; no startup failure if missing.
