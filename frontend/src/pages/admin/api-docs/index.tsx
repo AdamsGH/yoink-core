@@ -1,21 +1,39 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSidebar } from '@core/components/ui/sidebar'
 
-const SCALAR_AUTH_KEY = 'scalar-client-auth'
 const APP_TOKEN_KEY = 'access_token'
+
+// Scalar uses github-slugger on the API title ("Yoink API" -> "yoink-api")
+// to build the localStorage key for persisted auth.
+// Key format: scalar-reference-auth-{slug}
+// Value format: { secrets: { SchemeName: { type, "x-scalar-secret-token" } }, selected: {...} }
+const SCALAR_AUTH_KEY = 'scalar-reference-auth-yoink-api'
+
+function syncTokenToScalar() {
+  const token = localStorage.getItem(APP_TOKEN_KEY)
+  if (!token) return
+  localStorage.setItem(
+    SCALAR_AUTH_KEY,
+    JSON.stringify({
+      secrets: {
+        HTTPBearer: {
+          type: 'http',
+          'x-scalar-secret-token': token,
+        },
+      },
+      selected: { document: null, path: null },
+    }),
+  )
+}
 
 export default function ApiDocsPage() {
   const { state, isMobile } = useSidebar()
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  // Cache-bust src so Scalar re-initialises and re-reads localStorage on every visit.
   const [src, setSrc] = useState<string>('')
 
   useEffect(() => {
-    const token = localStorage.getItem(APP_TOKEN_KEY)
-    if (token) {
-      localStorage.setItem(SCALAR_AUTH_KEY, JSON.stringify({ HTTPBearer: { token } }))
-    }
-    // Append timestamp to force iframe reload so Scalar reads fresh localStorage.
+    syncTokenToScalar()
+    // Timestamp forces iframe reload so Scalar reads fresh localStorage on every visit.
     setSrc(`/docs?t=${Date.now()}`)
   }, [])
 
