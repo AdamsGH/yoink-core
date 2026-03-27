@@ -6,6 +6,49 @@ interface TelegramWebAppUser {
   language_code?: string
 }
 
+interface TelegramBottomButton {
+  text: string
+  color: string
+  textColor: string
+  isVisible: boolean
+  isActive: boolean
+  isProgressVisible: boolean
+  hasShineEffect: boolean
+  position?: 'left' | 'right' | 'top' | 'bottom'
+  setText(text: string): this
+  show(): this
+  hide(): this
+  enable(): this
+  disable(): this
+  showProgress(leaveActive?: boolean): this
+  hideProgress(): this
+  setParams(params: {
+    text?: string
+    color?: string
+    text_color?: string
+    is_active?: boolean
+    is_visible?: boolean
+    has_shine_effect?: boolean
+    position?: 'left' | 'right' | 'top' | 'bottom'
+  }): this
+  onClick(cb: () => void): this
+  offClick(cb: () => void): this
+}
+
+interface TelegramBackButton {
+  isVisible: boolean
+  show(): this
+  hide(): this
+  onClick(cb: () => void): this
+  offClick(cb: () => void): this
+}
+
+interface TelegramHapticFeedback {
+  impactOccurred(style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft'): this
+  notificationOccurred(type: 'error' | 'success' | 'warning'): this
+  selectionChanged(): this
+}
+
 interface TelegramWebApp {
   ready: () => void
   expand: () => void
@@ -22,6 +65,22 @@ interface TelegramWebApp {
   isExpanded: boolean
   viewportHeight: number
   viewportStableHeight: number
+
+  MainButton: TelegramBottomButton
+  SecondaryButton: TelegramBottomButton
+  BackButton: TelegramBackButton
+  HapticFeedback: TelegramHapticFeedback
+
+  showAlert(message: string, callback?: () => void): void
+  showConfirm(message: string, callback: (confirmed: boolean) => void): void
+  showPopup(params: {
+    title?: string
+    message: string
+    buttons?: Array<{ id?: string; type: 'default' | 'ok' | 'close' | 'cancel' | 'destructive'; text?: string }>
+  }, callback?: (buttonId: string) => void): void
+
+  enableClosingConfirmation(): void
+  disableClosingConfirmation(): void
 }
 
 interface Window {

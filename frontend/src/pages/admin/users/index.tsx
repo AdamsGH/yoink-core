@@ -32,26 +32,31 @@ function BanDatePicker({
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
-  const [time, setTime] = useState('23:59')
+  const [hour, setHour] = useState('23')
+  const [minute, setMinute] = useState('59')
 
   const selected = value ? new Date(value) : undefined
 
+  const applyTime = (day: Date, h: string, m: string) => {
+    const d = new Date(day)
+    d.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0)
+    onChange(d.toISOString())
+  }
+
   const handleDaySelect = (day: Date | undefined) => {
     if (!day) { onChange(''); setOpen(false); return }
-    const [h, m] = time.split(':').map(Number)
-    day.setHours(h ?? 23, m ?? 59, 0, 0)
-    onChange(day.toISOString())
+    applyTime(day, hour, minute)
     setOpen(false)
   }
 
-  const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTime(e.target.value)
-    if (selected) {
-      const [h, m] = e.target.value.split(':').map(Number)
-      const d = new Date(selected)
-      d.setHours(h ?? 0, m ?? 0, 0, 0)
-      onChange(d.toISOString())
-    }
+  const handleHourChange = (h: string) => {
+    setHour(h)
+    if (selected) applyTime(selected, h, minute)
+  }
+
+  const handleMinuteChange = (m: string) => {
+    setMinute(m)
+    if (selected) applyTime(selected, hour, m)
   }
 
   const label = selected
@@ -87,12 +92,27 @@ function BanDatePicker({
           <Label className="text-xs text-muted-foreground shrink-0">
             {t('users.ban_until_time', { defaultValue: 'Time' })}
           </Label>
-          <Input
-            type="time"
-            value={time}
-            onChange={handleTimeChange}
-            className="h-8 w-full"
-          />
+          <Select value={hour} onValueChange={handleHourChange}>
+            <SelectTrigger className="h-8 w-20">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="max-h-48">
+              {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                <SelectItem key={h} value={h}>{h}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="text-muted-foreground">:</span>
+          <Select value={minute} onValueChange={handleMinuteChange}>
+            <SelectTrigger className="h-8 w-20">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {['00', '15', '30', '45'].map(m => (
+                <SelectItem key={m} value={m}>{m}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </PopoverContent>
     </Popover>
