@@ -103,9 +103,9 @@ async def get_status(
 
 @router.get("/users", response_model=list[UserM2MResponse])
 async def list_users(
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-    role: str | None = Query(None),
+    offset: int = Query(0, ge=0, description="Pagination offset (number of records to skip)"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of records to return"),
+    role: str | None = Query(None, description="Filter by role (owner/admin/moderator/user/restricted/banned)"),
     session: AsyncSession = Depends(_get_db),
     _key: ApiKey = Depends(require_scope("users:read")),
 ) -> list[UserM2MResponse]:
@@ -155,7 +155,7 @@ async def get_user(
 
 @router.get("/groups", response_model=list[GroupM2MResponse])
 async def list_groups(
-    enabled_only: bool = Query(False),
+    enabled_only: bool = Query(False, description="Only return groups where the bot is active"),
     session: AsyncSession = Depends(_get_db),
     _key: ApiKey = Depends(require_scope("groups:read")),
 ) -> list[GroupM2MResponse]:
@@ -205,10 +205,10 @@ async def create_event(
 
 @router.get("/events", response_model=list[EventResponse])
 async def list_events(
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-    plugin: str | None = Query(None),
-    event_type: str | None = Query(None),
+    offset: int = Query(0, ge=0, description="Pagination offset (number of records to skip)"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of records to return"),
+    plugin: str | None = Query(None, description="Filter by plugin name (e.g. dl, insight, stats)"),
+    event_type: str | None = Query(None, description="Event type filter (e.g. join, leave)"),
     session: AsyncSession = Depends(_get_db),
     _key: ApiKey = Depends(require_scope("events:read")),
 ) -> list[EventResponse]:

@@ -54,10 +54,16 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
         version="1.0.0",
         description=(
             "REST API for the Yoink Telegram bot.\n\n"
-            "**Authentication:** all endpoints (except `/health` and `/api/v1/auth/token`) "
-            "require a Bearer JWT obtained from `POST /api/v1/auth/token` using Telegram WebApp `initData`.\n\n"
-            "**Roles:** `owner > admin > moderator > user > restricted > banned`. "
-            "Each endpoint documents the minimum role required."
+            "## Authentication\n\n"
+            "All endpoints (except `/health`, `POST /api/v1/auth/token`, and `POST /api/v1/dl/cookies/submit`) "
+            "require a Bearer JWT.\n\n"
+            "**How to get a token for Try-it:**\n"
+            "1. Call `POST /api/v1/auth/dev` with your `user_id` — copy `access_token` from the response\n"
+            "2. Click the auth button (🔑) in Scalar's top-right corner, paste the token\n"
+            "3. All subsequent requests will include it automatically\n\n"
+            "## Roles\n\n"
+            "`owner > admin > moderator > user > restricted > banned`. "
+            "Each endpoint documents the minimum role required in parentheses, e.g. *(admin+)*."
         ),
         docs_url=None,
         redoc_url=None,
@@ -188,6 +194,20 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
         return get_scalar_api_reference(
             openapi_url="/openapi.json",
             title="Yoink API",
+            # Prefill HTTPBearer scheme so Try-it works without manual token entry.
+            # The token field stays empty — user pastes their JWT once and it's reused.
+            authentication={
+                "preferredSecurityScheme": "HTTPBearer",
+                "securitySchemes": {
+                    "HTTPBearer": {
+                        "type": "http",
+                        "scheme": "bearer",
+                        "bearerFormat": "JWT",
+                        "token": "",
+                    }
+                },
+            },
+            persist_auth=True,
         )
 
     return app

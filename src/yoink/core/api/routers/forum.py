@@ -34,10 +34,10 @@ async def get_forum_topics(
     chat_id: int,
     request: Request,
     query: str = Query("", description="Search filter"),
-    limit: int = Query(100, ge=1, le=100),
-    offset_date: int = Query(0),
-    offset_message_id: int = Query(0),
-    offset_forum_topic_id: int = Query(0),
+    limit: int = Query(100, ge=1, le=100, description="Maximum number of records to return"),
+    offset_date: int = Query(0, description="Telegram pagination: date offset (Unix timestamp)"),
+    offset_message_id: int = Query(0, description="Telegram pagination: message ID offset"),
+    offset_forum_topic_id: int = Query(0, description="Telegram pagination: forum topic ID offset"),
     _: User = Depends(require_role(UserRole.owner)),
 ) -> dict:
     """
@@ -97,8 +97,8 @@ async def search_chat_messages(
     query: str = Query("", description="Text to search for"),
     thread_id: int = Query(0, description="Restrict search to a forum topic"),
     from_message_id: int = Query(0, description="Start from this message ID (pagination)"),
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0, description="Pagination offset (number of records to skip)"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     filter: str = Query(
         "",
         description=(
@@ -132,8 +132,8 @@ async def get_chat_history(
     chat_id: int,
     request: Request,
     from_message_id: int = Query(0, description="Start from this message ID (0 = latest)"),
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0, description="Pagination offset (number of records to skip)"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of records to return"),
     only_local: bool = Query(False, description="Return only locally cached messages"),
     _: User = Depends(require_role(UserRole.owner)),
 ) -> dict:

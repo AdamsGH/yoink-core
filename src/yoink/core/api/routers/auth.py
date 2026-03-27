@@ -111,8 +111,8 @@ async def auth_token(
 )
 async def auth_dev(
     request: Request,
-    user_id: int = Query(...),
-    role: UserRole = Query(UserRole.user),
+    user_id: int = Query(..., description="Telegram user ID to generate token for"),
+    role: UserRole = Query(UserRole.user, description="Role to assign in the token (default: user)"),
 ) -> TokenResponse:
     settings = request.app.state.settings
     if not getattr(settings, "dev_auth_enabled", False):

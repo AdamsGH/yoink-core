@@ -130,11 +130,11 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserResponse
 
 @router.get("", response_model=dict, summary="List all users (admin+)", description="Paginated user list with optional search by username and filter by role/status.")
 async def list_users(
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-    search: str | None = Query(None),
-    role: str | None = Query(None),
-    status: str | None = Query(None),
+    offset: int = Query(0, ge=0, description="Pagination offset (number of records to skip)"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of records to return"),
+    search: str | None = Query(None, description="Filter by username or display name (partial match)"),
+    role: str | None = Query(None, description="Filter by role (owner/admin/moderator/user/restricted/banned)"),
+    status: str | None = Query(None, description="Filter by status (active/blocked)"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> dict:
