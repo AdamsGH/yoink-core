@@ -232,7 +232,7 @@ class YoinkPlugin(Protocol):
         """Commands to register with Telegram, with role and scope metadata."""
         ...
 
-    def get_help_section(self, role: str, lang: str) -> str:
+    def get_help_section(self, role: str, lang: str, granted_features: set[str] | None = None) -> str:
         """Return HTML help text for the given role, or empty string if none."""
         ...
 

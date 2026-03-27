@@ -61,10 +61,49 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await repo.get_or_create(tg.id, username=tg.username, first_name=tg.first_name)
 
     plugins = context.bot_data.get("plugins", [])
+
+    # Resolve effective feature grants so help sections can filter feature-gated commands.
+    granted_features: set[str] | None = None
+    session_factory = context.bot_data.get("session_factory")
+    if session_factory is not None:
+        try:
+            from datetime import datetime, timezone
+            from sqlalchemy import select
+            from yoink.core.db.models import UserPermission
+            from yoink.core.plugin import get_all_features
+            from yoink.core.auth.rbac import ROLE_ORDER
+            from yoink.core.db.models import UserRole
+
+            now = datetime.now(timezone.utc)
+            async with session_factory() as _s:
+                result = await _s.execute(
+                    select(UserPermission.plugin, UserPermission.feature).where(
+                        UserPermission.user_id == user.id,
+                        (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
+                    )
+                )
+                explicit = {f"{r.plugin}:{r.feature}" for r in result.all()}
+
+            try:
+                role_idx = ROLE_ORDER.index(UserRole(user.role.value))
+            except ValueError:
+                role_idx = 0
+            for spec in get_all_features():
+                if spec.default_min_role is not None:
+                    try:
+                        min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
+                        if role_idx >= min_idx:
+                            explicit.add(f"{spec.plugin}:{spec.feature}")
+                    except ValueError:
+                        pass
+            granted_features = explicit
+        except Exception as exc:
+            logger.warning("Could not resolve features for help: %s", exc)
+
     lines = [t("help.title", user.language)]
     for plugin in plugins:
         if hasattr(plugin, "get_help_section"):
-            section = plugin.get_help_section(user.role.value, user.language)
+            section = plugin.get_help_section(user.role.value, user.language, granted_features=granted_features)
             if section:
                 lines.append(section)
     await update.message.reply_html("\n\n".join(lines))
