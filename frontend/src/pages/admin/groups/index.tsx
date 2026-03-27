@@ -379,14 +379,10 @@ export default function AdminGroupsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t("groups.title")}</h1>
-        <Button size="sm" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
-      </div>
-
       <Card>
-        <CardHeader>
-          <CardTitle>{total} group{total !== 1 ? 's' : ''}</CardTitle>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-sm font-medium">{total} group{total !== 1 ? 's' : ''}</CardTitle>
+          <Button size="sm" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (

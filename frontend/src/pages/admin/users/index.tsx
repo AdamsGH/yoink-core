@@ -403,8 +403,7 @@ export default function AdminUsersPage() {
 
   return (
     <div className="space-y-3 p-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t('users.title')}</h1>
+      <div className="flex items-center justify-end">
         <Button variant="outline" size="sm" onClick={() => setShowFilters((v) => !v)}>
           {t('users.filter_toggle')}
           {hasActive && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />}

@@ -138,8 +138,7 @@ export default function AdminPermissionsPage() {
 
   return (
     <div className="space-y-4 p-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t('permissions.title')}</h1>
+      <div className="flex items-center justify-end">
         <Button size="sm" onClick={() => setGrantOpen(true)}>
           {t('permissions.grant_button')}
         </Button>

@@ -67,8 +67,6 @@ export default function AdminBotSettingsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">{t('bot_settings.title')}</h1>
-
       <Card>
         <CardHeader>
           <CardTitle>{t('bot_settings.access_mode')}</CardTitle>

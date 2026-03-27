@@ -11,7 +11,6 @@ import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { useSidebar } from '../ui/sidebar'
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 
 const ROLE_VARIANT: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
   owner:      'warning',
@@ -95,14 +94,9 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
     : []
 
   const avatarOnly = (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full p-0">
-          <Avatar photoUrl={photoUrl} name={name} size={32} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="right">{name}</TooltipContent>
-    </Tooltip>
+    <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full p-0">
+      <Avatar photoUrl={photoUrl} name={name} size={32} />
+    </Button>
   )
 
   const fullTrigger = (
