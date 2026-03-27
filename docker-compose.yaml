@@ -60,7 +60,7 @@ services:
       - ./data/cookies:/app/data/cookies
       - ./data/kasm/profile/chromium:/app/data/browser-profile:ro
       - ./data/tg-bot-api:/app/data/tg-bot-api:ro
-      - ${HOME}/.config/gemini:/root/.config/gemini:ro
+
     networks:
       - yoink
     ports:

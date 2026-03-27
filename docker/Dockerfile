@@ -47,12 +47,9 @@ RUN apk add --no-cache \
     ca-certificates \
     tzdata \
     libpq \
-    nodejs \
-    npm \
  && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
  && echo "${TZ}" > /etc/timezone \
- && apk del tzdata \
- && npm install -g @google/gemini-cli --no-fund --no-audit 2>&1 | tail -1
+ && apk del tzdata
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY --from=builder-plugins /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
