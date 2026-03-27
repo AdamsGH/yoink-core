@@ -7,6 +7,7 @@ import { cn } from '@core/lib/utils'
 interface JsonEditorProps {
   value: string
   onChange?: (value: string) => void
+  placeholder?: string
   readOnly?: boolean
   minHeight?: string
   maxHeight?: string
@@ -14,11 +15,12 @@ interface JsonEditorProps {
   colorScheme?: 'dark' | 'light'
 }
 
-const extensions = [json(), lintGutter(), linter(jsonParseLinter())]
+const baseExtensions = [json(), lintGutter(), linter(jsonParseLinter())]
 
 export function JsonEditor({
   value,
   onChange,
+  placeholder,
   readOnly = false,
   minHeight = '140px',
   maxHeight = '360px',
@@ -26,10 +28,18 @@ export function JsonEditor({
   colorScheme = 'dark',
 }: JsonEditorProps) {
   return (
-    <div className={cn('rounded-md border border-border overflow-hidden text-sm', className)}>
+    <div
+      className={cn('overflow-hidden text-sm relative', className)}
+      style={{ minHeight, maxHeight }}
+    >
+      {!value && placeholder && (
+        <pre className="absolute inset-0 px-3 py-2 text-xs font-mono text-muted-foreground/40 pointer-events-none select-none overflow-hidden leading-relaxed z-10 whitespace-pre">
+          {placeholder}
+        </pre>
+      )}
       <CodeMirror
         value={value}
-        extensions={extensions}
+        extensions={baseExtensions}
         theme={colorScheme === 'dark' ? vscodeDark : vscodeLight}
         readOnly={readOnly}
         basicSetup={{
