@@ -33,7 +33,7 @@ async def get_settings(
     )
 
 
-@router.patch("", response_model=SettingsResponse, summary="Update my settings", description="Update `language` (`en`/`ru`) and/or `theme` (`dark`/`light`/`system`).")
+@router.patch("", response_model=SettingsResponse, summary="Update my settings", description="Update `language` (`en`/`ru`) and/or `theme` (`latte`/`frappe`/`macchiato`/`mocha`) - Catppuccin flavors.")
 async def update_settings(
     body: SettingsUpdateRequest,
     session: AsyncSession = Depends(get_db),
