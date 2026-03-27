@@ -41,8 +41,12 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
             base_url=config.telegram_base_url.replace("/bot", ""),
             token_file=Path(str(config.data_dir)) / "tg-bot-api" / "user.token",
         )
-        # Provide the bot_data-like dict that router helpers expect.
-        app.state.bot_data = {"user_session": app.state.user_session}
+        # In combined mode combined_main.py sets app.state.bot_data to the live
+        # PTB bot_data dict before uvicorn starts. Only initialise it here when
+        # running in API-only mode (no bot process sharing state).
+        if not getattr(app.state, "bot_data", None):
+            app.state.bot_data = {}
+        app.state.bot_data.setdefault("user_session", app.state.user_session)
         yield
 
     app = FastAPI(

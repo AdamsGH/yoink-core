@@ -151,8 +151,12 @@ def build_app(
         application.bot_data["plugin_commands"] = plugin_commands
         await set_default_commands(application.bot, plugin_commands=plugin_commands)
 
-        # Refresh owner's per-chat command list on every startup so new plugins
-        # appear immediately without requiring /start.
+        class _State:
+            bot = application.bot
+            bot_data = application.bot_data
+
+        # Refresh owner's per-chat commands on startup (owner has elevated role
+        # and always needs a per-chat scope override).
         if config.owner_id:
             try:
                 from sqlalchemy import select as sa_select
@@ -162,14 +166,8 @@ def build_app(
                         sa_select(User).where(User.id == config.owner_id)
                     )).scalar_one_or_none()
                 if owner:
-                    # Use a minimal app_state stub so refresh_user_commands can
-                    # access bot and bot_data without a real Request object.
-                    class _State:
-                        bot = application.bot
-                        bot_data = application.bot_data
                     await refresh_user_commands(
-                        _State(),
-                        config.owner_id,
+                        _State(), config.owner_id,
                         role=owner.role.value,
                         lang=owner.language,
                         session_factory=session_factory,

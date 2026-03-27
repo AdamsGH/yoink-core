@@ -18,6 +18,7 @@ from telegram import (
     Bot, BotCommand,
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
     BotCommandScopeChat,
     BotCommandScopeDefault,
 )
@@ -147,6 +148,34 @@ async def set_default_commands(
         lambda c: c.scope in ("default", "groups"), "owner", "AllChatAdmins",
     )
 
+    # All private chats - full user-role private commands (no feature-gated ones).
+    # Covers every user without a per-chat override; registered for each UI language
+    # so translations show up regardless of whether the user has run /start.
+    await _set_commands_for_langs(
+        bot, [], BotCommandScopeAllPrivateChats(), all_commands,
+        lambda c: c.scope in ("default", "private") and c.required_feature is None,
+        "user", "AllPrivateChats",
+    )
+
+
+def _needs_per_chat_scope(
+    role: str,
+    granted_features: set[str] | None,
+    all_commands: list[CommandSpec],
+) -> bool:
+    """Return True if this user needs a per-chat BotCommandScopeChat override.
+
+    Per-chat scope is only necessary when the user's command list differs from
+    what BotCommandScopeAllPrivateChats provides - i.e. they have feature-gated
+    commands unlocked via an explicit grant, or an elevated role with extra commands.
+    """
+    if role not in ("user", "restricted", "banned"):
+        return True
+    if not granted_features:
+        return False
+    feature_cmds = [c for c in all_commands if c.required_feature is not None]
+    return any(c.required_feature in granted_features for c in feature_cmds)
+
 
 async def set_user_commands(
     bot: Bot,
@@ -156,41 +185,55 @@ async def set_user_commands(
     lang: str | None = None,
     granted_features: set[str] | None = None,
 ) -> None:
-    """Set per-chat command list for a private chat based on user role and language.
+    """Set per-chat command list for a private chat based on role and grants.
 
-    Registers two scopes:
-    - BotCommandScopeChat (no lang) - base fallback for this chat
-    - BotCommandScopeChat + language_code - highest priority per Telegram docs
-
-    granted_features: set of "plugin:feature" strings. Commands with
-    required_feature are only shown when the user has that feature granted.
-    Pass None to skip feature filtering (backwards compat).
+    For plain user-role accounts with no feature grants the per-chat scope is
+    cleared so they fall through to BotCommandScopeAllPrivateChats (set once at
+    startup for all languages). Per-chat scope is only registered when the user
+    has feature-gated commands unlocked or an elevated role.
     """
     all_commands = _CORE_COMMANDS + (plugin_commands or [])
     scope = BotCommandScopeChat(chat_id=chat_id)
-
-    # Always clear all known per-language scopes to remove stale entries from
-    # previous language settings or old bot versions.
     _KNOWN_LANGS = ("en", "ru")
-    for stale_lang in _KNOWN_LANGS:
-        try:
-            await bot.delete_my_commands(scope=scope, language_code=stale_lang)
-        except TelegramError:
-            pass
 
     if role == "banned":
+        for stale in _KNOWN_LANGS:
+            try:
+                await bot.delete_my_commands(scope=scope, language_code=stale)
+            except TelegramError:
+                pass
         try:
             await bot.delete_my_commands(scope=scope)
         except TelegramError as e:
-            logger.warning("Failed to clear commands for chat %d: %s", chat_id, e)
+            logger.warning("Failed to clear commands for banned chat %d: %s", chat_id, e)
         return
+
+    if not _needs_per_chat_scope(role, granted_features, all_commands):
+        # Clear any stale per-chat scope - AllPrivateChats covers this user.
+        for stale in _KNOWN_LANGS:
+            try:
+                await bot.delete_my_commands(scope=scope, language_code=stale)
+            except TelegramError:
+                pass
+        try:
+            await bot.delete_my_commands(scope=scope)
+        except TelegramError:
+            pass
+        logger.debug("Commands cleared for chat %d (role=%s, using AllPrivateChats)", chat_id, role)
+        return
+
+    # User has grants or elevated role - register a per-chat override.
+    # Clear stale language scopes first.
+    for stale in _KNOWN_LANGS:
+        try:
+            await bot.delete_my_commands(scope=scope, language_code=stale)
+        except TelegramError:
+            pass
 
     visible = _filter_by_role(all_commands, role, granted_features=granted_features)
     private_cmds = [c for c in visible if c.scope in ("default", "private")]
 
-    # Base scope (no lang) - shown to clients whose Telegram language has no
-    # explicit scope set. Use the user's preferred language so that regardless
-    # of Telegram client locale the user sees their chosen language.
+    # no-lang scope: user's preferred language regardless of Telegram client locale
     base_cmds = _make_bot_commands(private_cmds, lang=lang)
     try:
         await bot.set_my_commands(base_cmds, scope=scope)
@@ -198,8 +241,7 @@ async def set_user_commands(
     except TelegramError as e:
         logger.warning("Failed to set commands for chat %d: %s", chat_id, e)
 
-    # Language-specific scope - explicit match for clients whose Telegram locale
-    # matches the user's preferred language (highest priority in lookup chain).
+    # lang-specific scope: highest priority when Telegram locale matches
     if lang:
         lang_cmds = _make_bot_commands(private_cmds, lang=lang)
         try:
