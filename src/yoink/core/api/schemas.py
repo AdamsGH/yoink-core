@@ -31,6 +31,7 @@ class UserResponse(BaseModel):
     id: int
     username: str | None
     first_name: str | None
+    photo_url: str | None = None
     role: UserRole
     language: str
     theme: str

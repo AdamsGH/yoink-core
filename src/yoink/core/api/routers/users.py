@@ -186,7 +186,7 @@ async def list_users(
     users = result.scalars().all()
     return {
         "items": [UserResponse(
-            id=u.id, username=u.username, first_name=u.first_name,
+            id=u.id, username=u.username, first_name=u.first_name, photo_url=u.photo_url,
             role=u.role, language=u.language, theme=u.theme,
             ban_until=u.ban_until, created_at=u.created_at, updated_at=u.updated_at,
         ) for u in users],
@@ -268,7 +268,7 @@ async def get_user(
     if user is None:
         raise NotFoundError("User not found")
     return UserResponse(
-        id=user.id, username=user.username, first_name=user.first_name,
+        id=user.id, username=user.username, first_name=user.first_name, photo_url=user.photo_url,
         role=user.role, language=user.language, theme=user.theme,
         ban_until=user.ban_until, created_at=user.created_at, updated_at=user.updated_at,
     )
@@ -327,10 +327,39 @@ async def update_user(
             )
 
     return UserResponse(
-        id=user.id, username=user.username, first_name=user.first_name,
+        id=user.id, username=user.username, first_name=user.first_name, photo_url=user.photo_url,
         role=user.role, language=user.language, theme=user.theme,
         ban_until=user.ban_until, created_at=user.created_at, updated_at=user.updated_at,
     )
 
 
 
+
+@router.get("/{user_id}/photo", summary="Proxy user profile photo (admin+)")
+async def get_user_photo(
+    user_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+):
+    """Stream the user's Telegram profile photo via Bot API file download."""
+    from fastapi.responses import Response
+    import httpx
+
+    user = await session.get(User, user_id)
+    if user is None or not user.photo_url:
+        raise NotFoundError("No photo available")
+
+    bot = getattr(request.app.state, "bot", None)
+    if bot is None:
+        raise NotFoundError("Bot not available")
+
+    try:
+        file = await bot.get_file(user.photo_url)
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(file.file_path)
+            r.raise_for_status()
+            ct = r.headers.get("content-type", "image/jpeg")
+            return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
+    except Exception:
+        raise NotFoundError("Failed to fetch photo")

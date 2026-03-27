@@ -4,6 +4,7 @@ export interface User {
   id: number
   username: string | null
   first_name: string | null
+  photo_url: string | null
   role: UserRole
   language: string
   theme: string

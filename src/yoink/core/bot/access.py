@@ -18,6 +18,7 @@ Usage in handlers:
 """
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 from dataclasses import dataclass, field
@@ -311,7 +312,28 @@ def require_access(policy: AccessPolicy):
                 return
 
             context.user_data["_effective_role"] = result.effective_role
+
+            asyncio.create_task(_maybe_update_photo(user, context))
+
             await func(update, context)
 
         return wrapper
     return decorator
+
+
+async def _maybe_update_photo(tg_user, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fetch user profile photo file_id in background if not cached yet."""
+    try:
+        user_repo = context.bot_data.get("user_repo")
+        if user_repo is None:
+            return
+        db_user = await user_repo.get_or_create(tg_user.id)
+        if db_user.photo_url:
+            return
+        photos = await context.bot.get_user_profile_photos(tg_user.id, limit=1)
+        if not photos.photos:
+            return
+        photo = photos.photos[0][-1]
+        await user_repo.update(tg_user.id, photo_url=photo.file_id)
+    except Exception:
+        pass

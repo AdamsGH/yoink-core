@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { format } from 'date-fns'
-import { Ban, CalendarIcon, ShieldCheck, User as UserIcon, Users, X } from 'lucide-react'
+import { Ban, CalendarIcon, ShieldCheck, Users, X } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn, formatDate } from '@core/lib/utils'
 import type { EffectiveFeatureAccess, User, UserRole, UserUpdateRequest } from '@core/types/api'
+import { Avatar, AvatarFallback, AvatarImage } from '@core/components/ui/avatar'
 import { Badge } from '@core/components/ui/badge'
 import { RoleBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
 import { Calendar } from '@core/components/ui/calendar'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } from '@core/components/ui/drawer'
+import { Drawer, DrawerContent } from '@core/components/ui/drawer'
 import { Input } from '@core/components/ui/input'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@core/components/ui/item'
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from '@core/components/ui/item'
 import { Label } from '@core/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@core/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@core/components/ui/select'
@@ -22,6 +23,34 @@ import { Switch } from '@core/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@core/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@core/components/ui/tooltip'
 import { toast } from '@core/components/ui/toast'
+
+function userPhotoUrl(user: User): string | undefined {
+  if (!user.photo_url) return undefined
+  return `${apiClient.defaults.baseURL}/users/${user.id}/photo`
+}
+
+function userInitials(user: User): string {
+  const name = user.first_name ?? user.username ?? ''
+  return name.slice(0, 2).toUpperCase() || '#'
+}
+
+const GRADIENT_BY_ROLE: Record<string, string> = {
+  owner: 'from-amber-500/20 to-amber-600/5',
+  admin: 'from-blue-500/20 to-blue-600/5',
+  moderator: 'from-purple-500/20 to-purple-600/5',
+  user: 'from-primary/10 to-primary/5',
+  restricted: 'from-orange-500/20 to-orange-600/5',
+  banned: 'from-destructive/20 to-destructive/5',
+}
+
+const RING_BY_ROLE: Record<string, string> = {
+  owner: 'ring-amber-500/50',
+  admin: 'ring-blue-500/50',
+  moderator: 'ring-purple-500/50',
+  user: 'ring-primary/30',
+  restricted: 'ring-orange-500/50',
+  banned: 'ring-destructive/50',
+}
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
 
@@ -135,9 +164,9 @@ interface UserStats {
 
 function StatCell({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg bg-muted/50 p-3 text-center">
-      <div className="text-xl font-bold">{value}</div>
-      <div className="text-xs text-muted-foreground mt-0.5">{label}</div>
+    <div className="rounded-lg border bg-card p-3 text-center">
+      <div className="text-2xl font-bold tabular-nums">{value}</div>
+      <div className="text-[11px] text-muted-foreground mt-1 uppercase tracking-wide">{label}</div>
     </div>
   )
 }
@@ -156,12 +185,6 @@ function AccessBadge({ f }: { f: EffectiveFeatureAccess }) {
     return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">grant</Badge>
   }
   return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">role+grant</Badge>
-}
-
-function roleIcon(role: UserRole) {
-  if (role === 'banned') return <Ban className="size-4" />
-  if (role === 'owner' || role === 'admin') return <ShieldCheck className="size-4" />
-  return <UserIcon className="size-4" />
 }
 
 function roleMediaColor(role: UserRole) {
@@ -267,19 +290,29 @@ function UserDrawer({
       <DrawerContent className="max-h-[85vh]">
         {user && (
           <>
-            <DrawerHeader>
-              <DrawerTitle className="flex items-center gap-2">
-                {user.first_name ?? String(user.id)}
-                <RoleBadge role={user.role} />
-              </DrawerTitle>
-              <DrawerDescription className="flex items-center gap-3 text-xs">
-                {user.username && <span>@{user.username}</span>}
-                <span className="font-mono">#{user.id}</span>
-              </DrawerDescription>
-            </DrawerHeader>
+            <div className={cn('bg-gradient-to-b px-4 pt-5 pb-4', GRADIENT_BY_ROLE[user.role] ?? GRADIENT_BY_ROLE.user)}>
+              <div className="flex items-center gap-3">
+                <Avatar className={cn('size-14 ring-2', RING_BY_ROLE[user.role] ?? RING_BY_ROLE.user)}>
+                  <AvatarImage src={userPhotoUrl(user)} />
+                  <AvatarFallback className={cn('text-lg font-semibold', roleMediaColor(user.role))}>
+                    {userInitials(user)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-semibold truncate">{user.first_name ?? String(user.id)}</h3>
+                    <RoleBadge role={user.role} />
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {user.username && <span className="mr-2">@{user.username}</span>}
+                    <span className="font-mono">#{user.id}</span>
+                  </p>
+                </div>
+              </div>
+            </div>
 
             <Tabs defaultValue="stats" className="flex flex-col flex-1 min-h-0">
-              <TabsList className="mx-4 shrink-0">
+              <TabsList className="mx-4 mt-3 shrink-0">
                 <TabsTrigger value="stats" className="flex-1">{t('users.tab_stats')}</TabsTrigger>
                 <TabsTrigger value="access" className="flex-1">{t('users.tab_access')}</TabsTrigger>
                 <TabsTrigger value="edit" className="flex-1">{t('users.tab_edit')}</TabsTrigger>
@@ -584,9 +617,12 @@ export default function AdminUsersPage() {
                     className="py-2.5 rounded-none border-0 cursor-pointer"
                     onClick={() => setViewed(user)}
                   >
-                    <ItemMedia variant="icon" className={cn('size-8 rounded-md', roleMediaColor(user.role))}>
-                      {roleIcon(user.role)}
-                    </ItemMedia>
+                    <Avatar className={cn('size-8 ring-1', RING_BY_ROLE[user.role] ?? RING_BY_ROLE.user)}>
+                      <AvatarImage src={userPhotoUrl(user)} />
+                      <AvatarFallback className={cn('text-xs font-medium', roleMediaColor(user.role))}>
+                        {userInitials(user)}
+                      </AvatarFallback>
+                    </Avatar>
                     <ItemContent>
                       <ItemTitle>{user.first_name ?? user.username ?? String(user.id)}</ItemTitle>
                       <ItemDescription>

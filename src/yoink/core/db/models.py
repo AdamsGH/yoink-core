@@ -33,6 +33,7 @@ class User(Base):
     language: Mapped[str] = mapped_column(String(8), default="en", nullable=False)
     theme: Mapped[str] = mapped_column(String(32), default="macchiato", nullable=False)
     ban_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    photo_url: Mapped[str | None] = mapped_column(String(512))
     is_premium: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)

@@ -29,6 +29,7 @@ class UserRepo(BaseRepo[User]):
         username: str | None = None,
         first_name: str | None = None,
         is_premium: bool = False,
+        photo_url: str | None = None,
         **_: Any,
     ) -> User:
         async with self._sf() as session:
@@ -40,6 +41,7 @@ class UserRepo(BaseRepo[User]):
                     username=username,
                     first_name=first_name,
                     is_premium=is_premium,
+                    photo_url=photo_url,
                     role=role,
                 )
                 session.add(user)
@@ -55,6 +57,9 @@ class UserRepo(BaseRepo[User]):
                     changed = True
                 if is_premium != user.is_premium:
                     user.is_premium = is_premium
+                    changed = True
+                if photo_url is not None and user.photo_url != photo_url:
+                    user.photo_url = photo_url
                     changed = True
                 if changed:
                     user.updated_at = datetime.now(timezone.utc)
