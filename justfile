@@ -363,9 +363,12 @@ dev:
     cd frontend && npm run dev
 
 # Install host-side node_modules and plugin symlinks for local dev (run once).
+# Also run after `just build frontend` or `just tsc` to fix root-owned files.
 setup-dev:
     #!/usr/bin/env bash
     set -euo pipefail
+    sudo chown -R "$(id -u):$(id -g)" frontend/node_modules 2>/dev/null || true
+    rm -rf frontend/node_modules/.vite
     cd frontend && npm install
     for p in yoink-dl yoink-stats yoink-insight; do
         rm -rf "$(pwd)/../plugins/$p/frontend/node_modules"
