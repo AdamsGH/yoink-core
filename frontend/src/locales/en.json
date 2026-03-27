@@ -154,7 +154,12 @@
     "page_of": "Page {{page}} of {{total}}",
     "filtered": "filtered",
     "domain": "Domain",
-    "title_url": "Title / URL"
+    "title_url": "Title / URL",
+    "file_count": "Files",
+    "files": "files",
+    "open_telegram": "Open in Telegram",
+    "redownload": "Re-download",
+    "queuing": "Queuing…"
   },
   "users": {
     "title": "Users",

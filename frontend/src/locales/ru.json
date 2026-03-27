@@ -154,7 +154,12 @@
     "page_of": "Страница {{page}} из {{total}}",
     "filtered": "фильтр",
     "domain": "Домен",
-    "title_url": "Название / URL"
+    "title_url": "Название / URL",
+    "file_count": "Файлов",
+    "files": "файлов",
+    "open_telegram": "Открыть в Telegram",
+    "redownload": "Скачать снова",
+    "queuing": "Отправка…"
   },
   "users": {
     "title": "Пользователи",
