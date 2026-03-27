@@ -59,6 +59,7 @@ COPY --from=builder-plugins /usr/local/bin/gallery-dl /usr/local/bin/gallery-dl
 
 WORKDIR /app
 
+ARG CACHE_BUST=0
 COPY src/ ./src/
 COPY plugins/yoink-dl/src/ /app/plugins/yoink-dl/src/
 COPY plugins/yoink-stats/src/ /app/plugins/yoink-stats/src/

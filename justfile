@@ -19,7 +19,9 @@ build target="all":
     cd "$(dirname "$(just --justfile)")"
     case "{{target}}" in
       yoink)
-        docker build -f docker/Dockerfile           -t {{image_yoink}}    .
+        docker build -f docker/Dockerfile \
+          --build-arg CACHE_BUST=$(git rev-parse HEAD) \
+          -t {{image_yoink}}    .
         ;;
       frontend)
         docker build -f docker/Dockerfile.frontend \
@@ -33,7 +35,9 @@ build target="all":
         docker build -f docker/Dockerfile.backup     -t yoink/backup:latest .
         ;;
       all)
-        docker build -f docker/Dockerfile            -t {{image_yoink}}    .
+        docker build -f docker/Dockerfile \
+          --build-arg CACHE_BUST=$(git rev-parse HEAD) \
+          -t {{image_yoink}}    .
         docker build -f docker/Dockerfile.frontend \
           --build-arg CACHE_BUST=$(git rev-parse HEAD) \
           -t {{image_frontend}} .
