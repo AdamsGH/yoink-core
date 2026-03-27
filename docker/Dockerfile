@@ -55,6 +55,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY --from=builder-plugins /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder-plugins /usr/local/bin/yoink* /usr/local/bin/
 COPY --from=builder-plugins /usr/local/bin/alembic /usr/local/bin/alembic
+COPY --from=builder-plugins /usr/local/bin/gallery-dl /usr/local/bin/gallery-dl
 
 WORKDIR /app
 

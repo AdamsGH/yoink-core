@@ -54,6 +54,8 @@
     "nsfw_blur_hint": "Apply spoiler overlay on adult content",
     "mediainfo": "Mediainfo report",
     "mediainfo_hint": "Send technical details after each download",
+    "gallery_zip": "Gallery ZIP archive",
+    "gallery_zip_hint": "When a gallery has more than 10 images, send 9 previews + a ZIP with all files",
     "use_proxy": "Use proxy",
     "use_proxy_hint": "Route your downloads through a proxy server",
     "subs_enabled": "Download subtitles",
