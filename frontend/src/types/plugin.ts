@@ -15,6 +15,10 @@ export interface NavItem {
 
 export interface NavGroup {
   label?: string
+  /** Icon shown when sidebar is collapsed (represents the whole group). */
+  icon?: ReactNode
+  /** i18n key for the group label. */
+  i18nKey?: string
   items: NavItem[]
   minRole?: string[]
   collapsible?: boolean

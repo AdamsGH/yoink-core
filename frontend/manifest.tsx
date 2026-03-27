@@ -1,4 +1,4 @@
-import { Settings2, Users, UsersRound } from 'lucide-react'
+import { Settings2, Shield, Users, UsersRound } from 'lucide-react'
 
 import type { PluginManifest } from '@core/types/plugin'
 
@@ -19,6 +19,8 @@ export const corePlugin: PluginManifest = {
   navGroups: [
     {
       label: 'Admin',
+      i18nKey: 'nav.admin',
+      icon: <Shield className="h-4 w-4" />,
       collapsible: true,
       defaultOpen: true,
       minRole: ['owner', 'admin'],

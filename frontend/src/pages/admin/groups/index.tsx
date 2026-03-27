@@ -177,17 +177,17 @@ function ThreadRows({ groupId }: { groupId: number }) {
     } catch { toast.error(t('common.load_error')) }
   }
 
-  const toggle = async (t: ThreadPolicy) => {
+  const toggle = async (policy: ThreadPolicy) => {
     try {
-      await apiClient.post(`/groups/${groupId}/threads`, { thread_id: t.thread_id, name: t.name, enabled: !t.enabled })
+      await apiClient.post(`/groups/${groupId}/threads`, { thread_id: policy.thread_id, name: policy.name, enabled: !policy.enabled })
       load()
     } catch { toast.error(t('common.load_error')) }
   }
 
-  const remove = async (t: ThreadPolicy) => {
-    if (!confirm(`Remove policy for "${threadLabel(t)}"?`)) return
+  const remove = async (policy: ThreadPolicy) => {
+    if (!confirm(`Remove policy for "${threadLabel(policy)}"?`)) return
     try {
-      await apiClient.delete(`/groups/${groupId}/threads/${t.id}`)
+      await apiClient.delete(`/groups/${groupId}/threads/${policy.id}`)
       load()
     } catch { toast.error(t('common.load_error')) }
   }
@@ -347,7 +347,7 @@ export default function AdminGroupsPage() {
       if (edit.isNew) {
         const body: GroupCreateRequest = {
           id: parseInt(edit.newId, 10),
-          title: edit.title || null,
+          title: edit.title || undefined,
           enabled: edit.enabled,
           auto_grant_role: edit.auto_grant_role,
           allow_pm: edit.allow_pm,
@@ -357,7 +357,7 @@ export default function AdminGroupsPage() {
         toast.success(t('common.save'))
       } else if (edit.group) {
         const body: GroupUpdateRequest = {
-          title: edit.title || null,
+          title: edit.title || undefined,
           enabled: edit.enabled,
           auto_grant_role: edit.auto_grant_role,
           allow_pm: edit.allow_pm,

@@ -17,6 +17,7 @@ import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup,
   SidebarGroupContent, SidebarGroupLabel, SidebarHeader,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem,
+  SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
   SidebarInset, SidebarProvider, SidebarRail, SidebarTrigger,
 } from '../components/ui/sidebar'
 import {
@@ -119,48 +120,81 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
 
   const getLabel = (item: NavItem) =>
     item.i18nKey ? t(item.i18nKey, { defaultValue: item.label }) : item.label
+  const getGroupLabel = () =>
+    group.i18nKey ? t(group.i18nKey, { defaultValue: group.label }) : group.label
 
-  const items = (
-    <SidebarMenu>
-      {visible.map((item) => (
-        <SidebarMenuItem key={item.path}>
-          <SidebarMenuButton
-            asChild
-            isActive={currentPath === item.path || currentPath.startsWith(item.path + '/')}
-            tooltip={getLabel(item)}
-          >
-            <NavLink to={item.path}>
-              {item.icon}
-              <span>{getLabel(item)}</span>
-            </NavLink>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      ))}
-    </SidebarMenu>
+  const isGroupActive = visible.some(
+    (i) => currentPath === i.path || currentPath.startsWith(i.path + '/')
   )
 
-  if (group.collapsible) {
+  // Group with icon: renders as collapsible parent + SidebarMenuSub children.
+  // Collapsed sidebar shows only the parent icon button (sidebar-07 pattern).
+  if (group.icon) {
     return (
-      <Collapsible defaultOpen={group.defaultOpen ?? true} className="group/collapsible">
-        <SidebarGroup className="p-0">
-          <SidebarGroupLabel asChild>
-            <CollapsibleTrigger className="flex w-full items-center">
-              {group.label}
-              <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
-            </CollapsibleTrigger>
-          </SidebarGroupLabel>
-          <CollapsibleContent>
-            <SidebarGroupContent>{items}</SidebarGroupContent>
-          </CollapsibleContent>
-        </SidebarGroup>
-      </Collapsible>
+      <SidebarGroup>
+        <SidebarMenu>
+          <Collapsible
+            asChild
+            defaultOpen={group.defaultOpen ?? true}
+            className="group/collapsible"
+          >
+            <SidebarMenuItem>
+              <CollapsibleTrigger asChild>
+                <SidebarMenuButton
+                  tooltip={getGroupLabel()}
+                  isActive={isGroupActive}
+                >
+                  {group.icon}
+                  <span>{getGroupLabel()}</span>
+                  <ChevronDown className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-180" />
+                </SidebarMenuButton>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <SidebarMenuSub>
+                  {visible.map((item) => (
+                    <SidebarMenuSubItem key={item.path}>
+                      <SidebarMenuSubButton
+                        asChild
+                        isActive={currentPath === item.path || currentPath.startsWith(item.path + '/')}
+                      >
+                        <NavLink to={item.path}>
+                          {item.icon}
+                          <span>{getLabel(item)}</span>
+                        </NavLink>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                  ))}
+                </SidebarMenuSub>
+              </CollapsibleContent>
+            </SidebarMenuItem>
+          </Collapsible>
+        </SidebarMenu>
+      </SidebarGroup>
     )
   }
 
+  // Flat group: all items at top level, optional text label header.
   return (
     <SidebarGroup>
-      {group.label && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
-      <SidebarGroupContent>{items}</SidebarGroupContent>
+      {group.label && <SidebarGroupLabel>{getGroupLabel()}</SidebarGroupLabel>}
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {visible.map((item) => (
+            <SidebarMenuItem key={item.path}>
+              <SidebarMenuButton
+                asChild
+                isActive={currentPath === item.path || currentPath.startsWith(item.path + '/')}
+                tooltip={getLabel(item)}
+              >
+                <NavLink to={item.path}>
+                  {item.icon}
+                  <span>{getLabel(item)}</span>
+                </NavLink>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroupContent>
     </SidebarGroup>
   )
 }

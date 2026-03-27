@@ -18,19 +18,25 @@
     "noImplicitReturns": true,
     "baseUrl": ".",
     "paths": {
-      "@/*":          ["./src/*"],
-      "@core/*":      ["./src/*"],
-      "@dl/*":        ["../plugins/yoink-dl/frontend/src/*"],
-      "@dl-root/*":   ["../plugins/yoink-dl/frontend/*"],
-      "@stats/*":     ["../plugins/yoink-stats/frontend/src/*"],
-      "@stats-root/*": ["../plugins/yoink-stats/frontend/*"]
+      "@/*":           ["./src/*"],
+      "@core/*":       ["./src/*"],
+      "@core-root/*":  ["./*"],
+      "@dl/*":         ["../plugins/yoink-dl/frontend/src/*"],
+      "@dl-root/*":    ["../plugins/yoink-dl/frontend/*"],
+      "@stats/*":      ["../plugins/yoink-stats/frontend/src/*"],
+      "@stats-root/*": ["../plugins/yoink-stats/frontend/*"],
+      "@insight-root/*": ["../plugins/yoink-insight/frontend/*"]
     }
   },
   "include": [
     "src",
     "vite.config.ts",
     "../plugins/yoink-dl/frontend/**/*.ts",
-    "../plugins/yoink-dl/frontend/**/*.tsx"
+    "../plugins/yoink-dl/frontend/**/*.tsx",
+    "../plugins/yoink-stats/frontend/**/*.ts",
+    "../plugins/yoink-stats/frontend/**/*.tsx",
+    "../plugins/yoink-insight/frontend/**/*.ts",
+    "../plugins/yoink-insight/frontend/**/*.tsx"
   ],
   "compileOnSave": false
 }
