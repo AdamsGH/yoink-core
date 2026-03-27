@@ -97,3 +97,9 @@
   padding-top: 0.25rem;
   padding-bottom: 0.25rem;
 }
+
+/* Hide text span and chevron inside group parent button when collapsed. */
+[data-sidebar=menu-button]:is(:where(.group)[data-collapsible=icon] *) > span,
+[data-sidebar=menu-button]:is(:where(.group)[data-collapsible=icon] *) > svg.ml-auto {
+  display: none;
+}
