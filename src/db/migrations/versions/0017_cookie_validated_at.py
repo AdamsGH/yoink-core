@@ -9,8 +9,8 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0017'
-down_revision = '0016'
+revision = '0017_cookie_validated_at'
+down_revision = '0016_download_log_file_count'
 branch_labels = None
 depends_on = None
 
