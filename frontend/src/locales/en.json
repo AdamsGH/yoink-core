@@ -13,7 +13,8 @@
     "admin": "Admin",
     "chat_stats": "Chat Stats",
     "import_history": "Import History",
-    "ai_settings": "AI Settings"
+    "ai_settings": "AI Settings",
+    "api_docs": "API Docs"
   },
   "common": {
     "loading": "Loading…",

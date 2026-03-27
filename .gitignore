@@ -1,12 +1,12 @@
 ARCHITECTURE.md
-node_modules/
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-.venv/
-dist/
-build/
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.egg-info/
+**/.venv/
+**/dist/
+**/build/
 .env
 .env.local
 data/
@@ -14,3 +14,6 @@ data/
 .DS_Store
 docker-compose.override.yml
 .pi/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

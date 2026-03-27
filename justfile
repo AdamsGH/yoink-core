@@ -3,6 +3,7 @@ set shell := ["bash", "-cu"]
 
 image_yoink    := "yoink/yoink:latest"
 image_frontend := "yoink/frontend:latest"
+image_nginx    := "yoink/nginx:latest"
 image_tg       := "yoink/tg-bot-api:latest"
 
 compose := "docker compose"
@@ -28,6 +29,10 @@ build target="all":
           --build-arg CACHE_BUST=$(git rev-parse HEAD) \
           -t {{image_frontend}} .
         ;;
+      nginx)
+        docker build -f docker/Dockerfile.nginx \
+          -t {{image_nginx}} .
+        ;;
       tg)
         docker build -f docker/Dockerfile.tg-bot-api -t {{image_tg}}      .
         ;;
@@ -41,9 +46,11 @@ build target="all":
         docker build -f docker/Dockerfile.frontend \
           --build-arg CACHE_BUST=$(git rev-parse HEAD) \
           -t {{image_frontend}} .
+        docker build -f docker/Dockerfile.nginx \
+          -t {{image_nginx}} .
         ;;
       *)
-        echo "Unknown target: {{target}}. Use: yoink | frontend | tg | backup | all"
+        echo "Unknown target: {{target}}. Use: yoink | frontend | nginx | tg | backup | all"
         exit 1
         ;;
     esac
@@ -329,3 +336,42 @@ clean-pyc:
     find src -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     find src -name "*.pyc" -delete 2>/dev/null || true
     find src -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Remove all host-side build artifacts (node_modules, pycache, .venv).
+# All building and type-checking must happen inside containers.
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    find . -name "node_modules" -not -path "*/.git/*" -prune -exec rm -rf {} + 2>/dev/null || true
+    find . -type d -name __pycache__ -not -path "*/.git/*" -exec rm -rf {} + 2>/dev/null || true
+    find . -name "*.pyc" -not -path "*/.git/*" -delete 2>/dev/null || true
+    find . -name "*.egg-info" -type d -not -path "*/.git/*" -exec rm -rf {} + 2>/dev/null || true
+    rm -rf .venv frontend/dist
+    echo "Host artifacts cleaned."
+
+# Run TypeScript type-check inside a container (no host node_modules needed).
+tsc *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker run --rm \
+        -v "$(pwd)/frontend":/build/frontend \
+        -v "$(pwd)/plugins/yoink-dl/frontend":/build/plugins/yoink-dl/frontend \
+        -v "$(pwd)/plugins/yoink-stats/frontend":/build/plugins/yoink-stats/frontend \
+        -v "$(pwd)/plugins/yoink-insight/frontend":/build/plugins/yoink-insight/frontend \
+        -w /build/frontend \
+        node:22-alpine sh -c "
+            npm install --silent 2>/dev/null
+            ln -sf /build/frontend/node_modules /build/plugins/yoink-dl/frontend/node_modules 2>/dev/null || true
+            ln -sf /build/frontend/node_modules /build/plugins/yoink-stats/frontend/node_modules 2>/dev/null || true
+            ln -sf /build/frontend/node_modules /build/plugins/yoink-insight/frontend/node_modules 2>/dev/null || true
+            npx tsc --noEmit {{args}}
+        "
+
+# Run npm commands inside a container for frontend (e.g. just npm 'add some-pkg').
+npm *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker run --rm \
+        -v "$(pwd)/frontend":/build/frontend \
+        -w /build/frontend \
+        node:22-alpine sh -c "npm {{args}}"

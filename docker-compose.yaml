@@ -102,6 +102,34 @@ services:
         max-size: "50M"
         max-file: "3"
 
+  yoink-nginx:
+    image: yoink/nginx:latest
+    container_name: yoink-nginx
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nginx
+    restart: unless-stopped
+    networks:
+      - yoink
+    ports:
+      - "8081:8081"
+    depends_on:
+      yoink:
+        condition: service_healthy
+      yoink-frontend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/api/v1/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: local
+      options:
+        max-size: "50M"
+        max-file: "3"
+
   yoink-tg-bot-api:
     image: yoink/tg-bot-api:latest
     container_name: yoink-tg-bot-api

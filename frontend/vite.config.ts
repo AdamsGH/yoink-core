@@ -15,9 +15,9 @@ export default defineConfig({
 
   resolve: {
     alias: {
-      '@':           resolve(__dirname, 'src'),
-      '@core':       resolve(__dirname, 'src'),
-      '@core-root':  resolve(__dirname, '.'),
+      '@':             resolve(__dirname, 'src'),
+      '@core':         resolve(__dirname, 'src'),
+      '@core-root':    resolve(__dirname, '.'),
       '@dl':           resolve(__dirname, '../plugins/yoink-dl/frontend/src'),
       '@dl-root':      resolve(__dirname, '../plugins/yoink-dl/frontend'),
       '@stats':        resolve(__dirname, '../plugins/yoink-stats/frontend/src'),
@@ -34,8 +34,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router'],
-          'vendor-refine': ['@refinedev/core', '@refinedev/react-router'],
+          'vendor-react':    ['react', 'react-dom', 'react-router'],
+          'vendor-refine':   ['@refinedev/core', '@refinedev/react-router'],
           'vendor-recharts': ['recharts'],
         },
       },
@@ -45,9 +45,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    fs: {
-      allow: ['..'],
-    },
+    fs: { allow: ['..'] },
     proxy: {
       '/api': { target: 'http://localhost:8000', changeOrigin: true },
     },

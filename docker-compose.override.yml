@@ -1,0 +1,16 @@
+services:
+  yoink-nginx:
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.yoink.rule: "Host(`${yoink_domain}`)"
+      traefik.http.routers.yoink.entrypoints: "websecure"
+      traefik.http.routers.yoink.tls: "true"
+      traefik.http.services.yoink.loadbalancer.server.port: "8081"
+
+  yoink-frontend:
+    labels:
+      traefik.enable: "false"
+
+  yoink:
+    labels:
+      traefik.enable: "false"
