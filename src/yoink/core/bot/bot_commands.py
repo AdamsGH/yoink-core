@@ -136,16 +136,16 @@ async def set_default_commands(
         lambda c: c.scope == "default", "user", "Default",
     )
 
-    # All group chats - user-level commands that make sense in groups
+    # All group chats - default + groups-scoped user-level commands (e.g. /stats)
     await _set_commands_for_langs(
         bot, [], BotCommandScopeAllGroupChats(), all_commands,
-        lambda c: c.scope == "default", "user", "AllGroupChats",
+        lambda c: c.scope in ("default", "groups"), "user", "AllGroupChats",
     )
 
-    # All group chat administrators - user commands + groups-scoped admin commands
+    # All group chat administrators - same set + admin-only groups commands (/group, /thread)
     await _set_commands_for_langs(
         bot, [], BotCommandScopeAllChatAdministrators(), all_commands,
-        lambda c: c.scope in ("default", "groups"), "owner", "AllChatAdmins",
+        lambda c: c.scope in ("default", "groups"), "admin", "AllChatAdmins",
     )
 
     # All private chats - full user-role private commands (no feature-gated ones).
