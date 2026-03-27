@@ -71,6 +71,9 @@ class AccessPolicy:
     # True  = silently ignore denied messages (no reply)
     # False = send ephemeral error reply
     silent_deny: bool = True
+    # When True, override silent_deny=False in group chats - always silent in groups.
+    # Useful for feature-gated commands that should reply in private but not spam groups.
+    group_silent_deny: bool = False
     # Always log denials at DEBUG level
     log_deny: bool = True
     # Optional feature gate: both fields must be set together
@@ -289,7 +292,9 @@ def require_access(policy: AccessPolicy):
                         result.deny_reason,
                         func.__name__,
                     )
-                if not policy.silent_deny:
+                is_group_ctx = chat is not None and chat.type in ("group", "supergroup")
+                effectively_silent = policy.silent_deny or (policy.group_silent_deny and is_group_ctx)
+                if not effectively_silent:
                     from yoink.core.bot.middleware import reply_ephemeral
                     from yoink.core.i18n import t
                     lang = "en"
