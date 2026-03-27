@@ -6,7 +6,8 @@ import { CalendarIcon, X } from 'lucide-react'
 import { apiClient } from '@core/lib/api-client'
 import { cn, formatDate } from '@core/lib/utils'
 import type { EffectiveFeatureAccess, User, UserRole, UserUpdateRequest } from '@core/types/api'
-import { Badge, type BadgeProps } from '@core/components/ui/badge'
+import { Badge } from '@core/components/ui/badge'
+import { RoleBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
 import { Calendar } from '@core/components/ui/calendar'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
@@ -130,14 +131,7 @@ interface UserStats {
   member_since: string
 }
 
-export function roleBadgeVariant(role: UserRole): BadgeProps['variant'] {
-  if (role === 'owner') return 'default'
-  if (role === 'admin') return 'secondary'
-  if (role === 'moderator') return 'outline'
-  if (role === 'banned') return 'destructive'
-  if (role === 'restricted') return 'warning'
-  return 'outline'
-}
+
 
 function StatCell({ label, value }: { label: string; value: string | number }) {
   return (
@@ -262,7 +256,7 @@ function UserSheet({
             <SheetHeader className="px-4 pt-4 pb-2 border-b shrink-0">
               <SheetTitle className="flex items-center gap-2 flex-wrap">
                 <span>{user.first_name ?? String(user.id)}</span>
-                <Badge variant={roleBadgeVariant(user.role)}>{user.role}</Badge>
+                <RoleBadge role={user.role} />
               </SheetTitle>
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 {user.username && <span>@{user.username}</span>}
@@ -580,7 +574,7 @@ export default function AdminUsersPage() {
                           {user.username && <p className="text-xs text-muted-foreground">@{user.username}</p>}
                         </TableCell>
                         <TableCell className="font-mono text-xs">{user.id}</TableCell>
-                        <TableCell><Badge variant={roleBadgeVariant(user.role)}>{user.role}</Badge></TableCell>
+                        <TableCell><RoleBadge role={user.role} /></TableCell>
                         <TableCell className="text-xs text-muted-foreground">{formatDate(user.created_at)}</TableCell>
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <div className="flex gap-1">
@@ -609,7 +603,7 @@ export default function AdminUsersPage() {
                         <p className="text-sm font-medium truncate">{user.first_name ?? user.username ?? '-'}</p>
                         <p className="text-xs text-muted-foreground font-mono">{user.id}{user.username && ` · @${user.username}`}</p>
                       </div>
-                      <Badge variant={roleBadgeVariant(user.role)} className="shrink-0">{user.role}</Badge>
+                      <RoleBadge role={user.role} className="shrink-0" />
                     </div>
                     <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                       {user.role === 'banned' ? (

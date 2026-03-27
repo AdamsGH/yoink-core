@@ -7,19 +7,11 @@ import { apiClient } from '../../lib/api-client'
 import { formatDate } from '../../lib/utils'
 import { useTelegram } from '../../layout/TelegramProvider'
 import type { UserStats } from '../../types/plugin'
-import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { RoleBadge } from './StatusBadge'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../ui/sheet'
 import { useSidebar } from '../ui/sidebar'
 
-const ROLE_VARIANT: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
-  owner:      'warning',
-  admin:      'default',
-  moderator:  'secondary',
-  user:       'outline',
-  restricted: 'outline',
-  banned:     'destructive',
-}
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   video: <Film className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />,
@@ -122,9 +114,7 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
                 <p className="text-sm text-muted-foreground">@{tgUser.username}</p>
               )}
               {role && (
-                <Badge variant={ROLE_VARIANT[role] ?? 'outline'} className="mt-1 capitalize">
-                  {role}
-                </Badge>
+                <RoleBadge role={role as import('@core/types/api').UserRole} className="mt-1" />
               )}
             </div>
           </div>

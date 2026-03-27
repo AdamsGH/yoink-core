@@ -6,6 +6,7 @@ import { apiClient } from '@core/lib/api-client'
 import { cn, formatDate } from '@core/lib/utils'
 import type { Group, GroupCreateRequest, GroupUpdateRequest, ThreadPolicy, UserRole } from '@core/types/api'
 import { Badge } from '@core/components/ui/badge'
+import { SuccessBadge, WarningBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
 import {
@@ -221,9 +222,11 @@ function ThreadRows({ groupId }: { groupId: number }) {
                 <span className="ml-2 font-mono text-muted-foreground">#{t.thread_id}</span>
               )}
             </div>
-            <Badge variant={t.enabled ? 'success' : 'outline'} className="shrink-0 text-xs">
+            {(t.enabled) ? <SuccessBadge className="shrink-0 text-xs">
               {t.enabled ? 'allowed' : 'denied'}
-            </Badge>
+            </SuccessBadge> : <Badge variant="outline" className="shrink-0 text-xs">
+              {t.enabled ? 'allowed' : 'denied'}
+            </Badge>}
             <Button size="sm" variant="ghost" className="h-6 shrink-0 text-xs" onClick={() => toggle(t)}>
               {t.enabled ? 'Deny' : 'Allow'}
             </Button>
@@ -418,20 +421,26 @@ export default function AdminGroupsPage() {
                             <p className="font-mono text-xs text-muted-foreground">{group.id}</p>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={group.enabled ? 'success' : 'outline'}>
+                            {(group.enabled) ? <SuccessBadge>
                               {group.enabled ? t('groups.active') : t('groups.disabled')}
-                            </Badge>
+                            </SuccessBadge> : <Badge variant="outline">
+                              {group.enabled ? t('groups.active') : t('groups.disabled')}
+                            </Badge>}
                           </TableCell>
                           <TableCell><Badge variant="secondary">{group.auto_grant_role}</Badge></TableCell>
                           <TableCell>
-                            <Badge variant={group.allow_pm ? 'success' : 'outline'}>
+                            {(group.allow_pm) ? <SuccessBadge>
                               {group.allow_pm ? 'yes' : 'no'}
-                            </Badge>
+                            </SuccessBadge> : <Badge variant="outline">
+                              {group.allow_pm ? 'yes' : 'no'}
+                            </Badge>}
                           </TableCell>
                           <TableCell>
-                            <Badge variant={group.nsfw_allowed ? 'warning' : 'outline'}>
+                            {(group.nsfw_allowed) ? <WarningBadge>
                               {group.nsfw_allowed ? t('groups.allowed') : t('groups.blocked')}
-                            </Badge>
+                            </WarningBadge> : <Badge variant="outline">
+                              {group.nsfw_allowed ? t('groups.allowed') : t('groups.blocked')}
+                            </Badge>}
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground">{formatDate(group.created_at)}</TableCell>
                           <TableCell>
@@ -463,10 +472,10 @@ export default function AdminGroupsPage() {
                       <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0" onClick={() => setEdit(defaultEdit(group))}>{t('common.edit')}</Button>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      <Badge variant={group.enabled ? 'success' : 'outline'}>{group.enabled ? t('groups.active') : t('groups.disabled')}</Badge>
+                      {(group.enabled) ? <SuccessBadge>{group.enabled ? t('groups.active') : t('groups.disabled')}</SuccessBadge> : <Badge variant="outline">{group.enabled ? t('groups.active') : t('groups.disabled')}</Badge>}
                       <Badge variant="secondary">{group.auto_grant_role}</Badge>
-                      <Badge variant={group.allow_pm ? 'success' : 'outline'}>{`PM: ${group.allow_pm ? t('common.yes') : t('common.no')}`}</Badge>
-                      <Badge variant={group.nsfw_allowed ? 'warning' : 'outline'}>{`NSFW: ${group.nsfw_allowed ? t('common.yes') : t('common.no')}`}</Badge>
+                      {(group.allow_pm) ? <SuccessBadge>{`PM: ${group.allow_pm ? t('common.yes') : t('common.no')}`}</SuccessBadge> : <Badge variant="outline">{`PM: ${group.allow_pm ? t('common.yes') : t('common.no')}`}</Badge>}
+                      {(group.nsfw_allowed) ? <WarningBadge>{`NSFW: ${group.nsfw_allowed ? t('common.yes') : t('common.no')}`}</WarningBadge> : <Badge variant="outline">{`NSFW: ${group.nsfw_allowed ? t('common.yes') : t('common.no')}`}</Badge>}
                     </div>
                     <Button
                       variant="ghost"
