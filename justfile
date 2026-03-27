@@ -22,7 +22,9 @@ build target="all":
         docker build -f docker/Dockerfile           -t {{image_yoink}}    .
         ;;
       frontend)
-        docker build -f docker/Dockerfile.frontend   -t {{image_frontend}} .
+        docker build -f docker/Dockerfile.frontend \
+          --build-arg CACHE_BUST=$(git rev-parse HEAD) \
+          -t {{image_frontend}} .
         ;;
       tg)
         docker build -f docker/Dockerfile.tg-bot-api -t {{image_tg}}      .
@@ -32,7 +34,9 @@ build target="all":
         ;;
       all)
         docker build -f docker/Dockerfile            -t {{image_yoink}}    .
-        docker build -f docker/Dockerfile.frontend   -t {{image_frontend}} .
+        docker build -f docker/Dockerfile.frontend \
+          --build-arg CACHE_BUST=$(git rev-parse HEAD) \
+          -t {{image_frontend}} .
         ;;
       *)
         echo "Unknown target: {{target}}. Use: yoink | frontend | tg | backup | all"

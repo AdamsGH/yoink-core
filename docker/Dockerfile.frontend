@@ -7,6 +7,10 @@ RUN npm install
 
 WORKDIR /build
 
+# Copy plugin frontends after core - each COPY invalidates cache on content change.
+# If a submodule update doesn't trigger cache invalidation (e.g. BuildKit stale
+# context), pass --build-arg CACHE_BUST=$(git rev-parse HEAD) to force rebuild.
+ARG CACHE_BUST=0
 COPY frontend/                      ./frontend/
 COPY plugins/yoink-dl/frontend/     ./plugins/yoink-dl/frontend/
 COPY plugins/yoink-stats/frontend/  ./plugins/yoink-stats/frontend/
