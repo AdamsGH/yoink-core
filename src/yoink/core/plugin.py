@@ -94,12 +94,16 @@ class CommandSpec:
     descriptions maps language codes to localized command descriptions.
     The value of `description` is used as the fallback (default locale).
     Pass additional translations via descriptions={'ru': '...', 'de': '...'}.
+
+    required_feature: if set as "plugin:feature", the command is only shown
+    to users who have effective access to that feature (role or explicit grant).
     """
     command: str
     description: str
     min_role: str = "user"   # "user" | "moderator" | "admin" | "owner"
     scope: str = "default"   # "default" | "groups" | "private"
     descriptions: dict[str, str] = field(default_factory=dict)
+    required_feature: str | None = None  # "plugin:feature" e.g. "insight:summary"
 
 
 @dataclass

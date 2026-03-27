@@ -236,8 +236,14 @@ async def update_user(
     await session.commit()
     await session.refresh(user)
 
-    if role_changed:
-        await _refresh_user_commands(request, user_id, user.role, user.language)
+    if role_changed or body.language is not None:
+        from yoink.core.bot.bot_commands import refresh_user_commands
+        sf = getattr(request.app.state, "bot_data", {}).get("session_factory")
+        await refresh_user_commands(
+            request.app.state, user_id,
+            role=user.role.value, lang=user.language,
+            session_factory=sf,
+        )
 
     return UserResponse(
         id=user.id, username=user.username, first_name=user.first_name,
@@ -246,23 +252,4 @@ async def update_user(
     )
 
 
-async def _refresh_user_commands(
-    request: Request, user_id: int, role: UserRole, lang: str = "en"
-) -> None:
-    """Re-register bot commands for a user's private chat after a role change.
 
-    Only works when running in the combined container where bot is in app.state.
-    Silently skipped otherwise (standalone API mode).
-    """
-    import logging
-    _log = logging.getLogger(__name__)
-    bot = getattr(request.app.state, "bot", None)
-    if bot is None:
-        return
-    plugin_commands = getattr(request.app.state, "bot_data", {}).get("plugin_commands", [])
-    try:
-        from yoink.core.bot.bot_commands import set_user_commands
-        await set_user_commands(bot, user_id, role=role.value, plugin_commands=plugin_commands, lang=lang)
-        _log.debug("Refreshed commands for user %d (role=%s lang=%s)", user_id, role.value, lang)
-    except Exception as exc:
-        _log.warning("Failed to refresh commands for user %d: %s", user_id, exc)

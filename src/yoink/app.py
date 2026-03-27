@@ -7,7 +7,7 @@ from telegram.ext import Application, InlineQueryHandler
 
 from yoink.core.bot.app import create_bot_app
 from yoink.core.bot.admin import register as register_admin_commands
-from yoink.core.bot.bot_commands import set_default_commands, set_user_commands
+from yoink.core.bot.bot_commands import refresh_user_commands, set_default_commands, set_user_commands
 from yoink.core.bot.commands import register as register_core_commands
 from yoink.core.bot.forum import register as register_forum_handlers
 from yoink.core.bot.group import register as register_group_commands
@@ -162,12 +162,17 @@ def build_app(
                         sa_select(User).where(User.id == config.owner_id)
                     )).scalar_one_or_none()
                 if owner:
-                    await set_user_commands(
-                        application.bot,
+                    # Use a minimal app_state stub so refresh_user_commands can
+                    # access bot and bot_data without a real Request object.
+                    class _State:
+                        bot = application.bot
+                        bot_data = application.bot_data
+                    await refresh_user_commands(
+                        _State(),
                         config.owner_id,
                         role=owner.role.value,
-                        plugin_commands=plugin_commands,
                         lang=owner.language,
+                        session_factory=session_factory,
                     )
                     logger.info("Refreshed commands for owner %d (lang=%s)", config.owner_id, owner.language)
             except Exception as exc:

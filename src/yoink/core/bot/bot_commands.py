@@ -48,9 +48,28 @@ _CORE_COMMANDS: list[CommandSpec] = [
 ]
 
 
-def _filter_by_role(commands: list[CommandSpec], role: str) -> list[CommandSpec]:
+def _filter_by_role(
+    commands: list[CommandSpec],
+    role: str,
+    granted_features: set[str] | None = None,
+) -> list[CommandSpec]:
+    """Filter commands by role rank and optional feature grants.
+
+    granted_features: set of "plugin:feature" strings the user has access to.
+    When a CommandSpec has required_feature set, it is only included if that
+    feature is in granted_features (or granted_features is None, meaning skip
+    feature filtering entirely for backwards-compat callers).
+    """
     rank = _ROLE_RANK.get(role, 0)
-    return [c for c in commands if _ROLE_RANK.get(c.min_role, 0) <= rank]
+    out = []
+    for c in commands:
+        if _ROLE_RANK.get(c.min_role, 0) > rank:
+            continue
+        if c.required_feature is not None and granted_features is not None:
+            if c.required_feature not in granted_features:
+                continue
+        out.append(c)
+    return out
 
 
 def _collect_languages(commands: list[CommandSpec]) -> set[str]:
@@ -135,6 +154,7 @@ async def set_user_commands(
     role: str,
     plugin_commands: list[CommandSpec] | None = None,
     lang: str | None = None,
+    granted_features: set[str] | None = None,
 ) -> None:
     """Set per-chat command list for a private chat based on user role and language.
 
@@ -142,8 +162,9 @@ async def set_user_commands(
     - BotCommandScopeChat (no lang) - base fallback for this chat
     - BotCommandScopeChat + language_code - highest priority per Telegram docs
 
-    This ensures the per-user role-filtered list always wins over
-    BotCommandScopeDefault+language_code which would otherwise show generic commands.
+    granted_features: set of "plugin:feature" strings. Commands with
+    required_feature are only shown when the user has that feature granted.
+    Pass None to skip feature filtering (backwards compat).
     """
     all_commands = _CORE_COMMANDS + (plugin_commands or [])
     scope = BotCommandScopeChat(chat_id=chat_id)
@@ -157,7 +178,7 @@ async def set_user_commands(
             logger.warning("Failed to clear commands for chat %d: %s", chat_id, e)
         return
 
-    visible = _filter_by_role(all_commands, role)
+    visible = _filter_by_role(all_commands, role, granted_features=granted_features)
     private_cmds = [c for c in visible if c.scope in ("default", "private")]
 
     # Base scope (no lang) - covers clients with unsupported language
@@ -176,3 +197,76 @@ async def set_user_commands(
             logger.debug("Commands set for chat %d (role=%s lang=%s): %d", chat_id, role, lang, len(lang_cmds))
         except TelegramError as e:
             logger.warning("Failed to set commands for chat %d lang=%s: %s", chat_id, lang, e)
+
+
+async def refresh_user_commands(
+    app_state: object,
+    user_id: int,
+    role: str,
+    lang: str = "en",
+    session_factory: object = None,
+) -> None:
+    """Re-register bot commands for a user after role, language, or permission change.
+
+    Fetches the user's active feature grants from DB when session_factory is
+    provided, so feature-gated commands appear/disappear correctly.
+    Works only in the combined process (bot in app_state). Silent in API-only mode.
+    """
+    bot = getattr(app_state, "bot", None)
+    if bot is None:
+        return
+
+    plugin_commands: list[CommandSpec] = (
+        getattr(app_state, "bot_data", {}).get("plugin_commands", [])
+    )
+
+    granted_features: set[str] | None = None
+    if session_factory is not None:
+        try:
+            from datetime import datetime, timezone
+            from sqlalchemy import select
+            from yoink.core.db.models import UserPermission
+            from yoink.core.plugin import get_all_features
+
+            now = datetime.now(timezone.utc)
+            async with session_factory() as session:
+                result = await session.execute(
+                    select(UserPermission.plugin, UserPermission.feature).where(
+                        UserPermission.user_id == user_id,
+                        (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
+                    )
+                )
+                explicit = {f"{r.plugin}:{r.feature}" for r in result.all()}
+
+            # Add role-based features
+            from yoink.core.auth.rbac import ROLE_ORDER
+            from yoink.core.db.models import UserRole
+            try:
+                user_role = UserRole(role)
+                role_idx = ROLE_ORDER.index(user_role)
+            except ValueError:
+                role_idx = 0
+
+            for spec in get_all_features():
+                if spec.default_min_role is not None:
+                    try:
+                        min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
+                        if role_idx >= min_idx:
+                            explicit.add(f"{spec.plugin}:{spec.feature}")
+                    except ValueError:
+                        pass
+
+            granted_features = explicit
+        except Exception as exc:
+            logger.warning("Could not load feature grants for user %d: %s", user_id, exc)
+
+    try:
+        await set_user_commands(
+            bot, user_id, role=role,
+            plugin_commands=plugin_commands,
+            lang=lang,
+            granted_features=granted_features,
+        )
+        logger.debug("Refreshed commands for user %d (role=%s lang=%s features=%s)", user_id, role, lang, granted_features)
+    except Exception as exc:
+        logger.warning("Failed to refresh commands for user %d: %s", user_id, exc)

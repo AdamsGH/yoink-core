@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -169,6 +169,7 @@ async def list_user_permissions(
 async def grant_permission(
     user_id: int,
     body: GrantRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> PermissionResponse:
@@ -201,6 +202,15 @@ async def grant_permission(
         row.expires_at = body.expires_at
     await session.commit()
     await session.refresh(row)
+
+    from yoink.core.bot.bot_commands import refresh_user_commands
+    sf = getattr(request.app.state, "bot_data", {}).get("session_factory")
+    await refresh_user_commands(
+        request.app.state, user_id,
+        role=user.role.value, lang=user.language,
+        session_factory=sf,
+    )
+
     return PermissionResponse.model_validate(row)
 
 
@@ -209,9 +219,11 @@ async def revoke_permission(
     user_id: int,
     plugin: str,
     feature: str,
+    request: Request,
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> dict:
+    user = await session.get(User, user_id)
     result = await session.execute(
         delete(UserPermission).where(
             UserPermission.user_id == user_id,
@@ -220,4 +232,14 @@ async def revoke_permission(
         )
     )
     await session.commit()
+
+    if user is not None and result.rowcount > 0:
+        from yoink.core.bot.bot_commands import refresh_user_commands
+        sf = getattr(request.app.state, "bot_data", {}).get("session_factory")
+        await refresh_user_commands(
+            request.app.state, user_id,
+            role=user.role.value, lang=user.language,
+            session_factory=sf,
+        )
+
     return {"removed": result.rowcount > 0}
