@@ -477,64 +477,57 @@ export default function AdminUsersPage() {
 
   return (
     <div className="space-y-3 p-4">
-      <div className="flex items-center justify-end">
-        <Button variant="outline" size="sm" onClick={() => setShowFilters((v) => !v)}>
-          {t('users.filter_toggle')}
-          {hasActive && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />}
-        </Button>
-      </div>
-
-      {showFilters && (
-        <Card>
-          <CardContent className="pt-3 pb-3 space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">{t('common.search')}</Label>
-              <Input
-                placeholder={t('users.search_placeholder')}
-                value={draftSearch}
-                onChange={(e) => setDraftSearch(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && apply()}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{t('users.filter_role')}</Label>
-                <Select value={draftFilters.role} onValueChange={(v) => setDraftFilters((f) => ({ ...f, role: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">{t('users.filter_all_roles')}</SelectItem>
-                    {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{t('users.filter_status')}</Label>
-                <Select value={draftFilters.status} onValueChange={(v) => setDraftFilters((f) => ({ ...f, status: v as StatusFilter }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">{t('users.filter_all')}</SelectItem>
-                    <SelectItem value="active">{t('users.filter_active')}</SelectItem>
-                    <SelectItem value="restricted">{t('users.filter_restricted')}</SelectItem>
-                    <SelectItem value="banned">{t('users.filter_banned')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={apply}>{t('users.filter_apply')}</Button>
-              {hasActive && <Button size="sm" variant="outline" onClick={resetFilters}>{t('users.filter_clear')}</Button>}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       <Card>
         <CardHeader className="py-2 px-4">
-          <CardTitle className="text-sm font-normal text-muted-foreground">
-            {total.toLocaleString()} {t('users.count')}
-            {hasActive && <span className="ml-2 text-xs">(filtered)</span>}
-          </CardTitle>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-sm font-normal text-muted-foreground">
+              {total.toLocaleString()} {t('users.count')}
+              {hasActive && <span className="ml-2 text-xs">(filtered)</span>}
+            </CardTitle>
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setShowFilters((v) => !v)}>
+              {t('users.filter_toggle')}
+              {hasActive && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />}
+            </Button>
+          </div>
         </CardHeader>
+
+        {showFilters && (
+          <div className="px-4 pb-3 space-y-2 border-t pt-3">
+            <Input
+              placeholder={t('users.search_placeholder')}
+              value={draftSearch}
+              onChange={(e) => setDraftSearch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && apply()}
+              className="h-9"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <Select value={draftFilters.role} onValueChange={(v) => setDraftFilters((f) => ({ ...f, role: v }))}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('users.filter_all_roles')}</SelectItem>
+                  {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={draftFilters.status} onValueChange={(v) => setDraftFilters((f) => ({ ...f, status: v as StatusFilter }))}>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('users.filter_all')}</SelectItem>
+                  <SelectItem value="active">{t('users.filter_active')}</SelectItem>
+                  <SelectItem value="restricted">{t('users.filter_restricted')}</SelectItem>
+                  <SelectItem value="banned">{t('users.filter_banned')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button size="sm" className="h-9 w-full" onClick={apply}>{t('users.filter_apply')}</Button>
+              <Button size="sm" variant="outline" className="h-9 w-full" onClick={resetFilters} disabled={!hasActive}>
+                {t('users.filter_clear')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        
         <CardContent className="p-0">
           {loading ? (
             <div className="flex justify-center py-10">

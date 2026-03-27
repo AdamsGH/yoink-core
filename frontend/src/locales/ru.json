@@ -335,7 +335,9 @@
     "check_desc_label": "Фрагмент описания",
     "domains_count": "{{count}} доменов",
     "keywords_count": "{{count}} ключевых слов",
-    "export": "Экспорт"
+    "export": "Экспорт",
+    "check_title_placeholder": "Заголовок (опционально)",
+    "check_desc_placeholder": "Описание (опционально)"
   },
   "bot_settings": {
     "title": "Настройки бота",

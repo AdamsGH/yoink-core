@@ -79,7 +79,7 @@ export default function AdminBotSettingsPage() {
               value={settings['bot_access_mode'] ?? 'open'}
               onValueChange={(v) => update('bot_access_mode', v)}
             >
-              <SelectTrigger className="w-full max-w-sm">
+              <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -104,7 +104,7 @@ export default function AdminBotSettingsPage() {
               value={settings['browser_cookies_min_role'] ?? 'owner'}
               onValueChange={(v) => update('browser_cookies_min_role', v)}
             >
-              <SelectTrigger className="w-full max-w-sm">
+              <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

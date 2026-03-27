@@ -226,12 +226,12 @@ export default function TagMapEditor() {
             ))}
           </div>
         )}
-        <div className="flex items-center gap-2 pt-1">
-          <Button type="button" variant="outline" size="sm" onClick={addRow}>
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <Button type="button" variant="outline" size="sm" onClick={addRow} className="w-full">
             <Plus className="mr-1.5 h-4 w-4" />
             {t('tag_map.add_rule')}
           </Button>
-          <Button type="button" size="sm" onClick={save} disabled={saving}>
+          <Button type="button" size="sm" onClick={save} disabled={saving} className="w-full">
             {saving ? t('tag_map.saving') : t('tag_map.save')}
           </Button>
         </div>

@@ -335,7 +335,9 @@
     "check_desc_label": "Description snippet",
     "domains_count": "{{count}} domains",
     "keywords_count": "{{count}} keywords",
-    "export": "Export"
+    "export": "Export",
+    "check_title_placeholder": "Title (optional)",
+    "check_desc_placeholder": "Description (optional)"
   },
   "bot_settings": {
     "title": "Bot Settings",
