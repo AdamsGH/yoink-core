@@ -8,7 +8,7 @@ import { authProvider } from './lib/auth-provider'
 import { dataProvider } from './lib/data-provider'
 import { AppLayout } from './layout/AppLayout'
 import { useTelegram } from './layout/TelegramProvider'
-import { usePermissions } from './hooks/usePermissions'
+import { usePermissions } from '@/hooks/usePermissions'
 import { Button } from './components/ui/button'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { plugins } from './plugin-registry'
@@ -104,12 +104,24 @@ function firstAccessiblePath(navGroups: NavGroup[], role: string | null): string
   return '/'
 }
 
+/** Index redirect - needs Refine's QueryClient, so it lives inside <Refine>. */
+function IndexRedirect({ navGroups }: { navGroups: NavGroup[] }) {
+  const { role, isLoading } = usePermissions()
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" />
+      </div>
+    )
+  }
+  return <Navigate to={firstAccessiblePath(navGroups, role)} replace />
+}
+
 function RefineApp() {
   const navGroups     = buildNavGroups(plugins)
   const resources     = plugins.flatMap((p) => p.resources ?? [])
   const routes        = plugins.flatMap((p) => p.routes)
   const statsEndpoint = resolveStatsEndpoint(plugins)
-  const { role, isLoading: roleLoading } = usePermissions()
 
   return (
     <BrowserRouter>
@@ -121,11 +133,7 @@ function RefineApp() {
       >
         <Routes>
           <Route element={<AppLayout navGroups={navGroups} userStatsEndpoint={statsEndpoint} />}>
-            <Route index element={
-              roleLoading
-                ? <div className="flex min-h-[60vh] items-center justify-center"><div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" /></div>
-                : <Navigate to={firstAccessiblePath(navGroups, role)} replace />
-            } />
+            <Route index element={<IndexRedirect navGroups={navGroups} />} />
             {routes.map((r) => (
               <Route
                 key={r.path}
