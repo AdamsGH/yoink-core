@@ -70,7 +70,11 @@
     "resolution_label": "Разрешение",
     "codec_label": "Кодек",
     "container_label": "Контейнер",
-    "theme_label": "Тема"
+    "theme_label": "Тема",
+    "language_label": "Язык",
+    "language_hint": "Влияет на язык ответов бота и интерфейс.",
+    "theme_hint": "Сохраняется автоматически. Все четыре варианта - Catppuccin.",
+    "proxy_url_hint": "Оставьте пустым, чтобы использовать серверный прокси. Ваш URL имеет приоритет."
   },
   "history": {
     "title": "История загрузок",

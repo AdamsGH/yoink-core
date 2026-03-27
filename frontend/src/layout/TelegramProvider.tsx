@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 
 import { decodeJwt } from "../lib/utils"
+import { setLanguage, SUPPORTED_LANGUAGES, type SupportedLanguage } from '../lib/i18n'
 
 export type CatppuccinFlavor = 'latte' | 'frappe' | 'macchiato' | 'mocha'
 export type AuthState = 'loading' | 'ok' | 'error'
@@ -156,21 +157,24 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem(TOKEN_KEY, token)
         setAuthState('ok')
 
-        // Load theme from backend and apply it
+        // Load theme and language from backend and apply them
         try {
           const settingsRes = await fetch(`${API_BASE}/settings`, {
             headers: { Authorization: `Bearer ${token}` },
           })
           if (settingsRes.ok) {
-            const s = (await settingsRes.json()) as { theme?: string }
+            const s = (await settingsRes.json()) as { theme?: string; language?: string }
             if (s.theme && ['latte', 'frappe', 'macchiato', 'mocha'].includes(s.theme)) {
               const dbFlavor = s.theme as CatppuccinFlavor
               setFlavorState(dbFlavor)
               applyFlavor(dbFlavor)
             }
+            if (s.language && SUPPORTED_LANGUAGES.includes(s.language as SupportedLanguage)) {
+              setLanguage(s.language as SupportedLanguage)
+            }
           }
         } catch {
-          // Non-critical: theme stays as localStorage/default
+          // Non-critical: theme/language stay as localStorage/default
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)

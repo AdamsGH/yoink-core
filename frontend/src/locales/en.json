@@ -70,7 +70,11 @@
     "resolution_label": "Resolution",
     "codec_label": "Codec",
     "container_label": "Container",
-    "theme_label": "Theme"
+    "theme_label": "Theme",
+    "language_label": "Language",
+    "language_hint": "Controls both the bot reply language and the interface language.",
+    "theme_hint": "Saved automatically. All four variants are Catppuccin.",
+    "proxy_url_hint": "Leave blank to use the server's default proxy (if configured). Your URL takes priority."
   },
   "history": {
     "title": "Download history",
