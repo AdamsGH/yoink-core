@@ -39,9 +39,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          'vendor-react':    ['react', 'react-dom', 'react-router'],
-          'vendor-refine':   ['@refinedev/core', '@refinedev/react-router'],
-          'vendor-recharts': ['recharts'],
+          'vendor-react':      ['react', 'react-dom', 'react-router'],
+          'vendor-refine':     ['@refinedev/core', '@refinedev/react-router'],
+          'vendor-recharts':   ['recharts'],
+          'vendor-codemirror': ['@uiw/react-codemirror', '@codemirror/lang-json', '@codemirror/lint', '@uiw/codemirror-theme-vscode'],
         },
       },
     },
