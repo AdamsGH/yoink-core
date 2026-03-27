@@ -131,7 +131,7 @@ function SidebarNavGroup({ group, role, grantedFeatures, currentPath }: {
   // Collapsed sidebar shows only the parent icon button (sidebar-07 pattern).
   if (group.icon) {
     return (
-      <SidebarGroup>
+      <SidebarGroup className="px-2 py-1">
         <SidebarMenu>
           <Collapsible
             asChild
@@ -263,8 +263,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
       <SidebarProvider>
         <Sidebar collapsible="icon">
           <SidebarHeader>
-            <div className="flex h-10 items-center gap-2 px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
-              <SidebarTrigger />
+            <div className="flex h-10 items-center gap-2 px-2 group-data-[collapsible=icon]:justify-center">
               <span className="font-bold text-sm truncate flex-1 group-data-[collapsible=icon]:hidden">
                 {appName}
               </span>
@@ -297,6 +296,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
 
         <SidebarInset>
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+            <SidebarTrigger className="-ml-1" />
             <span className="text-sm font-medium">
               {(() => {
                 const item = visibleGroups.flatMap((g) => g.items).find((i) =>
