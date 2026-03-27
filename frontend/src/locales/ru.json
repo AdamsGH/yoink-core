@@ -471,7 +471,9 @@
     "last_message_user": "Последнее сообщение",
     "username_label": "Username",
     "no_messages": "Нет сообщений от этого пользователя в группе.",
-    "back": "Назад"
+    "back": "Назад",
+    "tab_stats": "Статистика",
+    "tab_import": "Импорт"
   },
   "tag_map": {
     "title": "Маппинг тегов → прав",

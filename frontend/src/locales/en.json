@@ -471,7 +471,9 @@
     "last_message_user": "Last message",
     "username_label": "Username",
     "no_messages": "No messages from this user in this group.",
-    "back": "Back"
+    "back": "Back",
+    "tab_stats": "Stats",
+    "tab_import": "Import"
   },
   "tag_map": {
     "title": "Tag → Permission Mapping",
