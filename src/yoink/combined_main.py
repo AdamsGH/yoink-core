@@ -46,6 +46,17 @@ async def _run(config: CoreSettings) -> None:
         if ptb_app.post_init:
             await ptb_app.post_init(ptb_app)
 
+        # Explicitly drop pending updates before polling starts.
+        # PTB passes drop_pending_updates to deleteWebhook inside start_polling,
+        # but if that bootstrap call fails the flag is silently ignored.
+        # Calling it here with retries ensures stale updates are never processed
+        # after a container restart.
+        try:
+            await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Pending updates dropped")
+        except Exception as exc:
+            logger.warning("Could not drop pending updates: %s", exc)
+
         # Share the session_factory and bot_data that PTB post_init populated.
         api_app.state.settings = config
         api_app.state.session_factory = ptb_app.bot_data["session_factory"]

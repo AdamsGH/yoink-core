@@ -131,22 +131,25 @@ async def set_default_commands(
     """Register commands for all scopes and all known language locales."""
     all_commands = _CORE_COMMANDS + (plugin_commands or [])
 
-    # Default scope - user-visible commands shown before /start
+    # Default scope - user-visible commands shown before /start, no feature-gated ones.
     await _set_commands_for_langs(
         bot, [], BotCommandScopeDefault(), all_commands,
-        lambda c: c.scope == "default", "user", "Default",
+        lambda c: c.scope == "default" and c.required_feature is None, "user", "Default",
     )
 
-    # All group chats - default + groups-scoped user-level commands (e.g. /stats)
+    # All group chats - default + groups-scoped user-level commands, no feature-gated ones.
+    # Feature-gated commands are only shown via BotCommandScopeChatMember per-user.
     await _set_commands_for_langs(
         bot, [], BotCommandScopeAllGroupChats(), all_commands,
-        lambda c: c.scope in ("default", "groups"), "user", "AllGroupChats",
+        lambda c: c.scope in ("default", "groups") and c.required_feature is None,
+        "user", "AllGroupChats",
     )
 
-    # All group chat administrators - same set + admin-only groups commands (/group, /thread)
+    # All group chat administrators - same rule, elevated role filter.
     await _set_commands_for_langs(
         bot, [], BotCommandScopeAllChatAdministrators(), all_commands,
-        lambda c: c.scope in ("default", "groups"), "admin", "AllChatAdmins",
+        lambda c: c.scope in ("default", "groups") and c.required_feature is None,
+        "admin", "AllChatAdmins",
     )
 
     # All private chats - full user-role private commands (no feature-gated ones).
