@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn } from '@core/lib/utils'
@@ -9,9 +9,11 @@ import { Badge } from '@core/components/ui/badge'
 import { SuccessBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@core/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -125,12 +127,132 @@ interface AddState {
 
 const DEFAULT_ADD: AddState = { linkOrId: '', name: '', enabled: true }
 
+function AddThreadDialog({
+  open,
+  onClose,
+  groupId,
+  threads,
+  onDone,
+}: {
+  open: boolean
+  onClose: () => void
+  groupId: number
+  threads: ThreadPolicy[]
+  onDone: () => void
+}) {
+  const { t } = useTranslation()
+  const [form, setForm] = useState<AddState>(DEFAULT_ADD)
+  const [saving, setSaving] = useState(false)
+
+  const namedAll = threads.filter((tp) => tp.name && tp.thread_id != null)
+  const parsedId = parseThreadId(form.linkOrId)
+
+  useEffect(() => {
+    if (open) setForm(DEFAULT_ADD)
+  }, [open])
+
+  const handleSave = async () => {
+    if (parsedId === null) return
+    setSaving(true)
+    try {
+      await apiClient.post(`/groups/${groupId}/threads`, {
+        thread_id: parsedId,
+        name: form.name.trim() || null,
+        enabled: form.enabled,
+      })
+      toast.success('Thread policy saved')
+      onClose()
+      onDone()
+    } catch {
+      toast.error(t('common.load_error'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t('groups.add_thread_title', { defaultValue: 'Add thread policy' })}</DialogTitle>
+          <DialogDescription>
+            {t('groups.add_thread_hint', { defaultValue: 'Select a known topic or paste a message link to identify the thread.' })}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>{t('groups.thread_id_label', { defaultValue: 'Thread' })}</Label>
+            {namedAll.length > 0 && (
+              <Select
+                value={form.linkOrId}
+                onValueChange={(v) => {
+                  const existing = threads.find((tp) => String(tp.thread_id) === v)
+                  setForm((f) => ({ ...f, linkOrId: v, name: existing?.name ?? f.name }))
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t('groups.choose_topic', { defaultValue: 'Choose a known topic...' })} />
+                </SelectTrigger>
+                <SelectContent>
+                  {namedAll.map((tp) => (
+                    <SelectItem key={tp.thread_id} value={String(tp.thread_id)}>
+                      {tp.name}
+                      <span className="ml-2 font-mono text-muted-foreground">#{tp.thread_id}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <ManualThreadInput
+              value={form.linkOrId}
+              onChange={(v) => setForm((f) => ({ ...f, linkOrId: v }))}
+              onEnter={() => parsedId !== null && handleSave()}
+              showHint={namedAll.length === 0}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>
+              {t('groups.thread_name_label', { defaultValue: 'Name' })}
+              <span className="font-normal text-muted-foreground ml-1">({t('common.optional', { defaultValue: 'optional' })})</span>
+            </Label>
+            <Input
+              placeholder="e.g. General, News, Off-topic"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              onKeyDown={(e) => e.key === 'Enter' && parsedId !== null && handleSave()}
+            />
+          </div>
+
+          <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+            <Label htmlFor="thread-access" className="font-normal">
+              {t('groups.thread_access_label', { defaultValue: 'Allow access' })}
+            </Label>
+            <Switch
+              id="thread-access"
+              checked={form.enabled}
+              onCheckedChange={(v) => setForm((f) => ({ ...f, enabled: v }))}
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="flex-row gap-2 sm:space-x-0">
+          <Button variant="outline" className="flex-1" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button className="flex-1" onClick={handleSave} disabled={parsedId === null || saving}>
+            {saving ? t('common.loading') : t('common.save')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function ThreadRows({ groupId }: { groupId: number }) {
   const { t } = useTranslation()
   const [threads, setThreads] = useState<ThreadPolicy[]>([])
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState<AddState>(DEFAULT_ADD)
 
   const load = () => {
     setLoading(true)
@@ -142,26 +264,6 @@ function ThreadRows({ groupId }: { groupId: number }) {
   }
 
   useEffect(() => { load() }, [groupId])
-
-  const namedAll = threads.filter((t) => t.name && t.thread_id != null)
-  const parsedId = parseThreadId(form.linkOrId)
-
-  const openAdd = () => { setForm(DEFAULT_ADD); setAdding(true) }
-  const closeAdd = () => { setAdding(false); setForm(DEFAULT_ADD) }
-
-  const addThread = async () => {
-    if (parsedId === null) return
-    try {
-      await apiClient.post(`/groups/${groupId}/threads`, {
-        thread_id: parsedId,
-        name: form.name.trim() || null,
-        enabled: form.enabled,
-      })
-      toast.success('Thread policy saved')
-      closeAdd()
-      load()
-    } catch { toast.error(t('common.load_error')) }
-  }
 
   const toggle = async (policy: ThreadPolicy) => {
     try {
@@ -178,127 +280,86 @@ function ThreadRows({ groupId }: { groupId: number }) {
     } catch { toast.error(t('common.load_error')) }
   }
 
-  if (loading) return <div className="px-4 py-2 text-xs text-muted-foreground">Loading threads…</div>
-
   return (
-    <div className="border-t bg-muted/30 px-4 py-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Thread Policies</span>
-        {!adding && (
-          <Button size="sm" variant="ghost" className="h-6 gap-1 text-xs" onClick={openAdd}>
-            <Plus className="h-3 w-3" /> Add policy
-          </Button>
-        )}
-      </div>
-
-      {threads.length === 0 && !adding && (
-        <p className="text-xs text-muted-foreground">
-          No thread policies. Topics are detected automatically from service messages.
-        </p>
-      )}
-
-      <div className="space-y-1">
-        {threads.map((t) => (
-          <div key={t.id} className="flex items-center gap-2 rounded-md bg-background px-3 py-1.5 text-xs">
-            <div className="min-w-0 flex-1">
-              <span className="font-medium">{threadLabel(t)}</span>
-              {t.name && t.thread_id != null && (
-                <span className="ml-2 font-mono text-muted-foreground">#{t.thread_id}</span>
-              )}
-            </div>
-            {t.enabled
-              ? <SuccessBadge className="shrink-0 text-xs">allowed</SuccessBadge>
-              : <Badge variant="outline" className="shrink-0 text-xs">denied</Badge>
-            }
-            <Button size="sm" variant="ghost" className="h-6 shrink-0 text-xs" onClick={() => toggle(t)}>
-              {t.enabled ? 'Deny' : 'Allow'}
-            </Button>
-            <Button size="sm" variant="ghost" className="h-6 shrink-0 text-destructive hover:text-destructive" onClick={() => remove(t)}>
-              <Trash2 className="h-3 w-3" />
-            </Button>
-          </div>
-        ))}
-      </div>
-
-      {adding && (
-        <div className="rounded-md border bg-background p-3 space-y-3">
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">{t("groups.col_group")}</p>
-            {namedAll.length > 0 && (
-              <Select
-                value={form.linkOrId}
-                onValueChange={(v) => {
-                  const existing = threads.find((t) => String(t.thread_id) === v)
-                  setForm((f) => ({ ...f, linkOrId: v, name: existing?.name ?? f.name }))
-                }}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Choose a known topic…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {namedAll.map((t) => (
-                    <SelectItem key={t.thread_id} value={String(t.thread_id)} className="text-xs">
-                      {t.name}
-                      <span className="ml-2 font-mono text-muted-foreground">#{t.thread_id}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <ManualThreadInput
-              value={form.linkOrId}
-              onChange={(v) => setForm((f) => ({ ...f, linkOrId: v }))}
-              onEnter={() => parsedId !== null && addThread()}
-              showHint={namedAll.length === 0}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">
-              Name <span className="font-normal text-muted-foreground">(optional)</span>
-            </p>
-            <Input
-              className="h-7 text-xs"
-              placeholder="e.g. General, News, Off-topic"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              onKeyDown={(e) => e.key === 'Enter' && parsedId !== null && addThread()}
-            />
-            <p className="text-xs text-muted-foreground">
-              Label shown here. If left blank and the bot has seen this topic created,
-              the name will be filled automatically.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setForm((f) => ({ ...f, enabled: !f.enabled }))}
-              className={cn(
-                'h-7 px-2.5 text-xs',
-                form.enabled
-                  ? 'border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400'
-                  : 'border-destructive/40 bg-destructive/10 text-destructive'
-              )}
-            >
-              {form.enabled ? 'Allow' : 'Deny'}
-            </Button>
-            <p className="text-xs text-muted-foreground">access in this thread</p>
-          </div>
-
-          <div className="flex gap-2">
-            <Button size="sm" className="h-7 text-xs" disabled={parsedId === null} onClick={addThread}>
-              Save
-            </Button>
-            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={closeAdd}>
-              Cancel
-            </Button>
-          </div>
+    <>
+      <Collapsible defaultOpen={false}>
+        <div className="px-4 py-2.5 flex items-center justify-between gap-2 border-t bg-muted/30">
+          <CollapsibleTrigger className="flex items-center gap-2 group flex-1 min-w-0">
+            <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=closed]:-rotate-90" />
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              {loading
+                ? t('groups.thread_policies')
+                : `${threads.length} ${t('groups.thread_policies').toLowerCase()}`}
+            </span>
+          </CollapsibleTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size="icon" className="h-7 w-7 shrink-0" onClick={() => setAdding(true)}>
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('groups.add_thread_title', { defaultValue: 'Add thread policy' })}</TooltipContent>
+          </Tooltip>
         </div>
-      )}
-    </div>
+        <CollapsibleContent>
+          {loading ? (
+            <div className="px-4 py-3 space-y-2">
+              {[1, 2].map((i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <Skeleton className="h-4 flex-1" />
+                  <Skeleton className="h-5 w-14" />
+                </div>
+              ))}
+            </div>
+          ) : threads.length === 0 ? (
+            <div className="px-4 py-4 text-center text-xs text-muted-foreground">
+              {t('groups.no_thread_policies', { defaultValue: 'No thread policies configured.' })}
+            </div>
+          ) : (
+            <div className="divide-y divide-border px-3 py-1">
+              {threads.map((tp) => (
+                <Item key={tp.id} size="sm" className="py-2 rounded-none border-0">
+                  <ItemContent>
+                    <ItemTitle className="text-xs">
+                      {threadLabel(tp)}
+                      {tp.name && tp.thread_id != null && (
+                        <span className="ml-1.5 font-mono text-muted-foreground font-normal">#{tp.thread_id}</span>
+                      )}
+                    </ItemTitle>
+                  </ItemContent>
+                  <ItemActions>
+                    {tp.enabled
+                      ? <SuccessBadge className="text-[10px]">allowed</SuccessBadge>
+                      : <Badge variant="outline" className="text-[10px]">denied</Badge>}
+                    <Switch
+                      checked={tp.enabled}
+                      onCheckedChange={() => toggle(tp)}
+                      className="scale-75"
+                    />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => remove(tp)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t('common.delete')}</TooltipContent>
+                    </Tooltip>
+                  </ItemActions>
+                </Item>
+              ))}
+            </div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
+
+      <AddThreadDialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        groupId={groupId}
+        threads={threads}
+        onDone={load}
+      />
+    </>
   )
 }
 
@@ -309,8 +370,6 @@ export default function AdminGroupsPage() {
   const [loading, setLoading] = useState(true)
   const [edit, setEdit] = useState<EditState | null>(null)
   const [saving, setSaving] = useState(false)
-  const [expanded, setExpanded] = useState<number | null>(null)
-
   const load = () => {
     setLoading(true)
     apiClient
@@ -392,52 +451,50 @@ export default function AdminGroupsPage() {
             ) : items.length === 0 ? (
               <div className="flex justify-center py-12 text-muted-foreground text-sm">{t('groups.no_groups')}</div>
             ) : (
-              <div className="divide-y divide-border px-3 py-1">
+              <div className="divide-y divide-border">
                 {items.map((group) => (
                   <div key={group.id}>
-                    <Item
-                      size="sm"
-                      className="py-2.5 rounded-none border-0 cursor-pointer"
-                      onClick={() => setExpanded((p) => p === group.id ? null : group.id)}
-                    >
-                      <ItemMedia
-                        variant="icon"
-                        className={cn(
-                          'size-8 rounded-md',
-                          group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
-                        )}
-                      >
-                        <MessageSquare className="size-4" />
-                      </ItemMedia>
-                      <ItemContent>
-                        <ItemTitle>
-                          {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
-                        </ItemTitle>
-                        <ItemDescription>
-                          <span className="font-mono text-[11px]">{group.id}</span>
-                          {group.nsfw_allowed && <span className="text-amber-500"> · NSFW</span>}
-                        </ItemDescription>
-                      </ItemContent>
-                      <ItemActions>
-                        {group.enabled
-                          ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
-                          : <Badge variant="outline">{t('groups.disabled')}</Badge>}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={(e) => { e.stopPropagation(); setEdit(defaultEdit(group)) }}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>{t('common.edit')}</TooltipContent>
-                        </Tooltip>
-                      </ItemActions>
-                    </Item>
-                    {expanded === group.id && <ThreadRows groupId={group.id} />}
+                    <div className="px-3 py-1">
+                      <Item size="sm" className="py-2.5 rounded-none border-0">
+                        <ItemMedia
+                          variant="icon"
+                          className={cn(
+                            'size-8 rounded-md',
+                            group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
+                          )}
+                        >
+                          <MessageSquare className="size-4" />
+                        </ItemMedia>
+                        <ItemContent>
+                          <ItemTitle>
+                            {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
+                          </ItemTitle>
+                          <ItemDescription>
+                            <span className="font-mono text-[11px]">{group.id}</span>
+                            {group.nsfw_allowed && <span className="text-amber-500"> · NSFW</span>}
+                          </ItemDescription>
+                        </ItemContent>
+                        <ItemActions>
+                          {group.enabled
+                            ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
+                            : <Badge variant="outline">{t('groups.disabled')}</Badge>}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => setEdit(defaultEdit(group))}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('common.edit')}</TooltipContent>
+                          </Tooltip>
+                        </ItemActions>
+                      </Item>
+                    </div>
+                    <ThreadRows groupId={group.id} />
                   </div>
                 ))}
               </div>
