@@ -60,7 +60,8 @@
     "grant_plugin": "Plugin",
     "select_plugin": "Select plugin",
     "grant_feature": "Feature",
-    "select_feature": "Select feature"
+    "select_feature": "Select feature",
+    "no_features": "No features declared by loaded plugins"
   },
   "auth": {
     "loading": "Authorizing…",
@@ -172,7 +173,16 @@
     "today": "Today",
     "top_domains": "Top domains",
     "no_downloads": "No downloads yet",
-    "edit_user_btn": "Edit user"
+    "edit_user_btn": "Edit user",
+    "tab_stats": "Stats",
+    "tab_access": "Access",
+    "tab_edit": "Edit",
+    "count": "users",
+    "filter_toggle": "Filters",
+    "search_placeholder": "@username or ID",
+    "banned": "User banned",
+    "unbanned": "User unbanned",
+    "update_success": "User updated"
   },
   "groups": {
     "title": "Groups",

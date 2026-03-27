@@ -60,7 +60,8 @@
     "grant_plugin": "Плагин",
     "select_plugin": "Выберите плагин",
     "grant_feature": "Функция",
-    "select_feature": "Выберите функцию"
+    "select_feature": "Выберите функцию",
+    "no_features": "Нет задекларированных функций"
   },
   "auth": {
     "loading": "Авторизация…",
@@ -172,7 +173,16 @@
     "today": "Сегодня",
     "top_domains": "Топ доменов",
     "no_downloads": "Загрузок пока нет",
-    "edit_user_btn": "Редактировать"
+    "edit_user_btn": "Редактировать",
+    "tab_stats": "Статистика",
+    "tab_access": "Доступ",
+    "tab_edit": "Изменить",
+    "count": "пользователей",
+    "filter_toggle": "Фильтры",
+    "search_placeholder": "@username или ID",
+    "banned": "Пользователь заблокирован",
+    "unbanned": "Пользователь разблокирован",
+    "update_success": "Пользователь обновлён"
   },
   "groups": {
     "title": "Группы",

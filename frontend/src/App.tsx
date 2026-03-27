@@ -16,7 +16,23 @@ import type { NavGroup, PluginManifest, PluginRoute } from './types/plugin'
 import UnauthorizedPage from './pages/unauthorized'
 
 function buildNavGroups(ps: PluginManifest[]): NavGroup[] {
-  return ps.flatMap((p) => p.navGroups ?? [])
+  const all = ps.flatMap((p) => p.navGroups ?? [])
+  // Merge groups with the same label: items are concatenated, first group's meta wins
+  const merged = new Map<string, NavGroup>()
+  const unlabelled: NavGroup[] = []
+  for (const g of all) {
+    if (!g.label) {
+      unlabelled.push(g)
+      continue
+    }
+    const existing = merged.get(g.label)
+    if (existing) {
+      existing.items = [...existing.items, ...g.items]
+    } else {
+      merged.set(g.label, { ...g, items: [...g.items] })
+    }
+  }
+  return [...unlabelled, ...merged.values()]
 }
 
 function resolveStatsEndpoint(ps: PluginManifest[]): string | undefined {
