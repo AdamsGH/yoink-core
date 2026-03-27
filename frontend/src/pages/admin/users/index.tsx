@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { format } from 'date-fns'
-import { CalendarIcon, X } from 'lucide-react'
+import { Ban, CalendarIcon, ShieldCheck, User as UserIcon, Users, X } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn, formatDate } from '@core/lib/utils'
@@ -11,15 +11,16 @@ import { RoleBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
 import { Calendar } from '@core/components/ui/calendar'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription } from '@core/components/ui/drawer'
 import { Input } from '@core/components/ui/input'
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@core/components/ui/item'
 import { Label } from '@core/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@core/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@core/components/ui/select'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@core/components/ui/sheet'
 import { Skeleton } from '@core/components/ui/skeleton'
 import { Switch } from '@core/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@core/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@core/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@core/components/ui/tooltip'
 import { toast } from '@core/components/ui/toast'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
@@ -28,7 +29,7 @@ function BanDatePicker({
   value,
   onChange,
 }: {
-  value: string   // ISO string or empty
+  value: string
   onChange: (iso: string) => void
 }) {
   const { t } = useTranslation()
@@ -119,6 +120,7 @@ function BanDatePicker({
     </Popover>
   )
 }
+
 const SUPPORTED_LANGS = ['en', 'ru']
 const PAGE_SIZE = 30
 type StatusFilter = 'all' | 'active' | 'restricted' | 'banned'
@@ -130,8 +132,6 @@ interface UserStats {
   top_domains: { domain: string; count: number }[]
   member_since: string
 }
-
-
 
 function StatCell({ label, value }: { label: string; value: string | number }) {
   return (
@@ -158,7 +158,22 @@ function AccessBadge({ f }: { f: EffectiveFeatureAccess }) {
   return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">role+grant</Badge>
 }
 
-function UserSheet({
+function roleIcon(role: UserRole) {
+  if (role === 'banned') return <Ban className="size-4" />
+  if (role === 'owner' || role === 'admin') return <ShieldCheck className="size-4" />
+  return <UserIcon className="size-4" />
+}
+
+function roleMediaColor(role: UserRole) {
+  if (role === 'banned') return 'bg-destructive/10 text-destructive'
+  if (role === 'owner') return 'bg-amber-500/10 text-amber-600'
+  if (role === 'admin') return 'bg-blue-500/10 text-blue-600'
+  if (role === 'moderator') return 'bg-purple-500/10 text-purple-600'
+  if (role === 'restricted') return 'bg-orange-500/10 text-orange-600'
+  return 'bg-muted text-muted-foreground'
+}
+
+function UserDrawer({
   user,
   onClose,
   onUpdated,
@@ -215,7 +230,6 @@ function UserSheet({
         await apiClient.delete(`/users/${user.id}/permissions/${f.plugin}/${f.feature}`)
         toast.success(t('permissions.revoked'))
       }
-      // Refresh feature-access to get updated effective state
       const r = await apiClient.get<EffectiveFeatureAccess[]>(`/users/${user.id}/feature-access`)
       setFeatures(r.data)
     } catch {
@@ -249,29 +263,29 @@ function UserSheet({
   }, {})
 
   return (
-    <Sheet open={!!user} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="w-full sm:max-w-md flex flex-col p-0">
+    <Drawer open={!!user} onOpenChange={(o) => !o && onClose()}>
+      <DrawerContent className="max-h-[85vh]">
         {user && (
           <>
-            <SheetHeader className="px-4 pt-4 pb-2 border-b shrink-0">
-              <SheetTitle className="flex items-center gap-2 flex-wrap">
-                <span>{user.first_name ?? String(user.id)}</span>
+            <DrawerHeader>
+              <DrawerTitle className="flex items-center gap-2">
+                {user.first_name ?? String(user.id)}
                 <RoleBadge role={user.role} />
-              </SheetTitle>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              </DrawerTitle>
+              <DrawerDescription className="flex items-center gap-3 text-xs">
                 {user.username && <span>@{user.username}</span>}
                 <span className="font-mono">#{user.id}</span>
-              </div>
-            </SheetHeader>
+              </DrawerDescription>
+            </DrawerHeader>
 
             <Tabs defaultValue="stats" className="flex flex-col flex-1 min-h-0">
-              <TabsList className="mx-4 mt-3 shrink-0">
+              <TabsList className="mx-4 shrink-0">
                 <TabsTrigger value="stats" className="flex-1">{t('users.tab_stats')}</TabsTrigger>
                 <TabsTrigger value="access" className="flex-1">{t('users.tab_access')}</TabsTrigger>
                 <TabsTrigger value="edit" className="flex-1">{t('users.tab_edit')}</TabsTrigger>
               </TabsList>
 
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 overflow-y-auto pb-6">
                 <TabsContent value="stats" className="px-4 py-3 space-y-4 mt-0">
                   {statsLoading ? (
                     <div className="grid grid-cols-3 gap-2">
@@ -410,8 +424,8 @@ function UserSheet({
             </Tabs>
           </>
         )}
-      </SheetContent>
-    </Sheet>
+      </DrawerContent>
+    </Drawer>
   )
 }
 
@@ -490,147 +504,138 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div className="space-y-3 p-4">
-      <Card>
-        <CardHeader className="px-4 py-3">
-          <div className="flex items-center justify-between gap-2">
-            <CardTitle className="text-sm font-normal text-muted-foreground">
-              {total.toLocaleString()} {t('users.count')}
-              {hasActive && <span className="ml-2 text-xs">(filtered)</span>}
-            </CardTitle>
-            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setShowFilters((v) => !v)}>
-              {t('users.filter_toggle')}
-              {hasActive && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />}
-            </Button>
-          </div>
-        </CardHeader>
-
-        {showFilters && (
-          <div className="px-4 pb-3 space-y-2 border-t pt-3">
-            <Input
-              placeholder={t('users.search_placeholder')}
-              value={draftSearch}
-              onChange={(e) => setDraftSearch(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && apply()}
-              className="h-9"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <Select value={draftFilters.role} onValueChange={(v) => setDraftFilters((f) => ({ ...f, role: v }))}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">{t('users.filter_all_roles')}</SelectItem>
-                  {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Select value={draftFilters.status} onValueChange={(v) => setDraftFilters((f) => ({ ...f, status: v as StatusFilter }))}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">{t('users.filter_all')}</SelectItem>
-                  <SelectItem value="active">{t('users.filter_active')}</SelectItem>
-                  <SelectItem value="restricted">{t('users.filter_restricted')}</SelectItem>
-                  <SelectItem value="banned">{t('users.filter_banned')}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" className="h-9 w-full" onClick={apply}>{t('users.filter_apply')}</Button>
-              <Button size="sm" variant="outline" className="h-9 w-full" onClick={resetFilters} disabled={!hasActive}>
-                {t('users.filter_clear')}
+    <TooltipProvider delayDuration={300}>
+      <div className="space-y-3">
+        <Card>
+          <CardHeader className="px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Users className="h-4 w-4 text-muted-foreground" />
+                {loading
+                  ? t('users.title', { defaultValue: 'Users' })
+                  : `${total.toLocaleString()} ${t('users.count')}`}
+                {hasActive && <span className="text-xs text-muted-foreground">(filtered)</span>}
+              </CardTitle>
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setShowFilters((v) => !v)}>
+                {t('users.filter_toggle')}
+                {hasActive && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />}
               </Button>
+            </div>
+          </CardHeader>
+
+          {showFilters && (
+            <div className="px-4 pb-3 space-y-2 border-t pt-3">
+              <Input
+                placeholder={t('users.search_placeholder')}
+                value={draftSearch}
+                onChange={(e) => setDraftSearch(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && apply()}
+                className="h-9"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Select value={draftFilters.role} onValueChange={(v) => setDraftFilters((f) => ({ ...f, role: v }))}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">{t('users.filter_all_roles')}</SelectItem>
+                    {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={draftFilters.status} onValueChange={(v) => setDraftFilters((f) => ({ ...f, status: v as StatusFilter }))}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">{t('users.filter_all')}</SelectItem>
+                    <SelectItem value="active">{t('users.filter_active')}</SelectItem>
+                    <SelectItem value="restricted">{t('users.filter_restricted')}</SelectItem>
+                    <SelectItem value="banned">{t('users.filter_banned')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button size="sm" className="h-9 w-full" onClick={apply}>{t('users.filter_apply')}</Button>
+                <Button size="sm" variant="outline" className="h-9 w-full" onClick={resetFilters} disabled={!hasActive}>
+                  {t('users.filter_clear')}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="divide-y divide-border px-3 py-1">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 py-2.5">
+                    <Skeleton className="size-8 rounded-md shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-3.5 w-28" />
+                      <Skeleton className="h-3 w-20" />
+                    </div>
+                    <Skeleton className="h-5 w-14" />
+                  </div>
+                ))}
+              </div>
+            ) : items.length === 0 ? (
+              <div className="flex justify-center py-10 text-sm text-muted-foreground">{t('users.no_users')}</div>
+            ) : (
+              <div className="divide-y divide-border px-3 py-1">
+                {items.map((user) => (
+                  <Item
+                    key={user.id}
+                    size="sm"
+                    className="py-2.5 rounded-none border-0 cursor-pointer"
+                    onClick={() => setViewed(user)}
+                  >
+                    <ItemMedia variant="icon" className={cn('size-8 rounded-md', roleMediaColor(user.role))}>
+                      {roleIcon(user.role)}
+                    </ItemMedia>
+                    <ItemContent>
+                      <ItemTitle>{user.first_name ?? user.username ?? String(user.id)}</ItemTitle>
+                      <ItemDescription>
+                        {user.username ? `@${user.username}` : `#${user.id}`}
+                      </ItemDescription>
+                    </ItemContent>
+                    <ItemActions>
+                      <RoleBadge role={user.role} />
+                      <div onClick={(e) => e.stopPropagation()}>
+                        {user.role === 'banned' ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-green-600 hover:text-green-700" onClick={() => void quickUnban(user)}>
+                                <ShieldCheck className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('users.quick_unban')}</TooltipContent>
+                          </Tooltip>
+                        ) : user.role !== 'owner' ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => void quickBan(user)}>
+                                <Ban className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('users.quick_ban')}</TooltipContent>
+                          </Tooltip>
+                        ) : null}
+                      </div>
+                    </ItemActions>
+                  </Item>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">{t('users.page_of', { page, total: totalPages })}</span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>{t('users.prev')}</Button>
+              <Button variant="outline" size="sm" disabled={page === totalPages} onClick={() => setPage((p) => p + 1)}>{t('users.next')}</Button>
             </div>
           </div>
         )}
 
-        
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="flex justify-center py-10">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" />
-            </div>
-          ) : items.length === 0 ? (
-            <div className="flex justify-center py-10 text-sm text-muted-foreground">{t('users.no_users')}</div>
-          ) : (
-            <>
-              <div className="hidden md:block overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t('users.col_user')}</TableHead>
-                      <TableHead>{t('users.col_id')}</TableHead>
-                      <TableHead>{t('users.col_role')}</TableHead>
-                      <TableHead>{t('users.col_joined')}</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((user) => (
-                      <TableRow
-                        key={user.id}
-                        className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => setViewed(user)}
-                      >
-                        <TableCell>
-                          <p className="text-sm font-medium">{user.first_name ?? user.username ?? '-'}</p>
-                          {user.username && <p className="text-xs text-muted-foreground">@{user.username}</p>}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{user.id}</TableCell>
-                        <TableCell><RoleBadge role={user.role} /></TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{formatDate(user.created_at)}</TableCell>
-                        <TableCell onClick={(e) => e.stopPropagation()}>
-                          <div className="flex gap-1">
-                            {user.role === 'banned' ? (
-                              <Button variant="ghost" size="sm" className="text-green-600 hover:text-green-700" onClick={() => void quickUnban(user)}>{t('users.quick_unban')}</Button>
-                            ) : user.role !== 'owner' ? (
-                              <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => void quickBan(user)}>{t('users.quick_ban')}</Button>
-                            ) : null}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              <div className="md:hidden divide-y divide-border">
-                {items.map((user) => (
-                  <div
-                    key={user.id}
-                    className="px-4 py-3 space-y-2 cursor-pointer active:bg-muted/50"
-                    onClick={() => setViewed(user)}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium truncate">{user.first_name ?? user.username ?? '-'}</p>
-                        <p className="text-xs text-muted-foreground font-mono">{user.id}{user.username && ` · @${user.username}`}</p>
-                      </div>
-                      <RoleBadge role={user.role} className="shrink-0" />
-                    </div>
-                    <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                      {user.role === 'banned' ? (
-                        <Button variant="outline" size="sm" className="flex-1 text-green-600 border-green-600/30" onClick={() => void quickUnban(user)}>{t('users.quick_unban')}</Button>
-                      ) : user.role !== 'owner' ? (
-                        <Button variant="outline" size="sm" className="flex-1 text-destructive border-destructive/30" onClick={() => void quickBan(user)}>{t('users.quick_ban')}</Button>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">{t('users.page_of', { page, total: totalPages })}</span>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>{t('users.prev')}</Button>
-            <Button variant="outline" size="sm" disabled={page === totalPages} onClick={() => setPage((p) => p + 1)}>{t('users.next')}</Button>
-          </div>
-        </div>
-      )}
-
-      <UserSheet user={viewed} onClose={() => setViewed(null)} onUpdated={handleUpdated} />
-    </div>
+        <UserDrawer user={viewed} onClose={() => setViewed(null)} onUpdated={handleUpdated} />
+      </div>
+    </TooltipProvider>
   )
 }

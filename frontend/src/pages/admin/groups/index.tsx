@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn, formatDate } from '@core/lib/utils'
@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from '@core/components/ui/dialog'
 import { Input } from '@core/components/ui/input'
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@core/components/ui/item'
 import { Label } from '@core/components/ui/label'
 import {
   Select,
@@ -26,7 +27,8 @@ import {
   SelectValue,
 } from '@core/components/ui/select'
 import { Switch } from '@core/components/ui/switch'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@core/components/ui/table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@core/components/ui/tooltip'
+import { Skeleton } from '@core/components/ui/skeleton'
 import { toast } from '@core/components/ui/toast'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
@@ -59,28 +61,11 @@ function defaultEdit(group?: Group): EditState {
   }
 }
 
-/**
- * Parse thread_id from a Telegram message link.
- *
- * Private group links look like:
- *   https://t.me/c/1197008640/24/40    - channel_id / thread_id / message_id
- *   https://t.me/c/1197008640/40       - channel_id / message_id (no thread = main chat)
- *
- * The second segment is thread_id only when there are THREE numeric path parts.
- * With two parts it's just a direct message link (no thread context).
- *
- * Returns null if input is not a recognisable link or plain number.
- */
 function parseThreadId(input: string): number | null {
   const trimmed = input.trim()
-
-  // Plain number
   if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10)
-
-  // t.me/c/{channel}/{thread}/{message}
   const m = trimmed.match(/t\.me\/c\/\d+\/(\d+)\/(\d+)/)
   if (m) return parseInt(m[1], 10)
-
   return null
 }
 
@@ -133,8 +118,8 @@ function threadLabel(t: ThreadPolicy): string {
 }
 
 interface AddState {
-  linkOrId: string   // raw input: message link or plain number
-  name: string       // display name
+  linkOrId: string
+  name: string
   enabled: boolean
 }
 
@@ -156,7 +141,7 @@ function ThreadRows({ groupId }: { groupId: number }) {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [groupId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [groupId])
 
   const namedAll = threads.filter((t) => t.name && t.thread_id != null)
   const parsedId = parseThreadId(form.linkOrId)
@@ -198,7 +183,7 @@ function ThreadRows({ groupId }: { groupId: number }) {
   return (
     <div className="border-t bg-muted/30 px-4 py-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t('groups.title').replace('s','s')}</span>
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Thread Policies</span>
         {!adding && (
           <Button size="sm" variant="ghost" className="h-6 gap-1 text-xs" onClick={openAdd}>
             <Plus className="h-3 w-3" /> Add policy
@@ -208,8 +193,7 @@ function ThreadRows({ groupId }: { groupId: number }) {
 
       {threads.length === 0 && !adding && (
         <p className="text-xs text-muted-foreground">
-          {t('groups.thread_policies')}
-          from service messages when topics are created.
+          No thread policies. Topics are detected automatically from service messages.
         </p>
       )}
 
@@ -222,11 +206,10 @@ function ThreadRows({ groupId }: { groupId: number }) {
                 <span className="ml-2 font-mono text-muted-foreground">#{t.thread_id}</span>
               )}
             </div>
-            {(t.enabled) ? <SuccessBadge className="shrink-0 text-xs">
-              {t.enabled ? 'allowed' : 'denied'}
-            </SuccessBadge> : <Badge variant="outline" className="shrink-0 text-xs">
-              {t.enabled ? 'allowed' : 'denied'}
-            </Badge>}
+            {t.enabled
+              ? <SuccessBadge className="shrink-0 text-xs">allowed</SuccessBadge>
+              : <Badge variant="outline" className="shrink-0 text-xs">denied</Badge>
+            }
             <Button size="sm" variant="ghost" className="h-6 shrink-0 text-xs" onClick={() => toggle(t)}>
               {t.enabled ? 'Deny' : 'Allow'}
             </Button>
@@ -239,8 +222,6 @@ function ThreadRows({ groupId }: { groupId: number }) {
 
       {adding && (
         <div className="rounded-md border bg-background p-3 space-y-3">
-
-          {/* Topic source: select from known or paste link */}
           <div className="space-y-1.5">
             <p className="text-xs font-medium">{t("groups.col_group")}</p>
             {namedAll.length > 0 && (
@@ -272,7 +253,6 @@ function ThreadRows({ groupId }: { groupId: number }) {
             />
           </div>
 
-          {/* Display name */}
           <div className="space-y-1.5">
             <p className="text-xs font-medium">
               Name <span className="font-normal text-muted-foreground">(optional)</span>
@@ -290,7 +270,6 @@ function ThreadRows({ groupId }: { groupId: number }) {
             </p>
           </div>
 
-          {/* Allow / Deny toggle */}
           <div className="flex items-center gap-3">
             <Button
               type="button"
@@ -381,223 +360,197 @@ export default function AdminGroupsPage() {
   }
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between px-4 py-3 space-y-0">
-          <CardTitle className="text-sm font-medium">{total} group{total !== 1 ? 's' : ''}</CardTitle>
-          <Button size="sm" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          {loading ? (
-            <div className="flex justify-center py-12 text-muted-foreground">{t('common.loading')}</div>
-          ) : items.length === 0 ? (
-            <div className="flex justify-center py-12 text-muted-foreground">{t('groups.no_groups')} configured</div>
-          ) : (
-            <>
-              {/* Desktop table */}
-              <div className="hidden md:block">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-8" />
-                      <TableHead>{t('groups.col_group')}</TableHead>
-                      <TableHead>{t('groups.col_status')}</TableHead>
-                      <TableHead>{t('groups.col_role')}</TableHead>
-                      <TableHead>{t('groups.col_pm')}</TableHead>
-                      <TableHead>NSFW</TableHead>
-                      <TableHead>{t('groups.col_added')}</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((group) => (
-                      <>
-                        <TableRow key={group.id} className="cursor-pointer">
-                          <TableCell onClick={() => setExpanded((p) => p === group.id ? null : group.id)} className="text-muted-foreground">
-                            {expanded === group.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-sm font-medium">{group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}</p>
-                            <p className="font-mono text-xs text-muted-foreground">{group.id}</p>
-                          </TableCell>
-                          <TableCell>
-                            {(group.enabled) ? <SuccessBadge>
-                              {group.enabled ? t('groups.active') : t('groups.disabled')}
-                            </SuccessBadge> : <Badge variant="outline">
-                              {group.enabled ? t('groups.active') : t('groups.disabled')}
-                            </Badge>}
-                          </TableCell>
-                          <TableCell><Badge variant="secondary">{group.auto_grant_role}</Badge></TableCell>
-                          <TableCell>
-                            {(group.allow_pm) ? <SuccessBadge>
-                              {group.allow_pm ? 'yes' : 'no'}
-                            </SuccessBadge> : <Badge variant="outline">
-                              {group.allow_pm ? 'yes' : 'no'}
-                            </Badge>}
-                          </TableCell>
-                          <TableCell>
-                            {(group.nsfw_allowed) ? <WarningBadge>
-                              {group.nsfw_allowed ? t('groups.allowed') : t('groups.blocked')}
-                            </WarningBadge> : <Badge variant="outline">
-                              {group.nsfw_allowed ? t('groups.allowed') : t('groups.blocked')}
-                            </Badge>}
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{formatDate(group.created_at)}</TableCell>
-                          <TableCell>
-                            <Button variant="ghost" size="sm" onClick={() => setEdit(defaultEdit(group))}>{t('common.edit')}</Button>
-                          </TableCell>
-                        </TableRow>
-                        {expanded === group.id && (
-                          <TableRow key={`threads-${group.id}`} className="hover:bg-transparent">
-                            <TableCell colSpan={8} className="p-0">
-                              <ThreadRows groupId={group.id} />
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+    <TooltipProvider delayDuration={300}>
+      <div className="space-y-4">
+        <Card>
+          <CardHeader className="px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                {loading
+                  ? t('groups.title', { defaultValue: 'Groups' })
+                  : `${total} group${total !== 1 ? 's' : ''}`}
+              </CardTitle>
+              <Button size="sm" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
+            </div>
+          </CardHeader>
 
-              {/* Mobile cards */}
-              <div className="md:hidden divide-y divide-border">
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="divide-y divide-border px-3 py-1">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-3 py-2.5">
+                    <Skeleton className="size-8 rounded-md shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-3.5 w-36" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                    <Skeleton className="h-5 w-14" />
+                  </div>
+                ))}
+              </div>
+            ) : items.length === 0 ? (
+              <div className="flex justify-center py-12 text-muted-foreground text-sm">{t('groups.no_groups')}</div>
+            ) : (
+              <div className="divide-y divide-border">
                 {items.map((group) => (
-                  <div key={group.id} className="px-4 py-3 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-medium">{group.title ?? <span className="text-muted-foreground">{t('groups.untitled')}</span>}</p>
-                        <p className="font-mono text-xs text-muted-foreground">{group.id}</p>
-                      </div>
-                      <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0" onClick={() => setEdit(defaultEdit(group))}>{t('common.edit')}</Button>
+                  <div key={group.id}>
+                    <div className="px-3 py-1">
+                      <Item size="sm" className="py-2.5 rounded-none border-0">
+                        <ItemMedia
+                          variant="icon"
+                          className={cn(
+                            'size-8 rounded-md cursor-pointer',
+                            group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
+                          )}
+                          onClick={() => setExpanded((p) => p === group.id ? null : group.id)}
+                        >
+                          {expanded === group.id
+                            ? <ChevronDown className="size-4" />
+                            : <ChevronRight className="size-4" />}
+                        </ItemMedia>
+                        <ItemContent>
+                          <ItemTitle>
+                            {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
+                          </ItemTitle>
+                          <ItemDescription>
+                            <span className="font-mono">{group.id}</span>
+                            <span className="text-muted-foreground/60"> · {formatDate(group.created_at)}</span>
+                          </ItemDescription>
+                        </ItemContent>
+                        <ItemActions>
+                          <div className="flex flex-wrap gap-1">
+                            {group.enabled
+                              ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
+                              : <Badge variant="outline">{t('groups.disabled')}</Badge>}
+                            <Badge variant="secondary">{group.auto_grant_role}</Badge>
+                            {group.nsfw_allowed && <WarningBadge>NSFW</WarningBadge>}
+                          </div>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEdit(defaultEdit(group))}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('common.edit')}</TooltipContent>
+                          </Tooltip>
+                        </ItemActions>
+                      </Item>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(group.enabled) ? <SuccessBadge>{group.enabled ? t('groups.active') : t('groups.disabled')}</SuccessBadge> : <Badge variant="outline">{group.enabled ? t('groups.active') : t('groups.disabled')}</Badge>}
-                      <Badge variant="secondary">{group.auto_grant_role}</Badge>
-                      {(group.allow_pm) ? <SuccessBadge>{`PM: ${group.allow_pm ? t('common.yes') : t('common.no')}`}</SuccessBadge> : <Badge variant="outline">{`PM: ${group.allow_pm ? t('common.yes') : t('common.no')}`}</Badge>}
-                      {(group.nsfw_allowed) ? <WarningBadge>{`NSFW: ${group.nsfw_allowed ? t('common.yes') : t('common.no')}`}</WarningBadge> : <Badge variant="outline">{`NSFW: ${group.nsfw_allowed ? t('common.yes') : t('common.no')}`}</Badge>}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-auto px-0 py-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
-                      onClick={() => setExpanded((p) => p === group.id ? null : group.id)}
-                    >
-                      {expanded === group.id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                      {t('groups.thread_policies')}
-                    </Button>
                     {expanded === group.id && <ThreadRows groupId={group.id} />}
                   </div>
                 ))}
               </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
 
-      <Dialog open={!!edit} onOpenChange={(open: boolean) => !open && setEdit(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{edit?.isNew ? t('groups.edit_title_new') : t('groups.edit_title_edit')}</DialogTitle>
-          </DialogHeader>
+        <Dialog open={!!edit} onOpenChange={(open: boolean) => !open && setEdit(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{edit?.isNew ? t('groups.edit_title_new') : t('groups.edit_title_edit')}</DialogTitle>
+            </DialogHeader>
 
-          {edit && (
-            <div className="space-y-4">
-              {edit.isNew && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="group-id">{t('groups.field_chat_id')}</Label>
-                  <Input id="group-id" type="number" placeholder="-100123456789"
-                    value={edit.newId} onChange={(e) => setEdit({ ...edit, newId: e.target.value })} />
-                </div>
-              )}
+            {edit && (
+              <div className="space-y-5">
+                {edit.isNew && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="group-id">{t('groups.field_chat_id')}</Label>
+                    <Input id="group-id" type="number" placeholder="-100123456789"
+                      value={edit.newId} onChange={(e) => setEdit({ ...edit, newId: e.target.value })} />
+                  </div>
+                )}
 
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="group-enabled"
-                  checked={edit.enabled}
-                  onCheckedChange={(checked: boolean) => setEdit({ ...edit, enabled: checked })}
-                />
-                <div>
-                  <Label htmlFor="group-enabled">{t('groups.field_active')}</Label>
-                  <p className="text-xs text-muted-foreground">{t('groups.field_active_hint')}</p>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="group-title">{t('groups.field_title')}</Label>
-                <Input id="group-title" value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>{t('groups.field_auto_role')}</Label>
-                <Select value={edit.auto_grant_role} onValueChange={(v: string) => setEdit({ ...edit, auto_grant_role: v as UserRole })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="group-allow-pm"
-                  checked={edit.allow_pm}
-                  onCheckedChange={(checked: boolean) => setEdit({ ...edit, allow_pm: checked })}
-                />
-                <Label htmlFor="group-allow-pm">{t('groups.field_allow_pm')}</Label>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <Switch
-                  id="group-nsfw"
-                  checked={edit.nsfw_allowed}
-                  onCheckedChange={(checked: boolean) => setEdit({ ...edit, nsfw_allowed: checked })}
-                />
-                <div>
-                  <Label htmlFor="group-nsfw">{t('groups.field_nsfw')}</Label>
-                  <p className="text-xs text-muted-foreground">{t('groups.field_nsfw_hint')}</p>
-                </div>
-              </div>
-
-              {!edit.isNew && (
-                <div className="space-y-3 border-t pt-3">
-                  <div>
-                    <p className="text-sm font-medium">{t('groups.inline_storage')}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {t('groups.inline_storage_hint')}
-                    </p>
+                <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1.5 items-center">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="group-title">{t('groups.field_title')}</Label>
+                    <Input id="group-title" value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="storage-chat">{t('groups.storage_chat_id')}</Label>
-                    <Input
-                      id="storage-chat"
-                      type="number"
-                      placeholder="-100123456789"
-                      value={edit.storage_chat_id}
-                      onChange={(e) => setEdit({ ...edit, storage_chat_id: e.target.value })}
+                    <Label className="text-muted-foreground">{t('groups.col_status')}</Label>
+                    <div className="flex items-center h-9 px-1">
+                      <Switch
+                        id="group-enabled"
+                        checked={edit.enabled}
+                        onCheckedChange={(checked: boolean) => setEdit({ ...edit, enabled: checked })}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-md border divide-y">
+                  <div className="flex items-center justify-between px-3 py-2.5">
+                    <Label htmlFor="group-auto-role" className="font-normal">{t('groups.field_auto_role')}</Label>
+                    <Select value={edit.auto_grant_role} onValueChange={(v: string) => setEdit({ ...edit, auto_grant_role: v as UserRole })}>
+                      <SelectTrigger id="group-auto-role" className="h-8 w-28"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-2.5">
+                    <div>
+                      <Label htmlFor="group-allow-pm" className="font-normal">{t('groups.field_allow_pm')}</Label>
+                    </div>
+                    <Switch
+                      id="group-allow-pm"
+                      checked={edit.allow_pm}
+                      onCheckedChange={(checked: boolean) => setEdit({ ...edit, allow_pm: checked })}
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="storage-thread">{t('groups.storage_thread_id')}</Label>
-                    <Input
-                      id="storage-thread"
-                      type="number"
-                      placeholder="Thread / topic ID"
-                      value={edit.storage_thread_id}
-                      onChange={(e) => setEdit({ ...edit, storage_thread_id: e.target.value })}
+                  <div className="flex items-center justify-between px-3 py-2.5">
+                    <div>
+                      <Label htmlFor="group-nsfw" className="font-normal">{t('groups.field_nsfw')}</Label>
+                      <p className="text-xs text-muted-foreground">{t('groups.field_nsfw_hint')}</p>
+                    </div>
+                    <Switch
+                      id="group-nsfw"
+                      checked={edit.nsfw_allowed}
+                      onCheckedChange={(checked: boolean) => setEdit({ ...edit, nsfw_allowed: checked })}
                     />
                   </div>
                 </div>
-              )}
-            </div>
-          )}
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEdit(null)}>{t('common.cancel')}</Button>
-            <Button onClick={save} disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+                {!edit.isNew && (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-medium">{t('groups.inline_storage')}</p>
+                      <p className="text-xs text-muted-foreground">{t('groups.inline_storage_hint')}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="storage-chat" className="text-xs">{t('groups.storage_chat_id')}</Label>
+                        <Input
+                          id="storage-chat"
+                          type="number"
+                          placeholder="-100…"
+                          value={edit.storage_chat_id}
+                          onChange={(e) => setEdit({ ...edit, storage_chat_id: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="storage-thread" className="text-xs">{t('groups.storage_thread_id')}</Label>
+                        <Input
+                          id="storage-thread"
+                          type="number"
+                          placeholder="Thread ID"
+                          value={edit.storage_thread_id}
+                          onChange={(e) => setEdit({ ...edit, storage_thread_id: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <DialogFooter className="flex-row gap-2 sm:space-x-0">
+              <Button variant="outline" className="flex-1" onClick={() => setEdit(null)}>{t('common.cancel')}</Button>
+              <Button className="flex-1" onClick={save} disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </TooltipProvider>
   )
 }
