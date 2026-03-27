@@ -1,5 +1,7 @@
 ARCHITECTURE.md
 **/node_modules/
+.vscode/
+*.code-workspace
 **/__pycache__/
 **/*.pyc
 **/*.pyo
