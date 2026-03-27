@@ -381,24 +381,7 @@ setup-dev:
 tsc *args="":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ ! -d frontend/node_modules ] || [ "$(stat -c %U frontend/node_modules 2>/dev/null)" = "root" ]; then
-        echo "node_modules missing or owned by root - running in container..."
-        docker run --rm \
-            -v "$(pwd)/frontend":/build/frontend \
-            -v "$(pwd)/plugins/yoink-dl/frontend":/build/plugins/yoink-dl/frontend \
-            -v "$(pwd)/plugins/yoink-stats/frontend":/build/plugins/yoink-stats/frontend \
-            -v "$(pwd)/plugins/yoink-insight/frontend":/build/plugins/yoink-insight/frontend \
-            -w /build/frontend \
-            node:22-alpine sh -c "
-                npm install --silent 2>/dev/null
-                ln -sf /build/frontend/node_modules /build/plugins/yoink-dl/frontend/node_modules 2>/dev/null || true
-                ln -sf /build/frontend/node_modules /build/plugins/yoink-stats/frontend/node_modules 2>/dev/null || true
-                ln -sf /build/frontend/node_modules /build/plugins/yoink-insight/frontend/node_modules 2>/dev/null || true
-                npx tsc --noEmit {{args}}
-            "
-    else
-        cd frontend && npx tsc --noEmit {{args}}
-    fi
+    cd frontend && npx tsc --noEmit {{args}}
 
 # Run npm commands for frontend (e.g. just npm 'add some-pkg').
 npm *args="":
