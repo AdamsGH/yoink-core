@@ -478,7 +478,7 @@ export default function AdminUsersPage() {
   return (
     <div className="space-y-3 p-4">
       <Card>
-        <CardHeader className="py-2 px-4 border-b">
+        <CardHeader className="px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <CardTitle className="text-sm font-normal text-muted-foreground">
               {total.toLocaleString()} {t('users.count')}

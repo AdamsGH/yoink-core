@@ -201,7 +201,7 @@ export default function TagMapEditor() {
 
   return (
     <Card>
-      <CardHeader className="px-4 py-3 border-b">
+      <CardHeader className="px-4 py-3">
         <CardTitle>{t('tag_map.title')}</CardTitle>
         <CardDescription>{t('tag_map.description')}</CardDescription>
       </CardHeader>

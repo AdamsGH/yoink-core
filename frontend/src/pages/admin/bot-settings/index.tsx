@@ -68,11 +68,11 @@ export default function AdminBotSettingsPage() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="px-4 py-3 border-b">
+        <CardHeader className="px-4 py-3">
           <CardTitle>{t('bot_settings.access_mode')}</CardTitle>
           <CardDescription>{t('bot_settings.access_mode_desc')}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="px-4 py-3 space-y-3">
           <div className="space-y-1.5">
             <Label>{t('bot_settings.access_label')}</Label>
             <Select
@@ -93,11 +93,11 @@ export default function AdminBotSettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader className="px-4 py-3 border-b">
+        <CardHeader className="px-4 py-3">
           <CardTitle>{t('bot_settings.browser_cookies')}</CardTitle>
           <CardDescription>{t('bot_settings.browser_cookies_desc')}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="px-4 py-3 space-y-3">
           <div className="space-y-1.5">
             <Label>{t('bot_settings.browser_cookies_role')}</Label>
             <Select
@@ -121,11 +121,11 @@ export default function AdminBotSettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader className="px-4 py-3 border-b">
+        <CardHeader className="px-4 py-3">
           <CardTitle>{t('bot_settings.inline_storage')}</CardTitle>
           <CardDescription>{t('bot_settings.inline_storage_desc')}</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="px-4 py-3 space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="storage-chat">{t('bot_settings.storage_chat_id')}</Label>

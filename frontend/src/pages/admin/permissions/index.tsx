@@ -145,7 +145,7 @@ export default function AdminPermissionsPage() {
       </div>
 
       <Card>
-        <CardHeader className="px-4 py-3 border-b">
+        <CardHeader className="px-4 py-3">
           <CardTitle className="text-sm font-medium text-muted-foreground">
             {t('permissions.available_features')}
           </CardTitle>

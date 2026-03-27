@@ -398,7 +398,9 @@
     "period_90": "90d",
     "err_unauthorized": "Not authorized",
     "err_forbidden": "Forbidden",
-    "err_load": "Failed to load stats"
+    "err_load": "Failed to load stats",
+    "tab_stats": "Download Stats",
+    "tab_import": "Import History"
   },
   "insight": {
     "nav_settings": "AI Settings",
