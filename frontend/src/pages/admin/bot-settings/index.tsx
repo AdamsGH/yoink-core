@@ -121,14 +121,16 @@ export default function AdminBotSettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between px-4 py-3 space-y-0">
-          <div>
-            <CardTitle>{t('bot_settings.inline_storage')}</CardTitle>
-            <CardDescription>{t('bot_settings.inline_storage_desc')}</CardDescription>
+        <CardHeader className="px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <CardTitle>{t('bot_settings.inline_storage')}</CardTitle>
+              <CardDescription>{t('bot_settings.inline_storage_desc')}</CardDescription>
+            </div>
+            <Button onClick={saveStorage} disabled={storageSaving} size="sm" className="shrink-0">
+              {storageSaving ? t('bot_settings.saving') : t('bot_settings.save_storage')}
+            </Button>
           </div>
-          <Button onClick={saveStorage} disabled={storageSaving} size="sm">
-            {storageSaving ? t('bot_settings.saving') : t('bot_settings.save_storage')}
-          </Button>
         </CardHeader>
         <CardContent className="px-4 py-3 space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">

@@ -11,6 +11,7 @@ WORKDIR /build
 # If a submodule update doesn't trigger cache invalidation (e.g. BuildKit stale
 # context), pass --build-arg CACHE_BUST=$(git rev-parse HEAD) to force rebuild.
 ARG CACHE_BUST=0
+RUN echo "cache bust: $CACHE_BUST"
 COPY frontend/                      ./frontend/
 COPY plugins/yoink-dl/frontend/     ./plugins/yoink-dl/frontend/
 COPY plugins/yoink-stats/frontend/  ./plugins/yoink-stats/frontend/
