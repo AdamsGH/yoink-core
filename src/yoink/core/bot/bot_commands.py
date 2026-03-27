@@ -36,8 +36,8 @@ _ROLE_RANK: dict[str, int] = {
 }
 
 _CORE_COMMANDS: list[CommandSpec] = [
-    CommandSpec("start",     "Welcome",                  scope="default",  descriptions={"ru": "Начало работы"}),
-    CommandSpec("help",      "Show help",                scope="default",  descriptions={"ru": "Список команд"}),
+    CommandSpec("start",     "Welcome",                  scope="private",  descriptions={"ru": "Начало работы"}),
+    CommandSpec("help",      "Show help",                scope="private",  descriptions={"ru": "Список команд"}),
     CommandSpec("lang",      "Interface language",       scope="private",  descriptions={"ru": "Язык интерфейса"}),
     CommandSpec("block",     "Block a user",             scope="private",  min_role="admin", descriptions={"ru": "Заблокировать пользователя"}),
     CommandSpec("unblock",   "Unblock a user",           scope="private",  min_role="admin", descriptions={"ru": "Разблокировать пользователя"}),
