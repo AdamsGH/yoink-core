@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { Refine } from '@refinedev/core'
 import { NavigateToResource } from '@refinedev/react-router'
 import { Toaster } from 'sonner'
+import { TooltipProvider } from './components/ui/tooltip'
 
 import { authProvider } from './lib/auth-provider'
 import { dataProvider } from './lib/data-provider'
@@ -124,29 +125,31 @@ function RefineApp() {
   const statsEndpoint = resolveStatsEndpoint(plugins)
 
   return (
-    <BrowserRouter>
-      <Refine
-        dataProvider={dataProvider}
-        authProvider={authProvider}
-        resources={resources}
-        options={{ syncWithLocation: true, warnWhenUnsavedChanges: true, disableTelemetry: true }}
-      >
-        <Routes>
-          <Route element={<AppLayout navGroups={navGroups} userStatsEndpoint={statsEndpoint} />}>
-            <Route index element={<IndexRedirect navGroups={navGroups} />} />
-            {routes.map((r) => (
-              <Route
-                key={r.path}
-                path={r.path}
-                element={_guardRoute(r)}
-              />
-            ))}
-          </Route>
-          <Route path="/unauthorized" element={<UnauthorizedPage />} />
-          <Route path="*" element={<NavigateToResource resource={resources[0]?.name ?? 'settings'} />} />
-        </Routes>
-      </Refine>
-    </BrowserRouter>
+    <TooltipProvider delayDuration={300}>
+      <BrowserRouter>
+        <Refine
+          dataProvider={dataProvider}
+          authProvider={authProvider}
+          resources={resources}
+          options={{ syncWithLocation: true, warnWhenUnsavedChanges: true, disableTelemetry: true }}
+        >
+          <Routes>
+            <Route element={<AppLayout navGroups={navGroups} userStatsEndpoint={statsEndpoint} />}>
+              <Route index element={<IndexRedirect navGroups={navGroups} />} />
+              {routes.map((r) => (
+                <Route
+                  key={r.path}
+                  path={r.path}
+                  element={_guardRoute(r)}
+                />
+              ))}
+            </Route>
+            <Route path="/unauthorized" element={<UnauthorizedPage />} />
+            <Route path="*" element={<NavigateToResource resource={resources[0]?.name ?? 'settings'} />} />
+          </Routes>
+        </Refine>
+      </BrowserRouter>
+    </TooltipProvider>
   )
 }
 

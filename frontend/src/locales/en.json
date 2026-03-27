@@ -69,7 +69,10 @@
     "no_features": "No features declared by loaded plugins",
     "default_role": "Default for",
     "granted_by_role": "Access granted by role - cannot revoke without changing role",
-    "expires": "Expires"
+    "expires": "Expires",
+    "source_tag": "tag",
+    "source_tag_hint": "Granted automatically via tag mapping. Managed by the tag_map rule, not manually.",
+    "source_tag_no_revoke": "Tag-sourced grants are managed automatically via tag_map. Remove the tag to revoke."
   },
   "auth": {
     "loading": "Authorizing…",

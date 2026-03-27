@@ -103,6 +103,7 @@ export interface Permission {
   granted_by: number
   granted_at: string
   expires_at: string | null
+  grant_source: 'manual' | 'tag'
 }
 
 export interface GrantPermissionRequest {

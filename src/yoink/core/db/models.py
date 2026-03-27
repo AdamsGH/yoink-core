@@ -166,6 +166,8 @@ class UserPermission(Base):
         DateTime(timezone=True), default=_now, nullable=False
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Source of the grant: "manual" (admin action) or "tag" (automatic via tag_map)
+    grant_source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="manual")
 
 
 class ApiKey(Base):

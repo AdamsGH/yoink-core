@@ -78,7 +78,7 @@ async def _apply_tag_permissions(
         if len(parts) != 2:
             continue
         plugin, feature = parts
-        await perm_repo.grant(user_id, plugin, feature, granted_by=owner_id)
+        await perm_repo.grant(user_id, plugin, feature, granted_by=owner_id, grant_source="tag")
         logger.info("Tag grant user=%d feature=%s (tag=%s)", user_id, feature_key, tag)
         changed = True
 

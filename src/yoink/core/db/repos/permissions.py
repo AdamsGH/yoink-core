@@ -108,8 +108,13 @@ class UserPermissionRepo:
         feature: str,
         granted_by: int,
         expires_at: datetime | None = None,
+        grant_source: str = "manual",
     ) -> UserPermission:
-        """Upsert a permission grant. Creates a bare User row if needed."""
+        """Upsert a permission grant. Creates a bare User row if needed.
+
+        grant_source: "manual" (admin action) or "tag" (automatic via tag_map).
+        Tag-sourced grants are shown as read-only in the UI.
+        """
         now = datetime.now(timezone.utc)
         async with self._sf() as s:
             user = await s.get(User, user_id)
@@ -134,12 +139,14 @@ class UserPermissionRepo:
                     granted_by=granted_by,
                     granted_at=now,
                     expires_at=expires_at,
+                    grant_source=grant_source,
                 )
                 s.add(row)
             else:
                 row.granted_by = granted_by
                 row.granted_at = now
                 row.expires_at = expires_at
+                row.grant_source = grant_source
             await s.commit()
             await s.refresh(row)
             return row

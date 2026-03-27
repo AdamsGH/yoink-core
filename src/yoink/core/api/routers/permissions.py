@@ -42,6 +42,7 @@ class PermissionResponse(BaseModel):
     granted_by: int
     granted_at: datetime
     expires_at: datetime | None
+    grant_source: str = "manual"
 
 
 class EffectiveFeatureAccess(BaseModel):
@@ -236,8 +237,23 @@ async def revoke_permission(
     feature: str,
     request: Request,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+    current_user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> dict:
+    # Tag-sourced grants can only be revoked by the owner, not by admins.
+    # They are managed automatically via tag_map and should not be edited manually.
+    existing = await session.execute(
+        select(UserPermission).where(
+            UserPermission.user_id == user_id,
+            UserPermission.plugin == plugin,
+            UserPermission.feature == feature,
+        )
+    )
+    row = existing.scalar_one_or_none()
+    if row is not None and getattr(row, "grant_source", "manual") == "tag":
+        if current_user.role != UserRole.owner:
+            from yoink.core.api.exceptions import ForbiddenError
+            raise ForbiddenError("Tag-sourced grants can only be revoked by the owner")
+
     user = await session.get(User, user_id)
     result = await session.execute(
         delete(UserPermission).where(

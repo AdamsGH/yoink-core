@@ -5,6 +5,7 @@ import { apiClient } from '@core/lib/api-client'
 import { formatDate } from '@core/lib/utils'
 import type { Feature, Permission, User } from '@core/types/api'
 import { Badge } from '@core/components/ui/badge'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@core/components/ui/tooltip'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@core/components/ui/dialog'
@@ -217,7 +218,21 @@ export default function AdminPermissionsPage() {
                     <TableCell className="font-medium">{displayUser(p)}</TableCell>
                     <TableCell><Badge variant="outline">{p.plugin}</Badge></TableCell>
                     <TableCell>
-                      {features.find((f) => f.plugin === p.plugin && f.feature === p.feature)?.label ?? p.feature}
+                      <div className="flex items-center gap-1.5">
+                        {features.find((f) => f.plugin === p.plugin && f.feature === p.feature)?.label ?? p.feature}
+                        {p.grant_source === 'tag' && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="secondary" className="cursor-default text-xs px-1.5 py-0">
+                                {t('permissions.source_tag')}
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              {t('permissions.source_tag_hint')}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">{displayGrantedBy(p.granted_by)}</TableCell>
                     <TableCell className="text-sm">{formatDate(p.granted_at)}</TableCell>
@@ -225,14 +240,34 @@ export default function AdminPermissionsPage() {
                       {p.expires_at ? formatDate(p.expires_at) : t('permissions.never_expires')}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => void handleRevoke(p)}
-                      >
-                        {t('permissions.revoke')}
-                      </Button>
+                      {p.grant_source === 'tag' ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-muted-foreground cursor-not-allowed opacity-40"
+                                disabled
+                              >
+                                {t('permissions.revoke')}
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="left">
+                            {t('permissions.source_tag_no_revoke')}
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => void handleRevoke(p)}
+                        >
+                          {t('permissions.revoke')}
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
