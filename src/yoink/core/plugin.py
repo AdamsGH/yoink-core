@@ -31,6 +31,38 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class FeatureSpec:
+    """A gated feature declared by a plugin.
+
+    Plugins return a list of FeatureSpec from get_features().
+    Core uses this list to:
+    - Show available features in GET /features (admin UI).
+    - Enforce access checks when AccessPolicy.feature is set.
+
+    default_min_role: if set, users with this role or higher get access
+    without an explicit user_permissions row. None means the feature is
+    always gated by an explicit grant (owner always passes regardless).
+    """
+    plugin: str
+    feature: str
+    label: str
+    description: str = ""
+    default_min_role: str | None = None  # "user" | "moderator" | "admin" | "owner" | None
+
+
+# Global registry populated by load_plugins()
+_feature_registry: list[FeatureSpec] = []
+
+
+def register_features(features: list[FeatureSpec]) -> None:
+    _feature_registry.extend(features)
+
+
+def get_all_features() -> list[FeatureSpec]:
+    return list(_feature_registry)
+
+
+@dataclass
 class HandlerSpec:
     """Wraps a PTB handler with metadata for registration."""
     handler: BaseHandler
@@ -188,6 +220,10 @@ class YoinkPlugin(Protocol):
         """Recurring PTB JobQueue jobs."""
         ...
 
+    def get_features(self) -> list[FeatureSpec]:
+        """Gated features this plugin exposes. Core registers them globally."""
+        ...
+
     def get_commands(self) -> list[CommandSpec]:
         """Commands to register with Telegram, with role and scope metadata."""
         ...
@@ -216,6 +252,11 @@ def _discover_plugins(enabled: list[str]) -> list[YoinkPlugin]:
             instance = cls()
             plugins.append(instance)
             logger.info("Loaded plugin: %s v%s", instance.name, instance.version)
+            if hasattr(instance, "get_features"):
+                try:
+                    register_features(instance.get_features())
+                except Exception:
+                    logger.exception("Failed to register features for plugin %s", ep.name)
         except Exception:
             logger.exception("Failed to load plugin %s", ep.name)
     return plugins

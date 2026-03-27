@@ -17,6 +17,7 @@ export default defineConfig({
     alias: {
       '@':           resolve(__dirname, 'src'),
       '@core':       resolve(__dirname, 'src'),
+      '@core-root':  resolve(__dirname, '.'),
       '@dl':           resolve(__dirname, '../plugins/yoink-dl/frontend/src'),
       '@dl-root':      resolve(__dirname, '../plugins/yoink-dl/frontend'),
       '@stats':        resolve(__dirname, '../plugins/yoink-stats/frontend/src'),

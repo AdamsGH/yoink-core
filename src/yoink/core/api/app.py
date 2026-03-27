@@ -14,7 +14,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from yoink.core.api.health import router as health_router
 from yoink.core.api.internal.router import router as internal_router
-from yoink.core.api.routers import api_keys, auth, bot_settings, forum, groups, messages, settings, threads, users
+from yoink.core.api.routers import api_keys, auth, bot_settings, forum, groups, messages, permissions, settings, threads, users
 from yoink.core.db.engine import create_tables, get_session_factory, init_engine
 
 if TYPE_CHECKING:
@@ -98,6 +98,7 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
     app.include_router(forum.router, prefix="/api/v1")
     app.include_router(messages.router, prefix="/api/v1")
     app.include_router(api_keys.router, prefix="/api/v1")
+    app.include_router(permissions.router, prefix="/api/v1")
     app.include_router(internal_router, prefix="/api/internal/v1")
 
     if plugins:

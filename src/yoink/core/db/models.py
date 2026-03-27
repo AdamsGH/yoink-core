@@ -142,6 +142,32 @@ class Event(Base):
     )
 
 
+class UserPermission(Base):
+    """Per-user feature access grant.
+
+    Replaces per-plugin allowlist tables (e.g. insight_access).
+    plugin + feature form a compound natural key alongside user_id.
+    expires_at=None means the grant never expires.
+    """
+    __tablename__ = "user_permissions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "plugin", "feature"),
+        Index("idx_user_permissions_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    plugin: Mapped[str] = mapped_column(String(32), nullable=False)
+    feature: Mapped[str] = mapped_column(String(64), nullable=False)
+    granted_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ApiKey(Base):
     """Long-lived API keys for M2M (machine-to-machine) access."""
     __tablename__ = "api_keys"

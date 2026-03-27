@@ -30,3 +30,69 @@ export interface UserUpdateRequest {
   role?: UserRole
   ban_until?: string | null
 }
+
+export interface ThreadPolicy {
+  id: number
+  group_id: number
+  thread_id: number | null
+  name: string | null
+  enabled: boolean
+}
+
+export interface Group {
+  id: number
+  title: string | null
+  enabled: boolean
+  auto_grant_role: UserRole
+  allow_pm: boolean
+  nsfw_allowed: boolean
+  storage_chat_id: number | null
+  storage_thread_id: number | null
+  created_at: string
+  thread_policies: ThreadPolicy[]
+}
+
+export interface GroupCreateRequest {
+  id: number
+  title?: string
+  enabled?: boolean
+  auto_grant_role?: UserRole
+  allow_pm?: boolean
+  nsfw_allowed?: boolean
+  storage_chat_id?: number | null
+  storage_thread_id?: number | null
+}
+
+export interface GroupUpdateRequest {
+  title?: string
+  enabled?: boolean
+  auto_grant_role?: UserRole
+  allow_pm?: boolean
+  nsfw_allowed?: boolean
+  storage_chat_id?: number | null
+  storage_thread_id?: number | null
+}
+
+export interface Feature {
+  plugin: string
+  feature: string
+  label: string
+  description: string
+  default_min_role: string | null
+}
+
+export interface Permission {
+  id: number
+  user_id: number
+  plugin: string
+  feature: string
+  granted_by: number
+  granted_at: string
+  expires_at: string | null
+}
+
+export interface GrantPermissionRequest {
+  plugin: string
+  feature: string
+  expires_at?: string | null
+}
