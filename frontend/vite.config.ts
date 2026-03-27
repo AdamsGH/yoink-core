@@ -38,11 +38,12 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react':      ['react', 'react-dom', 'react-router'],
-          'vendor-refine':     ['@refinedev/core', '@refinedev/react-router'],
-          'vendor-recharts':   ['recharts'],
-          'vendor-codemirror': ['@uiw/react-codemirror', '@codemirror/lang-json', '@codemirror/lint', '@uiw/codemirror-theme-vscode'],
+        manualChunks: (id) => {
+          if (id.includes('@uiw/') || id.includes('@codemirror/')) return 'vendor-codemirror'
+          if (id.includes('recharts') || id.includes('d3-')) return 'vendor-recharts'
+          if (id.includes('@refinedev/')) return 'vendor-refine'
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/') || id.includes('node_modules/react-router/')) return 'vendor-react'
+          return undefined
         },
       },
     },
