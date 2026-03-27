@@ -7,25 +7,15 @@ const APP_TOKEN_KEY = 'access_token'
 // to build the localStorage key for persisted auth.
 // Key format: scalar-reference-auth-{slug}
 // Value format: { secrets: { SchemeName: { type, "x-scalar-secret-token" } }, selected: {...} }
-const SCALAR_AUTH_KEY = 'scalar-reference-auth-yoink-api'
+// scalar-client-auth is the active key in Scalar 1.49.x (not the "deprecated" one from main branch).
+// Structure: { [nameKey]: { [field]: value } }
+// For HTTPBearer: nameKey="httpBearer", token field="token"
+const SCALAR_AUTH_KEY = 'scalar-client-auth'
 
 function syncTokenToScalar() {
   const token = localStorage.getItem(APP_TOKEN_KEY)
   if (!token) return
-  localStorage.setItem(
-    SCALAR_AUTH_KEY,
-    JSON.stringify({
-      secrets: {
-        HTTPBearer: {
-          type: 'http',
-          'x-scalar-secret-token': token,
-          'x-scalar-secret-username': '',
-          'x-scalar-secret-password': '',
-        },
-      },
-      selected: { document: null, path: null },
-    }),
-  )
+  localStorage.setItem(SCALAR_AUTH_KEY, JSON.stringify({ httpBearer: { token } }))
 }
 
 export default function ApiDocsPage() {
