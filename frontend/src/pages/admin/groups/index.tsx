@@ -380,7 +380,7 @@ export default function AdminGroupsPage() {
   return (
     <div className="space-y-5">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardHeader className="flex flex-row items-center justify-between px-4 py-3 border-b space-y-0">
           <CardTitle className="text-sm font-medium">{total} group{total !== 1 ? 's' : ''}</CardTitle>
           <Button size="sm" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
         </CardHeader>

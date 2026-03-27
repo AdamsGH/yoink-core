@@ -68,7 +68,7 @@ export default function AdminBotSettingsPage() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader>
+        <CardHeader className="px-4 py-3 border-b">
           <CardTitle>{t('bot_settings.access_mode')}</CardTitle>
           <CardDescription>{t('bot_settings.access_mode_desc')}</CardDescription>
         </CardHeader>
@@ -93,7 +93,7 @@ export default function AdminBotSettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="px-4 py-3 border-b">
           <CardTitle>{t('bot_settings.browser_cookies')}</CardTitle>
           <CardDescription>{t('bot_settings.browser_cookies_desc')}</CardDescription>
         </CardHeader>
@@ -121,7 +121,7 @@ export default function AdminBotSettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="px-4 py-3 border-b">
           <CardTitle>{t('bot_settings.inline_storage')}</CardTitle>
           <CardDescription>{t('bot_settings.inline_storage_desc')}</CardDescription>
         </CardHeader>
