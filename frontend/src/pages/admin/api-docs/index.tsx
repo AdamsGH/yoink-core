@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSidebar } from '@core/components/ui/sidebar'
 
-// Scalar stores auth in localStorage under this key.
-// Structure: { [schemeName]: { token: string } }
 const SCALAR_AUTH_KEY = 'scalar-client-auth'
 const APP_TOKEN_KEY = 'access_token'
 
 export default function ApiDocsPage() {
   const { state, isMobile } = useSidebar()
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  // Start with no src — set it after writing to localStorage so Scalar
-  // reads the token on its very first init, not from a stale cached load.
+  // Cache-bust src so Scalar re-initialises and re-reads localStorage on every visit.
   const [src, setSrc] = useState<string>('')
 
   useEffect(() => {
@@ -18,7 +15,8 @@ export default function ApiDocsPage() {
     if (token) {
       localStorage.setItem(SCALAR_AUTH_KEY, JSON.stringify({ HTTPBearer: { token } }))
     }
-    setSrc('/docs')
+    // Append timestamp to force iframe reload so Scalar reads fresh localStorage.
+    setSrc(`/docs?t=${Date.now()}`)
   }, [])
 
   const left = isMobile
