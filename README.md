@@ -1,26 +1,17 @@
 # yoink-core
 
-Telegram bot for media downloading, music link aggregation, and group chat analytics. Modular plugin architecture - each plugin is an independent Python package and git submodule.
+Telegram bot platform with a plugin system, REST API, and React WebApp. Handles auth, RBAC, groups, settings, and provides a plugin protocol that each plugin implements.
 
-## Plugins
-
-| Plugin | Submodule | Description |
-|---|---|---|
-| [yoink-dl](plugins/yoink-dl) | `plugins/yoink-dl` | Media downloader (yt-dlp + gallery-dl) |
-| [yoink-music](plugins/yoink-music) | `plugins/yoink-music` | Music link aggregator (Spotify / Deezer / YM / YTM / SoundCloud / Apple Music) |
-| [yoink-stats](plugins/yoink-stats) | `plugins/yoink-stats` | Group chat analytics with web dashboard |
-| [yoink-insight](plugins/yoink-insight) | `plugins/yoink-insight` | AI YouTube video summaries via Gemini API |
-
-Enable plugins via `yoink_plugins=dl,music,stats,insight` in `.env`.
+Plugins are git submodules under `plugins/`. Each is an independent Python package with its own handlers, routes, models, migrations, and frontend pages.
 
 ## Quick start
 
 ```bash
-cp .env.example .env       # fill in bot_token, owner_id, api_id, api_hash, api_secret_key
-just data-dirs             # create data/ subdirectories
-just build all             # build yoink + frontend images
-just up                    # start services
-just migrate up            # run migrations
+cp .env.example .env        # fill in required vars
+just data-dirs              # create data/ subdirectories
+just build all              # build yoink + frontend images
+just up                     # start services
+just migrate up             # run migrations
 ```
 
 ## Services
@@ -31,7 +22,7 @@ just migrate up            # run migrations
 | `yoink-postgres` | PostgreSQL 17 | - |
 | `yoink-frontend` | React SPA (nginx) | 3010 |
 | `yoink-tg-bot-api` | Custom tdlight Bot API server | 8082 |
-| `yoink-backup` | pg\_dump + S3 (profile `backup`) | - |
+| `yoink-backup` | pg_dump + S3 (profile `backup`) | - |
 | `yoink-browser` | Kasmweb Chromium (profile `cookies`) | 6902 |
 
 ## Just recipes
@@ -62,6 +53,8 @@ just backup-up / backup-down / backup-logs
 
 ## Environment variables
 
+Core variables (all lowercase):
+
 | Variable | Required | Description |
 |---|---|---|
 | `bot_token` | yes | Telegram bot token |
@@ -70,24 +63,15 @@ just backup-up / backup-down / backup-logs
 | `api_secret_key` | yes | JWT signing secret |
 | `yoink_plugins` | no | Comma-separated plugin names (default: empty) |
 | `database_url` | no | PostgreSQL URL (default provided) |
-| `telegram_base_url` | no | Bot API URL (default: official Telegram) |
+| `telegram_base_url` | no | Bot API base URL (default: official Telegram) |
 | `data_dir` | no | Host path for cookies, sessions, browser profile |
 | `json_logs` | no | Enable JSON log format |
 
 See `.env.example` for the full list with defaults. Plugin-specific variables are documented in each plugin's README.
 
-#### yoink-insight plugin variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `gemini_api_key` | yes | Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| `gemini_model` | no | Model name (default: `gemini-3-flash-preview`) |
-| `insight_default_lang` | no | Default response language (default: `en`) |
-| `insight_transcript_langs` | no | Transcript language preference order (default: `en,ru`) |
-
 ## REST API
 
-Base path: `/api/v1`. Docs (Scalar): `http://localhost:8003/docs`.
+Base path: `/api/v1`. Docs: `http://localhost:8003/docs`.
 
 Auth: `Authorization: Bearer <JWT>` obtained via `POST /api/v1/auth/token` (Telegram WebApp initData).
 
@@ -96,34 +80,24 @@ Auth: `Authorization: Bearer <JWT>` obtained via `POST /api/v1/auth/token` (Tele
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | /auth/token | - | Exchange Telegram initData for JWT |
-| GET | /users/me | user | Current user |
-| GET | /users | admin | List users |
-| PATCH | /users/{id} | admin | Update role/ban |
+| GET | /users/me | user | Current user profile |
+| GET | /users | admin | List all users |
+| PATCH | /users/{id} | admin | Update role |
 | GET | /groups | admin | List groups |
 | PATCH | /groups/{id} | admin | Update group settings |
 | GET | /settings | user | Personal settings |
 | PATCH | /settings | user | Update settings |
-| GET | /bot-settings | admin | Global settings |
+| GET | /bot-settings | admin | Global bot settings |
 | PATCH | /bot-settings | owner | Update global settings |
-
-### Forum and message proxy (owner, requires user session)
-
-| Method | Path | Description |
-|---|---|---|
-| GET | /forum/topics/{chat\_id} | List topics |
-| GET | /forum/topics/{chat\_id}/{thread\_id} | Single topic |
-| GET | /forum/topics/{chat\_id}/{thread\_id}/link | Public link |
-| GET | /forum/search/{chat\_id} | Search messages |
-| GET | /forum/history/{chat\_id} | Chat history |
-| GET | /messages/{chat\_id}/{msg\_id}/viewers | Message viewers |
-| GET | /messages/{chat\_id}/{msg\_id}/link | Shareable link |
-| GET | /messages/{chat\_id}/{msg\_id}/read-date | Read receipt |
-| GET | /messages/{chat\_id}/{msg\_id}/thread | Thread info |
-| GET | /messages/{chat\_id}/by-date | Find message by timestamp |
+| GET | /permissions | admin | List all user permissions |
+| GET | /permissions/{uid} | admin | Permissions for a user |
+| POST | /permissions/{uid} | admin | Grant a feature |
+| DELETE | /permissions/{uid}/{feature} | admin | Revoke a feature |
+| GET | /features | user | List all registered features |
 
 ### M2M API
 
-Auth: `X-Api-Key` header (SHA-256 hashed, scope-based). Base path: `/api/internal/v1`.
+Auth: `X-Api-Key` header. Base path: `/api/internal/v1`.
 
 | Method | Path | Scope | Description |
 |---|---|---|---|
@@ -132,7 +106,7 @@ Auth: `X-Api-Key` header (SHA-256 hashed, scope-based). Base path: `/api/interna
 | GET | /groups | groups:r | List groups |
 | POST | /events | events:w | Create event |
 
-API key management: `GET/POST /api/v1/api-keys`, `DELETE /api/v1/api-keys/{id}` (owner, JWT auth).
+API key management: `GET/POST /api/v1/api-keys`, `DELETE /api/v1/api-keys/{id}` (owner only).
 
 ### Health
 
@@ -143,18 +117,6 @@ API key management: `GET/POST /api/v1/api-keys`, `DELETE /api/v1/api-keys/{id}` 
 
 Plugin routes are mounted at `/api/v1/{plugin_name}/`.
 
-#### yoink-insight routes (`/api/v1/insight/`)
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | /access | admin | List users with Insight access |
-| POST | /access/{uid} | admin | Grant access |
-| PATCH | /access/{uid} | admin | Update language |
-| DELETE | /access/{uid} | admin | Revoke access |
-| GET | /access/lookup?q= | admin | Search users by @username or ID |
-| GET | /settings/me | user | Get own language setting |
-| PATCH | /settings/me | user | Update own language |
-
 ## Plugin system
 
 Plugins are Python packages declared via entry points:
@@ -164,56 +126,105 @@ Plugins are Python packages declared via entry points:
 dl = "yoink_dl:DlPlugin"
 ```
 
-Each plugin implements the `YoinkPlugin` protocol and can provide:
+Each plugin implements the `YoinkPlugin` protocol:
 
-- PTB message/command handlers (`get_handlers()`)
-- Inline query handlers (`get_inline_handlers()`) - registered via the core inline dispatcher
-- FastAPI routes (`get_routes()`)
-- SQLAlchemy models (`get_models()`)
-- Locale files (`get_locale_dir()`)
-- Scheduled jobs (`get_jobs()`)
-- Frontend web manifest (`get_web_manifest()`)
+| Method | Returns | Description |
+|---|---|---|
+| `get_handlers()` | `list[HandlerSpec]` | PTB message/command handlers |
+| `get_inline_handlers()` | `list[InlineHandlerSpec]` | Inline query handlers |
+| `get_routes()` | `APIRouter \| None` | FastAPI routes |
+| `get_models()` | `list` | SQLAlchemy models |
+| `get_locale_dir()` | `Path \| None` | Directory with `en.yml`, `ru.yml` |
+| `get_jobs()` | `list[JobSpec] \| None` | Scheduled background jobs |
+| `get_web_manifest()` | `WebManifest \| None` | Frontend pages and sidebar entries |
+| `get_commands()` | `list[CommandSpec]` | Bot commands for BotFather menu |
+| `get_features()` | `list[FeatureSpec]` | RBAC features declared by this plugin |
+| `get_help_section()` | `str` | HTML fragment for `/help` |
+| `setup(ctx)` | - | Async startup: init services, populate `bot_data` |
 
 ### Inline dispatcher
 
-Core registers a single `InlineQueryHandler` that routes queries to plugins by priority, then prefix, then pattern, then catch-all. Plugins declare `InlineHandlerSpec(callback, priority, prefix, pattern, access_policy)`. If `access_policy` is set, the dispatcher runs `PermissionChecker` before calling the handler - denied users are silently skipped.
+Core registers a single `InlineQueryHandler` that routes queries to plugins by priority, then prefix, then pattern, then catch-all. If `access_policy` is set on an `InlineHandlerSpec`, access is checked before calling the handler - denied users are silently skipped.
 
-Current specs (descending priority):
+| Plugin | Priority | Description |
+|---|---|---|
+| yoink-music | 10 | Music URLs and empty-query hint; returns `False` for non-music |
+| yoink-dl | 0 | YouTube/URL search catch-all |
 
-| Plugin | Priority | Match | Description |
-|---|---|---|---|
-| yoink-music | 10 | catch-all | Shows paste hint on empty query; returns `False` for non-music text so dl still handles YouTube search |
-| yoink-dl | 0 | catch-all | YouTube/URL search |
+## RBAC
+
+Role hierarchy: `banned < restricted < user < moderator < admin < owner`
+
+Owner is set via `owner_id` env var at startup and always has full access.
+
+### Features
+
+Plugins declare `FeatureSpec` objects that describe access-gated capabilities:
+
+```python
+FeatureSpec(
+    plugin="insight",
+    feature="summary",
+    label="AI Summary",
+    description="Access to /summary and /about commands",
+    default_min_role=None,  # None = explicit grant required; "user" = all users by default
+)
+```
+
+Access is granted if **either**:
+1. `user.role >= feature.default_min_role` (role threshold), or
+2. An explicit grant exists in `user_permissions` table
+
+Owner always passes regardless.
+
+### Commands
+
+`CommandSpec` supports `required_feature="plugin:feature"` to hide a command from users who don't have access:
+
+```python
+CommandSpec(
+    command="summary",
+    description="Summarize a YouTube video",
+    required_feature="insight:summary",
+)
+```
+
+Bot command menus are refreshed automatically on role change, grant/revoke, language change, and `/start`.
+
+### Web dashboard
+
+- `/admin/users` - user list with role management
+- `/admin/permissions` - per-feature access matrix (grant/revoke per user)
 
 ## Database migrations
 
 Single Alembic chain covering core and all plugins:
 
-```
-0001_initial_schema        - users, groups, thread_policies, bot_settings, events
-0002_dl_plugin_schema      - dl settings, file cache, download log, rate limits, cookies
-0003_stats_plugin_schema   - message log, stats tables
-0004_stats_tsvector        - full-text search index
-0005_group_storage         - inline storage settings
-0006_user_is_premium       - premium flag
-0007_dl_dm_topic           - DM topic thread ID
-0008_api_keys              - M2M API keys
-0009_insight_plugin_schema - insight_access table
-```
-
-## Role hierarchy
-
-`banned < restricted < user < moderator < admin < owner`
-
-Owner is set via `owner_id` env var at startup, never stored in the database.
+| Migration | Description |
+|---|---|
+| 0001_initial_schema | users, groups, thread_policies, bot_settings, events |
+| 0002_dl_plugin_schema | dl settings, file cache, download log, rate limits, cookies |
+| 0003_stats_plugin_schema | message log, stats tables |
+| 0004_stats_tsvector | full-text search index |
+| 0005_group_storage | inline storage settings |
+| 0006_user_is_premium | premium flag |
+| 0007_dl_dm_topic | DM topic thread ID |
+| 0008_api_keys | M2M API keys |
+| 0009_insight_plugin_schema | insight_access table |
+| 0010_file_cache_multi | file_ids JSON column for album/gallery results |
+| 0011_gallery_zip | gallery_zip flag in download log |
+| 0012_user_permissions | unified user_permissions table |
+| 0013_insight_user_settings | insight_user_settings table |
 
 ## Custom Bot API server
 
-Built from [tdlight-telegram-bot-api](https://github.com/tdlight-team/tdlight-telegram-bot-api) with `docker/patches/tdlight-forum-extras.patch`. Adds 16 methods for forum topics, message viewers, chat history, etc.
+Built from [tdlight-telegram-bot-api](https://github.com/tdlight-team/tdlight-telegram-bot-api) with `docker/patches/tdlight-forum-extras.patch`. Adds methods for forum topics, message viewers, chat history, etc.
 
 ```bash
 just build tg   # ~10 min first build, cached thereafter
 ```
+
+Current server version: **9.5**.
 
 ## User-mode session
 
@@ -225,7 +236,7 @@ just tg-status
 just tg-logout
 ```
 
-Token stored in `data/tg-bot-api/user.token` (chmod 600).
+Token stored in `data/tg-bot-api/user.token`.
 
 ## Cookie extraction
 
@@ -239,7 +250,7 @@ Cookies written to `data/cookies/` and picked up by yt-dlp. Alternatively, use t
 
 ## Backup
 
-Requires `backup_s3_*` env vars. pg\_dump with custom format, uploaded to S3 via mc.
+Requires `backup_s3_*` env vars. pg_dump with custom format, uploaded to S3 via mc.
 
 ```bash
 just backup           # one-shot
