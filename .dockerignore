@@ -11,6 +11,8 @@
 .git
 .env
 .env.local
+frontend/.env.local
+plugins/**/.env.local
 data/
 *.log
 .DS_Store

@@ -11,6 +11,7 @@
     "admin_stats": "Статистика",
     "unauthorized": "Нет доступа",
     "admin": "Администрирование",
+    "my_stats": "Моя статистика",
     "chat_stats": "Статистика чатов",
     "import_history": "Импорт истории",
     "ai_settings": "Настройки AI",
@@ -161,7 +162,12 @@
     "files": "файлов",
     "open_telegram": "Открыть в Telegram",
     "redownload": "Скачать снова",
-    "queuing": "Отправка…"
+    "queuing": "Отправка…",
+    "clip": "Клип",
+    "group": "Группа",
+    "retry_ok": "URL отправлен в бот — проверьте Telegram",
+    "retry_error": "Не удалось поставить в очередь",
+    "period_all": "Всё время"
   },
   "users": {
     "title": "Пользователи",

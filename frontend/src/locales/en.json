@@ -11,6 +11,7 @@
     "admin_stats": "Download Stats",
     "unauthorized": "Unauthorized",
     "admin": "Admin",
+    "my_stats": "My Stats",
     "chat_stats": "Chat Stats",
     "import_history": "Import History",
     "ai_settings": "AI Settings",
@@ -161,7 +162,12 @@
     "files": "files",
     "open_telegram": "Open in Telegram",
     "redownload": "Re-download",
-    "queuing": "Queuing…"
+    "queuing": "Queuing…",
+    "clip": "Clip",
+    "group": "Group",
+    "retry_ok": "URL sent to bot — check your Telegram",
+    "retry_error": "Failed to queue retry",
+    "period_all": "All time"
   },
   "users": {
     "title": "Users",

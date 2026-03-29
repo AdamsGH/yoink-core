@@ -131,23 +131,30 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Try existing valid token first
+      const tgInitData = tg?.initData
+
+      // Always re-exchange when we have live Telegram initData or a dev token —
+      // this guarantees the token reflects the current DB role, not a stale JWT claim.
+      // Fall back to cached token only when launched outside Telegram (e.g. browser preview).
+      const hasLiveSource = Boolean(devToken || tgInitData)
       const cached = localStorage.getItem(TOKEN_KEY)
-      if (cached && isTokenValid(cached)) {
+      if (!hasLiveSource && cached && isTokenValid(cached)) {
         setAuthState('ok')
         setIsReady(true)
         return
       }
 
-      // Exchange for a new token
+      // Exchange for a fresh token
       try {
         let token: string
-        const tgInitData = tg?.initData
 
         if (devToken) {
           token = await exchangeDevToken(devToken)
         } else if (tgInitData) {
           token = await exchangeTelegramUser(tgInitData)
+        } else if (cached && isTokenValid(cached)) {
+          // No live source but cached token exists — use it (shouldn't happen, but safe fallback)
+          token = cached
         } else {
           setAuthState('error')
           setIsReady(true)
