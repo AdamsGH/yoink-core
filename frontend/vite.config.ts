@@ -4,7 +4,6 @@ import { dirname, resolve } from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
-import tsconfigPaths from 'vite-tsconfig-paths'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -12,11 +11,11 @@ const __dirname = dirname(__filename)
 export default defineConfig({
   base: '/',
 
-  // tsconfigPaths handles @/* and @core/* for files inside frontend/src.
-  // resolve.alias is required for cross-package imports from plugin dirs
-  // (e.g. @core/lib/api-client imported from plugins/yoink-dl/frontend/src)
-  // because tsconfigPaths only applies its mappings to files within root.
-  plugins: [tailwindcss(), react(), tsconfigPaths()],
+  // resolve.alias is the single source of truth for all alias resolution at
+  // build time. tsconfigPaths is not used — it cannot resolve @core/* from
+  // plugin dirs (outside vite root), so alias covers everything.
+  // tsconfig.json paths entries stay in sync for tsc / editor support only.
+  plugins: [tailwindcss(), react()],
 
   resolve: {
     alias: {
