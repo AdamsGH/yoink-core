@@ -7,8 +7,13 @@ from sqlalchemy import DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-def _now() -> datetime:
+def utcnow() -> datetime:
+    """Current UTC datetime, suitable as SQLAlchemy column default."""
     return datetime.now(timezone.utc)
+
+
+# Internal alias used by mapped_column(default=...) calls
+_now = utcnow
 
 
 class Base(DeclarativeBase):

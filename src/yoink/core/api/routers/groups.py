@@ -317,7 +317,7 @@ async def get_group_photo(
 ) -> None:
     """
     Stream the group's Telegram chat photo. No auth required (used in <img src>).
-    Always fetches fresh file_id via getChat — survives photo changes.
+    Always fetches fresh file_id via getChat - survives photo changes.
     """
     from fastapi.responses import Response
 

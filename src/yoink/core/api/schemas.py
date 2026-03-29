@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
 from yoink.core.db.models import UserRole
-
-# CoreSettingsResponse was removed (it was empty). Use settings.SettingsResponse instead.
 
 
 class TelegramInitDataRequest(BaseModel):
@@ -74,3 +73,26 @@ class PaginatedResponse(BaseModel):
     offset: int
     limit: int
     has_more: bool
+
+
+class PluginActivityItem(BaseModel):
+    plugin: str
+    total: int
+    last_at: datetime | None = None
+    extra: dict[str, Any] = {}
+
+
+class UserStatsResponse(BaseModel):
+    """Per-user activity statistics aggregated from all registered plugins."""
+    total: int
+    this_week: int
+    today: int
+    top_domains: list[dict]
+    member_since: datetime
+    by_category: dict[str, int] = {}
+    dl_last_at: datetime | None = None
+    music_total: int = 0
+    music_last_at: datetime | None = None
+    ai_total: int = 0
+    ai_last_at: datetime | None = None
+    plugins: list[PluginActivityItem] = []
