@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 
 import { decodeJwt } from "../lib/utils"
-import { setLanguage, SUPPORTED_LANGUAGES, type SupportedLanguage } from '../lib/i18n'
+import { setLanguage, SUPPORTED_LANGUAGES, type SupportedLanguage } from '@core/lib/i18n'
 
 export type CatppuccinFlavor = 'latte' | 'frappe' | 'macchiato' | 'mocha'
 export type AuthState = 'loading' | 'ok' | 'error'

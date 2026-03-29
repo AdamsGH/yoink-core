@@ -3,29 +3,29 @@ import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
 
-import { usePermissions } from '@/hooks/usePermissions'
+import { usePermissions } from '@core/hooks/usePermissions'
 import { apiClient } from '@core/lib/api-client'
-import { useTelegram, type CatppuccinFlavor } from './TelegramProvider'
-import { UserPanel } from '../components/app/UserPanel'
-import { Button } from '../components/ui/button'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet'
+import { cn } from '@core/lib/utils'
+import { useTelegram, type CatppuccinFlavor } from '@core/layout/TelegramProvider'
+import type { UserRole } from '@core/types/api'
+import type { NavGroup, NavItem } from '@core/types/plugin'
+import { UserPanel } from '@core/components/app/UserPanel'
+import { Button } from '@core/components/ui/button'
+import {
+  Collapsible, CollapsibleContent, CollapsibleTrigger,
+} from '@core/components/ui/collapsible'
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
-} from '../components/ui/dropdown-menu'
+} from '@core/components/ui/dropdown-menu'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@core/components/ui/sheet'
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup,
   SidebarGroupContent, SidebarGroupLabel, SidebarHeader,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem,
   SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
   SidebarInset, SidebarProvider, SidebarRail, SidebarTrigger,
-} from '../components/ui/sidebar'
-import {
-  Collapsible, CollapsibleContent, CollapsibleTrigger,
-} from '../components/ui/collapsible'
-import { cn } from '../lib/utils'
-import type { UserRole } from '../types/api'
-import type { NavGroup, NavItem } from '../types/plugin'
+} from '@core/components/ui/sidebar'
 
 export type { NavItem, NavGroup }
 

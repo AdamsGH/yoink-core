@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Globe, HardDrive, Shield, Tag } from 'lucide-react'
 
-import { plugins } from '@/plugin-registry'
-import { usePermissions } from '@/hooks/usePermissions'
+import { plugins } from '@core/plugin-registry'
+import { usePermissions } from '@core/hooks/usePermissions'
+import { SettingRow } from '@core/components/app/SettingRow'
 import { apiClient } from '@core/lib/api-client'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
@@ -34,25 +35,6 @@ function SectionSkeleton() {
   )
 }
 
-function SettingRow({
-  label,
-  hint,
-  children,
-}: {
-  label: string
-  hint?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-4">
-      <div className="sm:w-48 shrink-0 pt-0.5">
-        <p className="text-sm font-medium leading-none">{label}</p>
-        {hint && <p className="mt-1 text-xs text-muted-foreground leading-snug">{hint}</p>}
-      </div>
-      <div className="flex-1 min-w-0">{children}</div>
-    </div>
-  )
-}
 
 export default function AdminBotSettingsPage() {
   const { t } = useTranslation()
@@ -157,7 +139,7 @@ export default function AdminBotSettingsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="px-4 pb-4">
-          <SettingRow
+          <SettingRow variant="stacked"
             label={t('bot_settings.access_label')}
             hint={t('bot_settings.access_hint')}
           >
@@ -186,7 +168,7 @@ export default function AdminBotSettingsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="px-4 pb-4">
-          <SettingRow
+          <SettingRow variant="stacked"
             label={t('bot_settings.browser_cookies_role')}
             hint={t('bot_settings.browser_cookies_hint')}
           >
@@ -233,7 +215,7 @@ export default function AdminBotSettingsPage() {
           </p>
         </CardHeader>
         <CardContent className="px-4 pb-4 space-y-4">
-          <SettingRow
+          <SettingRow variant="stacked"
             label={t('bot_settings.storage_chat_id')}
             hint={t('bot_settings.storage_chat_hint')}
           >
@@ -244,7 +226,7 @@ export default function AdminBotSettingsPage() {
             />
           </SettingRow>
           <Separator />
-          <SettingRow
+          <SettingRow variant="stacked"
             label={t('bot_settings.storage_thread_id')}
             hint={t('bot_settings.storage_thread_hint')}
           >

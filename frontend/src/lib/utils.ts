@@ -14,7 +14,8 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i] ?? 'B'}`
 }
 
-export function formatDate(iso: string, locale?: string): string {
+export function formatDate(iso: string | null | undefined, locale?: string): string {
+  if (!iso) return '-'
   return new Date(iso).toLocaleString(locale ?? navigator.language, {
     year: 'numeric',
     month: 'short',
@@ -22,6 +23,18 @@ export function formatDate(iso: string, locale?: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+/** Short date without time: "Jan 2025" */
+export function formatDateMonth(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short' })
+}
+
+/** Medium date without time: "Jan 5, 2025" */
+export function formatDateDay(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 export function decodeJwt(token: string): Record<string, unknown> {

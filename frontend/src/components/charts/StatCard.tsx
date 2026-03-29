@@ -19,6 +19,7 @@ export function StatCard({
   icon,
   variant = 'default',
   compact = false,
+  centered = false,
 }: {
   label: string
   value: string | number | null
@@ -26,9 +27,23 @@ export function StatCard({
   icon?: ReactNode
   variant?: Variant
   compact?: boolean
+  /** Center-aligned layout for user-facing stats pages (as opposed to admin dashboards). */
+  centered?: boolean
 }) {
   const display = value === null ? '-' : typeof value === 'number' ? value.toLocaleString() : value
   const isLong = typeof display === 'string' && display.length > 8
+  if (centered) {
+    return (
+      <div className="rounded-lg bg-muted px-3 py-3 text-center flex flex-col items-center gap-1 select-none">
+        {icon && <span className="text-muted-foreground">{icon}</span>}
+        <p className={cn('font-bold tabular-nums leading-none', isLong ? 'text-xl' : 'text-2xl', variantClass[variant])}>
+          {display}
+        </p>
+        <p className="text-xs text-muted-foreground">{label}</p>
+        {sub && <p className="text-xs text-muted-foreground/70">{sub}</p>}
+      </div>
+    )
+  }
   if (compact) {
     return (
       <Card className="select-none overflow-hidden">

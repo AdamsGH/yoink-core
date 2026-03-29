@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Navigate } from 'react-router'
 
-import { usePermissions } from '@/hooks/usePermissions'
+import { usePermissions } from '@core/hooks/usePermissions'
 
 interface ProtectedRouteProps {
   minRole: string
