@@ -119,18 +119,23 @@ async def _cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     status = await update.message.reply_html(
         t("admin.broadcast_started", lang, count=len(user_ids))
     )
-    sent = failed = 0
-    for uid in user_ids:
-        try:
-            await context.bot.send_message(uid, text)
-            sent += 1
-        except Exception:
-            failed += 1
-        await asyncio.sleep(0.05)
-    await status.edit_text(
-        t("admin.broadcast_done", lang, sent=sent, failed=failed),
-        parse_mode="HTML",
-    )
+
+    async def _do_broadcast() -> None:
+        sent = failed = 0
+        for uid in user_ids:
+            try:
+                await context.bot.send_message(uid, text)
+                sent += 1
+            except Exception:
+                failed += 1
+            # 20 msg/s per-chat limit; 0.05s gives comfortable headroom
+            await asyncio.sleep(0.05)
+        await status.edit_text(
+            t("admin.broadcast_done", lang, sent=sent, failed=failed),
+            parse_mode="HTML",
+        )
+
+    context.application.create_task(_do_broadcast())
 
 
 @require_access(_ADMIN_POLICY)

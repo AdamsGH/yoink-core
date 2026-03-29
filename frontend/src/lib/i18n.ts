@@ -1,11 +1,15 @@
 /**
  * i18next configuration for the Yoink frontend.
  *
- * Language is initialised from:
- *   1. Telegram WebApp's languageCode (injected by TelegramProvider)
- *   2. localStorage (persisted across sessions)
- *   3. Browser language
- *   4. Fallback: "en"
+ * Language is initialised from (priority order):
+ *   1. localStorage (explicit user choice, fastest)
+ *   2. Telegram CloudStorage (synced across devices, Bot API 9.0+)
+ *   3. Telegram WebApp languageCode (injected by TelegramProvider)
+ *   4. Browser language
+ *   5. Fallback: "en"
+ *
+ * On setLanguage() both localStorage and CloudStorage are written so the
+ * preference survives reinstalls and device switches.
  */
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
@@ -61,13 +65,34 @@ export function setLanguage(lang: SupportedLanguage): void {
   i18n.changeLanguage(lang)
   try {
     localStorage.setItem('yoink_lang', lang)
-    // DeviceStorage (Bot API 9.0) is available via Telegram.WebApp.CloudStorage.
-    // It persists across installs and devices, unlike localStorage.
-    // Migration path: call CloudStorage.setItem('lang', lang) here when
-    // @telegram-apps/sdk exposes a stable DeviceStorage wrapper.
-    // For now localStorage is sufficient and zero-latency.
   } catch {
     // ignore storage errors in restricted contexts
+  }
+  // CloudStorage persists across reinstalls and devices (Bot API 9.0+)
+  try {
+    window.Telegram?.WebApp?.CloudStorage?.setItem('lang', lang, () => {})
+  } catch {
+    // not available outside Telegram - silent
+  }
+}
+
+/**
+ * Read language from Telegram CloudStorage and apply it if different.
+ * Call this once after TelegramProvider mounts (async, non-blocking).
+ * localStorage takes priority - only syncs if localStorage is empty.
+ */
+export function syncLangFromCloud(): void {
+  try {
+    const stored = localStorage.getItem('yoink_lang')
+    if (stored) return // localStorage wins
+    window.Telegram?.WebApp?.CloudStorage?.getItem('lang', (err, value) => {
+      if (!err && value && SUPPORTED_LANGUAGES.includes(value as SupportedLanguage)) {
+        i18n.changeLanguage(value)
+        try { localStorage.setItem('yoink_lang', value) } catch { /* ignore */ }
+      }
+    })
+  } catch {
+    // CloudStorage not available - silent
   }
 }
 

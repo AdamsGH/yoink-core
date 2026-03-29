@@ -4,6 +4,8 @@ interface TelegramWebAppUser {
   last_name?: string
   username?: string
   language_code?: string
+  /** User's profile photo URL. Available since Bot API 8.1 if privacy settings allow. */
+  photo_url?: string
 }
 
 interface TelegramBottomButton {
@@ -49,6 +51,14 @@ interface TelegramHapticFeedback {
   selectionChanged(): this
 }
 
+interface TelegramCloudStorage {
+  setItem(key: string, value: string, callback?: (err: Error | null, stored: boolean) => void): this
+  getItem(key: string, callback: (err: Error | null, value: string) => void): this
+  getItems(keys: string[], callback: (err: Error | null, values: Record<string, string>) => void): this
+  removeItem(key: string, callback?: (err: Error | null, removed: boolean) => void): this
+  getKeys(callback: (err: Error | null, keys: string[]) => void): this
+}
+
 interface TelegramWebApp {
   ready: () => void
   expand: () => void
@@ -70,6 +80,7 @@ interface TelegramWebApp {
   SecondaryButton: TelegramBottomButton
   BackButton: TelegramBackButton
   HapticFeedback: TelegramHapticFeedback
+  CloudStorage: TelegramCloudStorage
 
   showAlert(message: string, callback?: () => void): void
   showConfirm(message: string, callback: (confirmed: boolean) => void): void

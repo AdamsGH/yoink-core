@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 
 import { decodeJwt } from "../lib/utils"
-import { setLanguage, SUPPORTED_LANGUAGES, type SupportedLanguage } from '@core/lib/i18n'
+import { setLanguage, syncLangFromCloud, SUPPORTED_LANGUAGES, type SupportedLanguage } from '@core/lib/i18n'
 
 export type CatppuccinFlavor = 'latte' | 'frappe' | 'macchiato' | 'mocha'
 export type AuthState = 'loading' | 'ok' | 'error'
@@ -106,6 +106,11 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     applyFlavor(flavor)
   }, [flavor])
+
+  useEffect(() => {
+    // Sync language from CloudStorage after Telegram SDK is ready (non-blocking)
+    syncLangFromCloud()
+  }, [])
 
   useEffect(() => {
     async function init() {
