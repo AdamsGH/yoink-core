@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquare, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
+import { MessageSquare, Pencil, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn } from '@core/lib/utils'
 import type { Group, GroupCreateRequest, GroupUpdateRequest, ThreadPolicy, UserRole } from '@core/types/api'
 import { Avatar, AvatarFallback, AvatarImage } from '@core/components/ui/avatar'
+import { InlineSelect } from '@core/components/app/InlineSelect'
 import { Badge } from '@core/components/ui/badge'
 import { SuccessBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
@@ -184,25 +185,13 @@ function AddThreadDialog({
           <div className="space-y-1.5">
             <Label>{t('groups.thread_id_label', { defaultValue: 'Thread' })}</Label>
             {namedAll.length > 0 && (
-              <Select
+              <InlineSelect
+                options={namedAll.map((tp) => ({ value: String(tp.thread_id), label: tp.name ?? String(tp.thread_id), meta: `#${tp.thread_id}` }))}
                 value={form.linkOrId}
-                onValueChange={(v) => {
-                  const existing = threads.find((tp) => String(tp.thread_id) === v)
-                  setForm((f) => ({ ...f, linkOrId: v, name: existing?.name ?? f.name }))
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={t('groups.choose_topic', { defaultValue: 'Choose a known topic...' })} />
-                </SelectTrigger>
-                <SelectContent>
-                  {namedAll.map((tp) => (
-                    <SelectItem key={tp.thread_id} value={String(tp.thread_id)}>
-                      {tp.name}
-                      <span className="ml-2 font-mono text-muted-foreground">#{tp.thread_id}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onValueChange={(v, opt) => setForm((f) => ({ ...f, linkOrId: v, name: opt.label }))}
+                placeholder={t('groups.choose_topic', { defaultValue: 'Choose a known topic...' })}
+                searchPlaceholder="Search topics..."
+              />
             )}
             <ManualThreadInput
               value={form.linkOrId}
@@ -261,6 +250,9 @@ function ThreadPoliciesDialog({
   const [threads, setThreads] = useState<ThreadPolicy[]>([])
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(false)
+  const [sessionAvailable, setSessionAvailable] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const sessionChecked = useRef(false)
 
   const load = () => {
     setLoading(true)
@@ -271,13 +263,25 @@ function ThreadPoliciesDialog({
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { if (open) load() }, [open])
+  useEffect(() => {
+    if (!open) return
+    load()
+    if (!sessionChecked.current) {
+      sessionChecked.current = true
+      apiClient.get<{ available: boolean }>('/threads/status')
+        .then((res) => setSessionAvailable(res.data.available))
+        .catch(() => {})
+    }
+  }, [open])
 
   const toggle = async (policy: ThreadPolicy) => {
+    setThreads((prev) => prev.map((tp) => tp.id === policy.id ? { ...tp, enabled: !tp.enabled } : tp))
     try {
       await apiClient.post(`/groups/${group.id}/threads`, { thread_id: policy.thread_id, name: policy.name, enabled: !policy.enabled })
-      load()
-    } catch { toast.error(t('common.load_error')) }
+    } catch {
+      setThreads((prev) => prev.map((tp) => tp.id === policy.id ? { ...tp, enabled: policy.enabled } : tp))
+      toast.error(t('common.load_error'))
+    }
   }
 
   const remove = async (policy: ThreadPolicy) => {
@@ -286,6 +290,19 @@ function ThreadPoliciesDialog({
       await apiClient.delete(`/groups/${group.id}/threads/${policy.id}`)
       load()
     } catch { toast.error(t('common.load_error')) }
+  }
+
+  const scan = async () => {
+    setScanning(true)
+    try {
+      const res = await apiClient.post<{ total_count: number; upserted: number }>(`/threads/scan/${group.id}`)
+      toast.success(`Synced ${res.data.upserted} of ${res.data.total_count} topics`)
+      load()
+    } catch {
+      toast.error(t('common.load_error'))
+    } finally {
+      setScanning(false)
+    }
   }
 
   return (
@@ -313,7 +330,7 @@ function ThreadPoliciesDialog({
               {t('groups.no_thread_policies', { defaultValue: 'No thread policies configured.' })}
             </div>
           ) : (
-            <div className="divide-y divide-border rounded-md border">
+            <div className="divide-y divide-border rounded-md border max-h-72 overflow-y-auto">
               {threads.map((tp) => (
                 <div key={tp.id} className="flex items-center gap-2 px-3 py-2.5">
                   <div className="min-w-0 flex-1">
@@ -339,8 +356,18 @@ function ThreadPoliciesDialog({
             </div>
           )}
 
-          <DialogFooter>
-            <Button variant="outline" className="w-full" onClick={() => setAdding(true)}>
+          <DialogFooter className="flex-row gap-2 sm:space-x-0">
+            {sessionAvailable && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" onClick={scan} disabled={scanning}>
+                    <RefreshCw className={cn('h-4 w-4', scanning && 'animate-spin')} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t('groups.scan_topics', { defaultValue: 'Sync topics from Telegram' })}</TooltipContent>
+              </Tooltip>
+            )}
+            <Button variant="outline" className="flex-1" onClick={() => setAdding(true)}>
               <Plus className="h-4 w-4 mr-2" />
               {t('groups.add_thread_title', { defaultValue: 'Add policy' })}
             </Button>

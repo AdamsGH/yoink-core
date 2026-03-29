@@ -90,6 +90,9 @@ Auth: `Authorization: Bearer <JWT>` obtained via `POST /api/v1/auth/token` (Tele
 | POST | /users/photos/sync | owner | Mass-backfill user avatars from Bot API |
 | GET | /groups | admin | List groups |
 | PATCH | /groups/{id} | admin | Update group settings |
+| GET | /groups/{id}/photo | public | Proxy group chat photo from Bot API |
+| POST | /groups/photos/sync | owner | Mass-backfill group photos via getChat |
+| GET | /threads/status | admin | Check if user-mode session is available |
 | GET | /settings | user | Personal settings |
 | PATCH | /settings | user | Update settings |
 | GET | /bot-settings | admin | Global bot settings |
@@ -208,7 +211,7 @@ Bot command menus are refreshed automatically on role change, grant/revoke, lang
 ### Web dashboard
 
 - `/admin/users` - user list with role management; Item list + bottom Drawer with tabs; user avatars loaded from photo proxy
-- `/admin/groups` - group list; Item list + Dialog for editing; thread policies via badge + ThreadPoliciesDialog
+- `/admin/groups` - group list; Item list + Dialog for editing; group chat avatar via photo proxy; thread policies via Settings2 icon (always visible, badge counter overlay); ThreadPoliciesDialog with scrollable list, optimistic toggle, Scan button (user-session only)
 - `/admin/permissions` - per-feature access matrix (grant/revoke per user)
 - `/admin/bot-settings` - accepts plugin-contributed sections via `PluginManifest.botSettingsSections`
 
@@ -246,6 +249,7 @@ Single Alembic chain covering core and all plugins:
 | 0024_cookie_content_hash | Cookie.content_hash String(64) + index |
 | 0025_cookie_session_key | Cookie.session_key String(256) + index |
 | 0026_user_settings_use_pool | dl_user_settings.use_pool_cookies BOOLEAN DEFAULT TRUE |
+| 0027_group_photo_url | photo_url column in groups table |
 
 ## Custom Bot API server
 

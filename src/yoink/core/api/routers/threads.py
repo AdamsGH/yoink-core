@@ -54,6 +54,18 @@ def _svc(request: Request) -> UserSessionService:
     return svc
 
 
+@router.get("/status", summary="Check if user-mode session is available (admin+)")
+async def session_status(
+    request: Request,
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> dict:
+    svc: UserSessionService | None = None
+    if hasattr(request.app.state, "bot_data"):
+        svc = request.app.state.bot_data.get("user_session")
+    available = svc is not None and svc.is_available()
+    return {"available": available}
+
+
 @router.get("/group/{group_id}", response_model=list[ThreadPolicyResponse])
 async def list_thread_policies(
     group_id: int,
