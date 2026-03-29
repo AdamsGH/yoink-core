@@ -307,59 +307,30 @@ async def remove_member_override(
     await session.commit()
 
 
-# Group photo
-
-_TG_FILE_ROOT = "/var/lib/telegram-bot-api/"
-_LOCAL_FILE_ROOT = "/app/data/tg-bot-api/"
+from yoink.core.api.photo import bot_api_params, resolve_chat_photo
 
 
 @router.get("/{group_id}/photo", summary="Proxy group chat photo")
 async def get_group_photo(
     group_id: int,
     request: Request,
-    session: AsyncSession = Depends(get_db),
 ) -> None:
-    """Stream the group's Telegram chat photo. No auth required (used in <img src>)."""
-    import httpx
-    import os
-    from pathlib import Path
+    """
+    Stream the group's Telegram chat photo. No auth required (used in <img src>).
+    Always fetches fresh file_id via getChat — survives photo changes.
+    """
     from fastapi.responses import Response
 
-    group = await session.get(Group, group_id)
-    if group is None or not group.photo_url:
+    bot_api_url, bot_token = bot_api_params(request.app.state)
+    data = await resolve_chat_photo(bot_api_url, bot_token, group_id)
+    if not data:
         raise NotFoundError("No photo available")
 
-    settings = request.app.state.settings
-    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
-    bot_token = settings.bot_token
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{bot_api_url}/bot{bot_token}/getFile", params={"file_id": group.photo_url})
-            r.raise_for_status()
-            data = r.json()
-            if not data.get("ok"):
-                raise NotFoundError("Failed to fetch photo")
-            file_path = data["result"].get("file_path", "")
-
-        if file_path.startswith(_TG_FILE_ROOT):
-            local = Path(_LOCAL_FILE_ROOT) / file_path[len(_TG_FILE_ROOT):]
-            if local.is_file():
-                return Response(
-                    content=local.read_bytes(),
-                    media_type="image/jpeg",
-                    headers={"Cache-Control": "public, max-age=3600"},
-                )
-
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{bot_api_url}/file/bot{bot_token}/{file_path}")
-            r.raise_for_status()
-            ct = r.headers.get("content-type", "image/jpeg")
-            return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
-    except NotFoundError:
-        raise
-    except Exception:
-        raise NotFoundError("Failed to fetch photo")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.post("/photos/sync", summary="Backfill group photos via getChat (owner)")

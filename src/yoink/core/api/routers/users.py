@@ -373,64 +373,28 @@ async def sync_user_photos(
     return {"total": len(users_without_photo), "updated": updated}
 
 
-_TG_FILE_ROOT = "/var/lib/telegram-bot-api/"
-_LOCAL_FILE_ROOT = "/app/data/tg-bot-api/"
+from yoink.core.api.photo import bot_api_params, resolve_chat_photo
 
 
 @router.get("/{user_id}/photo", summary="Proxy user profile photo")
 async def get_user_photo(
     user_id: int,
     request: Request,
-    session: AsyncSession = Depends(get_db),
 ):
-    """Stream the user's Telegram profile photo."""
-    import httpx
-    from pathlib import Path
+    """
+    Stream user's current Telegram profile photo.
+    Always calls getChat for a fresh file_id — survives photo changes.
+    No DB lookup needed: photo is fetched live from Bot API.
+    """
     from fastapi.responses import Response
 
-    user = await session.get(User, user_id)
-    if user is None or not user.photo_url:
+    bot_api_url, bot_token = bot_api_params(request.app.state)
+    data = await resolve_chat_photo(bot_api_url, bot_token, user_id)
+    if not data:
         raise NotFoundError("No photo available")
 
-    if user.photo_url.startswith("http"):
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(user.photo_url)
-                r.raise_for_status()
-                ct = r.headers.get("content-type", "image/jpeg")
-                return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
-        except Exception:
-            raise NotFoundError("Failed to fetch photo")
-
-    import os
-    settings = request.app.state.settings
-    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
-    bot_token = settings.bot_token
-
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{bot_api_url}/bot{bot_token}/getFile", params={"file_id": user.photo_url})
-            r.raise_for_status()
-            data = r.json()
-            if not data.get("ok"):
-                raise NotFoundError("Failed to fetch photo")
-            file_path = data["result"].get("file_path", "")
-
-        if file_path.startswith(_TG_FILE_ROOT):
-            local = Path(_LOCAL_FILE_ROOT) / file_path[len(_TG_FILE_ROOT):]
-            if local.is_file():
-                return Response(
-                    content=local.read_bytes(),
-                    media_type="image/jpeg",
-                    headers={"Cache-Control": "public, max-age=3600"},
-                )
-
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{bot_api_url}/file/bot{bot_token}/{file_path}")
-            r.raise_for_status()
-            ct = r.headers.get("content-type", "image/jpeg")
-            return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
-    except NotFoundError:
-        raise
-    except Exception:
-        raise NotFoundError("Failed to fetch photo")
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
