@@ -64,6 +64,7 @@ export interface Group {
   nsfw_allowed: boolean
   storage_chat_id: number | null
   storage_thread_id: number | null
+  photo_url: string | null
   created_at: string
   thread_policies: ThreadPolicy[]
 }

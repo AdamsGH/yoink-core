@@ -1,7 +1,7 @@
 """Group management endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,6 +77,7 @@ def _group_response(group: Group) -> GroupResponse:
         nsfw_allowed=group.nsfw_allowed,
         storage_chat_id=group.storage_chat_id,
         storage_thread_id=group.storage_thread_id,
+        photo_url=group.photo_url,
         created_at=group.created_at,
         thread_policies=_thread_policies(group),
     )
@@ -304,3 +305,96 @@ async def remove_member_override(
         raise NotFoundError("Override not found")
     await session.delete(policy)
     await session.commit()
+
+
+# Group photo
+
+_TG_FILE_ROOT = "/var/lib/telegram-bot-api/"
+_LOCAL_FILE_ROOT = "/app/data/tg-bot-api/"
+
+
+@router.get("/{group_id}/photo", summary="Proxy group chat photo")
+async def get_group_photo(
+    group_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    """Stream the group's Telegram chat photo. No auth required (used in <img src>)."""
+    import httpx
+    import os
+    from pathlib import Path
+    from fastapi.responses import Response
+
+    group = await session.get(Group, group_id)
+    if group is None or not group.photo_url:
+        raise NotFoundError("No photo available")
+
+    settings = request.app.state.settings
+    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
+    bot_token = settings.bot_token
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{bot_api_url}/bot{bot_token}/getFile", params={"file_id": group.photo_url})
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("ok"):
+                raise NotFoundError("Failed to fetch photo")
+            file_path = data["result"].get("file_path", "")
+
+        if file_path.startswith(_TG_FILE_ROOT):
+            local = Path(_LOCAL_FILE_ROOT) / file_path[len(_TG_FILE_ROOT):]
+            if local.is_file():
+                return Response(
+                    content=local.read_bytes(),
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=3600"},
+                )
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{bot_api_url}/file/bot{bot_token}/{file_path}")
+            r.raise_for_status()
+            ct = r.headers.get("content-type", "image/jpeg")
+            return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
+    except NotFoundError:
+        raise
+    except Exception:
+        raise NotFoundError("Failed to fetch photo")
+
+
+@router.post("/photos/sync", summary="Backfill group photos via getChat (owner)")
+async def sync_group_photos(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.owner)),
+):
+    """Fetch chat photos for all groups missing them via Bot API getChat."""
+    import httpx
+    import os
+
+    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
+    bot_token = request.app.state.settings.bot_token
+
+    groups_without_photo = (await session.execute(
+        select(Group).where(Group.photo_url.is_(None))
+    )).scalars().all()
+
+    updated = 0
+    for g in groups_without_photo:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(f"{bot_api_url}/bot{bot_token}/getChat", params={"chat_id": g.id})
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                if not data.get("ok"):
+                    continue
+                photo = data["result"].get("photo")
+                if photo and photo.get("big_file_id"):
+                    g.photo_url = photo["big_file_id"]
+                    updated += 1
+        except Exception:
+            continue
+
+    await session.commit()
+    return {"total": len(groups_without_photo), "updated": updated}

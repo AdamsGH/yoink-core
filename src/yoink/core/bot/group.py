@@ -49,6 +49,14 @@ async def _lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     return "en"
 
 
+def _chat_photo_url(chat) -> str | None:
+    """Extract big_file_id from a Chat object if available."""
+    try:
+        return chat.photo.big_file_id if chat.photo else None
+    except Exception:
+        return None
+
+
 async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_chat:
         return
@@ -71,7 +79,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     group_id = chat.id
 
     if sub == "info":
-        group = await repo.upsert(group_id=group_id, title=chat.title)
+        group = await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
         status = t("common.enabled", lang) if group.enabled else t("common.disabled", lang)
         nsfw_status = t("group.nsfw_on", lang) if group.nsfw_allowed else t("group.nsfw_off", lang)
         await update.message.reply_html(
@@ -85,7 +93,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     elif sub in ("enable", "disable"):
         val = sub == "enable"
-        await repo.upsert(group_id=group_id, title=chat.title)
+        await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
         await repo.update(group_id=group_id, enabled=val)
         msg = t("group.enabled", lang) if val else t("group.disabled", lang)
         await update.message.reply_text(msg)
@@ -95,7 +103,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text(t("group.usage_allow_pm", lang))
             return
         val = args[1].lower() == "on"
-        await repo.upsert(group_id=group_id, title=chat.title)
+        await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
         await repo.update(group_id=group_id, allow_pm=val)
         state = t("common.enabled", lang) if val else t("common.disabled", lang)
         await update.message.reply_text(t("group.allow_pm_changed", lang, state=state.lower()))
@@ -105,7 +113,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text(t("group.usage_nsfw", lang))
             return
         val = args[1].lower() == "on"
-        await repo.upsert(group_id=group_id, title=chat.title)
+        await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
         await repo.update(group_id=group_id, nsfw_allowed=val)
         await update.message.reply_text(t("group.nsfw_on" if val else "group.nsfw_off", lang))
 
@@ -115,7 +123,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text(t("group.usage_role", lang, roles=roles))
             return
         role = UserRole(args[1].lower())
-        await repo.upsert(group_id=group_id, title=chat.title)
+        await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
         await repo.update(group_id=group_id, auto_grant_role=role)
         await update.message.reply_html(t("group.role_set", lang, role=role.value))
 
@@ -144,7 +152,7 @@ async def _cmd_thread(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     sub = args[0].lower() if args else "list"
     group_id = chat.id
 
-    await repo.upsert(group_id=group_id, title=chat.title)
+    await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
 
     if sub == "list":
         policies = await repo.list_thread_policies(group_id)

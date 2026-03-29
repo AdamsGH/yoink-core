@@ -62,6 +62,7 @@ class GroupResponse(BaseModel):
     nsfw_allowed: bool
     storage_chat_id: int | None = None
     storage_thread_id: int | None = None
+    photo_url: str | None = None
     created_at: datetime
     thread_policies: list[ThreadPolicyInline] = []
 

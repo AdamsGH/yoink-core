@@ -69,6 +69,7 @@ class Group(Base):
     nsfw_allowed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     storage_chat_id: Mapped[int | None] = mapped_column(BigInteger)
     storage_thread_id: Mapped[int | None] = mapped_column(BigInteger)
+    photo_url: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
     thread_policies: Mapped[list[ThreadPolicy]] = relationship(

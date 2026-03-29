@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
+import { MessageSquare, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn } from '@core/lib/utils'
 import type { Group, GroupCreateRequest, GroupUpdateRequest, ThreadPolicy, UserRole } from '@core/types/api'
+import { Avatar, AvatarFallback, AvatarImage } from '@core/components/ui/avatar'
 import { Badge } from '@core/components/ui/badge'
 import { SuccessBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
@@ -380,37 +381,40 @@ function GroupCard({
     <>
       <div className="px-3 py-1">
         <Item size="sm" className="py-2.5 rounded-none border-0">
-          <ItemMedia
-            variant="icon"
-            className={cn(
-              'size-8 rounded-md',
-              group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
-            )}
-          >
-            <MessageSquare className="size-4" />
+          <ItemMedia variant="icon" className="size-8 shrink-0">
+            <Avatar className={cn('size-8 rounded-md', !group.photo_url && (group.enabled ? 'bg-green-500/10' : 'bg-muted'))}>
+              <AvatarImage src={group.photo_url ? `${apiClient.defaults.baseURL}/groups/${group.id}/photo` : undefined} className="rounded-md object-cover" />
+              <AvatarFallback className={cn('size-8 rounded-md text-xs font-medium', group.enabled ? 'text-green-600' : 'text-muted-foreground')}>
+                <MessageSquare className="size-4" />
+              </AvatarFallback>
+            </Avatar>
           </ItemMedia>
-          <ItemContent>
-            <ItemTitle>
+          <ItemContent className="gap-0">
+            <ItemTitle className="leading-snug">
               {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
             </ItemTitle>
-            <ItemDescription>
+            <ItemDescription className="mt-0 leading-snug">
               <span className="font-mono text-[11px]">{group.id}</span>
               {group.nsfw_allowed && <span className="text-amber-500"> · NSFW</span>}
             </ItemDescription>
           </ItemContent>
           <ItemActions>
-            {threadCount !== null && threadCount > 0 && (
-              <Badge
-                variant="secondary"
-                className="cursor-pointer text-[10px] tabular-nums"
-                onClick={() => setShowThreads(true)}
-              >
-                {threadCount} thr
-              </Badge>
-            )}
             {group.enabled
               ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
               : <Badge variant="outline">{t('groups.disabled')}</Badge>}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="relative h-8 w-8" onClick={() => setShowThreads(true)}>
+                  <Settings2 className="h-3.5 w-3.5" />
+                  {threadCount !== null && threadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted text-[9px] font-medium tabular-nums text-muted-foreground">
+                      {threadCount}
+                    </span>
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t('groups.thread_policies')}</TooltipContent>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onEdit}>
@@ -549,7 +553,8 @@ export default function AdminGroupsPage() {
                 {edit.isNew && (
                   <div className="space-y-1.5">
                     <Label htmlFor="group-id">{t('groups.field_chat_id')}</Label>
-                    <Input id="group-id" type="number" placeholder="-100123456789"
+                    <Input id="group-id" inputMode="numeric" placeholder="-100123456789"
+                      className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       value={edit.newId} onChange={(e) => setEdit({ ...edit, newId: e.target.value })} />
                   </div>
                 )}
@@ -615,8 +620,9 @@ export default function AdminGroupsPage() {
                         <Label htmlFor="storage-chat" className="text-xs">{t('groups.storage_chat_id')}</Label>
                         <Input
                           id="storage-chat"
-                          type="number"
+                          inputMode="numeric"
                           placeholder="-100…"
+                          className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           value={edit.storage_chat_id}
                           onChange={(e) => setEdit({ ...edit, storage_chat_id: e.target.value })}
                         />
@@ -625,8 +631,9 @@ export default function AdminGroupsPage() {
                         <Label htmlFor="storage-thread" className="text-xs">{t('groups.storage_thread_id')}</Label>
                         <Input
                           id="storage-thread"
-                          type="number"
+                          inputMode="numeric"
                           placeholder="Thread ID"
+                          className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           value={edit.storage_thread_id}
                           onChange={(e) => setEdit({ ...edit, storage_thread_id: e.target.value })}
                         />

@@ -20,6 +20,7 @@ class GroupRepo(BaseRepo[Group]):
         self,
         group_id: int,
         title: str | None = None,
+        photo_url: str | None = None,
         enabled: bool = True,
         auto_grant_role: UserRole = UserRole.user,
         allow_pm: bool = True,
@@ -30,13 +31,17 @@ class GroupRepo(BaseRepo[Group]):
                 group = Group(
                     id=group_id,
                     title=title,
+                    photo_url=photo_url,
                     enabled=enabled,
                     auto_grant_role=auto_grant_role,
                     allow_pm=allow_pm,
                 )
                 s.add(group)
-            elif title is not None:
-                group.title = title
+            else:
+                if title is not None:
+                    group.title = title
+                if photo_url is not None:
+                    group.photo_url = photo_url
             await s.commit()
             await s.refresh(group)
             return group
