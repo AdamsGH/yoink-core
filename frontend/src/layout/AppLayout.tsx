@@ -315,7 +315,8 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
       </SidebarProvider>
 
       {/* Mobile bottom nav — max 5 slots total */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 flex border-t bg-background md:hidden">
+      {/* right-scroll-bar-position: react-remove-scroll-bar compensates fixed elements with this class */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 flex border-t bg-background md:hidden right-scroll-bar-position">
         {pinnedItems.map((item) => {
           const isActive = location.pathname === item.path
           return (

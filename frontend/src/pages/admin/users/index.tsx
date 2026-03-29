@@ -35,21 +35,21 @@ function userInitials(user: User): string {
 }
 
 const GRADIENT_BY_ROLE: Record<string, string> = {
-  owner: 'from-amber-500/20 to-amber-600/5',
-  admin: 'from-blue-500/20 to-blue-600/5',
-  moderator: 'from-purple-500/20 to-purple-600/5',
-  user: 'from-primary/10 to-primary/5',
-  restricted: 'from-orange-500/20 to-orange-600/5',
-  banned: 'from-destructive/20 to-destructive/5',
+  owner: 'from-amber-500/30 via-amber-500/10 to-transparent',
+  admin: 'from-blue-500/30 via-blue-500/10 to-transparent',
+  moderator: 'from-purple-500/25 via-purple-500/8 to-transparent',
+  user: 'from-primary/20 via-primary/8 to-transparent',
+  restricted: 'from-orange-500/25 via-orange-500/8 to-transparent',
+  banned: 'from-destructive/25 via-destructive/8 to-transparent',
 }
 
 const RING_BY_ROLE: Record<string, string> = {
-  owner: 'ring-amber-500/50',
-  admin: 'ring-blue-500/50',
-  moderator: 'ring-purple-500/50',
-  user: 'ring-primary/30',
-  restricted: 'ring-orange-500/50',
-  banned: 'ring-destructive/50',
+  owner: 'ring-amber-500/60',
+  admin: 'ring-blue-500/60',
+  moderator: 'ring-purple-500/60',
+  user: 'ring-primary/40',
+  restricted: 'ring-orange-500/60',
+  banned: 'ring-destructive/60',
 }
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
@@ -287,26 +287,26 @@ function UserDrawer({
 
   return (
     <Drawer open={!!user} onOpenChange={(o) => !o && onClose()}>
-      <DrawerContent className="max-h-[85vh]">
+      <DrawerContent className="max-h-[85vh] border-0">
         {user && (
           <>
-            <div className={cn('bg-gradient-to-b px-4 pt-5 pb-4', GRADIENT_BY_ROLE[user.role] ?? GRADIENT_BY_ROLE.user)}>
-              <div className="flex items-center gap-3">
-                <Avatar className={cn('size-14 ring-2', RING_BY_ROLE[user.role] ?? RING_BY_ROLE.user)}>
+            <div className={cn('bg-gradient-to-b -mt-7 pt-7 px-4 pb-5 border-b border-border/50 rounded-t-[10px]', GRADIENT_BY_ROLE[user.role] ?? GRADIENT_BY_ROLE.user)}>
+              <div className="flex items-center gap-4">
+                <Avatar className={cn('size-16 ring-2 shadow-lg', RING_BY_ROLE[user.role] ?? RING_BY_ROLE.user)}>
                   <AvatarImage src={userPhotoUrl(user)} />
-                  <AvatarFallback className={cn('text-lg font-semibold', roleMediaColor(user.role))}>
+                  <AvatarFallback className={cn('text-xl font-bold', roleMediaColor(user.role))}>
                     {userInitials(user)}
                   </AvatarFallback>
                 </Avatar>
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 space-y-1">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base font-semibold truncate">{user.first_name ?? String(user.id)}</h3>
+                    <h3 className="text-lg font-semibold truncate leading-tight">{user.first_name ?? String(user.id)}</h3>
                     <RoleBadge role={user.role} />
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {user.username && <span className="mr-2">@{user.username}</span>}
-                    <span className="font-mono">#{user.id}</span>
-                  </p>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    {user.username && <span>@{user.username}</span>}
+                    <span className="font-mono text-xs">#{user.id}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -422,12 +422,17 @@ function UserDrawer({
                 </TabsContent>
 
                 <TabsContent value="edit" className="px-4 py-3 space-y-4 mt-0">
+                  {user.role === 'owner' && (
+                    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                      {t('users.owner_protected', { defaultValue: 'Owner role is assigned via config and cannot be changed.' })}
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     <Label>{t('users.col_role')}</Label>
-                    <Select value={editRole} onValueChange={(v) => setEditRole(v as UserRole)}>
+                    <Select value={editRole} onValueChange={(v) => setEditRole(v as UserRole)} disabled={user.role === 'owner'}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {ROLES.filter((r) => r !== 'owner').map((r) => (
+                        {(user.role === 'owner' ? ROLES : ROLES.filter((r) => r !== 'owner')).map((r) => (
                           <SelectItem key={r} value={r}>{r}</SelectItem>
                         ))}
                       </SelectContent>
@@ -444,12 +449,14 @@ function UserDrawer({
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label>{t('users.ban_until_label')}</Label>
-                    <BanDatePicker value={banUntil} onChange={setBanUntil} />
-                    <p className="text-xs text-muted-foreground">{t('users.ban_until_hint')}</p>
-                  </div>
-                  <Button className="w-full" onClick={saveUser} disabled={saving}>
+                  {user.role !== 'owner' && (
+                    <div className="space-y-1.5">
+                      <Label>{t('users.ban_until_label')}</Label>
+                      <BanDatePicker value={banUntil} onChange={setBanUntil} />
+                      <p className="text-xs text-muted-foreground">{t('users.ban_until_hint')}</p>
+                    </div>
+                  )}
+                  <Button className="w-full" onClick={saveUser} disabled={saving || user.role === 'owner'}>
                     {saving ? t('common.saving') : t('common.save')}
                   </Button>
                 </TabsContent>
@@ -468,58 +475,58 @@ export default function AdminUsersPage() {
   const [items, setItems] = useState<User[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [fetching, setFetching] = useState(false)
 
   const [search, setSearch] = useState('')
-  const [draftSearch, setDraftSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [filters, setFilters] = useState<{ role: string; status: StatusFilter }>({ role: 'all', status: 'all' })
-  const [draftFilters, setDraftFilters] = useState(filters)
   const [showFilters, setShowFilters] = useState(false)
 
   const [viewed, setViewed] = useState<User | null>(null)
 
-  const hasActive = search !== '' || filters.role !== 'all' || filters.status !== 'all'
+  const hasActive = debouncedSearch !== '' || filters.role !== 'all' || filters.status !== 'all'
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  const load = async (p = page) => {
-    setLoading(true)
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setDebouncedSearch(search)
+      setPage(1)
+    }, 300)
+    return () => clearTimeout(id)
+  }, [search])
+
+  const load = async (p: number, q: string, f: typeof filters) => {
+    setFetching(true)
     try {
       const params: Record<string, string | number> = { offset: (p - 1) * PAGE_SIZE, limit: PAGE_SIZE }
-      if (search) params.search = search
-      if (filters.role !== 'all') params.role = filters.role
-      if (filters.status !== 'all') params.status = filters.status
+      if (q) params.search = q
+      if (f.role !== 'all') params.role = f.role
+      if (f.status !== 'all') params.status = f.status
       const res = await apiClient.get<{ items: User[]; total: number }>('/users', { params })
       setItems(res.data.items)
       setTotal(res.data.total)
     } catch {
       toast.error(t('common.load_error'))
     } finally {
-      setLoading(false)
+      setFetching(false)
+      setInitialLoading(false)
     }
   }
 
-  useEffect(() => { void load(page) }, [page, search, filters])
-
-  const apply = () => {
-    setSearch(draftSearch)
-    setFilters(draftFilters)
-    setPage(1)
-    setShowFilters(false)
-  }
+  useEffect(() => { void load(page, debouncedSearch, filters) }, [page, debouncedSearch, filters])
 
   const resetFilters = () => {
-    const empty = { role: 'all', status: 'all' as StatusFilter }
-    setDraftSearch(''); setSearch('')
-    setDraftFilters(empty); setFilters(empty)
+    setSearch(''); setDebouncedSearch('')
+    setFilters({ role: 'all', status: 'all' })
     setPage(1)
-    setShowFilters(false)
   }
 
   const quickBan = async (u: User) => {
     try {
       await apiClient.patch(`/users/${u.id}`, { role: 'banned' } as UserUpdateRequest)
       toast.success(t('users.banned'))
-      void load(page)
+      void load(page, debouncedSearch, filters)
     } catch { toast.error(t('users.update_error')) }
   }
 
@@ -527,7 +534,7 @@ export default function AdminUsersPage() {
     try {
       await apiClient.patch(`/users/${u.id}`, { role: 'user' } as UserUpdateRequest)
       toast.success(t('users.unbanned'))
-      void load(page)
+      void load(page, debouncedSearch, filters)
     } catch { toast.error(t('users.update_error')) }
   }
 
@@ -544,36 +551,34 @@ export default function AdminUsersPage() {
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Users className="h-4 w-4 text-muted-foreground" />
-                {loading
+                {initialLoading
                   ? t('users.title', { defaultValue: 'Users' })
                   : `${total.toLocaleString()} ${t('users.count')}`}
-                {hasActive && <span className="text-xs text-muted-foreground">(filtered)</span>}
               </CardTitle>
               <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setShowFilters((v) => !v)}>
                 {t('users.filter_toggle')}
                 {hasActive && <span className="ml-1.5 h-1.5 w-1.5 rounded-full bg-primary inline-block" />}
               </Button>
             </div>
+            <Input
+              placeholder={t('users.search_placeholder')}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-9 mt-2"
+            />
           </CardHeader>
 
           {showFilters && (
             <div className="px-4 pb-3 space-y-2 border-t pt-3">
-              <Input
-                placeholder={t('users.search_placeholder')}
-                value={draftSearch}
-                onChange={(e) => setDraftSearch(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && apply()}
-                className="h-9"
-              />
               <div className="grid grid-cols-2 gap-2">
-                <Select value={draftFilters.role} onValueChange={(v) => setDraftFilters((f) => ({ ...f, role: v }))}>
+                <Select value={filters.role} onValueChange={(v) => { setFilters((f) => ({ ...f, role: v })); setPage(1) }}>
                   <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">{t('users.filter_all_roles')}</SelectItem>
                     {ROLES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Select value={draftFilters.status} onValueChange={(v) => setDraftFilters((f) => ({ ...f, status: v as StatusFilter }))}>
+                <Select value={filters.status} onValueChange={(v) => { setFilters((f) => ({ ...f, status: v as StatusFilter })); setPage(1) }}>
                   <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">{t('users.filter_all')}</SelectItem>
@@ -583,17 +588,16 @@ export default function AdminUsersPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Button size="sm" className="h-9 w-full" onClick={apply}>{t('users.filter_apply')}</Button>
-                <Button size="sm" variant="outline" className="h-9 w-full" onClick={resetFilters} disabled={!hasActive}>
+              {hasActive && (
+                <Button size="sm" variant="outline" className="h-8 w-full text-xs" onClick={resetFilters}>
                   {t('users.filter_clear')}
                 </Button>
-              </div>
+              )}
             </div>
           )}
 
-          <CardContent className="p-0">
-            {loading ? (
+          <CardContent className={cn('p-0 transition-opacity duration-150', fetching && !initialLoading && 'opacity-60')}>
+            {initialLoading ? (
               <div className="divide-y divide-border px-3 py-1">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <div key={i} className="flex items-center gap-3 py-2.5">

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
+import { MessageSquare, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn } from '@core/lib/utils'
@@ -9,7 +9,6 @@ import { Badge } from '@core/components/ui/badge'
 import { SuccessBadge } from '@core/components/app/StatusBadge'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@core/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -248,7 +247,15 @@ function AddThreadDialog({
   )
 }
 
-function ThreadRows({ groupId }: { groupId: number }) {
+function ThreadPoliciesDialog({
+  open,
+  onClose,
+  group,
+}: {
+  open: boolean
+  onClose: () => void
+  group: Group
+}) {
   const { t } = useTranslation()
   const [threads, setThreads] = useState<ThreadPolicy[]>([])
   const [loading, setLoading] = useState(true)
@@ -257,17 +264,17 @@ function ThreadRows({ groupId }: { groupId: number }) {
   const load = () => {
     setLoading(true)
     apiClient
-      .get<ThreadPolicy[]>(`/groups/${groupId}/threads`)
+      .get<ThreadPolicy[]>(`/groups/${group.id}/threads`)
       .then((res) => setThreads(res.data))
       .catch(() => toast.error(t('common.load_error')))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [groupId])
+  useEffect(() => { if (open) load() }, [open])
 
   const toggle = async (policy: ThreadPolicy) => {
     try {
-      await apiClient.post(`/groups/${groupId}/threads`, { thread_id: policy.thread_id, name: policy.name, enabled: !policy.enabled })
+      await apiClient.post(`/groups/${group.id}/threads`, { thread_id: policy.thread_id, name: policy.name, enabled: !policy.enabled })
       load()
     } catch { toast.error(t('common.load_error')) }
   }
@@ -275,35 +282,24 @@ function ThreadRows({ groupId }: { groupId: number }) {
   const remove = async (policy: ThreadPolicy) => {
     if (!confirm(`Remove policy for "${threadLabel(policy)}"?`)) return
     try {
-      await apiClient.delete(`/groups/${groupId}/threads/${policy.id}`)
+      await apiClient.delete(`/groups/${group.id}/threads/${policy.id}`)
       load()
     } catch { toast.error(t('common.load_error')) }
   }
 
   return (
     <>
-      <Collapsible defaultOpen={false}>
-        <div className="px-4 py-2.5 flex items-center justify-between gap-2 border-t bg-muted/30">
-          <CollapsibleTrigger className="flex items-center gap-2 group flex-1 min-w-0">
-            <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=closed]:-rotate-90" />
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              {loading
-                ? t('groups.thread_policies')
-                : `${threads.length} ${t('groups.thread_policies').toLowerCase()}`}
-            </span>
-          </CollapsibleTrigger>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button size="icon" className="h-7 w-7 shrink-0" onClick={() => setAdding(true)}>
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{t('groups.add_thread_title', { defaultValue: 'Add thread policy' })}</TooltipContent>
-          </Tooltip>
-        </div>
-        <CollapsibleContent>
+      <Dialog open={open && !adding} onOpenChange={(o) => !o && onClose()}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('groups.thread_policies')}</DialogTitle>
+            <DialogDescription>
+              {group.title ?? group.id}
+            </DialogDescription>
+          </DialogHeader>
+
           {loading ? (
-            <div className="px-4 py-3 space-y-2">
+            <div className="space-y-2 py-2">
               {[1, 2].map((i) => (
                 <div key={i} className="flex items-center gap-3">
                   <Skeleton className="h-4 flex-1" />
@@ -312,52 +308,130 @@ function ThreadRows({ groupId }: { groupId: number }) {
               ))}
             </div>
           ) : threads.length === 0 ? (
-            <div className="px-4 py-4 text-center text-xs text-muted-foreground">
+            <div className="py-6 text-center text-sm text-muted-foreground">
               {t('groups.no_thread_policies', { defaultValue: 'No thread policies configured.' })}
             </div>
           ) : (
-            <div className="divide-y divide-border px-3 py-1">
+            <div className="divide-y divide-border rounded-md border">
               {threads.map((tp) => (
-                <Item key={tp.id} size="sm" className="py-2 rounded-none border-0">
-                  <ItemContent>
-                    <ItemTitle className="text-xs">
-                      {threadLabel(tp)}
-                      {tp.name && tp.thread_id != null && (
-                        <span className="ml-1.5 font-mono text-muted-foreground font-normal">#{tp.thread_id}</span>
-                      )}
-                    </ItemTitle>
-                  </ItemContent>
-                  <ItemActions>
-                    {tp.enabled
-                      ? <SuccessBadge className="text-[10px]">allowed</SuccessBadge>
-                      : <Badge variant="outline" className="text-[10px]">denied</Badge>}
-                    <Switch
-                      checked={tp.enabled}
-                      onCheckedChange={() => toggle(tp)}
-                      className="scale-75"
-                    />
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => remove(tp)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>{t('common.delete')}</TooltipContent>
-                    </Tooltip>
-                  </ItemActions>
-                </Item>
+                <div key={tp.id} className="flex items-center gap-2 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{threadLabel(tp)}</p>
+                    {tp.name && tp.thread_id != null && (
+                      <p className="font-mono text-xs text-muted-foreground">#{tp.thread_id}</p>
+                    )}
+                  </div>
+                  <Switch
+                    checked={tp.enabled}
+                    onCheckedChange={() => toggle(tp)}
+                  />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => remove(tp)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t('common.delete')}</TooltipContent>
+                  </Tooltip>
+                </div>
               ))}
             </div>
           )}
-        </CollapsibleContent>
-      </Collapsible>
+
+          <DialogFooter>
+            <Button variant="outline" className="w-full" onClick={() => setAdding(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              {t('groups.add_thread_title', { defaultValue: 'Add policy' })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AddThreadDialog
         open={adding}
         onClose={() => setAdding(false)}
-        groupId={groupId}
+        groupId={group.id}
         threads={threads}
-        onDone={load}
+        onDone={() => { setAdding(false); load() }}
+      />
+    </>
+  )
+}
+
+function GroupCard({
+  group,
+  onEdit,
+}: {
+  group: Group
+  onEdit: () => void
+}) {
+  const { t } = useTranslation()
+  const [threadCount, setThreadCount] = useState<number | null>(null)
+  const [showThreads, setShowThreads] = useState(false)
+
+  useEffect(() => {
+    apiClient
+      .get<ThreadPolicy[]>(`/groups/${group.id}/threads`)
+      .then((res) => setThreadCount(res.data.length))
+      .catch(() => {})
+  }, [group.id])
+
+  return (
+    <>
+      <div className="px-3 py-1">
+        <Item size="sm" className="py-2.5 rounded-none border-0">
+          <ItemMedia
+            variant="icon"
+            className={cn(
+              'size-8 rounded-md',
+              group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
+            )}
+          >
+            <MessageSquare className="size-4" />
+          </ItemMedia>
+          <ItemContent>
+            <ItemTitle>
+              {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
+            </ItemTitle>
+            <ItemDescription>
+              <span className="font-mono text-[11px]">{group.id}</span>
+              {group.nsfw_allowed && <span className="text-amber-500"> · NSFW</span>}
+            </ItemDescription>
+          </ItemContent>
+          <ItemActions>
+            {threadCount !== null && threadCount > 0 && (
+              <Badge
+                variant="secondary"
+                className="cursor-pointer text-[10px] tabular-nums"
+                onClick={() => setShowThreads(true)}
+              >
+                {threadCount} thr
+              </Badge>
+            )}
+            {group.enabled
+              ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
+              : <Badge variant="outline">{t('groups.disabled')}</Badge>}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onEdit}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t('common.edit')}</TooltipContent>
+            </Tooltip>
+          </ItemActions>
+        </Item>
+      </div>
+
+      <ThreadPoliciesDialog
+        open={showThreads}
+        onClose={() => {
+          setShowThreads(false)
+          apiClient.get<ThreadPolicy[]>(`/groups/${group.id}/threads`)
+            .then((res) => setThreadCount(res.data.length))
+            .catch(() => {})
+        }}
+        group={group}
       />
     </>
   )
@@ -430,7 +504,7 @@ export default function AdminGroupsPage() {
                   ? t('groups.title', { defaultValue: 'Groups' })
                   : `${total} group${total !== 1 ? 's' : ''}`}
               </CardTitle>
-              <Button size="sm" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
+              <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
             </div>
           </CardHeader>
 
@@ -453,49 +527,11 @@ export default function AdminGroupsPage() {
             ) : (
               <div className="divide-y divide-border">
                 {items.map((group) => (
-                  <div key={group.id}>
-                    <div className="px-3 py-1">
-                      <Item size="sm" className="py-2.5 rounded-none border-0">
-                        <ItemMedia
-                          variant="icon"
-                          className={cn(
-                            'size-8 rounded-md',
-                            group.enabled ? 'bg-green-500/10 text-green-600' : 'bg-muted text-muted-foreground'
-                          )}
-                        >
-                          <MessageSquare className="size-4" />
-                        </ItemMedia>
-                        <ItemContent>
-                          <ItemTitle>
-                            {group.title ?? <span className="text-muted-foreground italic">{t('groups.untitled')}</span>}
-                          </ItemTitle>
-                          <ItemDescription>
-                            <span className="font-mono text-[11px]">{group.id}</span>
-                            {group.nsfw_allowed && <span className="text-amber-500"> · NSFW</span>}
-                          </ItemDescription>
-                        </ItemContent>
-                        <ItemActions>
-                          {group.enabled
-                            ? <SuccessBadge>{t('groups.active')}</SuccessBadge>
-                            : <Badge variant="outline">{t('groups.disabled')}</Badge>}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => setEdit(defaultEdit(group))}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{t('common.edit')}</TooltipContent>
-                          </Tooltip>
-                        </ItemActions>
-                      </Item>
-                    </div>
-                    <ThreadRows groupId={group.id} />
-                  </div>
+                  <GroupCard
+                    key={group.id}
+                    group={group}
+                    onEdit={() => setEdit(defaultEdit(group))}
+                  />
                 ))}
               </div>
             )}

@@ -139,7 +139,7 @@ export default function AdminPermissionsPage() {
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-end">
-        <Button size="sm" onClick={() => setGrantOpen(true)}>
+        <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => setGrantOpen(true)}>
           {t('permissions.grant_button')}
         </Button>
       </div>
