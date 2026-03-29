@@ -42,6 +42,17 @@ export interface UserStats {
   by_category?: Record<string, number>
 }
 
+export interface BotSettingsSection {
+  /** Section title shown as Card header */
+  title: string
+  /** Lucide icon node */
+  icon?: ReactNode
+  /** The content to render inside the Card */
+  content: ReactNode
+  /** Minimum role required to see this section */
+  minRole?: string
+}
+
 export interface PluginManifest {
   id: string
   name: string
@@ -49,4 +60,6 @@ export interface PluginManifest {
   navGroups?: NavGroup[]
   resources?: ResourceProps[]
   userStatsEndpoint?: string
+  /** Extra cards injected into the admin bot-settings page */
+  botSettingsSections?: BotSettingsSection[]
 }

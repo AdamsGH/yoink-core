@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Globe, HardDrive, Shield, Tag } from 'lucide-react'
 
+import { plugins } from '@/plugin-registry'
+import { usePermissions } from '@/hooks/usePermissions'
 import { apiClient } from '@core/lib/api-client'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
@@ -55,6 +57,11 @@ function SettingRow({
 export default function AdminBotSettingsPage() {
   const { t } = useTranslation()
   const { hapticSelection, haptic } = useTelegramWebApp()
+  const { hasRole } = usePermissions()
+
+  const pluginSections = plugins
+    .flatMap(p => p.botSettingsSections ?? [])
+    .filter(s => !s.minRole || hasRole(s.minRole))
 
   const [settings, setSettings] = useState<Record<string, string | null>>({})
   const [loading, setLoading] = useState(true)
@@ -265,6 +272,21 @@ export default function AdminBotSettingsPage() {
           <TagMapEditor embedded />
         </CardContent>
       </Card>
+
+      {/* Plugin-contributed sections */}
+      {pluginSections.map((section, i) => (
+        <Card key={i}>
+          <CardHeader className="px-4 py-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              {section.icon}
+              {section.title}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            {section.content}
+          </CardContent>
+        </Card>
+      ))}
 
     </div>
   )
