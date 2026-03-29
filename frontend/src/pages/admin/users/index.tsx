@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowDownAZ, ArrowUpAZ, Ban, ShieldCheck, Users } from 'lucide-react'
 
-import { apiClient } from '@core/lib/api-client'
+import { usersApi } from '@core/lib/api'
 import { cn } from '@core/lib/utils'
 import { RING_BY_ROLE, userInitials, userPhotoUrl } from '@core/lib/user-utils'
 import type { User, UserRole, UserUpdateRequest } from '@core/types/api'
@@ -48,11 +48,7 @@ export default function AdminUsersPage() {
   const load = async (p: number, q: string, f: typeof filters, s: typeof sort, d: typeof sortDir) => {
     setFetching(true)
     try {
-      const params: Record<string, string | number> = { offset: (p - 1) * PAGE_SIZE, limit: PAGE_SIZE, sort: s, direction: d }
-      if (q) params.search = q
-      if (f.role !== 'all') params.role = f.role
-      if (f.status !== 'all') params.status = f.status
-      const res = await apiClient.get<{ items: User[]; total: number }>('/users', { params })
+      const res = await usersApi.list({ offset: (p - 1) * PAGE_SIZE, limit: PAGE_SIZE, sort: s, direction: d, search: q || undefined, role: f.role !== 'all' ? f.role : undefined, status: f.status !== 'all' ? f.status : undefined })
       setItems(res.data.items)
       setTotal(res.data.total)
     } catch {
@@ -73,7 +69,7 @@ export default function AdminUsersPage() {
 
   const quickBan = async (u: User) => {
     try {
-      await apiClient.patch(`/users/${u.id}`, { role: 'banned' } as UserUpdateRequest)
+      await usersApi.update(u.id, { role: 'banned' } as UserUpdateRequest)
       toast.success(t('users.banned'))
       void load(page, debouncedSearch, filters, sort, sortDir)
     } catch { toast.error(t('users.update_error')) }
@@ -81,7 +77,7 @@ export default function AdminUsersPage() {
 
   const quickUnban = async (u: User) => {
     try {
-      await apiClient.patch(`/users/${u.id}`, { role: 'user' } as UserUpdateRequest)
+      await usersApi.update(u.id, { role: 'user' } as UserUpdateRequest)
       toast.success(t('users.unbanned'))
       void load(page, debouncedSearch, filters, sort, sortDir)
     } catch { toast.error(t('users.update_error')) }

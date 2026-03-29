@@ -5,7 +5,7 @@ import { Globe, HardDrive, Shield, Tag } from 'lucide-react'
 import { plugins } from '@core/plugin-registry'
 import { usePermissions } from '@core/hooks/usePermissions'
 import { SettingRow } from '@app'
-import { apiClient } from '@core/lib/api-client'
+import { botSettingsApi } from '@core/lib/api'
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Separator, Skeleton } from '@ui'
 import { toast } from '@core/components/ui/toast'
 import { useTelegramSaveButton, useTelegramWebApp } from '@core/hooks/useTelegramWebApp'
@@ -48,8 +48,8 @@ export default function AdminBotSettingsPage() {
   const originalStorage = useRef({ chat: '', thread: '' })
 
   useEffect(() => {
-    apiClient
-      .get<Record<string, string | null>>('/bot-settings')
+    botSettingsApi
+      .get()
       .then((r) => {
         setSettings(r.data)
         const chat = r.data['inline_storage_chat_id'] ?? ''
@@ -65,7 +65,7 @@ export default function AdminBotSettingsPage() {
   const saveStorage = async () => {
     setStorageSaving(true)
     try {
-      await apiClient.patch('/bot-settings', {
+      await botSettingsApi.patchMany({
         inline_storage_chat_id: storageChat || null,
         inline_storage_thread_id: storageThread || null,
       })
@@ -100,7 +100,7 @@ export default function AdminBotSettingsPage() {
   const update = async (key: string, value: string) => {
     hapticSelection()
     try {
-      await apiClient.patch('/bot-settings', { [key]: value })
+      await botSettingsApi.patch(key, value)
       setSettings((prev) => ({ ...prev, [key]: value }))
       haptic('success')
       toast.success(t('bot_settings.save_ok'))

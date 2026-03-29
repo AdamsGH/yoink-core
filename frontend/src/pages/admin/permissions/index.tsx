@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { apiClient } from '@core/lib/api-client'
+import { permissionsApi, usersApi } from '@core/lib/api'
 import { formatDate } from '@core/lib/utils'
 import type { Feature, Permission, User } from '@core/types/api'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Tooltip, TooltipContent, TooltipTrigger } from '@ui'
@@ -35,8 +35,8 @@ export default function AdminPermissionsPage() {
     setLoading(true)
     try {
       const [featRes, permRes] = await Promise.all([
-        apiClient.get<Feature[]>('/features'),
-        apiClient.get<Permission[]>('/permissions/all'),
+        permissionsApi.listFeatures(),
+        permissionsApi.listAll(),
       ])
       setFeatures(featRes.data)
 
@@ -45,7 +45,7 @@ export default function AdminPermissionsPage() {
       const map = new Map<number, User>()
       await Promise.all(
         userIds.map((id) =>
-          apiClient.get<User>(`/users/${id}`).then((r) => map.set(id, r.data)).catch(() => null)
+          usersApi.get(id).then((r) => map.set(id, r.data)).catch(() => null)
         )
       )
       setUsersMap(map)
@@ -76,7 +76,7 @@ export default function AdminPermissionsPage() {
 
   const handleRevoke = async (p: Permission) => {
     try {
-      await apiClient.delete(`/users/${p.user_id}/permissions/${p.plugin}/${p.feature}`)
+      await permissionsApi.revoke(p.user_id, p.plugin, p.feature)
       toast.success(t('permissions.revoked'))
       void loadData()
     } catch {
@@ -87,7 +87,7 @@ export default function AdminPermissionsPage() {
   const searchUsers = async (q: string) => {
     if (q.length < 2) { setGrantUserResults([]); return }
     try {
-      const res = await apiClient.get<{ items: User[] }>('/users', { params: { search: q, limit: 10 } })
+      const res = await usersApi.list({ search: q, limit: 10 })
       setGrantUserResults(res.data.items ?? [])
     } catch { setGrantUserResults([]) }
   }
@@ -101,10 +101,7 @@ export default function AdminPermissionsPage() {
     if (!grantUserId || !grantPlugin || !grantFeature) return
     setGrantSaving(true)
     try {
-      await apiClient.post(`/users/${grantUserId}/permissions`, {
-        plugin: grantPlugin,
-        feature: grantFeature,
-      })
+      await permissionsApi.grant(Number(grantUserId), grantPlugin, grantFeature)
       toast.success(t('permissions.granted'))
       setGrantOpen(false)
       setGrantUserId('')

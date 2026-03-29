@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MessageSquare, Pencil, Plus, RefreshCw, Settings2, Trash2 } from 'lucide-react'
 
-import { apiClient } from '@core/lib/api-client'
+import { groupsApi, threadsApi } from '@core/lib/api'
 import { cn } from '@core/lib/utils'
-import type { Group, ThreadPolicy, UserRole } from '@core/types/api'
+import type { Group, UserRole } from '@core/types/api'
+import type { ThreadPolicy } from '@core/lib/api'
 import { useAdminGroups } from './useAdminGroups'
 import type { EditState } from './useAdminGroups'
 import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Switch, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
@@ -120,11 +121,7 @@ function AddThreadDialog({
     if (parsedId === null) return
     setSaving(true)
     try {
-      await apiClient.post(`/groups/${groupId}/threads`, {
-        thread_id: parsedId,
-        name: form.name.trim() || null,
-        enabled: form.enabled,
-      })
+      await groupsApi.addThread(groupId, { thread_id: parsedId, name: form.name.trim() || null, enabled: form.enabled })
       toast.success('Thread policy saved')
       onClose()
       onDone()
@@ -220,8 +217,8 @@ function ThreadPoliciesDialog({
 
   const load = () => {
     setLoading(true)
-    apiClient
-      .get<ThreadPolicy[]>(`/groups/${group.id}/threads`)
+    groupsApi
+      .listThreads(group.id)
       .then((res) => setThreads(res.data))
       .catch(() => toast.error(t('common.load_error')))
       .finally(() => setLoading(false))
@@ -232,7 +229,7 @@ function ThreadPoliciesDialog({
     load()
     if (!sessionChecked.current) {
       sessionChecked.current = true
-      apiClient.get<{ available: boolean }>('/threads/status')
+      threadsApi.getStatus()
         .then((res) => setSessionAvailable(res.data.available))
         .catch(() => {})
     }
@@ -241,7 +238,7 @@ function ThreadPoliciesDialog({
   const toggle = async (policy: ThreadPolicy) => {
     setThreads((prev) => prev.map((tp) => tp.id === policy.id ? { ...tp, enabled: !tp.enabled } : tp))
     try {
-      await apiClient.post(`/groups/${group.id}/threads`, { thread_id: policy.thread_id, name: policy.name, enabled: !policy.enabled })
+      await groupsApi.updateThread(group.id, policy)
     } catch {
       setThreads((prev) => prev.map((tp) => tp.id === policy.id ? { ...tp, enabled: policy.enabled } : tp))
       toast.error(t('common.load_error'))
@@ -251,7 +248,7 @@ function ThreadPoliciesDialog({
   const remove = async (policy: ThreadPolicy) => {
     if (!confirm(`Remove policy for "${threadLabel(policy)}"?`)) return
     try {
-      await apiClient.delete(`/groups/${group.id}/threads/${policy.id}`)
+      await groupsApi.deleteThread(group.id, policy.id)
       load()
     } catch { toast.error(t('common.load_error')) }
   }
@@ -259,7 +256,7 @@ function ThreadPoliciesDialog({
   const scan = async () => {
     setScanning(true)
     try {
-      const res = await apiClient.post<{ total_count: number; upserted: number }>(`/threads/scan/${group.id}`)
+      const res = await threadsApi.scan(group.id)
       toast.success(`Synced ${res.data.upserted} of ${res.data.total_count} topics`)
       load()
     } catch {
@@ -362,8 +359,8 @@ function GroupCard({
   const [showThreads, setShowThreads] = useState(false)
 
   useEffect(() => {
-    apiClient
-      .get<ThreadPolicy[]>(`/groups/${group.id}/threads`)
+    groupsApi
+      .listThreads(group.id)
       .then((res) => setThreadCount(res.data.length))
       .catch(() => {})
   }, [group.id])
@@ -374,7 +371,7 @@ function GroupCard({
         <Item size="sm" className="py-2.5 rounded-none border-0">
           <ItemMedia variant="icon" className="size-8 shrink-0">
             <Avatar className={cn('size-8 rounded-md', !group.photo_url && (group.enabled ? 'bg-green-500/10' : 'bg-muted'))}>
-              <AvatarImage src={`${apiClient.defaults.baseURL}/groups/${group.id}/photo`} className="rounded-md object-cover" />
+              <AvatarImage src={groupsApi.photoUrl(group.id)} className="rounded-md object-cover" />
               <AvatarFallback className={cn('size-8 rounded-md text-xs font-medium', group.enabled ? 'text-green-600' : 'text-muted-foreground')}>
                 <MessageSquare className="size-4" />
               </AvatarFallback>
@@ -422,7 +419,7 @@ function GroupCard({
         open={showThreads}
         onClose={() => {
           setShowThreads(false)
-          apiClient.get<ThreadPolicy[]>(`/groups/${group.id}/threads`)
+          groupsApi.listThreads(group.id)
             .then((res) => setThreadCount(res.data.length))
             .catch(() => {})
         }}

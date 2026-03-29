@@ -24,6 +24,7 @@
       "@dl-root/*":    ["../plugins/yoink-dl/frontend/*"],
       "@stats/*":      ["../plugins/yoink-stats/frontend/src/*"],
       "@stats-root/*": ["../plugins/yoink-stats/frontend/*"],
+      "@insight/*":      ["../plugins/yoink-insight/frontend/src/*"],
       "@insight-root/*": ["../plugins/yoink-insight/frontend/*"],
       "@ui":               ["./src/components/ui"],
       "@app":              ["./src/components/app"]

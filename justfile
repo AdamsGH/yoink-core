@@ -6,7 +6,10 @@ image_frontend := "yoink/frontend:latest"
 image_nginx    := "yoink/nginx:latest"
 image_tg       := "yoink/tg-bot-api:latest"
 
-compose := "docker compose"
+compose    := "docker compose"
+tg_url     := "http://127.0.0.1:8082"
+tg_token   := "data/tg-bot-api/user.token"
+tg_noproxy := "127.0.0.1,localhost"
 
 # List available recipes
 default:
@@ -163,16 +166,15 @@ proxy-init:
         -v "$(pwd)/data/tg-bot-api:/data/tg-bot-api:ro" \
         busybox sh /init-proxy.sh
 
-# Interactive Telegram user-mode login.
-# Stores session token in data/tg-bot-api/user.token.
+# Interactive Telegram user-mode login. Stores session token in data/tg-bot-api/user.token.
 # Usage: just tg-login +79001234567
 tg-login phone="":
     #!/usr/bin/env bash
     set -euo pipefail
-    TG_URL="http://127.0.0.1:8082"
-    no_proxy="127.0.0.1,localhost"
-    NO_PROXY="127.0.0.1,localhost"
-    TOKEN_FILE="data/tg-bot-api/user.token"
+    TG_URL="{{tg_url}}"
+    no_proxy="{{tg_noproxy}}"
+    NO_PROXY="{{tg_noproxy}}"
+    TOKEN_FILE="{{tg_token}}"
     PY="docker/tg-login.py"
 
     if [ -z "{{phone}}" ]; then
@@ -255,53 +257,59 @@ tg-login phone="":
         exit 1
     fi
 
-# Show current user-mode auth state
+# Show current user-mode session status
 tg-status:
     #!/usr/bin/env bash
-    TG_URL="http://127.0.0.1:8082"
-    no_proxy="127.0.0.1,localhost"
-    NO_PROXY="127.0.0.1,localhost"
-    TOKEN_FILE="data/tg-bot-api/user.token"
+    set -euo pipefail
+    TG_URL="{{tg_url}}"
+    TOKEN_FILE="{{tg_token}}"
     if [ ! -f "$TOKEN_FILE" ]; then
         echo "[tg-status] No token file. Run: just tg-login +<phone>"
         exit 1
     fi
     token=$(cat "$TOKEN_FILE")
     echo "[tg-status] Token: ${token:0:20}...(redacted)"
-    resp=$(curl -sf --noproxy '127.0.0.1,localhost' "${TG_URL}/user${token}/getMe" || echo '{"ok":false}')
+    resp=$(curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/getMe" || echo '{"ok":false}')
     python3 docker/tg-login.py status <<< "$resp"
 
-# Log out and remove the user session token
+# Log out the user-mode session and remove the token file
 tg-logout:
     #!/usr/bin/env bash
-    TG_URL="http://127.0.0.1:8082"
-    no_proxy="127.0.0.1,localhost"
-    NO_PROXY="127.0.0.1,localhost"
-    TOKEN_FILE="data/tg-bot-api/user.token"
+    set -euo pipefail
+    TG_URL="{{tg_url}}"
+    TOKEN_FILE="{{tg_token}}"
     if [ ! -f "$TOKEN_FILE" ]; then
         echo "[tg-logout] No token file."
         exit 0
     fi
     token=$(cat "$TOKEN_FILE")
-    curl -sf --noproxy '127.0.0.1,localhost' "${TG_URL}/user${token}/logout" > /dev/null && echo "[tg-logout] Logged out."
+    curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/logout" > /dev/null && echo "[tg-logout] Logged out."
     rm -f "$TOKEN_FILE"
     echo "[tg-logout] Token file removed."
 
 # Run a one-shot backup now (requires backup_s3_* env vars)
 backup:
+    #!/usr/bin/env bash
+    set -euo pipefail
     {{compose}} --profile backup run --rm --entrypoint /backup.sh yoink-backup
 
-# Restore from S3 backup. Usage: just restore [latest | daily/yoink-*.dump | list]
+# Restore from S3. Usage: just restore [list | latest | daily/yoink-TIMESTAMP.dump]
 restore target="latest":
+    #!/usr/bin/env bash
+    set -euo pipefail
     {{compose}} --profile backup run --rm --entrypoint /restore.sh yoink-backup "{{target}}"
 
-# Start the backup cron container
+# Start the backup cron container (runs daily at 03:00 UTC)
 backup-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
     {{compose}} --profile backup up -d yoink-backup
 
 # Stop the backup cron container
 backup-down:
-    {{compose}} --profile backup down yoink-backup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{compose}} --profile backup stop yoink-backup
 
 # Follow backup container logs
 backup-logs:
@@ -386,3 +394,34 @@ tsc *args="":
 # Run npm commands for frontend (e.g. just npm 'add some-pkg').
 npm *args="":
     cd frontend && npm {{args}}
+
+# Install a shadcn component into the frontend (runs inside a temp container).
+# Usage: just shadcn add progress
+shadcn *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker run --rm \
+        -v "$(pwd)/frontend:/app/frontend" \
+        -w /app/frontend \
+        node:22-alpine \
+        sh -c "npm install -g shadcn@latest 2>/dev/null; npx shadcn {{args}}"
+
+# Show git log across core + all plugin submodules
+log *args="--oneline -20":
+    #!/usr/bin/env bash
+    echo "=== core ==="
+    git log {{args}}
+    for p in plugins/*/; do
+        [ -d "$p/.git" ] || continue
+        echo "=== $p ==="
+        git -C "$p" log {{args}}
+    done
+
+# Pull latest for core and all submodules
+pull:
+    git pull
+    git submodule update --remote --merge
+
+# Show submodule status
+submodules:
+    git submodule status

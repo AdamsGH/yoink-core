@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronDown, Plus, Trash2, X } from 'lucide-react'
 
-import { apiClient } from '@core/lib/api-client'
+import { botSettingsApi } from '@core/lib/api'
 import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Popover, PopoverContent, PopoverTrigger, Separator, Skeleton } from '@ui'
 import { toast } from '@core/components/ui/toast'
 import type { AvailableFeature, TagMapEntry } from '@core/types/api'
@@ -155,8 +155,8 @@ export default function TagMapEditor({ embedded = false }: { embedded?: boolean 
 
   useEffect(() => {
     Promise.all([
-      apiClient.get<TagMapEntry[]>('/bot-settings/tag-map'),
-      apiClient.get<AvailableFeature[]>('/bot-settings/available-features'),
+      botSettingsApi.getTagMap(),
+      botSettingsApi.getAvailableFeatures(),
     ])
       .then(([mapRes, featRes]) => {
         setEntries(mapRes.data)
@@ -181,7 +181,7 @@ export default function TagMapEditor({ embedded = false }: { embedded?: boolean 
     const valid = entries.filter((e) => e.tag.trim())
     setSaving(true)
     try {
-      const res = await apiClient.put<TagMapEntry[]>('/bot-settings/tag-map', valid)
+      const res = await botSettingsApi.putTagMap(valid)
       setEntries(res.data)
       toast.success(t('tag_map.save_ok'))
     } catch {

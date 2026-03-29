@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { apiClient } from '@core/lib/api-client'
+import { groupsApi } from '@core/lib/api'
 import type { Group, GroupCreateRequest, GroupUpdateRequest, UserRole } from '@core/types/api'
 import { toast } from '@core/components/ui/toast'
 
@@ -39,8 +39,8 @@ export function useAdminGroups(): UseAdminGroupsReturn {
 
   const load = () => {
     setLoading(true)
-    apiClient
-      .get<Group[]>('/groups')
+    groupsApi
+      .list()
       .then((res) => { setItems(res.data); setTotal(res.data.length) })
       .catch(() => toast.error(t('common.load_error')))
       .finally(() => setLoading(false))
@@ -61,7 +61,7 @@ export function useAdminGroups(): UseAdminGroupsReturn {
           allow_pm: edit.allow_pm,
           nsfw_allowed: edit.nsfw_allowed,
         }
-        await apiClient.post('/groups', body)
+        await groupsApi.create(body)
         toast.success(t('common.save'))
       } else if (edit.group) {
         const body: GroupUpdateRequest = {
@@ -73,7 +73,7 @@ export function useAdminGroups(): UseAdminGroupsReturn {
           storage_chat_id: edit.storage_chat_id ? parseInt(edit.storage_chat_id, 10) : null,
           storage_thread_id: edit.storage_thread_id ? parseInt(edit.storage_thread_id, 10) : null,
         }
-        await apiClient.patch(`/groups/${edit.group.id}`, body)
+        await groupsApi.update(edit.group.id, body)
         toast.success(t('common.save'))
       }
       setEdit(null)

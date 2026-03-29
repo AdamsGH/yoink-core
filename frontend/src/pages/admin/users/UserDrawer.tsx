@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { format } from 'date-fns'
 import { CalendarIcon, X } from 'lucide-react'
 
-import { apiClient } from '@core/lib/api-client'
+import { usersApi } from '@core/lib/api'
 import { cn, formatDate } from '@core/lib/utils'
 import { GRADIENT_BY_ROLE, RING_BY_ROLE, userInitials, userPhotoUrl } from '@core/lib/user-utils'
 import type { EffectiveFeatureAccess, User, UserRole, UserUpdateRequest } from '@core/types/api'
@@ -188,15 +188,15 @@ export function UserDrawer({
     setBanUntil(user.ban_until ?? '')
 
     setStatsLoading(true)
-    apiClient
-      .get<UserStats>(`/users/${user.id}/stats`)
+    usersApi
+      .getStats(user.id)
       .then((r) => setStats(r.data))
       .catch(() => {})
       .finally(() => setStatsLoading(false))
 
     setPermsLoading(true)
-    apiClient
-      .get<EffectiveFeatureAccess[]>(`/users/${user.id}/feature-access`)
+    usersApi
+      .getFeatureAccess(user.id)
       .then((r) => setFeatures(r.data))
       .catch(() => {})
       .finally(() => setPermsLoading(false))
@@ -208,13 +208,13 @@ export function UserDrawer({
     setTogglingId(key)
     try {
       if (grant) {
-        await apiClient.post(`/users/${user.id}/permissions`, { plugin: f.plugin, feature: f.feature })
+        await usersApi.grantPermission(user.id, f.plugin, f.feature)
         toast.success(t('permissions.granted'))
       } else {
-        await apiClient.delete(`/users/${user.id}/permissions/${f.plugin}/${f.feature}`)
+        await usersApi.revokePermission(user.id, f.plugin, f.feature)
         toast.success(t('permissions.revoked'))
       }
-      const r = await apiClient.get<EffectiveFeatureAccess[]>(`/users/${user.id}/feature-access`)
+      const r = await usersApi.getFeatureAccess(user.id)
       setFeatures(r.data)
     } catch {
       toast.error(grant ? t('permissions.grant_error') : t('permissions.revoke_error'))
@@ -231,7 +231,7 @@ export function UserDrawer({
       if (editRole !== user.role) body.role = editRole
       if (editLang !== user.language) body.language = editLang
       body.ban_until = banUntil || null
-      const res = await apiClient.patch<User>(`/users/${user.id}`, body)
+      const res = await usersApi.update(user.id, body)
       toast.success(t('users.update_success'))
       onUpdated(res.data)
     } catch {

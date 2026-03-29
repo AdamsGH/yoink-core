@@ -84,23 +84,31 @@ Auth: `Authorization: Bearer <JWT>` obtained via `POST /api/v1/auth/token` (Tele
 | POST | /auth/token | - | Exchange Telegram initData for JWT |
 | POST | /auth/dev | - | Dev token (local network only, requires DEV_AUTH_ENABLED=true) |
 | GET | /users/me | user | Current user profile |
-| GET | /users | admin | List all users |
+| GET | /users | admin | List all users (sortable: created_at, updated_at, name, role, dl_count, dl_last_at) |
 | PATCH | /users/{id} | admin | Update role |
+| GET | /users/{id}/stats | admin | Activity stats (dl + music + ai aggregated) |
 | GET | /users/{user_id}/photo | public | Proxy user avatar from Bot API |
 | POST | /users/photos/sync | owner | Mass-backfill user avatars from Bot API |
 | GET | /groups | admin | List groups |
+| POST | /groups | admin | Add group |
 | PATCH | /groups/{id} | admin | Update group settings |
 | GET | /groups/{id}/photo | public | Proxy group chat photo from Bot API |
-| POST | /groups/photos/sync | owner | Mass-backfill group photos via getChat |
+| GET | /groups/{id}/threads | admin | List thread policies |
+| POST | /groups/{id}/threads | admin | Add/toggle thread policy |
+| DELETE | /groups/{id}/threads/{pid} | admin | Delete thread policy |
 | GET | /threads/status | admin | Check if user-mode session is available |
+| POST | /threads/scan/{group_id} | admin | Scan forum topics via user-mode session |
 | GET | /settings | user | Personal settings |
 | PATCH | /settings | user | Update settings |
 | GET | /bot-settings | admin | Global bot settings |
 | PATCH | /bot-settings | owner | Update global settings |
-| GET | /permissions | admin | List all user permissions |
-| GET | /permissions/{uid} | admin | Permissions for a user |
-| POST | /permissions/{uid} | admin | Grant a feature |
-| DELETE | /permissions/{uid}/{feature} | admin | Revoke a feature |
+| GET | /bot-settings/tag-map | admin | Tag-to-feature map |
+| PUT | /bot-settings/tag-map | owner | Update tag-to-feature map |
+| GET | /bot-settings/available-features | admin | All registered features |
+| GET | /permissions/all | admin | List all user permissions |
+| POST | /users/{id}/permissions | admin | Grant a feature |
+| DELETE | /users/{id}/permissions/{plugin}/{feature} | admin | Revoke a feature |
+| GET | /users/{id}/feature-access | admin | Effective feature access for a user |
 | GET | /features | user | List all registered features |
 
 ### M2M API
@@ -150,14 +158,24 @@ Each plugin implements the `YoinkPlugin` protocol:
 | `get_handlers()` | `list[HandlerSpec]` | PTB message/command handlers |
 | `get_inline_handlers()` | `list[InlineHandlerSpec]` | Inline query handlers |
 | `get_routes()` | `APIRouter \| None` | FastAPI routes |
-| `get_models()` | `list` | SQLAlchemy models |
+| `get_models()` | `list` | SQLAlchemy models (concrete classes, not base aliases) |
 | `get_locale_dir()` | `Path \| None` | Directory with `en.yml`, `ru.yml` |
 | `get_jobs()` | `list[JobSpec] \| None` | Scheduled background jobs |
 | `get_web_manifest()` | `WebManifest \| None` | Frontend pages and sidebar entries |
 | `get_commands()` | `list[CommandSpec]` | Bot commands for BotFather menu |
 | `get_features()` | `list[FeatureSpec]` | RBAC features declared by this plugin |
 | `get_help_section()` | `str` | HTML fragment for `/help` |
-| `setup(ctx)` | - | Async startup: init services, populate `bot_data` |
+| `setup(ctx)` | - | Async startup: init services, populate `bot_data`, register `ActivityProvider` |
+
+### Activity providers
+
+Plugins register an `ActivityProvider` callable in `setup()` via `register_activity_provider()`. Core collects activity from all providers in `collect_activity()` to build `/users/{id}/stats` responses. This keeps core decoupled from plugin internals.
+
+```python
+# in plugin setup():
+from yoink.core.activity import register_activity_provider
+register_activity_provider("dl", dl_activity_provider)
+```
 
 ### Inline dispatcher
 
@@ -208,14 +226,52 @@ CommandSpec(
 
 Bot command menus are refreshed automatically on role change, grant/revoke, language change, and `/start`.
 
-### Web dashboard
+## Web dashboard
 
-- `/admin/users` - user list with role management; Item list + bottom Drawer with tabs; user avatars loaded from photo proxy
-- `/admin/groups` - group list; Item list + Dialog for editing; group chat avatar via photo proxy; thread policies via Settings2 icon (always visible, badge counter overlay); ThreadPoliciesDialog with scrollable list, optimistic toggle, Scan button (user-session only)
+The frontend is a React SPA served by nginx. Built with Vite + Tailwind + shadcn/ui components.
+
+### Admin pages
+
+- `/admin/users` - user list; Item list + bottom Drawer with tabs (Stats / Access / Edit); sortable by role, name, dl_count, dl_last_at; user avatars via photo proxy
+- `/admin/groups` - group list; Item list + Dialog for editing; group photo via proxy; thread policies via Settings2 icon + ThreadPoliciesDialog; scan button (user-session only)
 - `/admin/permissions` - per-feature access matrix (grant/revoke per user)
 - `/admin/bot-settings` - accepts plugin-contributed sections via `PluginManifest.botSettingsSections`
 
-Both admin pages support dynamic search with 300 ms debounce (opacity fade, no skeleton flash).
+Both list pages support dynamic search with 300 ms debounce (opacity fade, no skeleton flash).
+
+### Frontend architecture
+
+```
+frontend/
+  src/
+    components/
+      ui/            # shadcn components (never edited directly); index.ts barrel -> @ui alias
+      app/           # app-level components (UserPanel, SettingRow, InlineSelect, StatusBadge); index.ts barrel -> @app alias
+      charts/        # StatCard, PeriodToggle, chartColors; index.ts barrel -> @core/components/charts
+    lib/
+      api/           # typed API modules: users, groups, bot-settings, permissions, user-settings, threads
+      api-client.ts  # axios instance with auth interceptor
+      user-utils.ts  # userInitials, userPhotoUrl, GRADIENT/RING/roleMediaColor, openProfileLink
+      utils.ts       # cn, formatDate, formatDateMonth, formatDateDay, formatBytes
+    pages/
+      admin/
+        users/       # AdminUsersPage + UserDrawer (extracted)
+        groups/      # AdminGroupsPage + useAdminGroups hook (extracted)
+        ...
+    types/
+      api.ts         # core API types (User, Group, Feature, Permission, ...)
+      plugin.ts      # PluginManifest, UserStats, NavGroup, ...
+```
+
+**Aliases:** `@core/*` = `frontend/src/*`, `@ui` = `frontend/src/components/ui`, `@app` = `frontend/src/components/app`, `@dl/*` = `plugins/yoink-dl/frontend/src/*`, `@stats/*` = `plugins/yoink-stats/frontend/src/*`, `@insight/*` = `plugins/yoink-insight/frontend/src/*`.
+
+**Alias resolution:** `vite.config.ts` `resolve.alias` is the sole runtime resolver (no `vite-tsconfig-paths` plugin). `tsconfig.json` paths remain in sync for tsc/editor only.
+
+**Page naming:** all page files use PascalCase (`AdminGroupsPage.tsx`, `GroupPage.tsx`, etc.). Index barrels (`index.ts`) export the public surface of each feature directory.
+
+**Logic hooks:** heavy pages extract state/logic into co-located `usePage.ts` hooks (`useAdminGroups`, `useAdminCookies`) keeping JSX thin.
+
+**API layer:** all `apiClient` calls go through typed modules in `lib/api/` and plugin `api/` directories. Pages and hooks import from those modules, not from `apiClient` directly.
 
 ## Database migrations
 
@@ -223,33 +279,36 @@ Single Alembic chain covering core and all plugins:
 
 | Migration | Description |
 |---|---|
-| 0001_initial_schema | users, groups, thread_policies, bot_settings, events |
-| 0002_dl_plugin_schema | dl settings, file cache, download log, rate limits, cookies |
-| 0003_stats_plugin_schema | message log, stats tables |
-| 0004_stats_tsvector | full-text search index |
-| 0005_group_storage | inline storage settings |
-| 0006_user_is_premium | premium flag |
-| 0007_dl_dm_topic | DM topic thread ID |
-| 0008_api_keys | M2M API keys |
-| 0009_insight_plugin_schema | insight_access table |
-| 0010_file_cache_multi | file_ids JSON column for album/gallery results |
-| 0011_gallery_zip | gallery_zip flag in download log |
-| 0012_user_permissions | unified user_permissions table |
-| 0013_insight_user_settings | insight_user_settings table |
-| 0014_dl_download_log_fields | clip_start, clip_end, media_type, group_title in download_log |
-| 0015_dl_cookies_inherited | inherited flag in cookies table |
-| 0016_music_download_log | user_id, group_id, thread_id in music download_log entries |
-| 0017_stats_ranked_list | ranked list and period fields for stats |
-| 0018_user_photo_url | photo_url column in users table |
-| 0019_file_cache_key_length | file_cache.cache_key String(64) → String(80) |
-| 0020_cookie_pool_flag | is_pool BOOLEAN in cookies table + index |
-| 0021_cookie_label | Cookie.label String(128) column |
-| 0022_cookie_personal_unique | partial unique index on cookies WHERE is_pool=false |
-| 0023_cookie_avatar_url | Cookie.avatar_url String(512) |
-| 0024_cookie_content_hash | Cookie.content_hash String(64) + index |
-| 0025_cookie_session_key | Cookie.session_key String(256) + index |
-| 0026_user_settings_use_pool | dl_user_settings.use_pool_cookies BOOLEAN DEFAULT TRUE |
-| 0027_group_photo_url | photo_url column in groups table |
+| 0001 | users, groups, thread_policies, bot_settings, events |
+| 0002 | dl settings, file cache, download log, rate limits, cookies |
+| 0003 | message log, stats tables |
+| 0004 | stats tsvector full-text index |
+| 0005 | inline storage settings for groups |
+| 0006 | user is_premium flag |
+| 0007 | dl DM topic thread ID |
+| 0008 | M2M API keys |
+| 0009 | insight_access table |
+| 0010 | file_cache multi-file (file_ids JSON) |
+| 0011 | gallery_zip flag in download_log |
+| 0012 | unified user_permissions table |
+| 0013 | insight_user_settings table |
+| 0014 | clip_start, clip_end, group_title in download_log |
+| 0015 | cookies.inherited flag |
+| 0016 | music download_log fields (user_id, group_id, thread_id) |
+| 0017 | stats ranked list and period fields |
+| 0018 | users.photo_url |
+| 0019 | file_cache.cache_key String(80) |
+| 0020 | cookies.is_pool flag + index |
+| 0021 | cookies.label |
+| 0022 | cookies partial unique index (personal) |
+| 0023 | cookies.avatar_url |
+| 0024 | cookies.content_hash + index |
+| 0025 | cookies.session_key + index |
+| 0026 | dl_user_settings.use_pool_cookies |
+| 0027 | groups.photo_url |
+| 0028 | stats_reactions table |
+| 0029 | stats_group_members table |
+| 0030 | stats_chat_admins table |
 
 ## Custom Bot API server
 
@@ -263,7 +322,7 @@ Current server version: **9.5**.
 
 ## User-mode session
 
-The bot API server runs with `--allow-users`, enabling both bot and user accounts. The user session unlocks API methods unavailable to bots (forum topic listing, chat history, etc).
+The bot API server runs with `--allow-users`, enabling both bot and user accounts. The user session unlocks API methods unavailable to bots (forum topic listing, chat history, etc). It is strictly optional - all core functionality works without it; user-session features are only shown in the UI when `GET /threads/status` returns `available: true`.
 
 ```bash
 just tg-login +79001234567
