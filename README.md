@@ -55,17 +55,19 @@ just backup-up / backup-down / backup-logs
 
 Core variables (all lowercase):
 
-| Variable | Required | Description |
-|---|---|---|
-| `bot_token` | yes | Telegram bot token |
-| `owner_id` | yes | Telegram user ID of the owner |
-| `api_id` / `api_hash` | yes | Telegram API credentials (for tg-bot-api) |
-| `api_secret_key` | yes | JWT signing secret |
-| `yoink_plugins` | no | Comma-separated plugin names (default: empty) |
-| `database_url` | no | PostgreSQL URL (default provided) |
-| `telegram_base_url` | no | Bot API base URL (default: official Telegram) |
-| `data_dir` | no | Host path for cookies, sessions, browser profile |
-| `json_logs` | no | Enable JSON log format |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `bot_token` | yes | - | Telegram bot token |
+| `owner_id` | yes | - | Telegram user ID of the owner |
+| `api_id` / `api_hash` | yes | - | Telegram API credentials (for tg-bot-api) |
+| `api_secret_key` | yes | - | JWT signing secret |
+| `yoink_plugins` | no | - | Comma-separated plugin names (default: empty) |
+| `database_url` | no | - | PostgreSQL URL (default provided) |
+| `telegram_base_url` | no | - | Bot API base URL (default: official Telegram) |
+| `data_dir` | no | - | Host path for cookies, sessions, browser profile |
+| `json_logs` | no | - | Enable JSON log format |
+| `DEV_AUTH_ENABLED` | no | `false` | Enable /auth/dev endpoint (restricted to DEV_ALLOWED_CIDR by nginx) |
+| `DEV_ALLOWED_CIDR` | no | `192.168.0.0/16` | CIDR allowed to access /auth/dev (nginx-enforced) |
 
 See `.env.example` for the full list with defaults. Plugin-specific variables are documented in each plugin's README.
 
@@ -80,6 +82,7 @@ Auth: `Authorization: Bearer <JWT>` obtained via `POST /api/v1/auth/token` (Tele
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | /auth/token | - | Exchange Telegram initData for JWT |
+| POST | /auth/dev | - | Dev token (local network only, requires DEV_AUTH_ENABLED=true) |
 | GET | /users/me | user | Current user profile |
 | GET | /users | admin | List all users |
 | PATCH | /users/{id} | admin | Update role |
@@ -118,6 +121,15 @@ API key management: `GET/POST /api/v1/api-keys`, `DELETE /api/v1/api-keys/{id}` 
 | GET | /metrics | In-process counters |
 
 Plugin routes are mounted at `/api/v1/{plugin_name}/`.
+
+## Dev authentication
+
+`POST /api/v1/auth/dev` generates a JWT for any user_id without Telegram verification.
+
+- Requires `DEV_AUTH_ENABLED=true` in env
+- **Restricted to `DEV_ALLOWED_CIDR` at nginx level** - never reachable from the internet
+- Accepts `user_id` and `role` query params (default role: `user`)
+- Used by the frontend when `?dev_token=<user_id>:<role>` is in the URL or `VITE_DEV_TOKEN` is set in `.env.local`
 
 ## Plugin system
 
@@ -198,6 +210,7 @@ Bot command menus are refreshed automatically on role change, grant/revoke, lang
 - `/admin/users` - user list with role management; Item list + bottom Drawer with tabs; user avatars loaded from photo proxy
 - `/admin/groups` - group list; Item list + Dialog for editing; thread policies via badge + ThreadPoliciesDialog
 - `/admin/permissions` - per-feature access matrix (grant/revoke per user)
+- `/admin/bot-settings` - accepts plugin-contributed sections via `PluginManifest.botSettingsSections`
 
 Both admin pages support dynamic search with 300 ms debounce (opacity fade, no skeleton flash).
 
@@ -226,6 +239,13 @@ Single Alembic chain covering core and all plugins:
 | 0017_stats_ranked_list | ranked list and period fields for stats |
 | 0018_user_photo_url | photo_url column in users table |
 | 0019_file_cache_key_length | file_cache.cache_key String(64) → String(80) |
+| 0020_cookie_pool_flag | is_pool BOOLEAN in cookies table + index |
+| 0021_cookie_label | Cookie.label String(128) column |
+| 0022_cookie_personal_unique | partial unique index on cookies WHERE is_pool=false |
+| 0023_cookie_avatar_url | Cookie.avatar_url String(512) |
+| 0024_cookie_content_hash | Cookie.content_hash String(64) + index |
+| 0025_cookie_session_key | Cookie.session_key String(256) + index |
+| 0026_user_settings_use_pool | dl_user_settings.use_pool_cookies BOOLEAN DEFAULT TRUE |
 
 ## Custom Bot API server
 
