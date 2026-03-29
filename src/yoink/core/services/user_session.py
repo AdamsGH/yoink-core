@@ -166,6 +166,27 @@ class UserSessionService:
             params["filter"] = filter
         return await self.call("searchChatMessages", **params)
 
+    async def get_chat_members(
+        self,
+        chat_id: int,
+        filter: str = "chatMembersFilterMembers",
+        offset: int = 0,
+        limit: int = 200,
+    ) -> dict:
+        """
+        Returns dict with keys: total_count, members[].
+        Each member has: user_id, status, joined_chat_date, etc.
+        filter options: chatMembersFilterMembers, chatMembersFilterAdministrators,
+                        chatMembersFilterBanned, chatMembersFilterRestricted
+        """
+        return await self.call(
+            "getChatMembers",
+            chat_id=chat_id,
+            filter=filter,
+            offset=offset,
+            limit=limit,
+        )
+
     async def get_chat_history(
         self,
         chat_id: int,
