@@ -166,9 +166,8 @@ proxy-init:
         -v "$(pwd)/data/tg-bot-api:/data/tg-bot-api:ro" \
         busybox sh /init-proxy.sh
 
-# Interactive Telegram user-mode login. Stores session token in data/tg-bot-api/user.token.
-# Usage: just tg-login +79001234567
-tg-login phone="":
+# Manage the user-mode session. Usage: just tg [login +79001234567|status|logout]
+tg action="status" phone="":
     #!/usr/bin/env bash
     set -euo pipefail
     TG_URL="{{tg_url}}"
@@ -176,144 +175,125 @@ tg-login phone="":
     NO_PROXY="{{tg_noproxy}}"
     TOKEN_FILE="{{tg_token}}"
     PY="docker/tg-login.py"
-
-    if [ -z "{{phone}}" ]; then
-        echo "Usage: just tg-login +79001234567"
-        exit 1
-    fi
-
-    mkdir -p data/tg-bot-api
-    chmod 700 data/tg-bot-api
-
-    PHONE_DIGITS="{{phone}}"
-    PHONE_DIGITS="${PHONE_DIGITS//+/}"
-    DB_PATH="data/tg-bot-api/user_db.binlog"
-    KNOWN_FILE=$(mktemp)
-    RESP_FILE=$(mktemp)
-
-    sudo python3 "$PY" watch-token "$DB_PATH" "$PHONE_DIGITS" snap 2>/dev/null > "$KNOWN_FILE" || true
-
-    echo "[tg-login] Requesting code for {{phone}} ..."
-    curl -sf --noproxy '127.0.0.1,localhost' "${TG_URL}/userLogin" \
-        -d "phone_number={{phone}}" > "$RESP_FILE" 2>/dev/null &
-    LOGIN_PID=$!
-
-    echo "[tg-login] Waiting for session token in user_db.binlog..."
-    new_token=$(sudo python3 "$PY" watch-token "$DB_PATH" "$PHONE_DIGITS" "$KNOWN_FILE" 2>/dev/null)
-
-    if [ -n "$new_token" ]; then
-        echo "[tg-login] Got token, configuring SOCKS5 proxy..."
-        python3 "$PY" proxy-add "$TG_URL" "$new_token" "host.docker.internal" "1080"
-    else
-        echo "[tg-login] WARNING: could not detect token early, proxy may not be set"
-    fi
-
-    wait "$LOGIN_PID" || true
-    resp=$(cat "$RESP_FILE")
-    rm -f "$RESP_FILE" "$KNOWN_FILE"
-
-    state=$(echo "$resp" | python3 "$PY" state)
-    token=$(echo "$resp" | python3 "$PY" token)
-
-    if [ "$state" = "ready" ]; then
-        echo "[tg-login] Already authorized."
-        printf '%s' "$token" > "$TOKEN_FILE"
-        chmod 600 "$TOKEN_FILE"
-        echo "[tg-login] Token saved to $TOKEN_FILE"
-        exit 0
-    fi
-
-    if [ "$state" != "wait_code" ]; then
-        echo "[tg-login] Unexpected state: $state"
-        echo "$resp"
-        exit 1
-    fi
-
-    read -rp "[tg-login] Enter the code from Telegram: " code
-    resp=$(curl -sf --noproxy '127.0.0.1,localhost' "${TG_URL}/user${token}/authcode" -d "code=${code}" || true)
-    state=$(echo "$resp" | python3 "$PY" state)
-
-    if [ "$state" = "wait_password" ]; then
-        read -rsp "[tg-login] Enter your 2FA password: " pwd; echo
-        resp=$(curl -sf --noproxy '127.0.0.1,localhost' "${TG_URL}/user${token}/authpassword" -d "password=${pwd}" || true)
+    case "{{action}}" in
+      login)
+        if [ -z "{{phone}}" ]; then
+            echo "Usage: just tg login +79001234567"
+            exit 1
+        fi
+        mkdir -p data/tg-bot-api
+        chmod 700 data/tg-bot-api
+        PHONE_DIGITS="{{phone}}"
+        PHONE_DIGITS="${PHONE_DIGITS//+/}"
+        DB_PATH="data/tg-bot-api/user_db.binlog"
+        KNOWN_FILE=$(mktemp)
+        RESP_FILE=$(mktemp)
+        sudo python3 "$PY" watch-token "$DB_PATH" "$PHONE_DIGITS" snap 2>/dev/null > "$KNOWN_FILE" || true
+        echo "[tg] Requesting code for {{phone}} ..."
+        curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/userLogin" \
+            -d "phone_number={{phone}}" > "$RESP_FILE" 2>/dev/null &
+        LOGIN_PID=$!
+        echo "[tg] Waiting for session token in user_db.binlog..."
+        new_token=$(sudo python3 "$PY" watch-token "$DB_PATH" "$PHONE_DIGITS" "$KNOWN_FILE" 2>/dev/null)
+        if [ -n "$new_token" ]; then
+            echo "[tg] Got token, configuring SOCKS5 proxy..."
+            python3 "$PY" proxy-add "$TG_URL" "$new_token" "host.docker.internal" "1080"
+        else
+            echo "[tg] WARNING: could not detect token early, proxy may not be set"
+        fi
+        wait "$LOGIN_PID" || true
+        resp=$(cat "$RESP_FILE")
+        rm -f "$RESP_FILE" "$KNOWN_FILE"
         state=$(echo "$resp" | python3 "$PY" state)
-    fi
-
-    if [ "$state" = "wait_registration" ]; then
-        read -rp "[tg-login] First name: " fname
-        read -rp "[tg-login] Last name:  " lname
-        resp=$(curl -sf --noproxy '127.0.0.1,localhost' "${TG_URL}/user${token}/registeruser" \
-            -d "first_name=${fname}" -d "last_name=${lname}" || true)
+        token=$(echo "$resp" | python3 "$PY" token)
+        if [ "$state" = "ready" ]; then
+            echo "[tg] Already authorized."
+            printf '%s' "$token" > "$TOKEN_FILE"
+            chmod 600 "$TOKEN_FILE"
+            echo "[tg] Token saved to $TOKEN_FILE"
+            exit 0
+        fi
+        if [ "$state" != "wait_code" ]; then
+            echo "[tg] Unexpected state: $state"
+            echo "$resp"
+            exit 1
+        fi
+        read -rp "[tg] Enter the code from Telegram: " code
+        resp=$(curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/authcode" -d "code=${code}" || true)
         state=$(echo "$resp" | python3 "$PY" state)
-    fi
-
-    if [ "$state" = "ready" ]; then
-        printf '%s' "$token" > "$TOKEN_FILE"
-        chmod 600 "$TOKEN_FILE"
-        echo "[tg-login] Authorized. Token saved to $TOKEN_FILE"
-    else
-        echo "[tg-login] Authorization failed. State: $state"
-        echo "$resp"
+        if [ "$state" = "wait_password" ]; then
+            read -rsp "[tg] Enter your 2FA password: " pwd; echo
+            resp=$(curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/authpassword" -d "password=${pwd}" || true)
+            state=$(echo "$resp" | python3 "$PY" state)
+        fi
+        if [ "$state" = "wait_registration" ]; then
+            read -rp "[tg] First name: " fname
+            read -rp "[tg] Last name:  " lname
+            resp=$(curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/registeruser" \
+                -d "first_name=${fname}" -d "last_name=${lname}" || true)
+            state=$(echo "$resp" | python3 "$PY" state)
+        fi
+        if [ "$state" = "ready" ]; then
+            printf '%s' "$token" > "$TOKEN_FILE"
+            chmod 600 "$TOKEN_FILE"
+            echo "[tg] Authorized. Token saved to $TOKEN_FILE"
+        else
+            echo "[tg] Authorization failed. State: $state"
+            echo "$resp"
+            exit 1
+        fi
+        ;;
+      status)
+        if [ ! -f "$TOKEN_FILE" ]; then
+            echo "[tg] No token file. Run: just tg login +<phone>"
+            exit 1
+        fi
+        token=$(cat "$TOKEN_FILE")
+        echo "[tg] Token: ${token:0:20}...(redacted)"
+        resp=$(curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/getMe" || echo '{"ok":false}')
+        python3 "$PY" status <<< "$resp"
+        ;;
+      logout)
+        if [ ! -f "$TOKEN_FILE" ]; then
+            echo "[tg] No token file."
+            exit 0
+        fi
+        token=$(cat "$TOKEN_FILE")
+        curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/logout" > /dev/null && echo "[tg] Logged out."
+        rm -f "$TOKEN_FILE"
+        echo "[tg] Token file removed."
+        ;;
+      *)
+        echo "Usage: just tg [login +<phone>|status|logout]"
         exit 1
-    fi
+        ;;
+    esac
 
-# Show current user-mode session status
-tg-status:
+# Manage backups. Usage: just backup [run|restore [target]|up|down|logs]
+backup action="run" target="latest":
     #!/usr/bin/env bash
     set -euo pipefail
-    TG_URL="{{tg_url}}"
-    TOKEN_FILE="{{tg_token}}"
-    if [ ! -f "$TOKEN_FILE" ]; then
-        echo "[tg-status] No token file. Run: just tg-login +<phone>"
+    case "{{action}}" in
+      run)
+        {{compose}} --profile backup run --rm --entrypoint /backup.sh yoink-backup
+        ;;
+      restore)
+        {{compose}} --profile backup run --rm --entrypoint /restore.sh yoink-backup "{{target}}"
+        ;;
+      up)
+        {{compose}} --profile backup up -d yoink-backup
+        ;;
+      down)
+        {{compose}} --profile backup stop yoink-backup
+        ;;
+      logs)
+        {{compose}} --profile backup logs -f --tail=50 yoink-backup
+        ;;
+      *)
+        echo "Usage: just backup [run|restore [target]|up|down|logs]"
         exit 1
-    fi
-    token=$(cat "$TOKEN_FILE")
-    echo "[tg-status] Token: ${token:0:20}...(redacted)"
-    resp=$(curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/getMe" || echo '{"ok":false}')
-    python3 docker/tg-login.py status <<< "$resp"
-
-# Log out the user-mode session and remove the token file
-tg-logout:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    TG_URL="{{tg_url}}"
-    TOKEN_FILE="{{tg_token}}"
-    if [ ! -f "$TOKEN_FILE" ]; then
-        echo "[tg-logout] No token file."
-        exit 0
-    fi
-    token=$(cat "$TOKEN_FILE")
-    curl -sf --noproxy '{{tg_noproxy}}' "${TG_URL}/user${token}/logout" > /dev/null && echo "[tg-logout] Logged out."
-    rm -f "$TOKEN_FILE"
-    echo "[tg-logout] Token file removed."
-
-# Run a one-shot backup now (requires backup_s3_* env vars)
-backup:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    {{compose}} --profile backup run --rm --entrypoint /backup.sh yoink-backup
-
-# Restore from S3. Usage: just restore [list | latest | daily/yoink-TIMESTAMP.dump]
-restore target="latest":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    {{compose}} --profile backup run --rm --entrypoint /restore.sh yoink-backup "{{target}}"
-
-# Start the backup cron container (runs daily at 03:00 UTC)
-backup-up:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    {{compose}} --profile backup up -d yoink-backup
-
-# Stop the backup cron container
-backup-down:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    {{compose}} --profile backup stop yoink-backup
-
-# Follow backup container logs
-backup-logs:
-    {{compose}} --profile backup logs -f --tail=50 yoink-backup
+        ;;
+    esac
 
 # Run tests inside a container against yoink_test DB in the existing postgres.
 # Usage: just test [path] (e.g. just test src/tests/test_rbac.py)

@@ -41,14 +41,14 @@ just test [path]
 just data-dirs
 just clean-pyc
 just reset
-just tg-login +<phone>
-just tg-status
-just tg-logout
+just tg login +<phone>
+just tg status
+just tg logout
 just browser [up|down|logs]
 just proxy-init
 just backup
-just restore [list|latest|FILE]
-just backup-up / backup-down / backup-logs
+just backup restore [list|latest|FILE]
+just backup [up|down|logs]
 ```
 
 ## Environment variables
@@ -325,9 +325,9 @@ Current server version: **9.5**.
 The bot API server runs with `--allow-users`, enabling both bot and user accounts. The user session unlocks API methods unavailable to bots (forum topic listing, chat history, etc). It is strictly optional - all core functionality works without it; user-session features are only shown in the UI when `GET /threads/status` returns `available: true`.
 
 ```bash
-just tg-login +79001234567
-just tg-status
-just tg-logout
+just tg login +79001234567
+just tg status
+just tg logout
 ```
 
 Token stored in `data/tg-bot-api/user.token`.
@@ -348,9 +348,9 @@ Requires `backup_s3_*` env vars. pg_dump with custom format, uploaded to S3 via 
 
 ```bash
 just backup           # one-shot
-just restore list     # list available backups
-just restore          # restore latest
-just backup-up        # start cron (daily at 03:00)
+just backup restore list  # list available backups
+just backup restore       # restore latest
+just backup up        # start cron (daily at 03:00)
 ```
 
 Retention: 7 daily + 4 weekly.
