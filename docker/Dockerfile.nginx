@@ -1,3 +1,10 @@
 FROM nginx:alpine
-COPY docker/nginx/nginx.conf /etc/nginx/nginx.conf
+
+COPY docker/nginx/nginx.conf.template /etc/nginx/nginx.conf.template
+
+# envsubst is built into nginx:alpine; substitute only the variables we use
+# to avoid clobbering nginx's own $variables (like $host, $remote_addr, etc.)
+CMD ["/bin/sh", "-c", \
+  "envsubst '${DEV_ALLOWED_CIDR}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"]
+
 EXPOSE 8081
