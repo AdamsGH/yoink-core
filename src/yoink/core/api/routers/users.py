@@ -335,31 +335,102 @@ async def update_user(
 
 
 
-@router.get("/{user_id}/photo", summary="Proxy user profile photo (admin+)")
+@router.post("/photos/sync", summary="Backfill user photos via getChat (owner)")
+async def sync_user_photos(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.owner)),
+):
+    """Fetch profile photos for all users missing them via Bot API getChat."""
+    import httpx
+    import os
+
+    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
+    bot_token = request.app.state.settings.bot_token
+
+    users_without_photo = (await session.execute(
+        select(User).where(User.photo_url.is_(None))
+    )).scalars().all()
+
+    updated = 0
+    for u in users_without_photo:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(f"{bot_api_url}/bot{bot_token}/getChat", params={"chat_id": u.id})
+                if r.status_code != 200:
+                    continue
+                data = r.json()
+                if not data.get("ok"):
+                    continue
+                photo = data["result"].get("photo")
+                if photo and photo.get("big_file_id"):
+                    u.photo_url = photo["big_file_id"]
+                    updated += 1
+        except Exception:
+            continue
+
+    await session.commit()
+    return {"total": len(users_without_photo), "updated": updated}
+
+
+_TG_FILE_ROOT = "/var/lib/telegram-bot-api/"
+_LOCAL_FILE_ROOT = "/app/data/tg-bot-api/"
+
+
+@router.get("/{user_id}/photo", summary="Proxy user profile photo")
 async def get_user_photo(
     user_id: int,
     request: Request,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ):
-    """Stream the user's Telegram profile photo via Bot API file download."""
-    from fastapi.responses import Response
+    """Stream the user's Telegram profile photo."""
     import httpx
+    from pathlib import Path
+    from fastapi.responses import Response
 
     user = await session.get(User, user_id)
     if user is None or not user.photo_url:
         raise NotFoundError("No photo available")
 
-    bot = getattr(request.app.state, "bot", None)
-    if bot is None:
-        raise NotFoundError("Bot not available")
+    if user.photo_url.startswith("http"):
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(user.photo_url)
+                r.raise_for_status()
+                ct = r.headers.get("content-type", "image/jpeg")
+                return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
+        except Exception:
+            raise NotFoundError("Failed to fetch photo")
+
+    import os
+    settings = request.app.state.settings
+    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
+    bot_token = settings.bot_token
 
     try:
-        file = await bot.get_file(user.photo_url)
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(file.file_path)
+            r = await client.get(f"{bot_api_url}/bot{bot_token}/getFile", params={"file_id": user.photo_url})
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("ok"):
+                raise NotFoundError("Failed to fetch photo")
+            file_path = data["result"].get("file_path", "")
+
+        if file_path.startswith(_TG_FILE_ROOT):
+            local = Path(_LOCAL_FILE_ROOT) / file_path[len(_TG_FILE_ROOT):]
+            if local.is_file():
+                return Response(
+                    content=local.read_bytes(),
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=3600"},
+                )
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{bot_api_url}/file/bot{bot_token}/{file_path}")
             r.raise_for_status()
             ct = r.headers.get("content-type", "image/jpeg")
             return Response(content=r.content, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
+    except NotFoundError:
+        raise
     except Exception:
         raise NotFoundError("Failed to fetch photo")

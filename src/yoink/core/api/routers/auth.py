@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"], responses={401: {"description": "Invalid or expired token"}})
 
 
-def _parse_tg_user(params: dict) -> tuple[int, str | None, str | None]:
-    """Extract (id, username, first_name) from verified initData params."""
+def _parse_tg_user(params: dict) -> tuple[int, str | None, str | None, str | None]:
+    """Extract (id, username, first_name, photo_url) from verified initData params."""
     user_json = params.get("user")
     if user_json:
         try:
@@ -29,6 +29,7 @@ def _parse_tg_user(params: dict) -> tuple[int, str | None, str | None]:
                 int(user_obj["id"]),
                 user_obj.get("username"),
                 user_obj.get("first_name"),
+                user_obj.get("photo_url"),
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise HTTPException(
@@ -67,7 +68,8 @@ async def auth_token(
             detail="Invalid Telegram initData",
         ) from exc
 
-    user_id, username, first_name = _parse_tg_user(params)
+    user_id, username, first_name, photo_url = _parse_tg_user(params)
+    logger.debug("auth: user_id=%d photo_url=%s", user_id, photo_url)
 
     user = await session.get(User, user_id)
     if user is None:
@@ -77,13 +79,15 @@ async def auth_token(
         role = UserRole.restricted if mode == "approved_only" else UserRole.user
         if user_id == settings.owner_id:
             role = UserRole.owner
-        user = User(id=user_id, username=username, first_name=first_name, role=role)
+        user = User(id=user_id, username=username, first_name=first_name, photo_url=photo_url, role=role)
         session.add(user)
     else:
         if username is not None:
             user.username = username
         if first_name is not None:
             user.first_name = first_name
+        if photo_url is not None:
+            user.photo_url = photo_url
         if user_id == settings.owner_id and user.role != UserRole.owner:
             user.role = UserRole.owner
         user.updated_at = datetime.now(timezone.utc)

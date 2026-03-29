@@ -48,6 +48,8 @@ services:
       dockerfile: docker/Dockerfile
     restart: unless-stopped
     env_file: .env
+    environment:
+      BOT_API_URL: "http://yoink-tg-bot-api:8082"
     depends_on:
       yoink-postgres:
         condition: service_healthy

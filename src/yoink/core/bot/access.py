@@ -325,31 +325,19 @@ def require_access(policy: AccessPolicy):
 
 
 async def _maybe_update_photo(tg_user, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fetch user profile photo file_id in background if not cached yet."""
-    for attempt in range(2):
-        try:
-            user_repo = context.bot_data.get("user_repo")
-            if user_repo is None:
-                return
-            db_user = await user_repo.get_or_create(tg_user.id)
-            if db_user.photo_url:
-                return
-            photos = await context.bot.get_user_profile_photos(tg_user.id, limit=1)
-            if not photos.photos:
-                if attempt == 0:
-                    await asyncio.sleep(5)
-                    continue
-                logger.debug(
-                    "No profile photos for user %d (total_count=%d)",
-                    tg_user.id, photos.total_count,
-                )
-                return
-            photo = photos.photos[0][-1]
-            await user_repo.update(tg_user.id, photo_url=photo.file_id)
-            logger.debug("Updated photo for user %d: %s", tg_user.id, photo.file_id)
+    """Fetch user profile photo via getChat in background if not cached yet."""
+    try:
+        user_repo = context.bot_data.get("user_repo")
+        if user_repo is None:
             return
-        except Exception:
-            logger.warning(
-                "_maybe_update_photo attempt %d failed for user %d",
-                attempt + 1, tg_user.id, exc_info=True,
-            )
+        db_user = await user_repo.get_or_create(tg_user.id)
+        if db_user.photo_url:
+            return
+        chat = await context.bot.get_chat(tg_user.id)
+        if chat.photo and chat.photo.big_file_id:
+            await user_repo.update(tg_user.id, photo_url=chat.photo.big_file_id)
+            logger.debug("Updated photo for user %d via getChat", tg_user.id)
+        else:
+            logger.debug("No chat photo for user %d", tg_user.id)
+    except Exception:
+        logger.warning("_maybe_update_photo failed for user %d", tg_user.id, exc_info=True)
