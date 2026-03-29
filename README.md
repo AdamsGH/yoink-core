@@ -83,6 +83,8 @@ Auth: `Authorization: Bearer <JWT>` obtained via `POST /api/v1/auth/token` (Tele
 | GET | /users/me | user | Current user profile |
 | GET | /users | admin | List all users |
 | PATCH | /users/{id} | admin | Update role |
+| GET | /users/{user_id}/photo | public | Proxy user avatar from Bot API |
+| POST | /users/photos/sync | owner | Mass-backfill user avatars from Bot API |
 | GET | /groups | admin | List groups |
 | PATCH | /groups/{id} | admin | Update group settings |
 | GET | /settings | user | Personal settings |
@@ -193,8 +195,11 @@ Bot command menus are refreshed automatically on role change, grant/revoke, lang
 
 ### Web dashboard
 
-- `/admin/users` - user list with role management
+- `/admin/users` - user list with role management; Item list + bottom Drawer with tabs; user avatars loaded from photo proxy
+- `/admin/groups` - group list; Item list + Dialog for editing; thread policies via badge + ThreadPoliciesDialog
 - `/admin/permissions` - per-feature access matrix (grant/revoke per user)
+
+Both admin pages support dynamic search with 300 ms debounce (opacity fade, no skeleton flash).
 
 ## Database migrations
 
@@ -215,6 +220,12 @@ Single Alembic chain covering core and all plugins:
 | 0011_gallery_zip | gallery_zip flag in download log |
 | 0012_user_permissions | unified user_permissions table |
 | 0013_insight_user_settings | insight_user_settings table |
+| 0014_dl_download_log_fields | clip_start, clip_end, media_type, group_title in download_log |
+| 0015_dl_cookies_inherited | inherited flag in cookies table |
+| 0016_music_download_log | user_id, group_id, thread_id in music download_log entries |
+| 0017_stats_ranked_list | ranked list and period fields for stats |
+| 0018_user_photo_url | photo_url column in users table |
+| 0019_file_cache_key_length | file_cache.cache_key String(64) → String(80) |
 
 ## Custom Bot API server
 
