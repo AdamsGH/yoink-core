@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_current_user, get_db
@@ -23,8 +23,12 @@ class UserStatsResponse(BaseModel):
     today: int
     top_domains: list[dict]
     member_since: datetime
-    # Breakdown by category - present only when dl plugin is loaded
     by_category: dict[str, int] = {}
+    dl_last_at: datetime | None = None
+    music_total: int = 0
+    music_last_at: datetime | None = None
+    ai_total: int = 0
+    ai_last_at: datetime | None = None
 
 
 _MUSIC_DOMAINS = frozenset({
@@ -152,48 +156,132 @@ async def get_me(current_user: User = Depends(get_current_user)) -> UserResponse
     )
 
 
-@router.get("", response_model=dict, summary="List all users (admin+)", description="Paginated user list with optional search by username and filter by role/status.")
+_SORT_FIELDS = {"created_at", "updated_at", "name", "role", "dl_count", "dl_last_at"}
+_ROLE_ORDER = {"owner": 0, "admin": 1, "moderator": 2, "user": 3, "restricted": 4, "banned": 5}
+
+_LIST_USERS_SQL = """
+    SELECT
+        u.id, u.username, u.first_name, u.photo_url,
+        u.role, u.language, u.theme, u.ban_until,
+        u.created_at, u.updated_at,
+        COALESCE(dl.dl_count, 0)  AS dl_count,
+        dl.dl_last_at
+    FROM users u
+    LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS dl_count, MAX(created_at) AS dl_last_at
+        FROM download_log
+        WHERE user_id = u.id
+    ) dl ON true
+    {where}
+    ORDER BY {order}
+    LIMIT :limit OFFSET :offset
+"""
+
+_COUNT_USERS_SQL = """
+    SELECT COUNT(*) FROM users u {where}
+"""
+
+
+def _build_users_where(search: str | None, role: str | None, status: str | None) -> tuple[str, dict]:
+    clauses: list[str] = []
+    params: dict = {}
+    if search:
+        s = search.lstrip("@")
+        clauses.append("(u.username ILIKE :search OR u.first_name ILIKE :search OR CAST(u.id AS TEXT) = :search_exact)")
+        params["search"] = f"%{s}%"
+        params["search_exact"] = s
+    if role and role != "all":
+        clauses.append("u.role = :role")
+        params["role"] = role
+    if status == "active":
+        clauses.append("u.role NOT IN ('restricted', 'banned')")
+    elif status == "restricted":
+        clauses.append("u.role = 'restricted'")
+    elif status == "banned":
+        clauses.append("u.role = 'banned'")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def _build_users_order(sort: str, direction: str) -> str:
+    desc = "DESC" if direction == "desc" else "ASC"
+    nulls = "NULLS LAST" if desc == "DESC" else "NULLS FIRST"
+    if sort == "name":
+        return f"COALESCE(u.first_name, u.username, CAST(u.id AS TEXT)) {desc}"
+    if sort == "role":
+        return f"u.role {desc}"
+    if sort == "dl_count":
+        return f"dl_count {desc} {nulls}"
+    if sort == "dl_last_at":
+        return f"dl_last_at {desc} {nulls}"
+    if sort == "updated_at":
+        return f"u.updated_at {desc}"
+    return f"u.created_at {desc}"
+
+
+@router.get("", response_model=dict, summary="List all users (admin+)")
 async def list_users(
-    offset: int = Query(0, ge=0, description="Pagination offset (number of records to skip)"),
-    limit: int = Query(50, ge=1, le=200, description="Maximum number of records to return"),
-    search: str | None = Query(None, description="Filter by username or display name (partial match)"),
-    role: str | None = Query(None, description="Filter by role (owner/admin/moderator/user/restricted/banned)"),
-    status: str | None = Query(None, description="Filter by status (active/blocked)"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    search: str | None = Query(None),
+    role: str | None = Query(None),
+    status: str | None = Query(None),
+    sort: str = Query("created_at"),
+    direction: str = Query("desc"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> dict:
-    q = select(User)
-    if search:
-        q = q.where(
-            User.username.ilike(f"%{search.lstrip('@')}%")
-            | func.cast(User.id, type_=User.id.type).in_(
-                [search] if search.isdigit() else []
-            )
-        )
-    if role and role != 'all':
-        try:
-            q = q.where(User.role == UserRole(role))
-        except ValueError:
-            pass
-    if status == 'active':
-        q = q.where(User.role.notin_([UserRole.restricted, UserRole.banned]))
-    elif status == 'restricted':
-        q = q.where(User.role == UserRole.restricted)
-    elif status == 'banned':
-        q = q.where(User.role == UserRole.banned)
-    total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
-    result = await session.execute(q.order_by(User.created_at.desc()).offset(offset).limit(limit))
-    users = result.scalars().all()
-    return {
-        "items": [UserResponse(
+    if sort not in _SORT_FIELDS:
+        sort = "created_at"
+    if direction not in ("asc", "desc"):
+        direction = "desc"
+
+    try:
+        from yoink_dl.storage.models import DownloadLog as _DL  # noqa: F401, PLC0415
+        has_dl = True
+    except ImportError:
+        has_dl = False
+
+    where, params = _build_users_where(search, role, status)
+
+    if has_dl:
+        order = _build_users_order(sort, direction)
+        count_sql = _COUNT_USERS_SQL.format(where=where)
+        list_sql = _LIST_USERS_SQL.format(where=where, order=order)
+        total = (await session.execute(text(count_sql), params)).scalar_one()
+        rows = (await session.execute(text(list_sql), {**params, "limit": limit, "offset": offset})).fetchall()
+        items = [UserResponse(
+            id=r.id, username=r.username, first_name=r.first_name, photo_url=r.photo_url,
+            role=r.role, language=r.language, theme=r.theme,
+            ban_until=r.ban_until, created_at=r.created_at, updated_at=r.updated_at,
+            dl_count=r.dl_count, dl_last_at=r.dl_last_at,
+        ) for r in rows]
+    else:
+        q = select(User)
+        if search:
+            s = search.lstrip("@")
+            q = q.where(User.username.ilike(f"%{s}%") | User.first_name.ilike(f"%{s}%"))
+        if role and role != "all":
+            try:
+                q = q.where(User.role == UserRole(role))
+            except ValueError:
+                pass
+        if status == "active":
+            q = q.where(User.role.notin_([UserRole.restricted, UserRole.banned]))
+        elif status == "restricted":
+            q = q.where(User.role == UserRole.restricted)
+        elif status == "banned":
+            q = q.where(User.role == UserRole.banned)
+        total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
+        result = await session.execute(q.order_by(User.created_at.desc()).offset(offset).limit(limit))
+        users = result.scalars().all()
+        items = [UserResponse(
             id=u.id, username=u.username, first_name=u.first_name, photo_url=u.photo_url,
             role=u.role, language=u.language, theme=u.theme,
             ban_until=u.ban_until, created_at=u.created_at, updated_at=u.updated_at,
-        ) for u in users],
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-    }
+        ) for u in users]
+
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
 
 
 @router.get("/{user_id}/stats", response_model=UserStatsResponse, summary="Download statistics for any user (admin+)")
@@ -206,6 +294,15 @@ async def get_user_stats(
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=7)
+
+    total = today_count = week_count = 0
+    top_domains: list[dict] = []
+    by_category: dict[str, int] = {}
+    dl_last_at: datetime | None = None
+    music_total = 0
+    music_last_at: datetime | None = None
+    ai_total = 0
+    ai_last_at: datetime | None = None
 
     try:
         from yoink_dl.storage.models import DownloadLog  # noqa: PLC0415
@@ -222,6 +319,10 @@ async def get_user_stats(
             select(func.count()).select_from(DownloadLog)
             .where(base, DownloadLog.created_at >= week_start)
         )).scalar_one()
+        dl_last_row = (await session.execute(
+            select(func.max(DownloadLog.created_at)).where(base)
+        )).scalar_one()
+        dl_last_at = dl_last_row
         top_result = await session.execute(
             select(DownloadLog.domain, func.count().label("cnt"))
             .where(base, DownloadLog.domain.isnot(None))
@@ -230,21 +331,44 @@ async def get_user_stats(
             .limit(5)
         )
         top_domains = [{"domain": r.domain, "count": r.cnt} for r in top_result]
-        cat_result2 = await session.execute(
+        cat_result = await session.execute(
             select(DownloadLog.domain, func.count().label("cnt"))
             .where(base, DownloadLog.domain.isnot(None))
             .group_by(DownloadLog.domain)
         )
-        by_category: dict[str, int] = {"video": 0, "music": 0, "other": 0}
-        for r in cat_result2:
+        by_category = {"video": 0, "music": 0, "other": 0}
+        for r in cat_result:
             by_category[_categorize_domain(r.domain)] += r.cnt
-        user = await session.get(User, user_id)
     except ImportError:
-        total = today_count = week_count = 0
-        top_domains = []
-        by_category = {}
-        user = await session.get(User, user_id)
+        pass
 
+    try:
+        from yoink_music.storage.models import MusicResolveLog  # noqa: PLC0415
+
+        mbase = MusicResolveLog.user_id == user_id
+        music_total = (await session.execute(
+            select(func.count()).select_from(MusicResolveLog).where(mbase)
+        )).scalar_one()
+        music_last_at = (await session.execute(
+            select(func.max(MusicResolveLog.created_at)).where(mbase)
+        )).scalar_one()
+    except ImportError:
+        pass
+
+    try:
+        from yoink_insight.storage.models import InsightUsageLog  # noqa: PLC0415
+
+        abase = InsightUsageLog.user_id == user_id
+        ai_total = (await session.execute(
+            select(func.count()).select_from(InsightUsageLog).where(abase)
+        )).scalar_one()
+        ai_last_at = (await session.execute(
+            select(func.max(InsightUsageLog.created_at)).where(abase)
+        )).scalar_one()
+    except ImportError:
+        pass
+
+    user = await session.get(User, user_id)
     if user is None:
         raise NotFoundError("User not found")
 
@@ -255,6 +379,11 @@ async def get_user_stats(
         top_domains=top_domains,
         member_since=user.created_at,
         by_category=by_category,
+        dl_last_at=dl_last_at,
+        music_total=music_total,
+        music_last_at=music_last_at,
+        ai_total=ai_total,
+        ai_last_at=ai_last_at,
     )
 
 

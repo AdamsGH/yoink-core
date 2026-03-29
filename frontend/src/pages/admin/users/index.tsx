@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { format } from 'date-fns'
-import { Ban, CalendarIcon, ShieldCheck, Users, X } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, Ban, CalendarIcon, ShieldCheck, Users, X } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
 import { cn, formatDate } from '@core/lib/utils'
@@ -159,6 +159,11 @@ interface UserStats {
   today: number
   top_domains: { domain: string; count: number }[]
   member_since: string
+  dl_last_at: string | null
+  music_total: number
+  music_last_at: string | null
+  ai_total: number
+  ai_last_at: string | null
 }
 
 function StatCell({ label, value }: { label: string; value: string | number }) {
@@ -346,6 +351,36 @@ function UserDrawer({
                       {stats.total === 0 && (
                         <p className="text-sm text-muted-foreground text-center py-4">{t('users.no_downloads')}</p>
                       )}
+                      {stats.music_total > 0 && (
+                        <div className="rounded-md border px-3 py-2 space-y-1">
+                          <p className="text-xs font-medium">{t('users.music_section', { defaultValue: 'Music' })}</p>
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span>{t('users.music_total', { defaultValue: 'Resolved' })}</span>
+                            <span className="font-medium text-foreground">{stats.music_total.toLocaleString()}</span>
+                          </div>
+                          {stats.music_last_at && (
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span>{t('users.music_last', { defaultValue: 'Last used' })}</span>
+                              <span>{formatDate(stats.music_last_at)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {stats.ai_total > 0 && (
+                        <div className="rounded-md border px-3 py-2 space-y-1">
+                          <p className="text-xs font-medium">{t('users.ai_section', { defaultValue: 'AI / Insight' })}</p>
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span>{t('users.ai_total', { defaultValue: 'Queries' })}</span>
+                            <span className="font-medium text-foreground">{stats.ai_total.toLocaleString()}</span>
+                          </div>
+                          {stats.ai_last_at && (
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span>{t('users.ai_last', { defaultValue: 'Last used' })}</span>
+                              <span>{formatDate(stats.ai_last_at)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="text-xs text-muted-foreground border-t pt-3 space-y-1">
                         <div className="flex justify-between">
                           <span>{t('users.col_joined')}</span>
@@ -355,6 +390,12 @@ function UserDrawer({
                           <span>{t('users.last_seen')}</span>
                           <span>{formatDate(user.updated_at)}</span>
                         </div>
+                        {stats.dl_last_at && (
+                          <div className="flex justify-between">
+                            <span>{t('users.dl_last_at', { defaultValue: 'Last download' })}</span>
+                            <span>{formatDate(stats.dl_last_at)}</span>
+                          </div>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -481,6 +522,8 @@ export default function AdminUsersPage() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [filters, setFilters] = useState<{ role: string; status: StatusFilter }>({ role: 'all', status: 'all' })
   const [showFilters, setShowFilters] = useState(false)
+  const [sort, setSort] = useState<'created_at' | 'updated_at' | 'name' | 'role' | 'dl_count' | 'dl_last_at'>('created_at')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const [viewed, setViewed] = useState<User | null>(null)
 
@@ -495,10 +538,10 @@ export default function AdminUsersPage() {
     return () => clearTimeout(id)
   }, [search])
 
-  const load = async (p: number, q: string, f: typeof filters) => {
+  const load = async (p: number, q: string, f: typeof filters, s: typeof sort, d: typeof sortDir) => {
     setFetching(true)
     try {
-      const params: Record<string, string | number> = { offset: (p - 1) * PAGE_SIZE, limit: PAGE_SIZE }
+      const params: Record<string, string | number> = { offset: (p - 1) * PAGE_SIZE, limit: PAGE_SIZE, sort: s, direction: d }
       if (q) params.search = q
       if (f.role !== 'all') params.role = f.role
       if (f.status !== 'all') params.status = f.status
@@ -513,7 +556,7 @@ export default function AdminUsersPage() {
     }
   }
 
-  useEffect(() => { void load(page, debouncedSearch, filters) }, [page, debouncedSearch, filters])
+  useEffect(() => { void load(page, debouncedSearch, filters, sort, sortDir) }, [page, debouncedSearch, filters, sort, sortDir])
 
   const resetFilters = () => {
     setSearch(''); setDebouncedSearch('')
@@ -525,7 +568,7 @@ export default function AdminUsersPage() {
     try {
       await apiClient.patch(`/users/${u.id}`, { role: 'banned' } as UserUpdateRequest)
       toast.success(t('users.banned'))
-      void load(page, debouncedSearch, filters)
+      void load(page, debouncedSearch, filters, sort, sortDir)
     } catch { toast.error(t('users.update_error')) }
   }
 
@@ -533,7 +576,7 @@ export default function AdminUsersPage() {
     try {
       await apiClient.patch(`/users/${u.id}`, { role: 'user' } as UserUpdateRequest)
       toast.success(t('users.unbanned'))
-      void load(page, debouncedSearch, filters)
+      void load(page, debouncedSearch, filters, sort, sortDir)
     } catch { toast.error(t('users.update_error')) }
   }
 
@@ -565,6 +608,31 @@ export default function AdminUsersPage() {
               onChange={(e) => setSearch(e.target.value)}
               className="h-9 mt-2"
             />
+            <div className="flex items-center gap-1.5 mt-2">
+              <Select value={sort} onValueChange={(v) => { setSort(v as typeof sort); setPage(1) }}>
+                <SelectTrigger className="h-7 flex-1 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="created_at">{t('users.sort_joined')}</SelectItem>
+                  <SelectItem value="updated_at">{t('users.sort_last_seen')}</SelectItem>
+                  <SelectItem value="name">{t('users.sort_name')}</SelectItem>
+                  <SelectItem value="role">{t('users.sort_role')}</SelectItem>
+                  <SelectItem value="dl_count">{t('users.sort_dl_count')}</SelectItem>
+                  <SelectItem value="dl_last_at">{t('users.sort_dl_last')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                onClick={() => { setSortDir((d) => d === 'desc' ? 'asc' : 'desc'); setPage(1) }}
+              >
+                {sortDir === 'desc'
+                  ? <ArrowDownAZ className="h-3.5 w-3.5" />
+                  : <ArrowUpAZ className="h-3.5 w-3.5" />}
+              </Button>
+            </div>
           </CardHeader>
 
           {showFilters && (

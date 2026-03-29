@@ -11,6 +11,8 @@ export interface User {
   ban_until: string | null
   created_at: string
   updated_at: string
+  dl_count: number
+  dl_last_at: string | null
 }
 
 export interface PaginatedResponse<T> {

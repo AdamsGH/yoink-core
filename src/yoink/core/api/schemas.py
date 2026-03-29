@@ -38,6 +38,8 @@ class UserResponse(BaseModel):
     ban_until: datetime | None
     created_at: datetime
     updated_at: datetime
+    dl_count: int = 0
+    dl_last_at: datetime | None = None
 
 
 class UserUpdateRequest(BaseModel):
