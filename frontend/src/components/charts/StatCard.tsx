@@ -18,15 +18,29 @@ export function StatCard({
   sub,
   icon,
   variant = 'default',
+  compact = false,
 }: {
   label: string
   value: string | number | null
   sub?: string
   icon?: ReactNode
   variant?: Variant
+  compact?: boolean
 }) {
   const display = value === null ? '-' : typeof value === 'number' ? value.toLocaleString() : value
   const isLong = typeof display === 'string' && display.length > 8
+  if (compact) {
+    return (
+      <Card className="select-none overflow-hidden">
+        <CardContent className="px-3 pt-3 pb-2.5">
+          <div className={cn('font-bold tabular-nums truncate', isLong ? 'text-sm' : 'text-lg', variantClass[variant])}>
+            {display}
+          </div>
+          <div className="mt-0.5 text-[10px] leading-tight text-muted-foreground truncate">{label}</div>
+        </CardContent>
+      </Card>
+    )
+  }
   return (
     <Card className="select-none overflow-hidden">
       <CardContent className="px-4 pt-4 pb-3">
