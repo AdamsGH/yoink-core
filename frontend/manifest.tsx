@@ -3,7 +3,7 @@ import { BookOpen, Settings2, Shield, Users, UsersRound } from 'lucide-react'
 import type { PluginManifest } from '@core/types/plugin'
 
 import AdminUsersPage       from './src/pages/admin/users'
-import AdminGroupsPage      from './src/pages/admin/groups'
+import AdminGroupsPage      from './src/pages/admin/groups/AdminGroupsPage'
 import AdminBotSettingsPage from './src/pages/admin/bot-settings'
 import ApiDocsPage          from './src/pages/admin/api-docs'
 
