@@ -1,9 +1,7 @@
 import * as React from 'react'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@core/lib/utils'
-import { Button } from '@core/components/ui/button'
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@core/components/ui/command'
-import { Popover, PopoverContent, PopoverTrigger } from '@core/components/ui/popover'
+import { Button, Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, Popover, PopoverContent, PopoverTrigger } from '@ui'
 
 export interface InlineSelectOption {
   value: string

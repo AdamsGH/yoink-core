@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
-import { Card, CardContent } from '@core/components/ui/card'
-import { Skeleton } from '@core/components/ui/skeleton'
+import { Card, CardContent, Skeleton } from '@ui'
 import { cn } from '@core/lib/utils'
 
 type Variant = 'default' | 'success' | 'warning' | 'danger'

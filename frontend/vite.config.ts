@@ -29,6 +29,8 @@ export default defineConfig({
       '@stats-root':   resolve(__dirname, '../plugins/yoink-stats/frontend'),
       '@insight':      resolve(__dirname, '../plugins/yoink-insight/frontend/src'),
       '@insight-root': resolve(__dirname, '../plugins/yoink-insight/frontend'),
+      '@ui':           resolve(__dirname, 'src/components/ui'),
+      '@app':          resolve(__dirname, 'src/components/app'),
     },
   },
 

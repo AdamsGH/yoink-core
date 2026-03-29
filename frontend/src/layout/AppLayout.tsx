@@ -9,23 +9,19 @@ import { cn } from '@core/lib/utils'
 import { useTelegram, type CatppuccinFlavor } from '@core/layout/TelegramProvider'
 import type { UserRole } from '@core/types/api'
 import type { NavGroup, NavItem } from '@core/types/plugin'
-import { UserPanel } from '@core/components/app/UserPanel'
-import { Button } from '@core/components/ui/button'
+import { UserPanel } from '@app'
 import {
+  Button,
   Collapsible, CollapsibleContent, CollapsibleTrigger,
-} from '@core/components/ui/collapsible'
-import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
-} from '@core/components/ui/dropdown-menu'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@core/components/ui/sheet'
-import {
+  Sheet, SheetContent, SheetHeader, SheetTitle,
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup,
   SidebarGroupContent, SidebarGroupLabel, SidebarHeader,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem,
   SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem,
   SidebarInset, SidebarProvider, SidebarRail, SidebarTrigger,
-} from '@core/components/ui/sidebar'
+} from '@ui'
 
 export type { NavItem, NavGroup }
 

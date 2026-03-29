@@ -5,33 +5,8 @@ import { MessageSquare, Pencil, Plus, RefreshCw, Settings2, Trash2 } from 'lucid
 import { apiClient } from '@core/lib/api-client'
 import { cn } from '@core/lib/utils'
 import type { Group, GroupCreateRequest, GroupUpdateRequest, ThreadPolicy, UserRole } from '@core/types/api'
-import { Avatar, AvatarFallback, AvatarImage } from '@core/components/ui/avatar'
-import { InlineSelect } from '@core/components/app/InlineSelect'
-import { Badge } from '@core/components/ui/badge'
-import { SuccessBadge } from '@core/components/app/StatusBadge'
-import { Button } from '@core/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@core/components/ui/dialog'
-import { Input } from '@core/components/ui/input'
-import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@core/components/ui/item'
-import { Label } from '@core/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@core/components/ui/select'
-import { Switch } from '@core/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@core/components/ui/tooltip'
-import { Skeleton } from '@core/components/ui/skeleton'
+import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Switch, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
+import { InlineSelect, SuccessBadge } from '@app'
 import { toast } from '@core/components/ui/toast'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']

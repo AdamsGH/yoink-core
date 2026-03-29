@@ -1,4 +1,4 @@
-import { Badge } from '@core/components/ui/badge'
+import { Badge } from '@ui'
 import { cn } from '@core/lib/utils'
 import type { UserRole } from '@core/types/api'
 

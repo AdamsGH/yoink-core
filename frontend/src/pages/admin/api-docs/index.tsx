@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSidebar } from '@core/components/ui/sidebar'
+import { useSidebar } from '@ui'
 
 const APP_TOKEN_KEY = 'access_token'
 

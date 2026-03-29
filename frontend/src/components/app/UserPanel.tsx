@@ -7,11 +7,8 @@ import { apiClient } from '@core/lib/api-client'
 import { formatDate } from '@core/lib/utils'
 import { useTelegram } from '@core/layout/TelegramProvider'
 import type { UserStats } from '@core/types/plugin'
-import { Avatar, AvatarFallback, AvatarImage } from '@core/components/ui/avatar'
-import { Button } from '@core/components/ui/button'
-import { RoleBadge } from '@core/components/app/StatusBadge'
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@core/components/ui/sheet'
-import { useSidebar } from '@core/components/ui/sidebar'
+import { Avatar, AvatarFallback, AvatarImage, Button, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger, useSidebar } from '@ui'
+import { RoleBadge } from '@app'
 
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {

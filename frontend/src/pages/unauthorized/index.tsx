@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 
-import { Button } from '@core/components/ui/button'
+import { Button } from '@ui'
 
 export default function UnauthorizedPage() {
   const { t } = useTranslation()

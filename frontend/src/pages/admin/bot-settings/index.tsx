@@ -4,16 +4,9 @@ import { Globe, HardDrive, Shield, Tag } from 'lucide-react'
 
 import { plugins } from '@core/plugin-registry'
 import { usePermissions } from '@core/hooks/usePermissions'
-import { SettingRow } from '@core/components/app/SettingRow'
+import { SettingRow } from '@app'
 import { apiClient } from '@core/lib/api-client'
-import { Button } from '@core/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
-import { Input } from '@core/components/ui/input'
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@core/components/ui/select'
-import { Separator } from '@core/components/ui/separator'
-import { Skeleton } from '@core/components/ui/skeleton'
+import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Separator, Skeleton } from '@ui'
 import { toast } from '@core/components/ui/toast'
 import { useTelegramSaveButton, useTelegramWebApp } from '@core/hooks/useTelegramWebApp'
 import TagMapEditor from './TagMapEditor'

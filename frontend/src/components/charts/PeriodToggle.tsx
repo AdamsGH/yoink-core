@@ -1,5 +1,5 @@
 import { cn } from '@core/lib/utils'
-import { Button } from '@core/components/ui/button'
+import { Button } from '@ui'
 
 export const PERIOD_OPTIONS = [
   { label: '7d',  value: 7  },
