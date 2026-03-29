@@ -410,7 +410,7 @@ function GroupCard({
         <Item size="sm" className="py-2.5 rounded-none border-0">
           <ItemMedia variant="icon" className="size-8 shrink-0">
             <Avatar className={cn('size-8 rounded-md', !group.photo_url && (group.enabled ? 'bg-green-500/10' : 'bg-muted'))}>
-              <AvatarImage src={group.photo_url ? `${apiClient.defaults.baseURL}/groups/${group.id}/photo` : undefined} className="rounded-md object-cover" />
+              <AvatarImage src={`${apiClient.defaults.baseURL}/groups/${group.id}/photo`} className="rounded-md object-cover" />
               <AvatarFallback className={cn('size-8 rounded-md text-xs font-medium', group.enabled ? 'text-green-600' : 'text-muted-foreground')}>
                 <MessageSquare className="size-4" />
               </AvatarFallback>

@@ -25,7 +25,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@core/
 import { toast } from '@core/components/ui/toast'
 
 function userPhotoUrl(user: User): string | undefined {
-  if (!user.photo_url) return undefined
   return `${apiClient.defaults.baseURL}/users/${user.id}/photo`
 }
 
