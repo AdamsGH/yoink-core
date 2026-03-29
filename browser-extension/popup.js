@@ -4,7 +4,7 @@ const DEFAULT_DOMAINS = ['youtube.com', 'tiktok.com', 'instagram.com', 'x.com'];
 
 let domains = [];
 
-// ── Persist / load ────────────────────────────────────────────────────────────
+// Persist / load
 
 async function load() {
   const data = await chrome.storage.sync.get(['botUrl', 'domains']);
@@ -21,7 +21,7 @@ async function savePersist() {
   });
 }
 
-// ── UI helpers ────────────────────────────────────────────────────────────────
+// UI helpers
 
 function showStatus(msg, type = 'info') {
   const el = document.getElementById('status');
@@ -74,7 +74,7 @@ async function updateCurrentSite() {
   }
 }
 
-// ── Core logic ────────────────────────────────────────────────────────────────
+// Core logic
 
 async function syncCookies() {
   const token = getToken();
@@ -155,7 +155,7 @@ async function syncCookies() {
   updateSyncButton();
 }
 
-// ── Event listeners ───────────────────────────────────────────────────────────
+// Event listeners
 
 document.getElementById('btn-sync').addEventListener('click', syncCookies);
 
@@ -203,6 +203,6 @@ document.getElementById('domains-list').addEventListener('click', e => {
   savePersist();
 });
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// Init
 
 load();
