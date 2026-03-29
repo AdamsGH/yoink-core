@@ -4,7 +4,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
+from pathlib import Path
+
 from sqlalchemy import func, select, text
+from yoink.core.db.query import load_sql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.activity import collect_activity
@@ -35,24 +38,9 @@ _VIDEO_DOMAINS = frozenset({
     "reddit.com", "redd.it",
 })
 
-_LIST_USERS_SQL = """
-    SELECT
-        u.id, u.username, u.first_name, u.photo_url,
-        u.role, u.language, u.theme, u.ban_until,
-        u.created_at, u.updated_at,
-        COALESCE(dl.dl_count, 0) AS dl_count,
-        dl.dl_last_at
-    FROM users u
-    LEFT JOIN LATERAL (
-        SELECT COUNT(*) AS dl_count, MAX(created_at) AS dl_last_at
-        FROM download_log WHERE user_id = u.id
-    ) dl ON true
-    {where}
-    ORDER BY {order}
-    LIMIT :limit OFFSET :offset
-"""
-
-_COUNT_USERS_SQL = "SELECT COUNT(*) FROM users u {where}"
+_Q = Path(__file__).parent / "queries"
+_LIST_USERS_SQL  = load_sql(_Q, "list_users")
+_COUNT_USERS_SQL = load_sql(_Q, "count_users")
 
 
 def _categorize_domain(domain: str | None) -> str:

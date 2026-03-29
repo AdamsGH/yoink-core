@@ -273,6 +273,27 @@ frontend/
 
 **API layer:** all `apiClient` calls go through typed modules in `lib/api/` and plugin `api/` directories. Pages and hooks import from those modules, not from `apiClient` directly.
 
+## SQL query layer
+
+Raw SQL lives in `.sql` files, never inline in Python. Loaded at import time via `yoink.core.db.query.load_sql()`.
+
+```
+src/yoink/core/db/
+  query.py                  # load_sql(base, name), date_condition(), date_params()
+  base.py                   # DeclarativeBase, AuditMixin, SoftDeleteMixin, utcnow()
+core/api/routers/queries/
+  list_users.sql            # paginated user list with dl stats (LATERAL)
+  count_users.sql           # count for the same filtered query
+```
+
+**`load_sql(base, name)`** - reads `base/name.sql` once at module import; result is a plain string passed to `text()`.  
+**`date_condition(col)`** - returns `CAST(:since AS timestamptz) IS NULL OR {col} >= :since`; eliminates the `date_filter = "AND ..." if since else ""` pattern.  
+**`date_params(since, **kw)`** - builds `{"since": since, ...}`; `since=None` disables the filter without changing query text (stable query plan).
+
+Plugin SQL files: `plugins/yoink-stats/src/yoink_stats/queries/*.sql` (23 files).
+
+**DB view:** `stats_user_latest_name` (migration `0031`) - `DISTINCT ON (user_id)` over `stats_user_names ORDER BY date DESC`. Replaces repeated `LEFT JOIN LATERAL (SELECT ... ORDER BY date DESC LIMIT 1)` in ~10 analytics queries.
+
 ## Database migrations
 
 Single Alembic chain covering core and all plugins:
@@ -309,6 +330,7 @@ Single Alembic chain covering core and all plugins:
 | 0028 | stats_reactions table |
 | 0029 | stats_group_members table |
 | 0030 | stats_chat_admins table |
+| 0031 | stats_user_latest_name view |
 
 ## Custom Bot API server
 
