@@ -169,15 +169,15 @@ class UserSessionService:
     async def get_chat_members(
         self,
         chat_id: int,
-        filter: str = "chatMembersFilterMembers",
+        filter: str = "members",
         offset: int = 0,
         limit: int = 200,
-    ) -> dict:
+    ) -> list[dict]:
         """
-        Returns dict with keys: total_count, members[].
-        Each member has: user_id, status, joined_chat_date, etc.
-        filter options: chatMembersFilterMembers, chatMembersFilterAdministrators,
-                        chatMembersFilterBanned, chatMembersFilterRestricted
+        Returns list of member objects.
+        Each member has: user{id, first_name, username, ...}, status, joined_date.
+        filter options: members, administrators, banned, restricted
+        Result is a plain list (not wrapped in total_count/members dict).
         """
         return await self.call(
             "getChatMembers",
