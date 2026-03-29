@@ -31,6 +31,21 @@ export function formatDateMonth(iso: string | null | undefined): string {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short' })
 }
 
+/** Compact date with time, omits year if current: "Mar 29, 10:51" or "Jan 5 2024, 10:51" */
+export function formatDateCompact(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  const now = new Date()
+  const sameYear = d.getFullYear() === now.getFullYear()
+  return d.toLocaleString(navigator.language, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 /** Medium date without time: "Jan 5, 2025" */
 export function formatDateDay(iso: string | null | undefined): string {
   if (!iso) return '-'
