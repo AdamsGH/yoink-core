@@ -57,6 +57,8 @@ export interface PluginManifest {
   id: string
   name: string
   routes: PluginRoute[]
+  /** Public routes rendered outside AuthGate - no JWT required. */
+  publicRoutes?: PluginRoute[]
   navGroups?: NavGroup[]
   resources?: ResourceProps[]
   userStatsEndpoint?: string

@@ -169,7 +169,35 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
+function PublicRoutes() {
+  const publicRoutes = plugins.flatMap((p) => p.publicRoutes ?? [])
+  if (publicRoutes.length === 0) return null
+  return (
+    <BrowserRouter>
+      <Routes>
+        {publicRoutes.map((r) => (
+          <Route key={r.path} path={r.path} element={r.element} />
+        ))}
+        <Route path="*" element={null} />
+      </Routes>
+    </BrowserRouter>
+  )
+}
+
 export default function App() {
+  // Check if current path matches any public route before mounting the full app.
+  const publicPaths = plugins.flatMap((p) => (p.publicRoutes ?? []).map((r) => r.path))
+  const isPublic = publicPaths.some((p) => window.location.pathname.startsWith(p))
+
+  if (isPublic) {
+    return (
+      <ErrorBoundary>
+        <PublicRoutes />
+        <Toaster position="top-right" richColors />
+      </ErrorBoundary>
+    )
+  }
+
   return (
     <ErrorBoundary>
       <AuthGate>
