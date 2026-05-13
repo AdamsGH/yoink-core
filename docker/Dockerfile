@@ -9,7 +9,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
 
-RUN uv pip install --system --no-cache -e .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -e .
 
 FROM builder-core AS builder-plugins
 
@@ -27,7 +28,8 @@ COPY plugins/yoink-music/src/ /app/plugins/yoink-music/src/
 COPY plugins/yoink-insight/pyproject.toml /app/plugins/yoink-insight/
 COPY plugins/yoink-insight/src/ /app/plugins/yoink-insight/src/
 
-RUN uv pip install --system --no-cache \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system \
     -e /app/plugins/yoink-dl \
     -e /app/plugins/yoink-stats \
     -e /app/plugins/yoink-music \
@@ -49,7 +51,8 @@ RUN apk add --no-cache \
     libpq \
  && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
  && echo "${TZ}" > /etc/timezone \
- && apk del tzdata
+ && apk del tzdata \
+ && yt-dlp --remote-components ejs:github --skip-download --print title 'https://youtu.be/dQw4w9WgXcQ' || true
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY --from=builder-plugins /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages

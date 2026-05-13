@@ -50,6 +50,7 @@ services:
     env_file: .env
     environment:
       BOT_API_URL: "http://yoink-tg-bot-api:8082"
+      MUSIC_PROXY_URL: "${proxy_url:-}"
     depends_on:
       yoink-postgres:
         condition: service_healthy
@@ -172,7 +173,7 @@ services:
     container_name: yoink-bgutil
     restart: unless-stopped
     environment:
-      PROXY: "${bgutil_proxy:-}"
+      PROXY: "${proxy_url:-}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
