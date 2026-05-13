@@ -52,6 +52,9 @@ group:
   thread_invalid_id: "Неверный thread_id."
   thread_usage: "Использование:\n/thread list\n/thread allow [thread_id]\n/thread deny [thread_id]\n/thread reset [thread_id]"
 
+confusion_guard:
+  nudge: "Напиши /help, болван."
+
 admin:
   user_blocked: "✅ Пользователь {user_id} заблокирован."
   user_unblocked: "✅ Пользователь {user_id} разблокирован."

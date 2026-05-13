@@ -52,6 +52,9 @@ group:
   thread_invalid_id: "Invalid thread_id."
   thread_usage: "Usage:\n/thread list\n/thread allow [thread_id]\n/thread deny [thread_id]\n/thread reset [thread_id]"
 
+confusion_guard:
+  nudge: "Just write /help, idiot."
+
 admin:
   user_blocked: "✅ User {user_id} blocked."
   user_unblocked: "✅ User {user_id} unblocked."
