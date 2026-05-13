@@ -23,33 +23,33 @@ build target="all":
     cd "$(dirname "$(just --justfile)")"
     case "{{target}}" in
       yoink)
-        docker build -f docker/Dockerfile \
+        docker build -f docker/Dockerfile --progress=plain \
           --build-arg CACHE_BUST=$(git rev-parse HEAD) \
           -t {{image_yoink}}    .
         ;;
       frontend)
-        docker build -f docker/Dockerfile.frontend \
+        docker build -f docker/Dockerfile.frontend --progress=plain \
           --build-arg CACHE_BUST=$(git rev-parse HEAD) \
           -t {{image_frontend}} .
         ;;
       nginx)
-        docker build -f docker/Dockerfile.nginx \
+        docker build -f docker/Dockerfile.nginx --progress=plain \
           -t {{image_nginx}} .
         ;;
       tg)
-        docker build -f docker/Dockerfile.tg-bot-api -t {{image_tg}}      .
+        docker build -f docker/Dockerfile.tg-bot-api --progress=plain -t {{image_tg}} .
         ;;
       backup)
-        docker build -f docker/Dockerfile.backup     -t yoink/backup:latest .
+        docker build -f docker/Dockerfile.backup --progress=plain -t yoink/backup:latest .
         ;;
       all)
-        docker build -f docker/Dockerfile \
+        docker build -f docker/Dockerfile --progress=plain \
           --build-arg CACHE_BUST=$(git rev-parse HEAD) \
           -t {{image_yoink}}    .
-        docker build -f docker/Dockerfile.frontend \
+        docker build -f docker/Dockerfile.frontend --progress=plain \
           --build-arg CACHE_BUST=$(git rev-parse HEAD) \
           -t {{image_frontend}} .
-        docker build -f docker/Dockerfile.nginx \
+        docker build -f docker/Dockerfile.nginx --progress=plain \
           -t {{image_nginx}} .
         ;;
       *)

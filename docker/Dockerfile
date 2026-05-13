@@ -52,7 +52,7 @@ RUN apk add --no-cache \
  && cp /usr/share/zoneinfo/${TZ} /etc/localtime \
  && echo "${TZ}" > /etc/timezone \
  && apk del tzdata \
- && yt-dlp --remote-components ejs:github --skip-download --print title 'https://youtu.be/dQw4w9WgXcQ' || true
+ && timeout 30 yt-dlp --remote-components ejs:github --skip-download --print title 'https://youtu.be/dQw4w9WgXcQ' || true
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 COPY --from=builder-plugins /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
