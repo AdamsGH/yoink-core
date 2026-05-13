@@ -20,7 +20,7 @@ default:
 build target="all":
     #!/usr/bin/env bash
     set -euo pipefail
-    cd "$(dirname "$(just --justfile)")"
+    cd "$(git rev-parse --show-toplevel)"
     case "{{target}}" in
       yoink)
         docker build -f docker/Dockerfile --progress=plain \

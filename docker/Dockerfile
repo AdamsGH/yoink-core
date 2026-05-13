@@ -35,6 +35,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     -e /app/plugins/yoink-music \
     -e /app/plugins/yoink-insight
 
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system bgutil-ytdlp-pot-provider
+
 FROM python:3.12-alpine
 
 ARG TZ=Europe/Moscow
