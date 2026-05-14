@@ -25,16 +25,10 @@ from telegram import (
 )
 from telegram.error import TelegramError
 
+from yoink.core.auth.rbac import ROLE_RANK as _ROLE_RANK
 from yoink.core.plugin import CommandSpec
 
 logger = logging.getLogger(__name__)
-
-_ROLE_RANK: dict[str, int] = {
-    "user": 0,
-    "moderator": 1,
-    "admin": 2,
-    "owner": 3,
-}
 
 _CORE_COMMANDS: list[CommandSpec] = [
     CommandSpec("start",     "Welcome",                  scope="private",  descriptions={"ru": "Начало работы"}),

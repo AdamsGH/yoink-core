@@ -17,6 +17,8 @@ ROLE_ORDER = [
     UserRole.owner,
 ]
 
+ROLE_RANK: dict[str, int] = {r.value: i for i, r in enumerate(ROLE_ORDER)}
+
 
 def role_gte(user_role: UserRole, min_role: UserRole) -> bool:
     """True if user_role is at least as permissive as min_role."""
