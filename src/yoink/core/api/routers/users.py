@@ -4,13 +4,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
-from pathlib import Path
 
-from sqlalchemy import func, select, text
-from yoink.core.db.query import load_sql
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yoink.core.activity import collect_activity
+from yoink.core.activity import collect_activity, collect_list_users
 from yoink.core.api.deps import get_current_user, get_db
 from yoink.core.api.exceptions import ForbiddenError, NotFoundError
 from yoink.core.api.schemas import UserResponse, UserStatsResponse, UserUpdateRequest
@@ -23,79 +21,10 @@ router = APIRouter(
     responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}},
 )
 
-_SORT_FIELDS = {"created_at", "updated_at", "name", "role", "dl_count", "dl_last_at"}
-
-_MUSIC_DOMAINS = frozenset({
-    "open.spotify.com", "spotify.com",
-    "music.yandex.ru", "music.yandex.com",
-    "deezer.com", "www.deezer.com",
-    "music.apple.com", "soundcloud.com", "music.youtube.com",
-})
-_VIDEO_DOMAINS = frozenset({
-    "youtube.com", "youtu.be", "m.youtube.com", "www.youtube.com",
-    "tiktok.com", "vimeo.com", "twitch.tv",
-    "instagram.com", "ig.me", "twitter.com", "x.com",
-    "reddit.com", "redd.it",
-})
-
-_Q = Path(__file__).parent / "queries"
-_LIST_USERS_SQL  = load_sql(_Q, "list_users")
-_COUNT_USERS_SQL = load_sql(_Q, "count_users")
+_SORT_FIELDS = {"created_at", "updated_at", "name", "role"}
 
 
-def _categorize_domain(domain: str | None) -> str:
-    if not domain:
-        return "other"
-    d = domain.lower().removeprefix("www.")
-    if d in _MUSIC_DOMAINS:
-        return "music"
-    if d in _VIDEO_DOMAINS:
-        return "video"
-    return "other"
-
-
-def _build_users_where(search: str | None, role: str | None, status: str | None) -> tuple[str, dict]:
-    clauses: list[str] = []
-    params: dict = {}
-    if search:
-        s = search.lstrip("@")
-        clauses.append(
-            "(u.username ILIKE :search OR u.first_name ILIKE :search OR CAST(u.id AS TEXT) = :search_exact)"
-        )
-        params["search"] = f"%{s}%"
-        params["search_exact"] = s
-    if role and role != "all":
-        clauses.append("u.role = :role")
-        params["role"] = role
-    if status == "active":
-        clauses.append("u.role NOT IN ('restricted', 'banned')")
-    elif status == "restricted":
-        clauses.append("u.role = 'restricted'")
-    elif status == "banned":
-        clauses.append("u.role = 'banned'")
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    return where, params
-
-
-def _build_users_order(sort: str, direction: str) -> str:
-    desc = "DESC" if direction == "desc" else "ASC"
-    nulls = "NULLS LAST" if desc == "DESC" else "NULLS FIRST"
-    match sort:
-        case "name":
-            return f"COALESCE(u.first_name, u.username, CAST(u.id AS TEXT)) {desc}"
-        case "role":
-            return f"u.role {desc}"
-        case "dl_count":
-            return f"dl_count {desc} {nulls}"
-        case "dl_last_at":
-            return f"dl_last_at {desc} {nulls}"
-        case "updated_at":
-            return f"u.updated_at {desc}"
-        case _:
-            return f"u.created_at {desc}"
-
-
-def _user_response(u: User, dl_count: int = 0, dl_last_at: datetime | None = None) -> UserResponse:
+def _user_response(u: User, dl_count: int = 0, dl_last_at: datetime | None = None, **_: object) -> UserResponse:
     return UserResponse(
         id=u.id, username=u.username, first_name=u.first_name, photo_url=u.photo_url,
         role=u.role, language=u.language, theme=u.theme,
@@ -134,46 +63,43 @@ async def list_users(
     if direction not in ("asc", "desc"):
         direction = "desc"
 
-    try:
-        from yoink_dl.storage.models import DownloadLog as _DL  # noqa: F401, PLC0415
-        has_dl = True
-    except ImportError:
-        has_dl = False
+    q = select(User)
+    if search:
+        s = search.lstrip("@")
+        q = q.where(User.username.ilike(f"%{s}%") | User.first_name.ilike(f"%{s}%"))
+    if role and role != "all":
+        try:
+            q = q.where(User.role == UserRole(role))
+        except ValueError:
+            pass
+    if status == "active":
+        q = q.where(User.role.notin_([UserRole.restricted, UserRole.banned]))
+    elif status == "restricted":
+        q = q.where(User.role == UserRole.restricted)
+    elif status == "banned":
+        q = q.where(User.role == UserRole.banned)
 
-    where, params = _build_users_where(search, role, status)
+    total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
 
-    if has_dl:
-        order = _build_users_order(sort, direction)
-        total = (await session.execute(text(_COUNT_USERS_SQL.format(where=where)), params)).scalar_one()
-        rows = (await session.execute(
-            text(_LIST_USERS_SQL.format(where=where, order=order)),
-            {**params, "limit": limit, "offset": offset},
-        )).fetchall()
-        items = [UserResponse(
-            id=r.id, username=r.username, first_name=r.first_name, photo_url=r.photo_url,
-            role=r.role, language=r.language, theme=r.theme,
-            ban_until=r.ban_until, created_at=r.created_at, updated_at=r.updated_at,
-            dl_count=r.dl_count, dl_last_at=r.dl_last_at,
-        ) for r in rows]
+    order_col = {
+        "name": User.first_name,
+        "role": User.role,
+        "updated_at": User.updated_at,
+    }.get(sort, User.created_at)
+    if direction == "desc":
+        q = q.order_by(order_col.desc())
     else:
-        q = select(User)
-        if search:
-            s = search.lstrip("@")
-            q = q.where(User.username.ilike(f"%{s}%") | User.first_name.ilike(f"%{s}%"))
-        if role and role != "all":
-            try:
-                q = q.where(User.role == UserRole(role))
-            except ValueError:
-                pass
-        if status == "active":
-            q = q.where(User.role.notin_([UserRole.restricted, UserRole.banned]))
-        elif status == "restricted":
-            q = q.where(User.role == UserRole.restricted)
-        elif status == "banned":
-            q = q.where(User.role == UserRole.banned)
-        total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
-        users = (await session.execute(q.order_by(User.created_at.desc()).offset(offset).limit(limit))).scalars().all()
-        items = [_user_response(u) for u in users]
+        q = q.order_by(order_col.asc())
+    users = (await session.execute(q.offset(offset).limit(limit))).scalars().all()
+
+    # Merge plugin-supplied per-user fields (e.g. dl_count, dl_last_at from yoink-dl)
+    user_ids = [u.id for u in users]
+    plugin_fields = await collect_list_users(session, user_ids)
+
+    items = [
+        _user_response(u, **plugin_fields.get(u.id, {}))
+        for u in users
+    ]
 
     return {"items": items, "total": total, "offset": offset, "limit": limit}
 
