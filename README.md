@@ -4,6 +4,17 @@ Telegram bot platform with a plugin system, REST API, and React WebApp. Handles 
 
 Plugins are git submodules under `plugins/`. Each is an independent Python package with its own handlers, routes, models, migrations, and frontend pages.
 
+## Entrypoints
+
+| Script | Module | Description |
+|---|---|---|
+| `yoink-combined` | `yoink.combined_main:main` | **Production default.** Bot + API in a single asyncio loop; shared session_factory and bot_data. Used by docker entrypoint. |
+| `yoink` | `yoink.main:main` | Bot only (no API). Useful when API runs separately. |
+| `yoink-api` | `yoink.api_main_cli:main` | API only via uvicorn (programmatic). |
+| `yoink.api_main` | ASGI app object | For external ASGI servers: `uvicorn yoink.api_main:app`. |
+
+In split-deploy scenarios run `yoink` + `yoink-api` in separate containers. For single-container deploys use `yoink-combined`.
+
 ## Quick start
 
 ```bash
