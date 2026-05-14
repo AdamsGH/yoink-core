@@ -132,11 +132,6 @@ def build_app(
 
         _register_inline_dispatcher(application, plugins)
 
-        # Temporary: log all message updates to diagnose via_bot handler issue
-        import telegram
-        from telegram.ext import TypeHandler
-
-
         for plugin in plugins:
             for job in (plugin.get_jobs() or []):
                 application.job_queue.run_repeating(
