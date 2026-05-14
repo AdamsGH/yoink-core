@@ -46,5 +46,6 @@ def setup_logging(*, debug: bool = False, json_logs: bool = False) -> None:
     for noisy in (
         "httpx", "httpcore", "telegram", "apscheduler",
         "asyncio", "urllib3", "uvicorn.access",
+        "yandex_music",
     ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
