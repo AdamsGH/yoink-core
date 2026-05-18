@@ -3,7 +3,7 @@ import { useGetIdentity } from '@refinedev/core'
 import { useTranslation } from 'react-i18next'
 import { Download, Music, Film, Package } from 'lucide-react'
 
-import { apiClient } from '@core/lib/api-client'
+import { meApi } from '@core/lib/api/me'
 import { formatDate } from '@core/lib/utils'
 import { useTelegram } from '@core/layout/TelegramProvider'
 import type { UserStats } from '@core/types/plugin'
@@ -39,7 +39,7 @@ export function UserPanel({ statsEndpoint }: UserPanelProps) {
 
   useEffect(() => {
     if (!open || !statsEndpoint) return
-    apiClient.get<UserStats>(statsEndpoint)
+    meApi.getStats(statsEndpoint)
       .then((r) => setStats(r.data))
       .catch(() => {})
   }, [open, statsEndpoint])
