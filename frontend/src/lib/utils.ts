@@ -59,7 +59,7 @@ export function decodeJwt(token: string): Record<string, unknown> {
     const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
     return JSON.parse(decoded) as Record<string, unknown>
   } catch (err) {
-    console.error('Failed to decode JWT payload', err)
+    if (import.meta.env.DEV) console.error('Failed to decode JWT payload', err)
     return {}
   }
 }

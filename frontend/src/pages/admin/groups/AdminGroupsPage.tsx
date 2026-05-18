@@ -79,10 +79,10 @@ function ManualThreadInput({
   )
 }
 
-function threadLabel(t: ThreadPolicy): string {
-  if (t.name) return t.name
-  if (t.thread_id == null) return 'Main chat'
-  return `Thread #${t.thread_id}`
+function threadLabel(policy: ThreadPolicy, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (policy.name) return policy.name
+  if (policy.thread_id == null) return t('groups.threads.main_chat')
+  return t('groups.threads.thread_n', { id: policy.thread_id })
 }
 
 interface AddState {
@@ -122,7 +122,7 @@ function AddThreadDialog({
     setSaving(true)
     try {
       await groupsApi.addThread(groupId, { thread_id: parsedId, name: form.name.trim() || null, enabled: form.enabled })
-      toast.success('Thread policy saved')
+      toast.success(t('groups.threads.saved'))
       onClose()
       onDone()
     } catch {
@@ -246,7 +246,7 @@ function ThreadPoliciesDialog({
   }
 
   const remove = async (policy: ThreadPolicy) => {
-    if (!confirm(`Remove policy for "${threadLabel(policy)}"?`)) return
+    if (!confirm(t('groups.threads.remove_confirm', { label: threadLabel(policy, t) }))) return
     try {
       await groupsApi.deleteThread(group.id, policy.id)
       load()
@@ -295,7 +295,7 @@ function ThreadPoliciesDialog({
               {threads.map((tp) => (
                 <div key={tp.id} className="flex items-center gap-2 px-3 py-2.5">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">{threadLabel(tp)}</p>
+                    <p className="text-sm font-medium">{threadLabel(tp, t)}</p>
                     {tp.name && tp.thread_id != null && (
                       <p className="font-mono text-xs text-muted-foreground">#{tp.thread_id}</p>
                     )}

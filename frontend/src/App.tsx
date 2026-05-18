@@ -158,10 +158,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 24, color: 'red', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-          <h2>App crashed</h2>
+        <div className="p-6 font-mono whitespace-pre-wrap text-destructive">
+          <h2 className="text-lg font-semibold">App crashed</h2>
           <p>{this.state.error.message}</p>
-          <pre>{this.state.error.stack}</pre>
+          <pre className="mt-2 text-xs">{this.state.error.stack}</pre>
         </div>
       )
     }

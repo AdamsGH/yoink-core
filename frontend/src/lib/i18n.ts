@@ -25,7 +25,7 @@ const tgLang = (() => {
     const tg = window.Telegram?.WebApp
     return tg?.initDataUnsafe?.user?.language_code ?? null
   } catch (err) {
-    console.error('Failed to read Telegram language', err)
+    if (import.meta.env.DEV) console.error('Failed to read Telegram language', err)
     return null
   }
 })()
@@ -34,7 +34,7 @@ const storedLang = (() => {
   try {
     return localStorage.getItem('yoink_lang')
   } catch (err) {
-    console.error('Failed to read stored language preference', err)
+    if (import.meta.env.DEV) console.error('Failed to read stored language preference', err)
     return null
   }
 })()

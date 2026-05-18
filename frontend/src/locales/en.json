@@ -278,6 +278,12 @@
     "no": "no",
     "untitled": "untitled",
     "thread_policies": "Thread policies",
+    "threads": {
+      "main_chat": "Main chat",
+      "thread_n": "Thread #{{id}}",
+      "saved": "Thread policy saved",
+      "remove_confirm": "Remove policy for \"{{label}}\"?"
+    },
     "edit_title_new": "Add group",
     "edit_title_edit": "Edit group",
     "field_chat_id": "Telegram chat ID",

@@ -278,6 +278,12 @@
     "no": "нет",
     "untitled": "без названия",
     "thread_policies": "Политики тредов",
+    "threads": {
+      "main_chat": "Основной чат",
+      "thread_n": "Тема #{{id}}",
+      "saved": "Правило темы сохранено",
+      "remove_confirm": "Удалить правило для \"{{label}}\"?"
+    },
     "edit_title_new": "Добавить группу",
     "edit_title_edit": "Редактировать группу",
     "field_chat_id": "Telegram chat ID",
