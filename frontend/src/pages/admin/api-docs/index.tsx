@@ -1,42 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { ApiReferenceReact } from '@scalar/api-reference-react'
+import '@scalar/api-reference-react/style.css'
 import { useSidebar } from '@ui'
+import { apiClient } from '@core/lib/api-client'
 
 const APP_TOKEN_KEY = 'access_token'
 
-function syncTokenToScalar() {
-  const token = localStorage.getItem(APP_TOKEN_KEY)
-  if (!token) return
-  // scalar-client-auth: used by Scalar 1.49.x client panel
-  localStorage.setItem('scalar-client-auth', JSON.stringify({ httpBearer: { token } }))
-  // scalar-reference-auth-api-1: used by Scalar reference panel.
-  // Slug is "api-1" because createApiReference config has no title/slug field.
-  localStorage.setItem(
-    'scalar-reference-auth-api-1',
-    JSON.stringify({
-      secrets: {
-        HTTPBearer: {
-          type: 'http',
-          'x-scalar-secret-token': token,
-          'x-scalar-secret-username': '',
-          'x-scalar-secret-password': '',
-        },
-      },
-      selected: {
-        document: { selectedIndex: 0, selectedSchemes: [{ HTTPBearer: [] }] },
-        path: null,
-      },
-    }),
-  )
-}
-
 export default function ApiDocsPage() {
   const { state, isMobile } = useSidebar()
-  const iframeRef = useRef<HTMLIFrameElement>(null)
-  const [src, setSrc] = useState<string>('')
+  const [spec, setSpec] = useState<object | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    syncTokenToScalar()
-    setSrc(`/docs?t=${Date.now()}`)
+    apiClient
+      .get<object>('/_meta/openapi.json')
+      .then((r) => setSpec(r.data))
+      .catch((e) => setError(e?.response?.status === 403 ? 'Admin role required' : 'Failed to load schema'))
   }, [])
 
   const left = isMobile
@@ -47,18 +26,28 @@ export default function ApiDocsPage() {
 
   const bottom = isMobile ? '56px' : '0px'
 
+  const token = localStorage.getItem(APP_TOKEN_KEY) ?? ''
+
   return (
     <div
-      className="fixed top-12 right-0 transition-[left,bottom] duration-200 ease-linear"
+      className="fixed top-12 right-0 overflow-auto transition-[left,bottom] duration-200 ease-linear"
       style={{ left, bottom }}
     >
-      {src && (
-        <iframe
-          ref={iframeRef}
-          src={src}
-          className="h-full w-full border-none"
-          title="API Docs"
-          allow="clipboard-write"
+      {error && <div className="p-6 text-sm text-muted-foreground">{error}</div>}
+      {!error && !spec && (
+        <div className="p-6 text-sm text-muted-foreground">Loading API schema…</div>
+      )}
+      {spec && (
+        <ApiReferenceReact
+          configuration={{
+            spec: { content: spec },
+            theme: 'default',
+            hideClientButton: true,
+            authentication: {
+              preferredSecurityScheme: 'HTTPBearer',
+              http: { bearer: { token } },
+            },
+          }}
         />
       )}
     </div>

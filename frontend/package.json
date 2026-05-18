@@ -31,6 +31,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@refinedev/core": "^5.0.11",
     "@refinedev/react-router": "^2.0.4",
+    "@scalar/api-reference-react": "^0.7.0",
     "@tanstack/react-query": "^5.95.2",
     "@telegram-apps/sdk": "^3.11.8",
     "@uiw/codemirror-theme-vscode": "^4.25.9",

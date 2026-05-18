@@ -1,30 +1,43 @@
 """FastAPI application factory."""
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-import time
-
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from scalar_fastapi import get_scalar_api_reference
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from yoink.core.api.health import router as health_router
 from yoink.core.api.internal.router import router as internal_router
-from yoink.core.api.routers import api_keys, auth, bot_settings, forum, groups, messages, permissions, settings, threads, users, user_photos
+from yoink.core.api.routers import (
+    api_keys,
+    auth,
+    bot_settings,
+    forum,
+    groups,
+    messages,
+    permissions,
+    settings,
+    threads,
+    user_photos,
+    users,
+)
 from yoink.core.db.engine import create_tables, get_session_factory, init_engine
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
     from yoink.core.plugin import YoinkPlugin
 
 
-def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
+def create_api(config, plugins: list[YoinkPlugin] | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from pathlib import Path
+
         from yoink.core.services.user_session import UserSessionService
 
         init_engine(config.database_url, echo=config.database_echo)
@@ -63,6 +76,7 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
         ),
         docs_url=None,
         redoc_url=None,
+        openapi_url=None,
         lifespan=lifespan,
         openapi_tags=[
             {
@@ -186,12 +200,16 @@ def create_api(config, plugins: list["YoinkPlugin"] | None = None) -> FastAPI:
             if router is not None:
                 app.include_router(router, prefix=f"/api/v1/{plugin.name}")
 
-    @app.get("/docs", include_in_schema=False)
-    async def scalar_html():
-        return get_scalar_api_reference(
-            openapi_url="/openapi.json",
-            title="Yoink API",
-            persist_auth=True,
-        )
+    # OpenAPI schema is exposed under /api/v1 so it goes through the same Bearer
+    # interceptor as every other API call. The UI itself is rendered inline by
+    # the frontend via @scalar/api-reference-react; no iframe, no separate /docs.
+    from yoink.core.auth.rbac import require_role
+    from yoink.core.db.models import User, UserRole
+
+    @app.get("/api/v1/_meta/openapi.json", include_in_schema=False)
+    async def openapi_schema(
+        _: User = Depends(require_role(UserRole.admin)),
+    ):
+        return app.openapi()
 
     return app
