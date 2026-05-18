@@ -300,8 +300,8 @@ async def refresh_user_commands(
                         pass
 
             granted_features = explicit
-        except Exception as exc:
-            logger.warning("Could not load feature grants for user %d: %s", user_id, exc)
+        except Exception:
+            logger.exception("Could not load feature grants for user %d", user_id)
 
     try:
         await set_user_commands(
@@ -311,8 +311,8 @@ async def refresh_user_commands(
             granted_features=granted_features,
         )
         logger.debug("Refreshed commands for user %d (role=%s lang=%s features=%s)", user_id, role, lang, granted_features)
-    except Exception as exc:
-        logger.warning("Failed to refresh commands for user %d: %s", user_id, exc)
+    except Exception:
+        logger.exception("Failed to refresh commands for user %d", user_id)
 
 
 _KNOWN_LANGS = ("en", "ru")
@@ -454,9 +454,9 @@ async def refresh_member_commands(
                     lang=lang,
                     granted_features=explicit,
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to refresh member commands group=%d user=%d: %s", gid, user_id, exc
+            except Exception:
+                logger.exception(
+                    "Failed to refresh member commands group=%d user=%d", gid, user_id
                 )
-    except Exception as exc:
-        logger.warning("refresh_member_commands failed for user %d: %s", user_id, exc)
+    except Exception:
+        logger.exception("refresh_member_commands failed for user %d", user_id)
