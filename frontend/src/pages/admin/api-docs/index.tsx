@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ApiReferenceReact } from '@scalar/api-reference-react'
 import '@scalar/api-reference-react/style.css'
 import { useSidebar } from '@ui'
-import { apiClient } from '@core/lib/api-client'
+import { metaApi } from '@core/lib/api/meta'
 
 const APP_TOKEN_KEY = 'access_token'
 
@@ -12,8 +12,8 @@ export default function ApiDocsPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    apiClient
-      .get<object>('/_meta/openapi.json')
+    metaApi
+      .openapi()
       .then((r) => setSpec(r.data))
       .catch((e) => setError(e?.response?.status === 403 ? 'Admin role required' : 'Failed to load schema'))
   }, [])
@@ -40,12 +40,14 @@ export default function ApiDocsPage() {
       {spec && (
         <ApiReferenceReact
           configuration={{
-            spec: { content: spec },
+            content: spec,
             theme: 'default',
             hideClientButton: true,
             authentication: {
               preferredSecurityScheme: 'HTTPBearer',
-              http: { bearer: { token } },
+              securitySchemes: {
+                HTTPBearer: { token },
+              },
             },
           }}
         />
