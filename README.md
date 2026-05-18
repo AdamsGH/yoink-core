@@ -30,7 +30,7 @@ just migrate up             # run migrations
 | Service | Description | Port |
 |---|---|---|
 | `yoink` | Bot + API | 8003 |
-| `yoink-postgres` | PostgreSQL 17 | - |
+| `yoink-postgres` | PostgreSQL 16 | - |
 | `yoink-frontend` | React SPA (nginx) | 3010 |
 | `yoink-tg-bot-api` | Custom tdlight Bot API server | 8082 |
 | `yoink-backup` | pg_dump + S3 (profile `backup`) | - |
@@ -341,7 +341,9 @@ Single Alembic chain covering core and all plugins:
 | 0028 | stats_reactions table |
 | 0029 | stats_group_members table |
 | 0030 | stats_chat_admins table |
-| 0031 | stats_user_latest_name view |
+| 0031 | stats_user_latest_name view (live, not materialised - source table is write-hot) |
+| 0032 | stats_messages (chat_id, message_id) index + message_thread_id column |
+| 0033 | insight_summary_cache table |
 
 ## Custom Bot API server
 
