@@ -4,6 +4,14 @@ Replaces repeated LATERAL subqueries against stats_user_names with a
 simple LEFT JOIN. The view uses DISTINCT ON which is efficient with the
 existing (user_id, date DESC) index on stats_user_names.
 
+Not materialised on purpose: stats_user_names is write-hot (every group
+message may upsert a row when the sender's display name changes), so a
+materialised view would need REFRESH on every write or a scheduled
+rebuild. The live DISTINCT ON over an index lookup is cheaper at our
+scale than maintaining a materialised copy. Switch to MATERIALIZED VIEW
++ scheduled REFRESH if the chat-members endpoint ever becomes the
+dominant query and stats_user_names writes are batched.
+
 Revision ID: 0031
 Revises: 0030
 """
