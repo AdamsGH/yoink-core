@@ -6,8 +6,8 @@ Create Date: 2026-03-29
 """
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0033_insight_cache"
 down_revision = "0032_stats_msg_idx"

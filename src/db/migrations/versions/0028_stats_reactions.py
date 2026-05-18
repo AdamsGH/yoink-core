@@ -3,8 +3,8 @@
 Revision ID: 0028
 Revises: 0027
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0028_stats_reactions"
 down_revision = "0027_group_photo_url"

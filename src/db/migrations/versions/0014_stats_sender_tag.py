@@ -4,8 +4,8 @@ Revision ID: 0014_stats_sender_tag
 Revises: 0013_insight_user_settings
 Create Date: 2026-03-27
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0014_stats_sender_tag"
 down_revision = "0013_insight_user_settings"

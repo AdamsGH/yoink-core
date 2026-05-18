@@ -4,8 +4,8 @@ Revision ID: 0026_user_settings_use_pool
 Revises: 0025_cookie_session_key
 Create Date: 2026-03-29
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0026_user_settings_use_pool"
 down_revision = "0025_cookie_session_key"

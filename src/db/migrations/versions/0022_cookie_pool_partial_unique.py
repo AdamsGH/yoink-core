@@ -7,8 +7,8 @@ Revision ID: 0022_cookie_pool_partial_unique
 Revises: 0021_cookie_unique_constraint
 Create Date: 2026-03-29
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0022_cookie_pool_partial_unique"
 down_revision = "0021_cookie_unique_constraint"

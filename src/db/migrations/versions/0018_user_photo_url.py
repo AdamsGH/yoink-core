@@ -3,8 +3,8 @@
 Revision ID: 0018
 Revises: 0017
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0018_user_photo_url"
 down_revision = "0017_cookie_validated_at"

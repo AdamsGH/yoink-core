@@ -4,8 +4,8 @@ Revision ID: 0015_permission_grant_source
 Revises: 0014_stats_sender_tag
 Create Date: 2026-03-27
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0015_permission_grant_source"
 down_revision = "0014_stats_sender_tag"

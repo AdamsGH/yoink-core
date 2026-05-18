@@ -6,8 +6,8 @@ Create Date: 2026-03-27
 """
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0013_insight_user_settings"
 down_revision = "0012_user_permissions"

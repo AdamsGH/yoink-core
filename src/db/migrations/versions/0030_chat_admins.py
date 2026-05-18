@@ -3,8 +3,8 @@
 Revision ID: 0030
 Revises: 0029
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0030_chat_admins"
 down_revision = "0029_group_members"

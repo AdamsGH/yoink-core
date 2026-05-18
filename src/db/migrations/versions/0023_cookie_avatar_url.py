@@ -4,8 +4,8 @@ Revision ID: 0023_cookie_avatar_url
 Revises: 0022_cookie_pool_partial_unique
 Create Date: 2026-03-29
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0023_cookie_avatar_url"
 down_revision = "0022_cookie_pool_partial_unique"

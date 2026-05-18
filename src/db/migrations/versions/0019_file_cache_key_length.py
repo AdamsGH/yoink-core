@@ -6,8 +6,8 @@ Create Date: 2026-03-29
 """
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = '0019_file_cache_key_length'
 down_revision = '0018_user_photo_url'
