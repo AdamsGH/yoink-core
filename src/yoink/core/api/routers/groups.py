@@ -1,6 +1,7 @@
 """Group management endpoints."""
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Request
@@ -16,6 +17,9 @@ from yoink.core.db.models import Group, ThreadPolicy, User, UserGroupPolicy, Use
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+logger = logging.getLogger(__name__)
 
 
 class GroupCreateRequest(BaseModel):
@@ -344,7 +348,7 @@ async def sync_group_photos(
     _: User = Depends(require_role(UserRole.owner)),
 ):
     """Fetch chat photos for all groups missing them via Bot API getChat."""
-    import httpx
+    from yoink.core.api.photo import fetch_chat_photo_id
 
     bot_api_url, bot_token = bot_api_params(request.app.state)
 
@@ -355,19 +359,13 @@ async def sync_group_photos(
     updated = 0
     for g in groups_without_photo:
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(f"{bot_api_url}/bot{bot_token}/getChat", params={"chat_id": g.id})
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                if not data.get("ok"):
-                    continue
-                photo = data["result"].get("photo")
-                if photo and photo.get("big_file_id"):
-                    g.photo_url = photo["big_file_id"]
-                    updated += 1
+            file_id = await fetch_chat_photo_id(bot_api_url, bot_token, g.id)
         except Exception:
+            logger.exception("Photo backfill failed for group %d", g.id)
             continue
+        if file_id:
+            g.photo_url = file_id
+            updated += 1
 
     await session.commit()
     return {"total": len(groups_without_photo), "updated": updated}

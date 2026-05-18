@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 from telegram.ext import ChatMemberHandler, ContextTypes
 
-from yoink.core.bot.access import ROLE_ORDER
+from yoink.core.auth.rbac import ROLE_ORDER
 
 if TYPE_CHECKING:
     from telegram import ChatMemberUpdated, Update

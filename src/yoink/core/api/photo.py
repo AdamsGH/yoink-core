@@ -60,3 +60,27 @@ def bot_api_params(app_state: object) -> tuple[str, str]:
     bot_api_url = app_state.settings.bot_api_url  # type: ignore[attr-defined]
     bot_token = app_state.settings.bot_token  # type: ignore[attr-defined]
     return bot_api_url, bot_token
+
+
+async def fetch_chat_photo_id(
+    bot_api_url: str, bot_token: str, chat_id: int, *, timeout: float = 5.0,
+) -> str | None:
+    """Call Bot API getChat for chat_id and return big_file_id if present.
+
+    Used by photo-backfill endpoints. Returns None on any failure or when
+    the chat has no photo. Logs nothing; callers may handle exceptions.
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.get(
+            f"{bot_api_url}/bot{bot_token}/getChat",
+            params={"chat_id": chat_id},
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if not data.get("ok"):
+            return None
+        photo = data["result"].get("photo")
+        if not photo:
+            return None
+        return photo.get("big_file_id") or None

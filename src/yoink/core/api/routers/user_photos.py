@@ -1,21 +1,23 @@
 """User photo proxy and backfill endpoints."""
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
-import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy import select
 
 from yoink.core.api.deps import get_db
 from yoink.core.api.exceptions import NotFoundError
-from yoink.core.api.photo import bot_api_params, resolve_chat_photo
+from yoink.core.api.photo import bot_api_params, fetch_chat_photo_id, resolve_chat_photo
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -50,22 +52,13 @@ async def sync_user_photos(
     updated = 0
     for u in users_without_photo:
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(
-                    f"{bot_api_url}/bot{bot_token}/getChat",
-                    params={"chat_id": u.id},
-                )
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                if not data.get("ok"):
-                    continue
-                photo = data["result"].get("photo")
-                if photo and photo.get("big_file_id"):
-                    u.photo_url = photo["big_file_id"]
-                    updated += 1
+            file_id = await fetch_chat_photo_id(bot_api_url, bot_token, u.id)
         except Exception:
+            logger.exception("Photo backfill failed for user %d", u.id)
             continue
+        if file_id:
+            u.photo_url = file_id
+            updated += 1
 
     await session.commit()
     return {"total": len(users_without_photo), "updated": updated}

@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from yoink.core.auth.rbac import ROLE_ORDER, role_gte
 from yoink.core.db.models import UserRole
 
 if TYPE_CHECKING:
@@ -31,19 +32,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ROLE_ORDER: list[UserRole] = [
-    UserRole.banned,
-    UserRole.restricted,
-    UserRole.user,
-    UserRole.moderator,
-    UserRole.admin,
-    UserRole.owner,
-]
-
-
-def role_gte(user_role: UserRole, min_role: UserRole) -> bool:
-    """True if user_role is at least as permissive as min_role."""
-    return ROLE_ORDER.index(user_role) >= ROLE_ORDER.index(min_role)
+__all__ = ("ROLE_ORDER", "role_gte")  # re-export for legacy callers
 
 
 @dataclass

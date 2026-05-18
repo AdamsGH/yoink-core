@@ -58,7 +58,7 @@ class UserPermissionRepo:
         if user is not None and not user.is_blocked:
             spec = _feature_spec(plugin, feature)
             if spec is not None and spec.default_min_role is not None:
-                from yoink.core.bot.access import ROLE_ORDER
+                from yoink.core.auth.rbac import ROLE_ORDER
                 from yoink.core.db.models import UserRole
                 try:
                     min_role = UserRole(spec.default_min_role)
