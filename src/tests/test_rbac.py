@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import API_SECRET, OWNER_ID, make_jwt
+from tests.conftest import OWNER_ID, make_jwt
 from yoink.core.db.models import UserRole
 
 
@@ -58,7 +58,8 @@ class TestPermissionChecker:
 
     @pytest.mark.asyncio
     async def test_blocked_user_denied(self, session_factory, banned_user):
-        from unittest.mock import MagicMock, AsyncMock
+        from unittest.mock import MagicMock
+
         from yoink.core.bot.access import AccessPolicy, PermissionChecker
         from yoink.core.db.repos.users import UserRepo
 
@@ -81,6 +82,7 @@ class TestPermissionChecker:
     @pytest.mark.asyncio
     async def test_user_allowed(self, session_factory, regular_user):
         from unittest.mock import MagicMock
+
         from yoink.core.bot.access import AccessPolicy, PermissionChecker
         from yoink.core.db.repos.users import UserRepo
 
@@ -102,6 +104,7 @@ class TestPermissionChecker:
     @pytest.mark.asyncio
     async def test_user_below_admin_role(self, session_factory, regular_user):
         from unittest.mock import MagicMock
+
         from yoink.core.bot.access import AccessPolicy, PermissionChecker
         from yoink.core.db.repos.users import UserRepo
 
@@ -124,6 +127,7 @@ class TestPermissionChecker:
     @pytest.mark.asyncio
     async def test_scope_private_only(self, session_factory, regular_user):
         from unittest.mock import MagicMock
+
         from yoink.core.bot.access import AccessPolicy, PermissionChecker
         from yoink.core.db.repos.users import UserRepo
 
@@ -154,10 +158,11 @@ class TestPermissionChecker:
     @pytest.mark.asyncio
     async def test_group_not_enabled(self, session_factory, regular_user):
         from unittest.mock import MagicMock
+
         from yoink.core.bot.access import AccessPolicy, PermissionChecker
-        from yoink.core.db.repos.users import UserRepo
-        from yoink.core.db.repos.groups import GroupRepo
         from yoink.core.db.models import Group
+        from yoink.core.db.repos.groups import GroupRepo
+        from yoink.core.db.repos.users import UserRepo
 
         async with session_factory() as sess:
             disabled_group = Group(id=-1001000099, title="Disabled", enabled=False)

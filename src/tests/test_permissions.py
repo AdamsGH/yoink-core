@@ -1,15 +1,14 @@
 """Tests for UserPermissionRepo.has() - explicit grant + role threshold paths."""
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
-import pytest_asyncio
-from datetime import datetime, timedelta, timezone
 
 from tests.conftest import OWNER_ID
-from yoink.core.db.models import User, UserPermission, UserRole
+from yoink.core.db.models import User, UserRole
 from yoink.core.db.repos.permissions import UserPermissionRepo
 from yoink.core.plugin import FeatureSpec, _feature_registry
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -94,7 +93,7 @@ class TestExplicitGrant:
     async def test_expired_grant_is_denied(self, session_factory):
         user = await _make_user(session_factory, 200002, UserRole.user)
         repo = UserPermissionRepo(session_factory)
-        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        past = datetime.now(UTC) - timedelta(hours=1)
         await repo.grant(200002, _TEST_PLUGIN, _GATED_FEATURE, granted_by=OWNER_ID, expires_at=past)
         try:
             assert await repo.has(200002, _TEST_PLUGIN, _GATED_FEATURE, user=user) is False
@@ -105,7 +104,7 @@ class TestExplicitGrant:
     async def test_non_expired_grant_is_allowed(self, session_factory):
         user = await _make_user(session_factory, 200003, UserRole.restricted)
         repo = UserPermissionRepo(session_factory)
-        future = datetime.now(timezone.utc) + timedelta(days=30)
+        future = datetime.now(UTC) + timedelta(days=30)
         await repo.grant(200003, _TEST_PLUGIN, _GATED_FEATURE, granted_by=OWNER_ID, expires_at=future)
         try:
             assert await repo.has(200003, _TEST_PLUGIN, _GATED_FEATURE, user=user) is True

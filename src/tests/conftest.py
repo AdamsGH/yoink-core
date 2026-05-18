@@ -8,13 +8,12 @@ import pytest_asyncio
 import sqlalchemy
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
-    AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
 from yoink.core.db.base import Base
-from yoink.core.db.models import User, UserRole, Group
+from yoink.core.db.models import Group, User, UserRole
 
 TEST_DB_URL = os.getenv(
     "TEST_DATABASE_URL",

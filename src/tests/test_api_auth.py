@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from tests.conftest import API_SECRET, BOT_TOKEN, OWNER_ID, make_jwt
+from tests.conftest import BOT_TOKEN, OWNER_ID, make_jwt
 
 
 def _build_init_data(

@@ -1,7 +1,7 @@
 """Tests for API key generation, hashing, scope checks."""
 from __future__ import annotations
 
-import pytest
+from datetime import UTC
 
 from yoink.core.auth.apikey import (
     ALL_SCOPES,
@@ -52,13 +52,13 @@ class TestIsExpired:
         assert not is_expired(None)
 
     def test_future_not_expired(self):
-        from datetime import datetime, timedelta, timezone
-        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        from datetime import datetime, timedelta
+        future = datetime.now(UTC) + timedelta(hours=1)
         assert not is_expired(future)
 
     def test_past_expired(self):
-        from datetime import datetime, timedelta, timezone
-        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        from datetime import datetime, timedelta
+        past = datetime.now(UTC) - timedelta(hours=1)
         assert is_expired(past)
 
 
