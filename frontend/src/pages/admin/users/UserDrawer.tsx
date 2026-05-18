@@ -1,160 +1,21 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CalendarIcon, X } from 'lucide-react'
 
 import { usersApi } from '@core/lib/api'
-import { cn, formatDate } from '@core/lib/utils'
+import { cn } from '@core/lib/utils'
 import { GRADIENT_BY_ROLE, RING_BY_ROLE, userInitials, userPhotoUrl } from '@core/lib/user-utils'
 import type { EffectiveFeatureAccess, User, UserRole, UserUpdateRequest } from '@core/types/api'
-import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Calendar, Drawer, DrawerContent, Label, Popover, PopoverContent, PopoverTrigger, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Switch, Tabs, TabsContent, TabsList, TabsTrigger } from '@ui'
+import { Avatar, AvatarFallback, AvatarImage, Button, Drawer, DrawerContent, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsContent, TabsList, TabsTrigger } from '@ui'
 import { RoleBadge } from '@app'
 import { toast } from '@core/components/ui/toast'
 
-function BanDatePicker({
-  value,
-  onChange,
-}: {
-  value: string
-  onChange: (iso: string) => void
-}) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const [hour, setHour] = useState('23')
-  const [minute, setMinute] = useState('59')
-
-  const selected = value ? new Date(value) : undefined
-
-  const applyTime = (day: Date, h: string, m: string) => {
-    const d = new Date(day)
-    d.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0)
-    onChange(d.toISOString())
-  }
-
-  const handleDaySelect = (day: Date | undefined) => {
-    if (!day) { onChange(''); setOpen(false); return }
-    applyTime(day, hour, minute)
-    setOpen(false)
-  }
-
-  const handleHourChange = (h: string) => {
-    setHour(h)
-    if (selected) applyTime(selected, h, minute)
-  }
-
-  const handleMinuteChange = (m: string) => {
-    setMinute(m)
-    if (selected) applyTime(selected, hour, m)
-  }
-
-  const label = selected
-    ? formatDate(selected.toISOString())
-    : t('users.ban_until_placeholder', { defaultValue: 'Pick date…' })
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          className={cn('w-full justify-start gap-2 font-normal', !selected && 'text-muted-foreground')}
-        >
-          <CalendarIcon className="h-4 w-4 shrink-0" />
-          <span className="flex-1 text-left truncate">{label}</span>
-          {selected && (
-            <X
-              className="h-3.5 w-3.5 shrink-0 opacity-50 hover:opacity-100"
-              onClick={(e) => { e.stopPropagation(); onChange('') }}
-            />
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
-        <Calendar
-          mode="single"
-          selected={selected}
-          onSelect={handleDaySelect}
-          disabled={(d) => d < new Date()}
-          initialFocus
-        />
-        <div className="border-t p-3 flex items-center gap-2">
-          <Label className="text-xs text-muted-foreground shrink-0">
-            {t('users.ban_until_time', { defaultValue: 'Time' })}
-          </Label>
-          <Select value={hour} onValueChange={handleHourChange}>
-            <SelectTrigger className="h-8 w-20">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="max-h-48">
-              {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
-                <SelectItem key={h} value={h}>{h}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className="text-muted-foreground">:</span>
-          <Select value={minute} onValueChange={handleMinuteChange}>
-            <SelectTrigger className="h-8 w-20">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {['00', '15', '30', '45'].map(m => (
-                <SelectItem key={m} value={m}>{m}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
-}
+import { BanDatePicker } from './BanDatePicker'
+import { StatsTab } from './UserDrawerStatsTab'
+import type { UserStats } from './UserDrawerStatsTab'
+import { PermissionsTab, roleMediaColor } from './UserDrawerPermissionsTab'
 
 const SUPPORTED_LANGS = ['en', 'ru']
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
-
-interface UserStats {
-  total: number
-  this_week: number
-  today: number
-  top_domains: { domain: string; count: number }[]
-  member_since: string
-  dl_last_at: string | null
-  music_total: number
-  music_last_at: string | null
-  ai_total: number
-  ai_last_at: string | null
-}
-
-function StatCell({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-lg border bg-card p-3 text-center">
-      <div className="text-2xl font-bold tabular-nums">{value}</div>
-      <div className="text-[11px] text-muted-foreground mt-1 uppercase tracking-wide">{label}</div>
-    </div>
-  )
-}
-
-function AccessBadge({ f }: { f: EffectiveFeatureAccess }) {
-  if (!f.effective) {
-    return <span className="text-xs text-muted-foreground">-</span>
-  }
-  if (f.access_via_role && !f.access_via_grant) {
-    return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500/50 text-blue-600">role</Badge>
-  }
-  if (f.access_via_grant && f.grant_source === 'tag') {
-    return <Badge variant="secondary" className="text-[10px] px-1.5 py-0">tag</Badge>
-  }
-  if (!f.access_via_role && f.access_via_grant) {
-    return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">grant</Badge>
-  }
-  return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-green-500/50 text-green-600">role+grant</Badge>
-}
-
-function roleMediaColor(role: UserRole) {
-  if (role === 'banned') return 'bg-destructive/10 text-destructive'
-  if (role === 'owner') return 'bg-amber-500/10 text-amber-600'
-  if (role === 'admin') return 'bg-blue-500/10 text-blue-600'
-  if (role === 'moderator') return 'bg-purple-500/10 text-purple-600'
-  if (role === 'restricted') return 'bg-orange-500/10 text-orange-600'
-  return 'bg-muted text-muted-foreground'
-}
 
 export function UserDrawer({
   user,
@@ -240,11 +101,6 @@ export function UserDrawer({
     }
   }
 
-  const groupedFeatures = features.reduce<Record<string, EffectiveFeatureAccess[]>>((acc, f) => {
-    (acc[f.plugin] ??= []).push(f)
-    return acc
-  }, {})
-
   return (
     <Drawer open={!!user} onOpenChange={(o) => !o && onClose()}>
       <DrawerContent className="max-h-[85vh] border-0">
@@ -279,142 +135,17 @@ export function UserDrawer({
               </TabsList>
 
               <div className="flex-1 overflow-y-auto pb-6">
-                <TabsContent value="stats" className="px-4 py-3 space-y-4 mt-0">
-                  {statsLoading ? (
-                    <div className="grid grid-cols-3 gap-2">
-                      {[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 rounded-lg" />)}
-                    </div>
-                  ) : stats ? (
-                    <>
-                      <div className="grid grid-cols-3 gap-2">
-                        <StatCell label={t('users.total')} value={stats.total.toLocaleString()} />
-                        <StatCell label={t('users.this_week')} value={stats.this_week.toLocaleString()} />
-                        <StatCell label={t('users.today')} value={stats.today.toLocaleString()} />
-                      </div>
-                      {stats.top_domains.length > 0 && (
-                        <div className="space-y-1.5">
-                          <p className="text-xs text-muted-foreground">{t('users.top_domains')}</p>
-                          <div className="space-y-1">
-                            {stats.top_domains.map((d) => (
-                              <div key={d.domain} className="flex items-center justify-between text-sm">
-                                <span className="font-mono text-xs truncate">{d.domain}</span>
-                                <span className="text-muted-foreground ml-2 shrink-0">{d.count}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {stats.total === 0 && (
-                        <p className="text-sm text-muted-foreground text-center py-4">{t('users.no_downloads')}</p>
-                      )}
-                      {stats.music_total > 0 && (
-                        <div className="rounded-md border px-3 py-2 space-y-1">
-                          <p className="text-xs font-medium">{t('users.music_section', { defaultValue: 'Music' })}</p>
-                          <div className="flex justify-between text-xs text-muted-foreground">
-                            <span>{t('users.music_total', { defaultValue: 'Resolved' })}</span>
-                            <span className="font-medium text-foreground">{stats.music_total.toLocaleString()}</span>
-                          </div>
-                          {stats.music_last_at && (
-                            <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>{t('users.music_last', { defaultValue: 'Last used' })}</span>
-                              <span>{formatDate(stats.music_last_at)}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {stats.ai_total > 0 && (
-                        <div className="rounded-md border px-3 py-2 space-y-1">
-                          <p className="text-xs font-medium">{t('users.ai_section', { defaultValue: 'AI / Insight' })}</p>
-                          <div className="flex justify-between text-xs text-muted-foreground">
-                            <span>{t('users.ai_total', { defaultValue: 'Queries' })}</span>
-                            <span className="font-medium text-foreground">{stats.ai_total.toLocaleString()}</span>
-                          </div>
-                          {stats.ai_last_at && (
-                            <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>{t('users.ai_last', { defaultValue: 'Last used' })}</span>
-                              <span>{formatDate(stats.ai_last_at)}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <div className="text-xs text-muted-foreground border-t pt-3 space-y-1">
-                        <div className="flex justify-between">
-                          <span>{t('users.col_joined')}</span>
-                          <span>{formatDate(user.created_at)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>{t('users.last_seen')}</span>
-                          <span>{formatDate(user.updated_at)}</span>
-                        </div>
-                        {stats.dl_last_at && (
-                          <div className="flex justify-between">
-                            <span>{t('users.dl_last_at', { defaultValue: 'Last download' })}</span>
-                            <span>{formatDate(stats.dl_last_at)}</span>
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-sm text-muted-foreground text-center py-4">{t('common.load_error')}</p>
-                  )}
+                <TabsContent value="stats" className="mt-0">
+                  <StatsTab user={user} stats={stats} statsLoading={statsLoading} />
                 </TabsContent>
 
-                <TabsContent value="access" className="px-4 py-3 space-y-4 mt-0">
-                  {permsLoading ? (
-                    <div className="space-y-3">
-                      {[0, 1].map((i) => <Skeleton key={i} className="h-16 w-full rounded-md" />)}
-                    </div>
-                  ) : features.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">{t('permissions.no_features')}</p>
-                  ) : (
-                    Object.entries(groupedFeatures).map(([plugin, feats]) => (
-                      <div key={plugin} className="space-y-1.5">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{plugin}</p>
-                        <div className="rounded-md border divide-y">
-                          {feats.map((f) => {
-                            const key = `${f.plugin}.${f.feature}`
-                            return (
-                              <div key={key} className="px-3 py-2.5 space-y-1">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
-                                      <p className="text-sm font-medium">{f.label}</p>
-                                      <AccessBadge f={f} />
-                                    </div>
-                                    {f.description && (
-                                      <p className="text-xs text-muted-foreground">{f.description}</p>
-                                    )}
-                                    {f.default_min_role && (
-                                      <p className="text-xs text-muted-foreground">
-                                        {t('permissions.default_role')}: <span className="font-mono">{f.default_min_role}+</span>
-                                      </p>
-                                    )}
-                                  </div>
-                                  <Switch
-                                    checked={f.effective}
-                                    disabled={togglingId === key || f.access_via_role || f.grant_source === 'tag'}
-                                    title={
-                                      f.access_via_role
-                                        ? t('permissions.granted_by_role')
-                                        : f.grant_source === 'tag'
-                                          ? t('permissions.source_tag_no_revoke')
-                                          : undefined
-                                    }
-                                    onCheckedChange={(v) => void toggleFeature(f, v)}
-                                  />
-                                </div>
-                                {f.access_via_grant && f.grant_expires_at && (
-                                  <p className="text-xs text-muted-foreground pl-0">
-                                    {t('permissions.expires')}: {formatDate(f.grant_expires_at)}
-                                  </p>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ))
-                  )}
+                <TabsContent value="access" className="mt-0">
+                  <PermissionsTab
+                    features={features}
+                    permsLoading={permsLoading}
+                    togglingId={togglingId}
+                    onToggle={toggleFeature}
+                  />
                 </TabsContent>
 
                 <TabsContent value="edit" className="px-4 py-3 space-y-4 mt-0">
@@ -464,4 +195,3 @@ export function UserDrawer({
     </Drawer>
   )
 }
-
