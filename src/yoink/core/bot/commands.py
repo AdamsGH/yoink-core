@@ -1,18 +1,30 @@
 """Core bot commands: /start, /help, /lang."""
 from __future__ import annotations
 
+import logging
+from datetime import UTC
+
 from telegram import (
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-    LinkPreviewOptions, Update,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Update,
 )
 from telegram.ext import (
-    Application, CallbackQueryHandler, CommandHandler, ContextTypes, filters,
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    filters,
 )
 
 from yoink.core.bot.bot_commands import refresh_user_commands
 from yoink.core.bot.middleware import get_user_repo
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import SUPPORTED, t
+
+logger = logging.getLogger(__name__)
 
 
 async def _cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -67,14 +79,15 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session_factory = context.bot_data.get("session_factory")
     if session_factory is not None:
         try:
-            from datetime import datetime, timezone
-            from sqlalchemy import select
-            from yoink.core.db.models import UserPermission
-            from yoink.core.plugin import get_all_features
-            from yoink.core.auth.rbac import ROLE_ORDER
-            from yoink.core.db.models import UserRole
+            from datetime import datetime
 
-            now = datetime.now(timezone.utc)
+            from sqlalchemy import select
+
+            from yoink.core.auth.rbac import ROLE_ORDER
+            from yoink.core.db.models import UserPermission, UserRole
+            from yoink.core.plugin import get_all_features
+
+            now = datetime.now(UTC)
             async with session_factory() as _s:
                 result = await _s.execute(
                     select(UserPermission.plugin, UserPermission.feature).where(
