@@ -1,7 +1,7 @@
 """Async engine and session factory."""
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -10,6 +10,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from yoink.core.db.base import Base
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 _engine = None
 _session_factory: async_sessionmaker | None = None

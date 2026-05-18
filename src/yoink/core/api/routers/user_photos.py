@@ -1,17 +1,21 @@
 """User photo proxy and backfill endpoints."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_db
 from yoink.core.api.exceptions import NotFoundError
 from yoink.core.api.photo import bot_api_params, resolve_chat_photo
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/users", tags=["users"])
 

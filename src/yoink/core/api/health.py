@@ -8,7 +8,6 @@ import time
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 
-from yoink.core.api.deps import get_current_user
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
 from yoink.core.metrics import metrics
@@ -27,7 +26,7 @@ async def health(request: Request) -> dict:
     checks["bot"] = _check_bot(request)
     checks["disk"] = _check_disk()
 
-    for name, result in checks.items():
+    for _name, result in checks.items():
         if result["status"] != "ok":
             overall = "degraded"
 

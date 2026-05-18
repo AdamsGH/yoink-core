@@ -1,12 +1,15 @@
 """UserPermissionRepo - CRUD for the unified user_permissions table."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import User, UserPermission
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 
 class UserPermissionRepo:
@@ -35,7 +38,7 @@ class UserPermissionRepo:
         The owner role sits at the top of the hierarchy so it satisfies any
         non-None default_min_role automatically via role_gte.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Path 1: explicit grant
         async with self._sf() as s:
@@ -66,7 +69,7 @@ class UserPermissionRepo:
         return False
 
     async def list_for_user(self, user_id: int) -> list[UserPermission]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             result = await s.execute(
                 select(UserPermission).where(
@@ -78,7 +81,7 @@ class UserPermissionRepo:
             return list(result.scalars().all())
 
     async def list_for_feature(self, plugin: str, feature: str) -> list[UserPermission]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             result = await s.execute(
                 select(UserPermission).where(
@@ -91,7 +94,7 @@ class UserPermissionRepo:
             return list(result.scalars().all())
 
     async def list_all(self) -> list[UserPermission]:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             result = await s.execute(
                 select(UserPermission).where(
@@ -115,7 +118,7 @@ class UserPermissionRepo:
         grant_source: "manual" (admin action) or "tag" (automatic via tag_map).
         Tag-sourced grants are shown as read-only in the UI.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             user = await s.get(User, user_id)
             if user is None:

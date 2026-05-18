@@ -1,12 +1,14 @@
 """Role-based access control helpers."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, status
 
 from yoink.core.db.models import User, UserRole
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 ROLE_ORDER = [
     UserRole.banned,

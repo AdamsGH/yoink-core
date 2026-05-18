@@ -1,10 +1,11 @@
 """Group management endpoints."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from yoink.core.api.deps import get_db
@@ -12,6 +13,9 @@ from yoink.core.api.exceptions import ConflictError, NotFoundError
 from yoink.core.api.schemas import GroupResponse, ThreadPolicyInline
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import Group, ThreadPolicy, User, UserGroupPolicy, UserRole
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class GroupCreateRequest(BaseModel):
@@ -340,8 +344,9 @@ async def sync_group_photos(
     _: User = Depends(require_role(UserRole.owner)),
 ):
     """Fetch chat photos for all groups missing them via Bot API getChat."""
-    import httpx
     import os
+
+    import httpx
 
     bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
     bot_token = request.app.state.settings.bot_token

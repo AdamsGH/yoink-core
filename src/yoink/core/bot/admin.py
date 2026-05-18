@@ -15,10 +15,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import UTC
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
-
-from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from yoink.core.bot.access import AccessPolicy, require_access
@@ -26,6 +26,9 @@ from yoink.core.bot.middleware import get_session_factory, get_user_repo
 from yoink.core.db.models import User, UserRole
 from yoink.core.i18n import t
 from yoink.core.utils.formatting import humantime, parse_duration
+
+if TYPE_CHECKING:
+    from telegram import Update
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +92,8 @@ async def _cmd_ban_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not delta:
         await update.message.reply_html(t("admin.invalid_duration", lang))
         return
-    from datetime import datetime, timezone
-    ban_until = datetime.now(timezone.utc) + delta
+    from datetime import datetime
+    ban_until = datetime.now(UTC) + delta
     await repo.update(target_id, ban_until=ban_until)
     await update.message.reply_html(
         t("admin.ban_set", lang, user_id=target_id, duration=duration_str)

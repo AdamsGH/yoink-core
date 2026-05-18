@@ -1,7 +1,7 @@
 """JWT utilities."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
@@ -17,7 +17,7 @@ def create_access_token(
     first_name: str | None = None,
     username: str | None = None,
 ) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    expire = datetime.now(UTC) + timedelta(minutes=expires_minutes)
     payload: dict = {"sub": str(user_id), "role": role, "exp": expire}
     if first_name:
         payload["first_name"] = first_name

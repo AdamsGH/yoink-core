@@ -10,15 +10,18 @@ State lives in PTB's chat_data (in-memory, not persisted) under the key
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
-import logging
+from typing import TYPE_CHECKING
 
-from telegram import Message, Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from yoink.core.bot.middleware import get_user_repo
 from yoink.core.i18n.loader import t
+
+if TYPE_CHECKING:
+    from telegram import Message, Update
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +132,6 @@ async def _handle_group_command(
         return
 
     user = update.effective_user
-    bot_username: str = context.bot.username or ""
     st = _state(context, user.id)
 
     if st["fired"]:

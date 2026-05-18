@@ -1,17 +1,19 @@
 """Generic async repository base."""
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yoink.core.db.base import Base
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 T = TypeVar("T", bound=Base)
 
 
-class BaseRepo(Generic[T]):
+class BaseRepo[T: Base]:
     model: type[T]
 
     def __init__(self, session_factory: async_sessionmaker) -> None:

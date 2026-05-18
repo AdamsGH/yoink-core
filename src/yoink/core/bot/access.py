@@ -18,19 +18,16 @@ Usage in handlers:
 """
 from __future__ import annotations
 
-import asyncio
 import functools
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from telegram import Chat, Update
-from telegram.ext import ContextTypes
-
 from yoink.core.db.models import UserRole
 
 if TYPE_CHECKING:
-    pass
+    from telegram import Chat, Update
+    from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +223,7 @@ class PermissionChecker:
         """
         try:
             from sqlalchemy import select
+
             from yoink.core.db.models import Group, UserGroupPolicy
 
             async with group_repo._sf() as session:

@@ -59,7 +59,7 @@ class CoreSettings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def _fill_log_channels(self) -> "CoreSettings":
+    def _fill_log_channels(self) -> CoreSettings:
         if self.log_exception_channel is None:
             self.log_exception_channel = self.log_channel
         return self

@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import BotSetting, UserRole
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 DEFAULTS: dict[str, Any] = {
     "browser_cookies_min_role": UserRole.owner.value,

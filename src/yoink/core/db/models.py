@@ -2,19 +2,27 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Enum, Float, Index,
-    Integer, JSON, String, Text, UniqueConstraint, ForeignKey,
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from yoink.core.db.base import Base, _now
 
 
-class UserRole(str, enum.Enum):
+class UserRole(enum.StrEnum):
     owner = "owner"
     admin = "admin"
     moderator = "moderator"
@@ -44,14 +52,13 @@ class User(Base):
 
     @property
     def is_blocked(self) -> bool:
-        from datetime import timezone
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if self.role == UserRole.banned:
             return True
         if self.ban_until is not None:
             bu = self.ban_until
             if bu.tzinfo is None:
-                bu = bu.replace(tzinfo=timezone.utc)
+                bu = bu.replace(tzinfo=UTC)
             return bu > now
         return False
 

@@ -15,14 +15,18 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, filters
 
 from yoink.core.bot.middleware import guard_admin
 from yoink.core.db.models import UserRole
-from yoink.core.db.repos.groups import GroupRepo
 from yoink.core.i18n import t
+
+if TYPE_CHECKING:
+    from telegram import Update
+
+    from yoink.core.db.repos.groups import GroupRepo
 
 logger = logging.getLogger(__name__)
 

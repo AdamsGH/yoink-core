@@ -1,12 +1,17 @@
 """User settings (core fields: language, theme)."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_current_user, get_db
-from yoink.core.db.models import User
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from yoink.core.db.models import User
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 

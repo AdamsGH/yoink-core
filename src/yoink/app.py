@@ -5,13 +5,16 @@ import logging
 
 from telegram.ext import Application, InlineQueryHandler
 
-from yoink.core.bot.app import create_bot_app
 from yoink.core.bot.admin import register as register_admin_commands
-from yoink.core.bot.bot_commands import refresh_user_commands, set_default_commands, set_user_commands
+from yoink.core.bot.app import create_bot_app
+from yoink.core.bot.bot_commands import (
+    refresh_user_commands,
+    set_default_commands,
+)
 from yoink.core.bot.commands import register as register_core_commands
+from yoink.core.bot.confusion_guard import register as register_confusion_guard
 from yoink.core.bot.forum import register as register_forum_handlers
 from yoink.core.bot.group import register as register_group_commands
-from yoink.core.bot.confusion_guard import register as register_confusion_guard
 from yoink.core.bot.member import register as register_member_handlers
 from yoink.core.config import CoreSettings
 from yoink.core.db.engine import create_tables, get_session_factory, init_engine
@@ -157,6 +160,7 @@ def build_app(
         if config.owner_id:
             try:
                 from sqlalchemy import select as sa_select
+
                 from yoink.core.db.models import User
                 async with session_factory() as _s:
                     owner = (await _s.execute(
@@ -191,7 +195,7 @@ def build_app(
 
 def _register_inline_dispatcher(
     application: Application,
-    plugins: "list[YoinkPlugin]",
+    plugins: list[YoinkPlugin],
 ) -> None:
     """Build and register a single InlineQueryHandler that dispatches to plugins.
 

@@ -5,16 +5,19 @@ for new handlers.  The imperative helpers here remain for backward compatibility
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+from typing import TYPE_CHECKING
 
-from telegram import Update
-from telegram.ext import ContextTypes
-from sqlalchemy.ext.asyncio import async_sessionmaker
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from telegram import Update
+    from telegram.ext import ContextTypes
 
-from yoink.core.config import CoreSettings
-from yoink.core.db.repos.users import UserRepo
-from yoink.core.db.repos.groups import GroupRepo
-from yoink.core.db.repos.bot_settings import BotSettingsRepo
+    from yoink.core.config import CoreSettings
+    from yoink.core.db.repos.bot_settings import BotSettingsRepo
+    from yoink.core.db.repos.groups import GroupRepo
+    from yoink.core.db.repos.users import UserRepo
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +73,10 @@ async def reply_ephemeral(
 
     if is_group:
         async def _delete(_ctx: ContextTypes.DEFAULT_TYPE) -> None:
-            try:
+            with contextlib.suppress(Exception):
                 await sent.delete()
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 await msg.delete()
-            except Exception:
-                pass
 
         context.job_queue.run_once(_delete, delay)
 

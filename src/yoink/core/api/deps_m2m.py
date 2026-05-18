@@ -2,16 +2,20 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.auth.apikey import has_scope, hash_key, is_expired
 from yoink.core.db.models import ApiKey
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable
+
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +66,7 @@ async def get_api_key(
     await session.execute(
         update(ApiKey)
         .where(ApiKey.id == key_row.id)
-        .values(last_used_at=datetime.now(timezone.utc))
+        .values(last_used_at=datetime.now(UTC))
     )
     await session.commit()
 

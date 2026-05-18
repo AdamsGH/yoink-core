@@ -12,10 +12,13 @@ Language support:
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+from datetime import UTC
 
 from telegram import (
-    Bot, BotCommand,
+    Bot,
+    BotCommand,
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
@@ -80,17 +83,13 @@ def _make_bot_commands(commands: list[CommandSpec], lang: str | None = None) -> 
     """Build BotCommand list, using localized description when available."""
     result = []
     for c in commands:
-        if lang and lang in c.descriptions:
-            desc = c.descriptions[lang]
-        else:
-            desc = c.description
+        desc = c.descriptions[lang] if lang and lang in c.descriptions else c.description
         result.append(BotCommand(c.command, desc))
     return result
 
 
 async def _set_commands_for_langs(
     bot: Bot,
-    commands: list[BotCommand],
     scope: object,
     all_commands: list[CommandSpec],
     scope_filter_fn,
@@ -127,21 +126,21 @@ async def set_default_commands(
 
     # Default scope - user-visible commands shown before /start, no feature-gated ones.
     await _set_commands_for_langs(
-        bot, [], BotCommandScopeDefault(), all_commands,
+        bot, BotCommandScopeDefault(), all_commands,
         lambda c: c.scope == "default" and c.required_feature is None, "user", "Default",
     )
 
     # All group chats - default + groups-scoped user-level commands, no feature-gated ones.
     # Feature-gated commands are only shown via BotCommandScopeChatMember per-user.
     await _set_commands_for_langs(
-        bot, [], BotCommandScopeAllGroupChats(), all_commands,
+        bot, BotCommandScopeAllGroupChats(), all_commands,
         lambda c: c.scope in ("default", "groups") and c.required_feature is None,
         "user", "AllGroupChats",
     )
 
     # All group chat administrators - same rule, elevated role filter.
     await _set_commands_for_langs(
-        bot, [], BotCommandScopeAllChatAdministrators(), all_commands,
+        bot, BotCommandScopeAllChatAdministrators(), all_commands,
         lambda c: c.scope in ("default", "groups") and c.required_feature is None,
         "admin", "AllChatAdmins",
     )
@@ -150,7 +149,7 @@ async def set_default_commands(
     # Covers every user without a per-chat override; registered for each UI language
     # so translations show up regardless of whether the user has run /start.
     await _set_commands_for_langs(
-        bot, [], BotCommandScopeAllPrivateChats(), all_commands,
+        bot, BotCommandScopeAllPrivateChats(), all_commands,
         lambda c: c.scope in ("default", "private") and c.required_feature is None,
         "user", "AllPrivateChats",
     )
@@ -196,10 +195,8 @@ async def set_user_commands(
 
     if role == "banned":
         for stale in _KNOWN_LANGS:
-            try:
+            with contextlib.suppress(TelegramError):
                 await bot.delete_my_commands(scope=scope, language_code=stale)
-            except TelegramError:
-                pass
         try:
             await bot.delete_my_commands(scope=scope)
         except TelegramError as e:
@@ -209,24 +206,18 @@ async def set_user_commands(
     if not _needs_per_chat_scope(role, granted_features, all_commands):
         # Clear any stale per-chat scope - AllPrivateChats covers this user.
         for stale in _KNOWN_LANGS:
-            try:
+            with contextlib.suppress(TelegramError):
                 await bot.delete_my_commands(scope=scope, language_code=stale)
-            except TelegramError:
-                pass
-        try:
+        with contextlib.suppress(TelegramError):
             await bot.delete_my_commands(scope=scope)
-        except TelegramError:
-            pass
         logger.debug("Commands cleared for chat %d (role=%s, using AllPrivateChats)", chat_id, role)
         return
 
     # User has grants or elevated role - register a per-chat override.
     # Clear stale language scopes first.
     for stale in _KNOWN_LANGS:
-        try:
+        with contextlib.suppress(TelegramError):
             await bot.delete_my_commands(scope=scope, language_code=stale)
-        except TelegramError:
-            pass
 
     visible = _filter_by_role(all_commands, role, granted_features=granted_features)
     private_cmds = [c for c in visible if c.scope in ("default", "private")]
@@ -273,12 +264,14 @@ async def refresh_user_commands(
     granted_features: set[str] | None = None
     if session_factory is not None:
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime
+
             from sqlalchemy import select
+
             from yoink.core.db.models import UserPermission
             from yoink.core.plugin import get_all_features
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             async with session_factory() as session:
                 result = await session.execute(
                     select(UserPermission.plugin, UserPermission.feature).where(
@@ -344,24 +337,18 @@ async def set_member_commands(
 
     if role in ("banned", "restricted"):
         for stale in _KNOWN_LANGS:
-            try:
+            with contextlib.suppress(TelegramError):
                 await bot.delete_my_commands(scope=scope, language_code=stale)
-            except TelegramError:
-                pass
-        try:
+        with contextlib.suppress(TelegramError):
             await bot.delete_my_commands(scope=scope)
-        except TelegramError:
-            pass
         return
 
     visible = _filter_by_role(all_commands, role, granted_features=granted_features)
     group_cmds = [c for c in visible if c.scope in ("default", "groups")]
 
     for stale in _KNOWN_LANGS:
-        try:
+        with contextlib.suppress(TelegramError):
             await bot.delete_my_commands(scope=scope, language_code=stale)
-        except TelegramError:
-            pass
 
     base_cmds = _make_bot_commands(group_cmds, lang=lang)
     try:
@@ -388,10 +375,8 @@ async def clear_member_commands(bot: Bot, group_id: int, user_id: int) -> None:
     """Remove BotCommandScopeChatMember for a user who left or was banned."""
     scope = BotCommandScopeChatMember(chat_id=group_id, user_id=user_id)
     for stale in _KNOWN_LANGS:
-        try:
+        with contextlib.suppress(TelegramError):
             await bot.delete_my_commands(scope=scope, language_code=stale)
-        except TelegramError:
-            pass
     try:
         await bot.delete_my_commands(scope=scope)
     except TelegramError as e:
@@ -422,12 +407,14 @@ async def refresh_member_commands(
         return
 
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from sqlalchemy import select
+
         from yoink.core.db.models import UserGroupPolicy, UserPermission
         from yoink.core.plugin import get_all_features
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with session_factory() as session:
             perm_result = await session.execute(
                 select(UserPermission.plugin, UserPermission.feature).where(

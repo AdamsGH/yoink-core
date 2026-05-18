@@ -18,14 +18,16 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from fastapi import APIRouter
-from pydantic_settings import BaseSettings
-from telegram.ext import BaseHandler
+if TYPE_CHECKING:
+    import re
+    from pathlib import Path
+
+    from fastapi import APIRouter
+    from pydantic_settings import BaseSettings
+    from telegram.ext import BaseHandler
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +134,8 @@ class InlineHandlerSpec:
     callback: Any
     priority: int = 0
     prefix: str | None = None
-    pattern: "re.Pattern[str] | None" = None
-    access_policy: "Any | None" = None  # AccessPolicy | None
+    pattern: re.Pattern[str] | None = None
+    access_policy: Any | None = None  # AccessPolicy | None
 
 
 @dataclass

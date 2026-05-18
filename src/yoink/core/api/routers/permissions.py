@@ -8,18 +8,21 @@ DELETE /users/{user_id}/permissions/{plugin}/{feature}      - revoke a feature (
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_current_user, get_db
-from yoink.core.auth.rbac import require_role, ROLE_ORDER
 from yoink.core.api.exceptions import NotFoundError
+from yoink.core.auth.rbac import ROLE_ORDER, require_role
 from yoink.core.db.models import User, UserPermission, UserRole
 from yoink.core.plugin import get_all_features
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["permissions"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
@@ -85,7 +88,7 @@ async def _compute_feature_access(
     session: AsyncSession,
     user: User,
 ) -> list[EffectiveFeatureAccess]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = await session.execute(
         select(UserPermission).where(
             UserPermission.user_id == user.id,
@@ -156,7 +159,7 @@ async def list_all_permissions(
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> list[PermissionResponse]:
     """Return all active (non-expired) permissions across all users."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = await session.execute(
         select(UserPermission).where(
             (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
@@ -172,7 +175,7 @@ async def list_user_permissions(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> list[PermissionResponse]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = await session.execute(
         select(UserPermission).where(
             UserPermission.user_id == user_id,
@@ -195,7 +198,7 @@ async def grant_permission(
     if user is None:
         raise NotFoundError("User not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = await session.execute(
         select(UserPermission).where(
             UserPermission.user_id == user_id,

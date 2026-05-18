@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_db
 from yoink.core.api.schemas import TelegramInitDataRequest, TokenResponse
 from yoink.core.auth.jwt import create_access_token
 from yoink.core.auth.telegram import verify_init_data
 from yoink.core.db.models import User, UserRole
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +93,7 @@ async def auth_token(
             user.photo_url = photo_url
         if user_id == settings.owner_id and user.role != UserRole.owner:
             user.role = UserRole.owner
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = datetime.now(UTC)
 
     await session.commit()
     await session.refresh(user)

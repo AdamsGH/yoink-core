@@ -1,13 +1,17 @@
 """Group, ThreadPolicy, UserGroupPolicy repositories."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import Group, ThreadPolicy, UserGroupPolicy, UserRole
 from yoink.core.db.repos.base import BaseRepo
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 
 class GroupRepo(BaseRepo[Group]):

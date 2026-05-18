@@ -27,10 +27,13 @@ fields into each UserResponse. Unknown fields are silently ignored by Pydantic.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Any, Awaitable, Callable, TypedDict
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 

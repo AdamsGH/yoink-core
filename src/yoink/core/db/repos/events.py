@@ -1,12 +1,12 @@
 """Event log repository - append only."""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from typing import TYPE_CHECKING, Any
 
 from yoink.core.db.models import Event
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 
 class EventRepo:

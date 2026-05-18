@@ -1,17 +1,19 @@
 """Bot-wide admin settings."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_db
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import BotSetting, User, UserRole
 from yoink.core.db.repos.bot_settings import DEFAULTS, BotSettingsRepo
 from yoink.core.plugin import get_all_features
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/bot-settings", tags=["bot-settings"])
 
@@ -64,9 +66,8 @@ async def get_tag_map(
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> list[TagMapEntry]:
     """Return tag -> features mapping as a list of entries."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    sf: async_sessionmaker = session.get_bind()  # type: ignore[arg-type]
-    repo = BotSettingsRepo.__new__(BotSettingsRepo)
+    session.get_bind()  # type: ignore[arg-type]
+    BotSettingsRepo.__new__(BotSettingsRepo)
     row = await session.get(BotSetting, "tag_map")
     import json
     raw = row.value if row else "{}"

@@ -6,7 +6,6 @@ import hmac
 import time
 from urllib.parse import parse_qsl, unquote
 
-
 _MAX_AGE_SECONDS = 86400  # 24 hours
 
 

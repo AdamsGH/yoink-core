@@ -1,12 +1,12 @@
 """User management endpoints."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import contextlib
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Query, Request
-
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.activity import collect_activity, collect_list_users
 from yoink.core.api.deps import get_current_user, get_db
@@ -14,6 +14,9 @@ from yoink.core.api.exceptions import ForbiddenError, NotFoundError
 from yoink.core.api.schemas import UserResponse, UserStatsResponse, UserUpdateRequest
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(
     prefix="/users",
@@ -68,10 +71,8 @@ async def list_users(
         s = search.lstrip("@")
         q = q.where(User.username.ilike(f"%{s}%") | User.first_name.ilike(f"%{s}%"))
     if role and role != "all":
-        try:
+        with contextlib.suppress(ValueError):
             q = q.where(User.role == UserRole(role))
-        except ValueError:
-            pass
     if status == "active":
         q = q.where(User.role.notin_([UserRole.restricted, UserRole.banned]))
     elif status == "restricted":
@@ -86,10 +87,7 @@ async def list_users(
         "role": User.role,
         "updated_at": User.updated_at,
     }.get(sort, User.created_at)
-    if direction == "desc":
-        q = q.order_by(order_col.desc())
-    else:
-        q = q.order_by(order_col.asc())
+    q = q.order_by(order_col.desc()) if direction == "desc" else q.order_by(order_col.asc())
     users = (await session.execute(q.offset(offset).limit(limit))).scalars().all()
 
     # Merge plugin-supplied per-user fields (e.g. dl_count, dl_last_at from yoink-dl)
@@ -164,7 +162,10 @@ async def update_user(
     await session.refresh(user)
 
     if role_changed or body.language is not None:
-        from yoink.core.bot.bot_commands import refresh_member_commands, refresh_user_commands  # noqa: PLC0415
+        from yoink.core.bot.bot_commands import (  # noqa: PLC0415
+            refresh_member_commands,
+            refresh_user_commands,
+        )
         sf = getattr(request.app.state, "bot_data", {}).get("session_factory")
         await refresh_user_commands(
             request.app.state, user_id,
@@ -183,9 +184,9 @@ async def update_user(
 
 async def _build_user_stats(session: AsyncSession, user_id: int, member_since: datetime) -> UserStatsResponse:
     """Aggregate activity statistics from all registered plugin providers."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=7)
+    today_start - timedelta(days=7)
 
     total = today_count = week_count = 0
     top_domains: list[dict] = []

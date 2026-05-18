@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import TYPE_CHECKING
 
-from telegram import ChatMemberUpdated, Update
 from telegram.ext import ChatMemberHandler, ContextTypes
 
-from yoink.core.db.models import UserRole
 from yoink.core.bot.access import ROLE_ORDER
+
+if TYPE_CHECKING:
+    from telegram import ChatMemberUpdated, Update
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +138,10 @@ async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
     group_id = chat.id
 
     from yoink.core.bot.bot_commands import (
-        set_member_commands,
         clear_member_commands,
-        refresh_user_commands,
         refresh_member_commands,
+        refresh_user_commands,
+        set_member_commands,
     )
 
     if _is_join(cmu):

@@ -15,11 +15,14 @@ Handled service message types:
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
-from yoink.core.db.repos.groups import GroupRepo
+if TYPE_CHECKING:
+    from telegram import Update
+
+    from yoink.core.db.repos.groups import GroupRepo
 
 logger = logging.getLogger(__name__)
 

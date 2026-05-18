@@ -1,14 +1,16 @@
 """User repository."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import BotSetting, User, UserRole
 from yoink.core.db.repos.base import BaseRepo
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 
 class UserRepo(BaseRepo[User]):
@@ -62,7 +64,7 @@ class UserRepo(BaseRepo[User]):
                     user.photo_url = photo_url
                     changed = True
                 if changed:
-                    user.updated_at = datetime.now(timezone.utc)
+                    user.updated_at = datetime.now(UTC)
                     await session.commit()
                     await session.refresh(user)
             return user
@@ -74,7 +76,7 @@ class UserRepo(BaseRepo[User]):
                 return None
             for k, v in kwargs.items():
                 setattr(user, k, v)
-            user.updated_at = datetime.now(timezone.utc)
+            user.updated_at = datetime.now(UTC)
             await session.commit()
             await session.refresh(user)
             return user

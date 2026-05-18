@@ -7,6 +7,7 @@ overhead for internal calls between bot and API layers.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import signal
 
@@ -112,10 +113,8 @@ async def _run(config: CoreSettings) -> None:
         logger.info("Stopping PTB polling...")
         await ptb_app.updater.stop()
         polling_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await polling_task
-        except asyncio.CancelledError:
-            pass
 
         await ptb_app.stop()
         await ptb_app.shutdown()

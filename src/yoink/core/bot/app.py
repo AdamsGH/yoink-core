@@ -1,11 +1,14 @@
 """PTB Application factory."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import httpx
 from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
-from yoink.core.config import CoreSettings
+if TYPE_CHECKING:
+    from yoink.core.config import CoreSettings
 
 
 def create_bot_app(config: CoreSettings) -> Application:

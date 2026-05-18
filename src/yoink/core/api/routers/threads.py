@@ -1,16 +1,20 @@
 """Thread policy management + forum topic scan via user-mode session."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_db
 from yoink.core.api.exceptions import ConflictError, NotFoundError
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import Group, ThreadPolicy, User, UserRole
 from yoink.core.services.user_session import UserSessionError, UserSessionService
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/threads", tags=["threads"])
 

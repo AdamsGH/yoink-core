@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
 
 PREFIX_LEN = 8
 
@@ -30,8 +29,8 @@ def is_expired(expires_at: datetime | None) -> bool:
     """Check whether the key has expired."""
     if expires_at is None:
         return False
-    exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=timezone.utc)
-    return exp <= datetime.now(timezone.utc)
+    exp = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=UTC)
+    return exp <= datetime.now(UTC)
 
 
 def has_scope(key_scopes: list[str], required: str) -> bool:
@@ -45,9 +44,7 @@ def has_scope(key_scopes: list[str], required: str) -> bool:
     if required in key_scopes:
         return True
     category = required.split(":")[0]
-    if f"{category}:*" in key_scopes:
-        return True
-    return False
+    return f"{category}:*" in key_scopes
 
 
 ALL_SCOPES = [
