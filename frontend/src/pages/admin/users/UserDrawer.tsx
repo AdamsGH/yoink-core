@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { format } from 'date-fns'
 import { CalendarIcon, X } from 'lucide-react'
 
 import { usersApi } from '@core/lib/api'
@@ -48,7 +47,7 @@ function BanDatePicker({
   }
 
   const label = selected
-    ? format(selected, 'MMM d, yyyy HH:mm')
+    ? formatDate(selected.toISOString())
     : t('users.ban_until_placeholder', { defaultValue: 'Pick date…' })
 
   return (
