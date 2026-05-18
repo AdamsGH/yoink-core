@@ -1,92 +1,31 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowDownAZ, ArrowUpAZ, Ban, ShieldCheck, Users } from 'lucide-react'
 
-import { usersApi } from '@core/lib/api'
 import { cn } from '@core/lib/utils'
 import { RING_BY_ROLE, userInitials, userPhotoUrl } from '@core/lib/user-utils'
-import type { User, UserRole, UserUpdateRequest } from '@core/types/api'
+import type { UserRole } from '@core/types/api'
 import { Avatar, AvatarFallback, AvatarImage, Button, Card, CardContent, CardHeader, CardTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
 import { RoleBadge } from '@app'
-import { toast } from '@core/components/ui/toast'
 import { UserDrawer } from './UserDrawer'
-
-type StatusFilter = 'all' | 'active' | 'restricted' | 'banned'
+import { useAdminUsers, type StatusFilter, type UserSortField } from './useAdminUsers'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
-const PAGE_SIZE = 25
 
 export default function AdminUsersPage() {
   const { t } = useTranslation()
+  const {
+    items, total, totalPages,
+    initialLoading, fetching,
+    page, setPage,
+    search, setSearch,
+    filters, setFilters, hasActive, resetFilters,
+    sort, setSort, sortDir, toggleSortDir,
+    viewed, setViewed, handleUpdated,
+    quickBan, quickUnban,
+  } = useAdminUsers()
 
-  const [items, setItems] = useState<User[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [initialLoading, setInitialLoading] = useState(true)
-  const [fetching, setFetching] = useState(false)
-
-  const [search, setSearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [filters, setFilters] = useState<{ role: string; status: StatusFilter }>({ role: 'all', status: 'all' })
   const [showFilters, setShowFilters] = useState(false)
-  const [sort, setSort] = useState<'created_at' | 'updated_at' | 'name' | 'role' | 'dl_count' | 'dl_last_at'>('created_at')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-
-  const [viewed, setViewed] = useState<User | null>(null)
-
-  const hasActive = debouncedSearch !== '' || filters.role !== 'all' || filters.status !== 'all'
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-
-  useEffect(() => {
-    const id = setTimeout(() => {
-      setDebouncedSearch(search)
-      setPage(1)
-    }, 300)
-    return () => clearTimeout(id)
-  }, [search])
-
-  const load = async (p: number, q: string, f: typeof filters, s: typeof sort, d: typeof sortDir) => {
-    setFetching(true)
-    try {
-      const res = await usersApi.list({ offset: (p - 1) * PAGE_SIZE, limit: PAGE_SIZE, sort: s, direction: d, search: q || undefined, role: f.role !== 'all' ? f.role : undefined, status: f.status !== 'all' ? f.status : undefined })
-      setItems(res.data.items)
-      setTotal(res.data.total)
-    } catch {
-      toast.error(t('common.load_error'))
-    } finally {
-      setFetching(false)
-      setInitialLoading(false)
-    }
-  }
-
-  useEffect(() => { void load(page, debouncedSearch, filters, sort, sortDir) }, [page, debouncedSearch, filters, sort, sortDir])
-
-  const resetFilters = () => {
-    setSearch(''); setDebouncedSearch('')
-    setFilters({ role: 'all', status: 'all' })
-    setPage(1)
-  }
-
-  const quickBan = async (u: User) => {
-    try {
-      await usersApi.update(u.id, { role: 'banned' } as UserUpdateRequest)
-      toast.success(t('users.banned'))
-      void load(page, debouncedSearch, filters, sort, sortDir)
-    } catch { toast.error(t('users.update_error')) }
-  }
-
-  const quickUnban = async (u: User) => {
-    try {
-      await usersApi.update(u.id, { role: 'user' } as UserUpdateRequest)
-      toast.success(t('users.unbanned'))
-      void load(page, debouncedSearch, filters, sort, sortDir)
-    } catch { toast.error(t('users.update_error')) }
-  }
-
-  const handleUpdated = (updated: User) => {
-    setViewed(updated)
-    setItems((prev) => prev.map((u) => u.id === updated.id ? updated : u))
-  }
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -112,7 +51,7 @@ export default function AdminUsersPage() {
               className="h-9 mt-2"
             />
             <div className="flex items-center gap-1.5 mt-2">
-              <Select value={sort} onValueChange={(v) => { setSort(v as typeof sort); setPage(1) }}>
+              <Select value={sort} onValueChange={(v) => setSort(v as UserSortField)}>
                 <SelectTrigger className="h-7 flex-1 text-xs">
                   <SelectValue />
                 </SelectTrigger>
@@ -129,7 +68,7 @@ export default function AdminUsersPage() {
                 variant="outline"
                 size="icon"
                 className="h-7 w-7 shrink-0"
-                onClick={() => { setSortDir((d) => d === 'desc' ? 'asc' : 'desc'); setPage(1) }}
+                onClick={toggleSortDir}
               >
                 {sortDir === 'desc'
                   ? <ArrowDownAZ className="h-3.5 w-3.5" />
