@@ -5,15 +5,19 @@ Mounted under /api/internal/v1/.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import contextlib
+from datetime import datetime
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from yoink.core.api.deps_m2m import require_scope, _get_db
+from yoink.core.api.deps_m2m import _get_db, require_scope
 from yoink.core.db.models import ApiKey, Event, Group, User, UserRole
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(tags=["internal"])
 
@@ -111,10 +115,8 @@ async def list_users(
 ) -> list[UserM2MResponse]:
     q = select(User)
     if role:
-        try:
+        with contextlib.suppress(ValueError):
             q = q.where(User.role == UserRole(role))
-        except ValueError:
-            pass
     result = await session.execute(
         q.order_by(User.created_at.desc()).offset(offset).limit(limit)
     )

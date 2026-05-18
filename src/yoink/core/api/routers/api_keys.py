@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from yoink.core.api.deps import get_current_user, get_db
+from yoink.core.api.deps import get_db
 from yoink.core.auth.apikey import ALL_SCOPES, generate_api_key
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import ApiKey, User, UserRole
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
