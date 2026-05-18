@@ -18,6 +18,7 @@ class CoreSettings(BaseSettings):
     bot_token: str
     owner_id: int
     telegram_base_url: str = "https://api.telegram.org/bot"
+    bot_api_url: str = "https://api.telegram.org"
 
     # Plugins (comma-separated entry-point names, e.g. "dl,stats")
     yoink_plugins: str = ""
@@ -28,7 +29,7 @@ class CoreSettings(BaseSettings):
 
     # API
     api_port: int = 8000
-    api_secret_key: str = "change-me-in-production"
+    api_secret_key: str
     api_token_expire_minutes: int = 1440
     debug: bool = False
     # Enable /auth/dev endpoint only via this explicit flag - never tied to debug

@@ -1,7 +1,6 @@
 """Shared photo resolution helpers for Bot API local server."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import httpx
@@ -58,6 +57,6 @@ async def resolve_chat_photo(bot_api_url: str, bot_token: str, chat_id: int) -> 
 
 def bot_api_params(app_state: object) -> tuple[str, str]:
     """Return (bot_api_url, bot_token) from app state and environment."""
-    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
+    bot_api_url = app_state.settings.bot_api_url  # type: ignore[attr-defined]
     bot_token = app_state.settings.bot_token  # type: ignore[attr-defined]
     return bot_api_url, bot_token

@@ -153,6 +153,7 @@ def _make_test_config():
     cfg.log_channel = None
     cfg.log_exception_channel = None
     cfg.telegram_base_url = "https://api.telegram.org/bot"
+    cfg.bot_api_url = "https://api.telegram.org"
     cfg.yoink_plugins = ""
     return cfg
 

@@ -41,8 +41,7 @@ async def sync_user_photos(
     _: User = Depends(require_role(UserRole.owner)),
 ) -> dict:
     """Fetch profile photos for all users missing them via Bot API getChat."""
-    bot_api_url = request.app.state.settings.bot_api_url if hasattr(request.app.state.settings, "bot_api_url") else "https://api.telegram.org"
-    bot_token = request.app.state.settings.bot_token
+    bot_api_url, bot_token = bot_api_params(request.app.state)
 
     users_without_photo = (await session.execute(
         select(User).where(User.photo_url.is_(None))

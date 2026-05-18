@@ -344,12 +344,9 @@ async def sync_group_photos(
     _: User = Depends(require_role(UserRole.owner)),
 ):
     """Fetch chat photos for all groups missing them via Bot API getChat."""
-    import os
-
     import httpx
 
-    bot_api_url = os.environ.get("BOT_API_URL", "https://api.telegram.org")
-    bot_token = request.app.state.settings.bot_token
+    bot_api_url, bot_token = bot_api_params(request.app.state)
 
     groups_without_photo = (await session.execute(
         select(Group).where(Group.photo_url.is_(None))
