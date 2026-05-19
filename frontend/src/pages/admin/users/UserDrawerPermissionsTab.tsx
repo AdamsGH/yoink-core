@@ -6,7 +6,7 @@ import { Badge, Skeleton, Switch } from '@ui'
 
 function AccessBadge({ f }: { f: EffectiveFeatureAccess }) {
   if (!f.effective) {
-    return <span className="text-xs text-muted-foreground">-</span>
+    return null
   }
   if (f.access_via_role && !f.access_via_grant) {
     return <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-500/50 text-blue-600">role</Badge>
@@ -68,17 +68,15 @@ export function PermissionsTab({
                   <div key={key} className="px-3 py-2.5 space-y-1">
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-medium">{f.label}</p>
+                          {f.default_min_role && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono text-muted-foreground">{f.default_min_role}+</Badge>
+                          )}
                           <AccessBadge f={f} />
                         </div>
                         {f.description && (
                           <p className="text-xs text-muted-foreground">{f.description}</p>
-                        )}
-                        {f.default_min_role && (
-                          <p className="text-xs text-muted-foreground">
-                            {t('permissions.default_role')}: <span className="font-mono">{f.default_min_role}+</span>
-                          </p>
                         )}
                       </div>
                       <Switch
