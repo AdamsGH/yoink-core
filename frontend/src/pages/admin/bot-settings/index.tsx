@@ -4,7 +4,7 @@ import { Globe, HardDrive, Shield, Tag } from 'lucide-react'
 
 import { plugins } from '@core/plugin-registry'
 import { usePermissions } from '@core/hooks/usePermissions'
-import { SettingRow } from '@app'
+import { CompactCardHeader, SettingRow } from '@app'
 import { botSettingsApi } from '@core/lib/api'
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Separator, Skeleton } from '@ui'
 import { toast } from '@core/components/ui/toast'
@@ -125,12 +125,7 @@ export default function AdminBotSettingsPage() {
 
       {/* Access Mode */}
       <Card>
-        <CardHeader className="px-4 py-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Globe className="h-4 w-4 text-muted-foreground" />
-            {t('bot_settings.access_mode')}
-          </CardTitle>
-        </CardHeader>
+        <CompactCardHeader title={<><Globe className="h-4 w-4 text-muted-foreground" />{t('bot_settings.access_mode')}</>} />
         <CardContent className="px-4 pb-4">
           <SettingRow variant="stacked"
             label={t('bot_settings.access_label')}
@@ -154,12 +149,7 @@ export default function AdminBotSettingsPage() {
 
       {/* Browser Cookies */}
       <Card>
-        <CardHeader className="px-4 py-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Shield className="h-4 w-4 text-muted-foreground" />
-            {t('bot_settings.browser_cookies')}
-          </CardTitle>
-        </CardHeader>
+        <CompactCardHeader title={<><Shield className="h-4 w-4 text-muted-foreground" />{t('bot_settings.browser_cookies')}</>} />
         <CardContent className="px-4 pb-4">
           <SettingRow variant="stacked"
             label={t('bot_settings.browser_cookies_role')}
@@ -251,12 +241,7 @@ export default function AdminBotSettingsPage() {
       {/* Plugin-contributed sections */}
       {pluginSections.map((section, i) => (
         <Card key={i}>
-          <CardHeader className="px-4 py-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              {section.icon}
-              {section.title}
-            </CardTitle>
-          </CardHeader>
+          <CompactCardHeader title={<>{section.icon}{section.title}</>} />
           <CardContent className="px-4 pb-4">
             {section.content}
           </CardContent>

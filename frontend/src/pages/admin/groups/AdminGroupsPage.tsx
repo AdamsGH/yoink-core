@@ -9,7 +9,7 @@ import type { ThreadPolicy } from '@core/lib/api'
 import { useAdminGroups } from './useAdminGroups'
 import type { EditState } from './useAdminGroups'
 import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Switch, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
-import { InlineSelect, SuccessBadge } from '@app'
+import { CompactCardHeader, EmptyState, InlineSelect, SuccessBadge } from '@app'
 import { toast } from '@core/components/ui/toast'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
@@ -437,17 +437,10 @@ export default function AdminGroupsPage() {
     <TooltipProvider delayDuration={300}>
       <div className="space-y-4">
         <Card>
-          <CardHeader className="px-4 py-3">
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                {loading
-                  ? t('groups.title', { defaultValue: 'Groups' })
-                  : `${total} group${total !== 1 ? 's' : ''}`}
-              </CardTitle>
-              <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>
-            </div>
-          </CardHeader>
+          <CompactCardHeader
+            title={<><MessageSquare className="h-4 w-4 text-muted-foreground" />{loading ? t('groups.title', { defaultValue: 'Groups' }) : `${total} group${total !== 1 ? 's' : ''}`}</>}
+            actions={<Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => setEdit(defaultEdit())}>{t('groups.add_group')}</Button>}
+          />
 
           <CardContent className="p-0">
             {loading ? (
@@ -464,7 +457,7 @@ export default function AdminGroupsPage() {
                 ))}
               </div>
             ) : items.length === 0 ? (
-              <div className="flex justify-center py-12 text-muted-foreground text-sm">{t('groups.no_groups')}</div>
+              <EmptyState message={t('groups.no_groups')} />
             ) : (
               <div className="divide-y divide-border">
                 {items.map((group) => (

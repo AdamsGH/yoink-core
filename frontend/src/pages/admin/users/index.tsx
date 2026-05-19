@@ -6,7 +6,7 @@ import { cn } from '@core/lib/utils'
 import { RING_BY_ROLE, userInitials, userPhotoUrl } from '@core/lib/user-utils'
 import type { UserRole } from '@core/types/api'
 import { Avatar, AvatarFallback, AvatarImage, Button, Card, CardContent, CardHeader, CardTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
-import { RoleBadge } from '@app'
+import { EmptyState, RoleBadge } from '@app'
 import { UserDrawer } from './UserDrawer'
 import { useAdminUsers, type StatusFilter, type UserSortField, type UserPeriod } from './useAdminUsers'
 
@@ -134,7 +134,7 @@ export default function AdminUsersPage() {
                 ))}
               </div>
             ) : items.length === 0 ? (
-              <div className="flex justify-center py-10 text-sm text-muted-foreground">{t('users.no_users')}</div>
+              <EmptyState message={t('users.no_users')} />
             ) : (
               <div className="divide-y divide-border px-3 py-1">
                 {items.map((user) => (
