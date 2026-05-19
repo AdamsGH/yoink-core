@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./themes/catppuccin.css";
 @import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/overpass";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -39,6 +40,7 @@
   --color-success:            #a6da95;
   --color-warning:            #eed49f;
   --radius: 0.5rem;
+  --font-heading: 'Overpass Variable', 'Overpass', sans-serif;
 }
 
 @layer base {
@@ -55,6 +57,14 @@
     color: var(--color-foreground);
     font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
     -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4, h5, h6,
+  [data-slot=card-title],
+  [data-slot=dialog-title],
+  [data-slot=sheet-title],
+  [data-slot=alert-dialog-title],
+  [data-slot=drawer-title] {
+    font-family: var(--font-heading);
   }
 }
 
