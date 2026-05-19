@@ -29,10 +29,10 @@ export function SettingRow({ label, hint, children, variant = 'inline', classNam
   }
 
   return (
-    <div className={cn('flex items-center justify-between gap-4 py-2.5', className)}>
+    <div className={cn('flex items-center justify-between gap-3 py-2', className)}>
       <div className="min-w-0 flex-1">
-        <p className="text-sm">{label}</p>
-        {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
+        <p className="text-sm leading-snug">{label}</p>
+        {hint && <p className="mt-0.5 text-xs text-muted-foreground leading-snug">{hint}</p>}
       </div>
       <div className="shrink-0">{children}</div>
     </div>
