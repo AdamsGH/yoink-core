@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM builder-core AS builder-plugins
 
-RUN apk add --no-cache gcc musl-dev libffi-dev
+RUN apk add --no-cache gcc musl-dev libffi-dev git
 
 COPY plugins/yoink-dl/pyproject.toml /app/plugins/yoink-dl/
 COPY plugins/yoink-dl/src/ /app/plugins/yoink-dl/src/
