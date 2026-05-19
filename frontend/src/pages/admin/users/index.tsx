@@ -71,10 +71,10 @@ export default function AdminUsersPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="7">{t('users.period_7', { defaultValue: '7d' })}</SelectItem>
-                    <SelectItem value="30">{t('users.period_30', { defaultValue: '30d' })}</SelectItem>
-                    <SelectItem value="90">{t('users.period_90', { defaultValue: '90d' })}</SelectItem>
-                    <SelectItem value="all">{t('users.period_all', { defaultValue: 'all time' })}</SelectItem>
+                    <SelectItem value="7">7d</SelectItem>
+                    <SelectItem value="30">30d</SelectItem>
+                    <SelectItem value="90">90d</SelectItem>
+                    <SelectItem value="all">all</SelectItem>
                   </SelectContent>
                 </Select>
               )}
