@@ -9,15 +9,15 @@ function AccessBadge({ f }: { f: EffectiveFeatureAccess }) {
     return null
   }
   if (f.access_via_role && !f.access_via_grant) {
-    return <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 border-blue-500/50 text-blue-600">role</Badge>
+    return <Badge variant="outline" className="text-[9px] px-1 py-0 border-blue-500/50 text-blue-600">role</Badge>
   }
   if (f.access_via_grant && f.grant_source === 'tag') {
-    return <Badge variant="secondary" className="text-[10px] px-1.5 py-0.5">tag</Badge>
+    return <Badge variant="secondary" className="text-[9px] px-1 py-0">tag</Badge>
   }
   if (!f.access_via_role && f.access_via_grant) {
-    return <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 border-green-500/50 text-green-600">grant</Badge>
+    return <Badge variant="outline" className="text-[9px] px-1 py-0 border-green-500/50 text-green-600">grant</Badge>
   }
-  return <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 border-green-500/50 text-green-600">role+grant</Badge>
+  return <Badge variant="outline" className="text-[9px] px-1 py-0 border-green-500/50 text-green-600">role+grant</Badge>
 }
 
 function roleMediaColor(role: UserRole) {
@@ -71,7 +71,7 @@ export function PermissionsTab({
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-medium">{f.label}</p>
                           {f.default_min_role && (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0.5 font-mono text-muted-foreground">{f.default_min_role}+</Badge>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono text-muted-foreground">{f.default_min_role}+</Badge>
                           )}
                           <AccessBadge f={f} />
                         </div>
