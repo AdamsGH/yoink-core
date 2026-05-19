@@ -8,7 +8,7 @@ import type { Group, UserRole } from '@core/types/api'
 import type { ThreadPolicy } from '@core/lib/api'
 import { useAdminGroups } from './useAdminGroups'
 import type { EditState } from './useAdminGroups'
-import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Switch, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
+import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Card, CardContent, Dialog, DialogActions, DialogContent, DialogDescription, DialogHeader, DialogTitle, DividedList, IconButton, Input, Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, SkeletonList, Switch, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
 import { CompactCardHeader, EmptyState, InlineSelect, SuccessBadge } from '@app'
 import { toast } from '@core/components/ui/toast'
 
@@ -187,12 +187,12 @@ function AddThreadDialog({
           </div>
         </div>
 
-        <DialogFooter className="flex-row gap-2 sm:space-x-0">
+        <DialogActions>
           <Button variant="outline" className="flex-1" onClick={onClose}>{t('common.cancel')}</Button>
           <Button className="flex-1" onClick={handleSave} disabled={parsedId === null || saving}>
             {saving ? t('common.loading') : t('common.save')}
           </Button>
-        </DialogFooter>
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )
@@ -304,35 +304,25 @@ function ThreadPoliciesDialog({
                     checked={tp.enabled}
                     onCheckedChange={() => toggle(tp)}
                   />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => remove(tp)}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{t('common.delete')}</TooltipContent>
-                  </Tooltip>
+                  <IconButton tooltip={t('common.delete')} className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => remove(tp)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </IconButton>
                 </div>
               ))}
             </div>
           )}
 
-          <DialogFooter className="flex-row gap-2 sm:space-x-0">
+          <DialogActions>
             {sessionAvailable && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="icon" className="h-9 w-9 shrink-0" onClick={scan} disabled={scanning}>
-                    <RefreshCw className={cn('h-4 w-4', scanning && 'animate-spin')} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{t('groups.scan_topics', { defaultValue: 'Sync topics from Telegram' })}</TooltipContent>
-              </Tooltip>
+              <IconButton tooltip={t('groups.scan_topics', { defaultValue: 'Sync topics from Telegram' })} variant="outline" className="h-9 w-9 shrink-0" onClick={scan} disabled={scanning}>
+                <RefreshCw className={cn('h-4 w-4', scanning && 'animate-spin')} />
+              </IconButton>
             )}
             <Button variant="outline" className="flex-1" onClick={() => setAdding(true)}>
               <Plus className="h-4 w-4 mr-2" />
               {t('groups.add_thread_title', { defaultValue: 'Add policy' })}
             </Button>
-          </DialogFooter>
+          </DialogActions>
         </DialogContent>
       </Dialog>
 
@@ -403,14 +393,9 @@ function GroupCard({
               </TooltipTrigger>
               <TooltipContent>{t('groups.thread_policies')}</TooltipContent>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onEdit}>
-                  <Pencil className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t('common.edit')}</TooltipContent>
-            </Tooltip>
+            <IconButton tooltip={t('common.edit')} onClick={onEdit}>
+              <Pencil className="h-3.5 w-3.5" />
+            </IconButton>
           </ItemActions>
         </Item>
       </div>
@@ -444,8 +429,8 @@ export default function AdminGroupsPage() {
 
           <CardContent className="p-0">
             {loading ? (
-              <div className="divide-y divide-border px-3 py-1">
-                {Array.from({ length: 3 }).map((_, i) => (
+              <DividedList>
+                <SkeletonList count={3}>{(i) => (
                   <div key={i} className="flex items-center gap-3 py-2.5">
                     <Skeleton className="size-8 rounded-md shrink-0" />
                     <div className="flex-1 space-y-1.5">
@@ -454,12 +439,12 @@ export default function AdminGroupsPage() {
                     </div>
                     <Skeleton className="h-5 w-14" />
                   </div>
-                ))}
-              </div>
+                )}</SkeletonList>
+              </DividedList>
             ) : items.length === 0 ? (
               <EmptyState message={t('groups.no_groups')} />
             ) : (
-              <div className="divide-y divide-border">
+              <DividedList className="px-0">
                 {items.map((group) => (
                   <GroupCard
                     key={group.id}
@@ -467,7 +452,7 @@ export default function AdminGroupsPage() {
                     onEdit={() => setEdit(defaultEdit(group))}
                   />
                 ))}
-              </div>
+              </DividedList>
             )}
           </CardContent>
         </Card>
@@ -574,10 +559,10 @@ export default function AdminGroupsPage() {
               </div>
             )}
 
-            <DialogFooter className="flex-row gap-2 sm:space-x-0">
+            <DialogActions>
               <Button variant="outline" className="flex-1" onClick={() => setEdit(null)}>{t('common.cancel')}</Button>
               <Button className="flex-1" onClick={save} disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
-            </DialogFooter>
+            </DialogActions>
           </DialogContent>
         </Dialog>
       </div>

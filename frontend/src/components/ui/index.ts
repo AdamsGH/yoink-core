@@ -29,3 +29,7 @@ export * from './tabs'
 // toast.tsx re-exports Toaster/toast from sonner, colliding with sonner.tsx;
 // import directly from './toast' when the shim is needed
 export * from './tooltip'
+export * from './DialogActions'
+export * from './DividedList'
+export * from './IconButton'
+export * from './SkeletonList'

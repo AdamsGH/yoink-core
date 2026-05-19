@@ -5,7 +5,7 @@ import { ArrowDownAZ, ArrowUpAZ, Ban, ShieldCheck, Users } from 'lucide-react'
 import { cn } from '@core/lib/utils'
 import { RING_BY_ROLE, userInitials, userPhotoUrl } from '@core/lib/user-utils'
 import type { UserRole } from '@core/types/api'
-import { Avatar, AvatarFallback, AvatarImage, Button, Card, CardContent, CardHeader, CardTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
+import { Avatar, AvatarFallback, AvatarImage, Button, Card, CardContent, CardHeader, CardTitle, DividedList, IconButton, Input, Item, ItemActions, ItemContent, ItemDescription, ItemTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SkeletonList, Skeleton, TooltipProvider } from '@ui'
 import { EmptyState, RoleBadge } from '@app'
 import { UserDrawer } from './UserDrawer'
 import { useAdminUsers, type StatusFilter, type UserSortField, type UserPeriod } from './useAdminUsers'
@@ -121,8 +121,8 @@ export default function AdminUsersPage() {
 
           <CardContent className={cn('p-0 transition-opacity duration-150', fetching && !initialLoading && 'opacity-60')}>
             {initialLoading ? (
-              <div className="divide-y divide-border px-3 py-1">
-                {Array.from({ length: 5 }).map((_, i) => (
+              <DividedList>
+                <SkeletonList count={5}>{(i) => (
                   <div key={i} className="flex items-center gap-3 py-2.5">
                     <Skeleton className="size-8 rounded-md shrink-0" />
                     <div className="flex-1 space-y-1.5">
@@ -131,12 +131,12 @@ export default function AdminUsersPage() {
                     </div>
                     <Skeleton className="h-5 w-14" />
                   </div>
-                ))}
-              </div>
+                )}</SkeletonList>
+              </DividedList>
             ) : items.length === 0 ? (
               <EmptyState message={t('users.no_users')} />
             ) : (
-              <div className="divide-y divide-border px-3 py-1">
+              <DividedList>
                 {items.map((user) => (
                   <Item
                     key={user.id}
@@ -160,29 +160,19 @@ export default function AdminUsersPage() {
                       <RoleBadge role={user.role} />
                       <div onClick={(e) => e.stopPropagation()}>
                         {user.role === 'banned' ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-green-600 hover:text-green-700" onClick={() => void quickUnban(user)}>
-                                <ShieldCheck className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{t('users.quick_unban')}</TooltipContent>
-                          </Tooltip>
+                          <IconButton tooltip={t('users.quick_unban')} className="text-green-600 hover:text-green-700" onClick={() => void quickUnban(user)}>
+                            <ShieldCheck className="h-4 w-4" />
+                          </IconButton>
                         ) : user.role !== 'owner' ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => void quickBan(user)}>
-                                <Ban className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{t('users.quick_ban')}</TooltipContent>
-                          </Tooltip>
+                          <IconButton tooltip={t('users.quick_ban')} className="text-muted-foreground hover:text-destructive" onClick={() => void quickBan(user)}>
+                            <Ban className="h-4 w-4" />
+                          </IconButton>
                         ) : null}
                       </div>
                     </ItemActions>
                   </Item>
                 ))}
-              </div>
+              </DividedList>
             )}
           </CardContent>
         </Card>
