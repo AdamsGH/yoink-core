@@ -15,11 +15,14 @@ export type UserSortField =
   | 'dl_count'
   | 'dl_last_at'
 
+export type UserPeriod = '7' | '30' | '90' | 'all'
+
 export const USERS_PAGE_SIZE = 25
 
 export interface AdminUsersFilters {
   role: string
   status: StatusFilter
+  period: UserPeriod
 }
 
 export interface UseAdminUsersReturn {
@@ -47,6 +50,8 @@ export interface UseAdminUsersReturn {
   setSort: (s: UserSortField) => void
   sortDir: 'asc' | 'desc'
   toggleSortDir: () => void
+  period: UserPeriod
+  setPeriod: (p: UserPeriod) => void
   // drawer
   viewed: User | null
   setViewed: (u: User | null) => void
@@ -72,13 +77,14 @@ export function useAdminUsers(): UseAdminUsersReturn {
 
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [filters, setFilters] = useState<AdminUsersFilters>({ role: 'all', status: 'all' })
-  const [sort, setSort] = useState<UserSortField>('created_at')
+  const [filters, setFilters] = useState<AdminUsersFilters>({ role: 'all', status: 'all', period: '30' })
+  const [sort, setSort] = useState<UserSortField>('dl_count')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [period, setPeriodState] = useState<UserPeriod>('30')
 
   const [viewed, setViewed] = useState<User | null>(null)
 
-  const hasActive = debouncedSearch !== '' || filters.role !== 'all' || filters.status !== 'all'
+  const hasActive = debouncedSearch !== '' || filters.role !== 'all' || filters.status !== 'all' || period !== '30'
   const totalPages = Math.max(1, Math.ceil(total / USERS_PAGE_SIZE))
 
   useEffect(() => {
@@ -95,6 +101,7 @@ export function useAdminUsers(): UseAdminUsersReturn {
     f: AdminUsersFilters,
     s: UserSortField,
     d: 'asc' | 'desc',
+    per: UserPeriod,
   ) => {
     setFetching(true)
     try {
@@ -106,6 +113,7 @@ export function useAdminUsers(): UseAdminUsersReturn {
         search: q || undefined,
         role: f.role !== 'all' ? f.role : undefined,
         status: f.status !== 'all' ? f.status : undefined,
+        period: per !== 'all' ? per : undefined,
       })
       setItems(res.data.items)
       setTotal(res.data.total)
@@ -118,13 +126,19 @@ export function useAdminUsers(): UseAdminUsersReturn {
   }
 
   useEffect(() => {
-    void load(page, debouncedSearch, filters, sort, sortDir)
-  }, [page, debouncedSearch, filters, sort, sortDir])
+    void load(page, debouncedSearch, filters, sort, sortDir, period)
+  }, [page, debouncedSearch, filters, sort, sortDir, period])
 
   const resetFilters = () => {
     setSearch('')
     setDebouncedSearch('')
-    setFilters({ role: 'all', status: 'all' })
+    setFilters({ role: 'all', status: 'all', period: '30' })
+    setPeriodState('30')
+    setPage(1)
+  }
+
+  const setPeriod = (p: UserPeriod) => {
+    setPeriodState(p)
     setPage(1)
   }
 
@@ -180,6 +194,8 @@ export function useAdminUsers(): UseAdminUsersReturn {
     },
     sortDir,
     toggleSortDir,
+    period,
+    setPeriod,
     viewed,
     setViewed,
     handleUpdated,

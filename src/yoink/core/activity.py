@@ -28,12 +28,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, TypedDict
+from datetime import datetime
+from typing import Any, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +44,7 @@ class PluginActivity(TypedDict, total=False):
 
 
 ActivityProvider = Callable[[AsyncSession, int], Awaitable[PluginActivity]]
-ListUsersProvider = Callable[[AsyncSession, list[int]], Awaitable[dict[int, dict]]]
+ListUsersProvider = Callable[[AsyncSession, list[int], datetime | None], Awaitable[dict[int, dict]]]
 
 _providers: dict[str, ActivityProvider] = {}
 _list_providers: dict[str, ListUsersProvider] = {}
@@ -76,12 +74,12 @@ def register_list_users_provider(plugin: str, provider: ListUsersProvider) -> No
     logger.debug("List-users provider registered: %s", plugin)
 
 
-async def collect_list_users(session: AsyncSession, user_ids: list[int]) -> dict[int, dict]:
+async def collect_list_users(session: AsyncSession, user_ids: list[int], since: datetime | None = None) -> dict[int, dict]:
     """Query all list-users providers and merge their results by user_id."""
     merged: dict[int, dict] = {}
     for plugin, provider in _list_providers.items():
         try:
-            result = await provider(session, user_ids)
+            result = await provider(session, user_ids, since)
             for uid, fields in result.items():
                 merged.setdefault(uid, {}).update(fields)
         except Exception:

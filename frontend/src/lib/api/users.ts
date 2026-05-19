@@ -13,6 +13,7 @@ export interface UsersQuery {
   offset?: number
   sort?: UserSortField
   direction?: SortDirection
+  period?: string
 }
 
 export interface UserStats {

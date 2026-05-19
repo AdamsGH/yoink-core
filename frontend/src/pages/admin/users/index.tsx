@@ -8,7 +8,7 @@ import type { UserRole } from '@core/types/api'
 import { Avatar, AvatarFallback, AvatarImage, Button, Card, CardContent, CardHeader, CardTitle, Input, Item, ItemActions, ItemContent, ItemDescription, ItemTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
 import { RoleBadge } from '@app'
 import { UserDrawer } from './UserDrawer'
-import { useAdminUsers, type StatusFilter, type UserSortField } from './useAdminUsers'
+import { useAdminUsers, type StatusFilter, type UserSortField, type UserPeriod } from './useAdminUsers'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
 
@@ -21,6 +21,7 @@ export default function AdminUsersPage() {
     search, setSearch,
     filters, setFilters, hasActive, resetFilters,
     sort, setSort, sortDir, toggleSortDir,
+    period, setPeriod,
     viewed, setViewed, handleUpdated,
     quickBan, quickUnban,
   } = useAdminUsers()
@@ -56,14 +57,27 @@ export default function AdminUsersPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="dl_count">{t('users.sort_dl_count')}</SelectItem>
+                  <SelectItem value="dl_last_at">{t('users.sort_dl_last')}</SelectItem>
                   <SelectItem value="created_at">{t('users.sort_joined')}</SelectItem>
                   <SelectItem value="updated_at">{t('users.sort_last_seen')}</SelectItem>
                   <SelectItem value="name">{t('users.sort_name')}</SelectItem>
                   <SelectItem value="role">{t('users.sort_role')}</SelectItem>
-                  <SelectItem value="dl_count">{t('users.sort_dl_count')}</SelectItem>
-                  <SelectItem value="dl_last_at">{t('users.sort_dl_last')}</SelectItem>
                 </SelectContent>
               </Select>
+              {(sort === 'dl_count' || sort === 'dl_last_at') && (
+                <Select value={period} onValueChange={(v) => setPeriod(v as UserPeriod)}>
+                  <SelectTrigger className="h-7 w-20 text-xs shrink-0">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="7">{t('users.period_7', { defaultValue: '7d' })}</SelectItem>
+                    <SelectItem value="30">{t('users.period_30', { defaultValue: '30d' })}</SelectItem>
+                    <SelectItem value="90">{t('users.period_90', { defaultValue: '90d' })}</SelectItem>
+                    <SelectItem value="all">{t('users.period_all', { defaultValue: 'all time' })}</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
               <Button
                 variant="outline"
                 size="icon"

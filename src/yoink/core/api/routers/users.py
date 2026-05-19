@@ -25,6 +25,8 @@ router = APIRouter(
 )
 
 _SORT_FIELDS = {"created_at", "updated_at", "name", "role"}
+_PLUGIN_SORT_FIELDS = {"dl_count", "dl_last_at"}
+_PERIOD_DAYS = {"7": 7, "30": 30, "90": 90}
 
 
 def _user_response(u: User, dl_count: int = 0, dl_last_at: datetime | None = None, **_: object) -> UserResponse:
@@ -56,15 +58,21 @@ async def list_users(
     search: str | None = Query(None),
     role: str | None = Query(None),
     status: str | None = Query(None),
-    sort: str = Query("created_at"),
+    sort: str = Query("dl_count"),
     direction: str = Query("desc"),
+    period: str | None = Query(None),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> dict:
-    if sort not in _SORT_FIELDS:
+    plugin_sort = sort in _PLUGIN_SORT_FIELDS
+    if sort not in _SORT_FIELDS and not plugin_sort:
         sort = "created_at"
     if direction not in ("asc", "desc"):
         direction = "desc"
+
+    since: datetime | None = None
+    if period in _PERIOD_DAYS:
+        since = datetime.now(UTC) - timedelta(days=_PERIOD_DAYS[period])
 
     q = select(User)
     if search:
@@ -82,17 +90,36 @@ async def list_users(
 
     total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar_one()
 
-    order_col = {
-        "name": User.first_name,
-        "role": User.role,
-        "updated_at": User.updated_at,
-    }.get(sort, User.created_at)
-    q = q.order_by(order_col.desc()) if direction == "desc" else q.order_by(order_col.asc())
-    users = (await session.execute(q.offset(offset).limit(limit))).scalars().all()
+    if not plugin_sort:
+        order_col = {
+            "name": User.first_name,
+            "role": User.role,
+            "updated_at": User.updated_at,
+        }.get(sort, User.created_at)
+        q = q.order_by(order_col.desc()) if direction == "desc" else q.order_by(order_col.asc())
+        users = (await session.execute(q.offset(offset).limit(limit))).scalars().all()
+    else:
+        # Plugin-sorted fields: fetch the whole result set, merge, then sort in Python.
+        # Offset/limit applied after sort so pagination stays correct.
+        users_all = (await session.execute(q)).scalars().all()
+        user_ids_all = [u.id for u in users_all]
+        plugin_fields_all = await collect_list_users(session, user_ids_all, since)
+        reverse = direction == "desc"
+        users_sorted = sorted(
+            users_all,
+            key=lambda u: plugin_fields_all.get(u.id, {}).get(sort) or (0 if sort == "dl_count" else datetime.min.replace(tzinfo=UTC)),
+            reverse=reverse,
+        )
+        users = users_sorted[offset: offset + limit]
+        items = [
+            _user_response(u, **plugin_fields_all.get(u.id, {}))
+            for u in users
+        ]
+        return {"items": items, "total": total, "offset": offset, "limit": limit}
 
     # Merge plugin-supplied per-user fields (e.g. dl_count, dl_last_at from yoink-dl)
     user_ids = [u.id for u in users]
-    plugin_fields = await collect_list_users(session, user_ids)
+    plugin_fields = await collect_list_users(session, user_ids, since)
 
     items = [
         _user_response(u, **plugin_fields.get(u.id, {}))
