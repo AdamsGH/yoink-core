@@ -439,7 +439,7 @@
     "nav_access": "Доступ к Insight",
     "settings_title": "Настройки AI Insight",
     "settings_lang_title": "Язык ответов",
-    "settings_lang_hint": "Gemini будет отвечать на выбранном языке для /about и /summary.",
+    "settings_lang_hint": "Язык ответов для /about, /summary и /tldr.",
     "settings_lang_label": "Язык",
     "settings_access_granted": "Доступ выдан {{date}}",
     "settings_no_access_title": "Нет доступа",

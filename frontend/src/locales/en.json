@@ -439,7 +439,7 @@
     "nav_access": "Insight Access",
     "settings_title": "AI Insight Settings",
     "settings_lang_title": "Response Language",
-    "settings_lang_hint": "Gemini will reply in the selected language for /about and /summary.",
+    "settings_lang_hint": "Reply language for /about, /summary and /tldr.",
     "settings_lang_label": "Language",
     "settings_access_granted": "Access granted on {{date}}",
     "settings_no_access_title": "No Access",
