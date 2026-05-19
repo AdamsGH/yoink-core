@@ -5,6 +5,9 @@
 - Never add an i18n key to only one locale - always update both `en.yml` and `ru.yml` together
 - Never add a new `DownloadError` for a known yt-dlp error pattern - use or create a specific `BotError` subclass
 - Never edit files under `frontend/src/components/ui/` (shadcn managed)
+- Never inline empty-state divs - use `EmptyState` from `@app` instead of `<div className="flex justify-center py-12 text-sm text-muted-foreground">`
+- Never inline divide-y lists - use `DividedList` from `@ui` instead of `<div className="divide-y divide-border px-3 py-1">`
+- Never inline skeleton loops - use `SkeletonList` from `@ui` instead of `Array.from({ length: N }).map((_, i) => ...)`
 - Never call `apiClient` directly from pages - use typed modules in `lib/api/` or plugin `api/` dirs
 - Never add an Alembic migration without a matching model change (and vice versa)
 - Never add `proxy_url` as a compose interpolation variable inside `.env` itself - compose self-reference doesn't work
@@ -47,10 +50,23 @@
 - New gated feature: add `FeatureSpec` in plugin's `get_features()` + `CommandSpec(required_feature=...)` on the command
 
 ## Frontend Conventions
-- Path aliases: `@core/*` = `frontend/src/*`, `@ui` = shadcn components, `@app` = app-level components; `@dl/*`, `@stats/*`, `@insight/*` for plugin frontends
+- Path aliases: `@core/*` = `frontend/src/*`, `@ui` = shadcn components, `@app` = app-level components, `@core/components/form` = react-hook-form controllers, `@core/components/charts` = chart wrappers; `@dl/*`, `@stats/*`, `@insight/*` for plugin frontends
 - Alias config lives in `vite.config.ts` only - keep `tsconfig.json` in sync manually (no vite-tsconfig-paths)
 - Page files: PascalCase (`AdminGroupsPage.tsx`); heavy pages extract logic into co-located `usePageName.ts` hooks (pattern: `AdminUsersPage` -> `useAdminUsers.ts`, `AdminGroupsPage` -> `useAdminGroups.ts`)
 - Large pages with multi-tab drawers split sub-tabs into co-located components (pattern: `UserDrawer.tsx` shell + `BanDatePicker.tsx` + `UserDrawerStatsTab.tsx` + `UserDrawerPermissionsTab.tsx` next to each other, NO barrel `index.ts` re-export)
 - Date formatting: use `formatDate` / `formatDateMonth` / `formatDateDay` from `@core/lib/utils` - the project does NOT depend on `date-fns`
 - Dev-only diagnostics: gate `console.error` / `console.warn` with `if (import.meta.env.DEV)` so production builds stay quiet
 - User confirmations: shadcn `AlertDialog` instead of native `confirm()` / `alert()`, except admin-only surfaces where the native dialog is acceptable (still i18n the text)
+
+### Shared UI components
+- `EmptyState` (`@app`) - centered empty state message inside a card
+- `CompactCardHeader` (`@app`) - `px-4 py-3` card header with title + optional actions; skip when the header has extra content below the title row
+- `DividedList` (`@ui`) - `divide-y divide-border px-3 py-1` wrapper
+- `SkeletonList` (`@ui`) - skeleton row repeater: `<SkeletonList count={N}>{(i) => <Row key={i} />}</SkeletonList>`
+- `IconButton` (`@ui`) - ghost icon button with Tooltip; `variant` prop for outline/destructive variants
+- `DialogActions` (`@ui`) - `DialogFooter` with `flex-row gap-2 sm:space-x-0`
+- `ControlledSelect<T>`, `ControlledSwitch<T>` (`@core/components/form`) - react-hook-form controllers for Select and Switch
+- `ChartSkeleton`, `SectionSkeleton` (`@core/components/charts`) - loading skeletons for chart sections
+- `MiniBarChart` (`@core/components/charts`) - recharts BarChart wrapper (expects `date` key for XAxis)
+- `HorizontalBars` (`@core/components/charts`) - ranked bar list with `colors[]` array
+- `RankedList<T>` (`@stats/components`) - generic typed ranked list with `bg-primary/60` bars
