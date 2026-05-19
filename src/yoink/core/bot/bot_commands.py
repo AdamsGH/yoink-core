@@ -290,8 +290,11 @@ async def refresh_user_commands(
             except ValueError:
                 role_idx = 0
 
+            is_owner = role == UserRole.owner.value
             for spec in get_all_features():
-                if spec.default_min_role is not None:
+                if is_owner:
+                    explicit.add(f"{spec.plugin}:{spec.feature}")
+                elif spec.default_min_role is not None:
                     try:
                         min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
                         if role_idx >= min_idx:
@@ -436,8 +439,11 @@ async def refresh_member_commands(
         except ValueError:
             role_idx = 0
 
+        is_owner = role == UserRole.owner.value
         for spec in get_all_features():
-            if spec.default_min_role is not None:
+            if is_owner:
+                explicit.add(f"{spec.plugin}:{spec.feature}")
+            elif spec.default_min_role is not None:
                 try:
                     min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
                     if role_idx >= min_idx:

@@ -101,8 +101,11 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 role_idx = ROLE_ORDER.index(UserRole(user.role.value))
             except ValueError:
                 role_idx = 0
+            is_owner = user.role.value == UserRole.owner.value
             for spec in get_all_features():
-                if spec.default_min_role is not None:
+                if is_owner:
+                    explicit.add(f"{spec.plugin}:{spec.feature}")
+                elif spec.default_min_role is not None:
                     try:
                         min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
                         if role_idx >= min_idx:

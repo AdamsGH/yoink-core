@@ -345,6 +345,9 @@ Single Alembic chain covering core and all plugins:
 | 0031 | stats_user_latest_name view (live, not materialised - source table is write-hot) |
 | 0032 | stats_messages (chat_id, message_id) index + message_thread_id column |
 | 0033 | insight_summary_cache table |
+| 0034 | youtube_auth_mode column in dl_user_settings |
+| 0035 | insight_summary_cache: video_id renamed to content_key (VARCHAR 512, supports non-YouTube URLs) |
+| 0036 | insight_user_settings: tldr_model column (per-user LLM override for /tldr) |
 
 ## Custom Bot API server
 
