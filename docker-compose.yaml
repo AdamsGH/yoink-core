@@ -22,6 +22,7 @@ services:
   yoink-proxy-init:
     image: busybox:latest
     container_name: yoink-proxy-init
+    profiles: [legacy]
     restart: "no"
     env_file: .env
     environment:
@@ -49,23 +50,21 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      BOT_API_URL: "http://yoink-tg-bot-api:8082"
+      BOT_API_URL: "http://tg-bot-api:8082"
       MUSIC_PROXY_URL: "${proxy_url:-}"
     depends_on:
       yoink-postgres:
         condition: service_healthy
-      yoink-tg-bot-api:
-        condition: service_healthy
-        restart: true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data/cookies:/app/data/cookies
       - ./data/kasm/profile/chromium:/app/data/browser-profile:ro
-      - ./data/tg-bot-api:/app/data/tg-bot-api:ro
+      - /opt/docker/shared/tg-bot-api/data:/app/data/tg-bot-api:ro
 
     networks:
       - yoink
+      - shared
     ports:
       - "8003:8000"
     healthcheck:
@@ -138,6 +137,7 @@ services:
   yoink-tg-bot-api:
     image: yoink/tg-bot-api:latest
     container_name: yoink-tg-bot-api
+    profiles: [legacy]
     restart: unless-stopped
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -168,9 +168,31 @@ services:
         max-size: "50M"
         max-file: "3"
 
+  yoink-youtubei:
+    image: yoink/youtubei:latest
+    container_name: yoink-youtubei
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.youtubei
+    restart: unless-stopped
+    networks:
+      - yoink
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9173/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: local
+      options:
+        max-size: "50M"
+        max-file: "3"
+
   yoink-bgutil:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
     container_name: yoink-bgutil
+    profiles: [legacy]
     restart: unless-stopped
     environment:
       PROXY: "${proxy_url:-}"
@@ -257,6 +279,9 @@ networks:
     # ipam:
     #   config:
     #     - subnet: 10.10.0.0/24
+  shared:
+    name: shared
+    external: true
 
 volumes:
   postgres-data:

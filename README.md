@@ -35,6 +35,7 @@ just migrate up             # run migrations
 | `yoink-tg-bot-api` | Custom tdlight Bot API server | 8082 |
 | `yoink-backup` | pg_dump + S3 (profile `backup`) | - |
 | `yoink-browser` | Kasmweb Chromium (profile `cookies`) | 6902 |
+| `yoink-youtubei` | Node.js youtubei.js sidecar for OAuth YouTube downloads | 9173 |
 
 ## Just recipes
 
@@ -366,6 +367,12 @@ just tg logout
 ```
 
 Token stored in `data/tg-bot-api/user.token`.
+
+## YouTube TV OAuth
+
+An optional sidecar service (`yoink-youtubei`) handles YouTube downloads for users who have authorized via the Google TV device flow. It uses [youtubei.js](https://github.com/LuanRT/YouTube.js) with a TV client and OAuth tokens, bypassing cookie requirements for age-restricted content.
+
+The sidecar is only used when a user has completed OAuth authorization **and** switched their YouTube auth method to "YouTube TV OAuth" in Settings. All other users continue to use yt-dlp with Netscape cookies by default. See `plugins/yoink-dl/README.md` for the full setup and flow description.
 
 ## Cookie extraction
 

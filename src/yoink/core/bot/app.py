@@ -19,7 +19,12 @@ def create_bot_app(config: CoreSettings) -> Application:
             "timeout": httpx.Timeout(connect=10.0, read=30.0, write=60.0, pool=5.0),
         },
     )
-    builder = Application.builder().token(config.bot_token).request(request)
+    builder = (
+        Application.builder()
+        .token(config.bot_token)
+        .request(request)
+        .concurrent_updates(True)
+    )
     if config.telegram_base_url != "https://api.telegram.org/bot":
         builder = builder.base_url(config.telegram_base_url)
     return builder.build()

@@ -1,0 +1,9 @@
+FROM node:22-alpine
+RUN apk add --no-cache ffmpeg
+WORKDIR /app
+COPY docker/youtubei-service/package.json ./
+RUN npm install --omit=dev
+COPY docker/youtubei-service/index.js ./
+ENV PORT=9173
+EXPOSE 9173
+CMD ["node", "index.js"]
