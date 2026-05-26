@@ -6,7 +6,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+# uv.lock is intentionally untracked (see AGENTS.md). The wildcard makes the
+# lockfile optional - when absent, uv resolves fresh from pyproject.toml.
+COPY pyproject.toml ./
+COPY uv.lock* ./
 COPY src/ ./src/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
