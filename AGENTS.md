@@ -1,5 +1,8 @@
 # AGENTS.md - yoink-core
 
+## CRITICAL: never run uv / python / pip / pytest on the host
+All Python work happens inside the docker containers. `uv.lock` is gitignored AND must stay un-tracked; running `uv sync`, `uv run`, `uv pip install`, `pip install`, `pytest`, or any `python -c '...'` from the host re-creates `.venv/`, regenerates `uv.lock`, and worst of all bakes host-side resolver state into commits. `gitignore` does NOT protect a file once it is already tracked, and `git commit paths=[..., 'uv.lock']` will happily re-add it. Use `just build`, `just up`, `just test`, `just migrate` (or `docker compose run --rm yoink ...`) for every Python command; if a typed verification step does not exist for what you need, add it to the justfile rather than reaching for host `uv`. If `uv.lock` ever shows up in `git status`, `git rm --cached uv.lock` immediately and commit the deletion before doing anything else.
+
 ## Critical Rules
 - Never inline SQL in Python - use `.sql` files loaded via `load_sql(base, name)` from `yoink.core.db.query`
 - Never add an i18n key to only one locale - always update both `en.yml` and `ru.yml` together
