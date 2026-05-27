@@ -59,3 +59,7 @@ ignore = ["E501", "B008"]
 "plugins/*/src/**/schemas.py" = ["TC001", "TC002", "TC003"]
 "plugins/*/src/**/api/**/*.py" = ["TC001", "TC002", "TC003"]
 "plugins/*/src/**/routers/*.py" = ["TC001", "TC002", "TC003"]
+
+[tool.pyrefly]
+project-includes = ["**/*.py*", "**/*.ipynb"]
+ignore-missing-imports = ["pytest", "pytest_asyncio"]
