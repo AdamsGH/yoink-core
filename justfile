@@ -295,6 +295,47 @@ backup action="run" target="latest":
         ;;
     esac
 
+# Run ruff lint inside a throwaway container. Args forwarded to ruff.
+# Usage: just lint                (full repo: src + plugins)
+#        just lint --fix          (autofix src + plugins)
+#        just lint src/yoink      (scope to a path; replaces default targets)
+lint *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Treat any arg that doesn't start with '-' as a path override; flags
+    # (--fix, --select, ...) keep the default src + plugins target set.
+    args="{{args}}"
+    has_path=0
+    for a in $args; do
+        case "$a" in -*) ;; *) has_path=1; break ;; esac
+    done
+    targets="src plugins"
+    [ "$has_path" = "1" ] && targets=""
+    docker run --rm \
+        -v "$(pwd)/src:/app/src:ro" \
+        -v "$(pwd)/plugins:/app/plugins:ro" \
+        -v "$(pwd)/pyproject.toml:/app/pyproject.toml:ro" \
+        -w /app \
+        yoink/yoink:latest \
+        sh -c "uv pip install --system ruff -q && ruff check --no-cache $args $targets"
+
+# Python verify: ruff lint + pytest. Fails fast on first red step.
+# Usage: just verify-py
+#        just verify-py src/tests/test_rbac.py    (scope tests)
+verify-py *args="src/tests":
+    just lint
+    just test {{args}}
+
+# Frontend verify: tsc across core + plugin frontends (uses host node_modules).
+# Requires `just setup-dev` once. Args forwarded to tsc.
+verify-fe *args="":
+    just tsc {{args}}
+
+# Full verify: python (lint + tests) + frontend (tsc). Mirrors CI.
+verify:
+    just verify-py
+    just verify-fe
+
 # Run tests inside a container against yoink_test DB in the existing postgres.
 # Usage: just test [path] (e.g. just test src/tests/test_rbac.py)
 test *args="src/tests":
