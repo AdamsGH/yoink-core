@@ -151,7 +151,7 @@ export function useAdminUsers(): UseAdminUsersReturn {
     try {
       await usersApi.update(u.id, { role: 'banned' } as UserUpdateRequest)
       toast.success(t('users.banned'))
-      void load(page, debouncedSearch, filters, sort, sortDir)
+      void load(page, debouncedSearch, filters, sort, sortDir, period)
     } catch {
       toast.error(t('users.update_error'))
     }
@@ -161,7 +161,7 @@ export function useAdminUsers(): UseAdminUsersReturn {
     try {
       await usersApi.update(u.id, { role: 'user' } as UserUpdateRequest)
       toast.success(t('users.unbanned'))
-      void load(page, debouncedSearch, filters, sort, sortDir)
+      void load(page, debouncedSearch, filters, sort, sortDir, period)
     } catch {
       toast.error(t('users.update_error'))
     }
