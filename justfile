@@ -64,7 +64,9 @@ data-dirs:
     mkdir -p data/cookies data/kasm/profile/chromium data/tg-bot-api
     chmod 700 data/tg-bot-api
 
-# Start all services (or a single one: just up yoink)
+# Start all services (or a single one: just up yoink).
+# Does NOT rebuild images. After editing code, use `just rebuild <service>`
+# instead - `up` alone notices a new image only if `just build` ran first.
 up service="":
     #!/usr/bin/env bash
     if [ -z "{{service}}" ]; then
@@ -77,9 +79,25 @@ up service="":
 down:
     {{compose}} down
 
-# Restart a service
+# Restart a running container (does NOT pick up a new image; use `rebuild`).
 restart service:
     {{compose}} restart {{service}}
+
+# Rebuild image then recreate the container so code changes land in one step.
+# Usage: just rebuild yoink-frontend  /  just rebuild yoink  /  just rebuild
+# (no arg = rebuild all yoink/* images and recreate every compose service).
+rebuild service="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{service}}" in
+      ""|all)              just build all          && {{compose}} up -d --force-recreate ;;
+      yoink)               just build yoink        && {{compose}} up -d --force-recreate --no-deps yoink ;;
+      yoink-frontend|fe)   just build frontend     && {{compose}} up -d --force-recreate --no-deps yoink-frontend ;;
+      yoink-nginx|nginx)   just build nginx        && {{compose}} up -d --force-recreate --no-deps yoink-nginx ;;
+      yoink-tg|tg)         just build tg           && {{compose}} up -d --force-recreate --no-deps yoink-tg ;;
+      yoink-backup|backup) just build backup       && {{compose}} up -d --force-recreate --no-deps yoink-backup ;;
+      *) echo "Unknown service: {{service}}. Use: yoink | yoink-frontend | yoink-nginx | yoink-tg | yoink-backup | all"; exit 1 ;;
+    esac
 
 # Follow logs (all or a single service)
 logs service="":
@@ -94,29 +112,26 @@ logs service="":
 ps:
     {{compose}} ps
 
-# Database migrations via alembic inside the api container
+# Database migrations via alembic inside the api container.
+# The working tree is bind-mounted over the baked /app/src so editing
+# alembic versions and running `just migrate up` picks them up without a
+# rebuild. The `--build` flag on `{{compose}} run` is intentionally absent;
+# add a fresh migration file on disk and rerun.
 migrate action="up" message="":
     #!/usr/bin/env bash
     set -euo pipefail
+    run='{{compose}} run --rm -v $(pwd)/src:/app/src yoink sh -c'
     case "{{action}}" in
-      up)
-        {{compose}} run --rm yoink sh -c "cd /app/src/db && alembic upgrade head"
-        ;;
-      down)
-        {{compose}} run --rm yoink sh -c "cd /app/src/db && alembic downgrade -1"
-        ;;
-      current)
-        {{compose}} run --rm yoink sh -c "cd /app/src/db && alembic current"
-        ;;
-      history)
-        {{compose}} run --rm yoink sh -c "cd /app/src/db && alembic history"
-        ;;
+      up)        eval "$run 'cd /app/src/db && alembic upgrade head'" ;;
+      down)      eval "$run 'cd /app/src/db && alembic downgrade -1'" ;;
+      current)   eval "$run 'cd /app/src/db && alembic current'" ;;
+      history)   eval "$run 'cd /app/src/db && alembic history'" ;;
       create)
         if [ -z "{{message}}" ]; then
           echo "Usage: just migrate create \"message\""
           exit 1
         fi
-        {{compose}} run --rm yoink sh -c "cd /app/src/db && alembic revision --autogenerate -m '{{message}}'"
+        eval "$run 'cd /app/src/db && alembic revision --autogenerate -m \"{{message}}\"'"
         ;;
       *)
         echo "Usage: just migrate [up|down|current|history|create \"msg\"]"
