@@ -61,6 +61,10 @@ just proxy-init
 just backup
 just backup restore [list|latest|FILE]
 just backup [up|down|logs]
+just lint [--fix] [path]          # ruff check inside container
+just verify-py [test-path]        # lint + pytest
+just verify-fe                    # tsc across core + plugin frontends
+just verify                       # full: verify-py + verify-fe
 ```
 
 ## Environment variables
@@ -218,11 +222,22 @@ FeatureSpec(
 )
 ```
 
-Access is granted if **either**:
-1. `user.role >= feature.default_min_role` (role threshold), or
-2. An explicit grant exists in `user_permissions` table
+Access is granted if **any** of the following is true:
+1. An explicit grant exists in `user_permissions` (non-expired row).
+2. `user.role >= feature.default_min_role` (role threshold).
+3. A plugin-registered feature provider returns `True` for the user.
 
 Owner always passes regardless.
+
+`yoink.core.auth.effective_features.EffectiveFeatureResolver` is the single source of truth for all three resolution paths. Plugins register additional grant sources at startup via `register_feature_provider(plugin, feature, provider)`. Example from yoink-insight:
+
+```python
+from yoink.core.auth.effective_features import register_feature_provider
+from yoink_insight.services.byok_access import byok_tldr_provider
+register_feature_provider("insight", "tldr", byok_tldr_provider)
+```
+
+All command-menu refresh (`refresh_user_commands`), `/help` generation, and `PermissionChecker.check` calls go through `EffectiveFeatureResolver` so provider grants are reflected everywhere without additional wiring.
 
 ### Commands
 
@@ -348,6 +363,15 @@ Single Alembic chain covering core and all plugins:
 | 0034 | youtube_auth_mode column in dl_user_settings |
 | 0035 | insight_summary_cache: video_id renamed to content_key (VARCHAR 512, supports non-YouTube URLs) |
 | 0036 | insight_user_settings: tldr_model column (per-user LLM override for /tldr) |
+| 0037 | insight_user_settings: github_token column (GitHub URL support in /tldr) |
+| 0038 | dl_user_settings: audio_codec column |
+| 0039 | insight_tldr_aliases table (initial: user-defined /tldr prompt aliases) |
+| 0040 | insight_tldr_aliases: rename alias to aliases column |
+| 0041 | insight_tldr_aliases: domain bindings and binding-to-built-in rows |
+| 0042 | insight_usage_log: content_chars, video_seconds, alias_key columns (TLDR metrics) |
+| 0043 | insight_user_prompts table (per-user default prompt overrides per command) |
+| 0044 | insight_user_settings: use_search column (AI Search toggle) |
+| 0045 | insight_user_byok table (per-user Bring-Your-Own-Key configuration) |
 
 ## Custom Bot API server
 
@@ -399,6 +423,12 @@ just backup up        # start cron (daily at 03:00)
 ```
 
 Retention: 7 daily + 4 weekly.
+
+## Development
+
+Each plugin pyproject has a `[tool.pyrefly]` section with `python-interpreter-path` pointing at `../../.venv` and a `search-path` listing sibling plugin `src/` directories. This lets Pyrefly resolve cross-plugin imports without a monorepo-wide config. Run `pyrefly check` from any plugin directory to get project-scoped type errors.
+
+Submodule heads: run `just submodules` (wraps `git submodule status`). Refresh the core repo and every submodule with `just pull` (runs `git pull` then `git submodule update --remote --merge`).
 
 ## Tests
 
