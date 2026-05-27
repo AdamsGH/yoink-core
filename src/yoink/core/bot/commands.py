@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC
 
 from telegram import (
     CallbackQuery,
@@ -79,40 +78,9 @@ async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session_factory = context.bot_data.get("session_factory")
     if session_factory is not None:
         try:
-            from datetime import datetime
-
-            from sqlalchemy import select
-
-            from yoink.core.auth.rbac import ROLE_ORDER
-            from yoink.core.db.models import UserPermission, UserRole
-            from yoink.core.plugin import get_all_features
-
-            now = datetime.now(UTC)
-            async with session_factory() as _s:
-                result = await _s.execute(
-                    select(UserPermission.plugin, UserPermission.feature).where(
-                        UserPermission.user_id == user.id,
-                        (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
-                    )
-                )
-                explicit = {f"{r.plugin}:{r.feature}" for r in result.all()}
-
-            try:
-                role_idx = ROLE_ORDER.index(UserRole(user.role.value))
-            except ValueError:
-                role_idx = 0
-            is_owner = user.role.value == UserRole.owner.value
-            for spec in get_all_features():
-                if is_owner:
-                    explicit.add(f"{spec.plugin}:{spec.feature}")
-                elif spec.default_min_role is not None:
-                    try:
-                        min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
-                        if role_idx >= min_idx:
-                            explicit.add(f"{spec.plugin}:{spec.feature}")
-                    except ValueError:
-                        pass
-            granted_features = explicit
+            from yoink.core.auth.effective_features import EffectiveFeatureResolver
+            resolver = EffectiveFeatureResolver(session_factory, context.bot_data)
+            granted_features = await resolver.resolve(user.id, user=user)
         except Exception as exc:
             logger.warning("Could not resolve features for help: %s", exc)
 

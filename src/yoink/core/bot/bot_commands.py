@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from datetime import UTC
 
 from telegram import (
     Bot,
@@ -64,9 +63,12 @@ def _filter_by_role(
     for c in commands:
         if _ROLE_RANK.get(c.min_role, 0) > rank:
             continue
-        if c.required_feature is not None and granted_features is not None:
-            if c.required_feature not in granted_features:
-                continue
+        if (
+            c.required_feature is not None
+            and granted_features is not None
+            and c.required_feature not in granted_features
+        ):
+            continue
         out.append(c)
     return out
 
@@ -264,45 +266,10 @@ async def refresh_user_commands(
     granted_features: set[str] | None = None
     if session_factory is not None:
         try:
-            from datetime import datetime
-
-            from sqlalchemy import select
-
-            from yoink.core.db.models import UserPermission
-            from yoink.core.plugin import get_all_features
-
-            now = datetime.now(UTC)
-            async with session_factory() as session:
-                result = await session.execute(
-                    select(UserPermission.plugin, UserPermission.feature).where(
-                        UserPermission.user_id == user_id,
-                        (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
-                    )
-                )
-                explicit = {f"{r.plugin}:{r.feature}" for r in result.all()}
-
-            # Add role-based features
-            from yoink.core.auth.rbac import ROLE_ORDER
-            from yoink.core.db.models import UserRole
-            try:
-                user_role = UserRole(role)
-                role_idx = ROLE_ORDER.index(user_role)
-            except ValueError:
-                role_idx = 0
-
-            is_owner = role == UserRole.owner.value
-            for spec in get_all_features():
-                if is_owner:
-                    explicit.add(f"{spec.plugin}:{spec.feature}")
-                elif spec.default_min_role is not None:
-                    try:
-                        min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
-                        if role_idx >= min_idx:
-                            explicit.add(f"{spec.plugin}:{spec.feature}")
-                    except ValueError:
-                        pass
-
-            granted_features = explicit
+            from yoink.core.auth.effective_features import EffectiveFeatureResolver
+            bot_data = getattr(app_state, "bot_data", {}) or {}
+            resolver = EffectiveFeatureResolver(session_factory, bot_data)
+            granted_features = await resolver.resolve(user_id, role=role)
         except Exception:
             logger.exception("Could not load feature grants for user %d", user_id)
 
@@ -410,46 +377,20 @@ async def refresh_member_commands(
         return
 
     try:
-        from datetime import datetime
-
         from sqlalchemy import select
 
-        from yoink.core.db.models import UserGroupPolicy, UserPermission
-        from yoink.core.plugin import get_all_features
+        from yoink.core.auth.effective_features import EffectiveFeatureResolver
+        from yoink.core.db.models import UserGroupPolicy
 
-        now = datetime.now(UTC)
+        bot_data = getattr(app_state, "bot_data", {}) or {}
+        resolver = EffectiveFeatureResolver(session_factory, bot_data)
+        explicit = await resolver.resolve(user_id, role=role)
+
         async with session_factory() as session:
-            perm_result = await session.execute(
-                select(UserPermission.plugin, UserPermission.feature).where(
-                    UserPermission.user_id == user_id,
-                    (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
-                )
-            )
-            explicit = {f"{r.plugin}:{r.feature}" for r in perm_result.all()}
-
             ugp_result = await session.execute(
                 select(UserGroupPolicy.group_id).where(UserGroupPolicy.user_id == user_id)
             )
             group_ids = [r.group_id for r in ugp_result.all()]
-
-        from yoink.core.auth.rbac import ROLE_ORDER
-        from yoink.core.db.models import UserRole
-        try:
-            role_idx = ROLE_ORDER.index(UserRole(role))
-        except ValueError:
-            role_idx = 0
-
-        is_owner = role == UserRole.owner.value
-        for spec in get_all_features():
-            if is_owner:
-                explicit.add(f"{spec.plugin}:{spec.feature}")
-            elif spec.default_min_role is not None:
-                try:
-                    min_idx = ROLE_ORDER.index(UserRole(spec.default_min_role))
-                    if role_idx >= min_idx:
-                        explicit.add(f"{spec.plugin}:{spec.feature}")
-                except ValueError:
-                    pass
 
         for gid in group_ids:
             try:

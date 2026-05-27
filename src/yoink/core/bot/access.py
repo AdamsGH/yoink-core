@@ -151,17 +151,25 @@ class PermissionChecker:
                 effective_role=effective_role,
             )
 
-        # Feature gate: explicit grant OR role threshold from FeatureSpec
+        # Feature gate: explicit grant OR role threshold OR registered provider
         if policy.plugin and policy.feature:
-            perm_repo = context.bot_data.get("perm_repo")
-            if perm_repo is None:
+            session_factory = context.bot_data.get("session_factory")
+            if session_factory is None:
                 return PermissionResult(
                     allowed=False,
-                    deny_reason="no_perm_repo",
+                    deny_reason="no_session_factory",
                     effective_role=effective_role,
                 )
-            allowed = await perm_repo.has(
-                user_id, policy.plugin, policy.feature, user=user
+            from yoink.core.auth.effective_features import EffectiveFeatureResolver
+            resolver = EffectiveFeatureResolver(session_factory, context.bot_data)
+            # User came from user_repo above; effective_role may differ from user.role
+            # for group grants. Pass a shallow override so role-threshold path uses
+            # the elevated role too.
+            user_for_resolver = user
+            if user_for_resolver is not None and user_for_resolver.role != effective_role:
+                user_for_resolver = _UserView(user_for_resolver, effective_role)
+            allowed = await resolver.is_allowed(
+                user_id, policy.plugin, policy.feature, user=user_for_resolver,
             )
             if not allowed:
                 return PermissionResult(
@@ -236,6 +244,25 @@ class PermissionChecker:
         except Exception as exc:
             logger.debug("Could not resolve group role override: %s", exc)
         return global_role
+
+
+class _UserView:
+    """Lightweight wrapper that overrides role on a User without mutating it.
+
+    EffectiveFeatureResolver reads `.role` and `.is_blocked` from the user
+    object; nothing else. The group-grant path in PermissionChecker computes
+    an effective_role that can be higher than user.role, and we want the
+    role-threshold side of the resolver to see the elevated value.
+    """
+    __slots__ = ("_user", "role")
+
+    def __init__(self, user, effective_role: UserRole) -> None:
+        self._user = user
+        self.role = effective_role
+
+    @property
+    def is_blocked(self) -> bool:
+        return self._user.is_blocked
 
 
 _checker = PermissionChecker()
