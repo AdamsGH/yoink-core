@@ -325,7 +325,8 @@ def require_access(policy: AccessPolicy):
                     await reply_ephemeral(update, context, t("common.access_denied", lang))
                 return
 
-            context.user_data["_effective_role"] = result.effective_role
+            if context.user_data is not None:
+                context.user_data["_effective_role"] = result.effective_role
 
             context.application.create_task(
                 _maybe_update_photo(user, context),

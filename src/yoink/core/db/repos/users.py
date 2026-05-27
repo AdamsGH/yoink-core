@@ -69,9 +69,9 @@ class UserRepo(BaseRepo[User]):
                     await session.refresh(user)
             return user
 
-    async def update(self, user_id: int, **kwargs: Any) -> User | None:
+    async def update(self, id: Any, **kwargs: Any) -> User | None:
         async with self._sf() as session:
-            user = await session.get(User, user_id)
+            user = await session.get(User, id)
             if user is None:
                 return None
             for k, v in kwargs.items():

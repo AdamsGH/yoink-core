@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
@@ -80,7 +80,7 @@ class EffectiveFeatureResolver:
         user_id: int,
         plugin: str,
         feature: str,
-        user: User | None = None,
+        user: Any | None = None,
     ) -> bool:
         """Return True if the user has plugin:feature by any source.
 

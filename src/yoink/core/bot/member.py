@@ -98,7 +98,7 @@ async def _apply_tag_permissions(
 
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Bot's own membership changed - enable/disable the group record."""
-    cmu: ChatMemberUpdated = update.my_chat_member
+    cmu: ChatMemberUpdated | None = update.my_chat_member
     if cmu is None:
         return
 
@@ -122,7 +122,7 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """A user's status in the chat changed."""
-    cmu: ChatMemberUpdated = update.chat_member
+    cmu: ChatMemberUpdated | None = update.chat_member
     if cmu is None:
         return
 

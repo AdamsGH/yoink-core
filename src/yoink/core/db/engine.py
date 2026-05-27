@@ -30,11 +30,15 @@ async def create_tables() -> None:
     All plugin models inherit from Base (single DeclarativeBase), so importing
     them before this call is sufficient - no extra metadata arguments needed.
     """
+    if _engine is None:
+        raise RuntimeError("Engine not initialized. Call init_engine() first.")
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    if _session_factory is None:
+        raise RuntimeError("Engine not initialized. Call init_engine() first.")
     async with _session_factory() as session:
         yield session
 

@@ -55,11 +55,15 @@ _FUMBLE_RE = re.compile(
 
 def _state(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
     """Return (and lazily init) per-user tracking state from chat_data."""
+    if context.chat_data is None:
+        return {"mentions": 0, "window": [], "fired": False}
     guard = context.chat_data.setdefault("_confusion_guard", {})
     return guard.setdefault(user_id, {"mentions": 0, "window": [], "fired": False})
 
 
 def _reset(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    if context.chat_data is None:
+        return
     context.chat_data.get("_confusion_guard", {}).pop(user_id, None)
 
 

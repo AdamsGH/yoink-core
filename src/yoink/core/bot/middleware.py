@@ -71,7 +71,7 @@ async def reply_ephemeral(
 
     sent = await msg.reply_text(text)
 
-    if is_group:
+    if is_group and context.job_queue is not None:
         async def _delete(_ctx: ContextTypes.DEFAULT_TYPE) -> None:
             with contextlib.suppress(Exception):
                 await sent.delete()

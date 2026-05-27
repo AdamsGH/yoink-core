@@ -1,15 +1,20 @@
 """Tests for M2M (internal) API endpoints and API key management."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from tests.conftest import make_jwt
 from yoink.core.auth.apikey import generate_api_key
 from yoink.core.db.models import ApiKey
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
 
 @pytest.fixture
-async def api_key_row(session_factory) -> tuple[str, ApiKey]:
+async def api_key_row(session_factory) -> AsyncGenerator[tuple[str, ApiKey], None]:
     """Create an API key directly in DB, return (raw_key, row)."""
     raw, key_hash, prefix = generate_api_key()
     async with session_factory() as sess:
@@ -32,7 +37,7 @@ async def api_key_row(session_factory) -> tuple[str, ApiKey]:
 
 
 @pytest.fixture
-async def scoped_key(session_factory) -> tuple[str, ApiKey]:
+async def scoped_key(session_factory) -> AsyncGenerator[tuple[str, ApiKey], None]:
     """API key with only users:read scope."""
     raw, key_hash, prefix = generate_api_key()
     async with session_factory() as sess:

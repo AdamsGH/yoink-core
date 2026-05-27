@@ -98,7 +98,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     elif sub in ("enable", "disable"):
         val = sub == "enable"
         await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
-        await repo.update(group_id=group_id, enabled=val)
+        await repo.update(id=group_id, enabled=val)
         msg = t("group.enabled", lang) if val else t("group.disabled", lang)
         await update.message.reply_text(msg)
 
@@ -108,7 +108,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         val = args[1].lower() == "on"
         await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
-        await repo.update(group_id=group_id, allow_pm=val)
+        await repo.update(id=group_id, allow_pm=val)
         state = t("common.enabled", lang) if val else t("common.disabled", lang)
         await update.message.reply_text(t("group.allow_pm_changed", lang, state=state.lower()))
 
@@ -118,7 +118,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         val = args[1].lower() == "on"
         await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
-        await repo.update(group_id=group_id, nsfw_allowed=val)
+        await repo.update(id=group_id, nsfw_allowed=val)
         await update.message.reply_text(t("group.nsfw_on" if val else "group.nsfw_off", lang))
 
     elif sub == "role":
@@ -128,7 +128,7 @@ async def _cmd_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         role = UserRole(args[1].lower())
         await repo.upsert(group_id=group_id, title=chat.title, photo_url=_chat_photo_url(chat))
-        await repo.update(group_id=group_id, auto_grant_role=role)
+        await repo.update(id=group_id, auto_grant_role=role)
         await update.message.reply_html(t("group.role_set", lang, role=role.value))
 
     else:

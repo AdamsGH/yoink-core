@@ -128,7 +128,7 @@ async def _cb_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     repo = get_user_repo(context)
     await repo.update(update.effective_user.id, language=lang_code)
     await query.edit_message_text(
-        t("lang.set", lang_code, lang=t(f"lang.buttons.{lang_code}", lang_code)),
+        t("lang.set", lang_code, language=t(f"lang.buttons.{lang_code}", lang_code)),
         reply_markup=None,
         parse_mode="HTML",
     )

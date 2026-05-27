@@ -1,7 +1,7 @@
 """Group, ThreadPolicy, UserGroupPolicy repositories."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select
 
@@ -50,9 +50,9 @@ class GroupRepo(BaseRepo[Group]):
             await s.refresh(group)
             return group
 
-    async def update(self, group_id: int, **kwargs) -> Group | None:
+    async def update(self, id: Any, **kwargs) -> Group | None:
         async with self._sf() as s:
-            group = await s.get(Group, group_id)
+            group = await s.get(Group, id)
             if group is None:
                 return None
             for k, v in kwargs.items():

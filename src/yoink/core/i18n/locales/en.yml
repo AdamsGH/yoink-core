@@ -26,7 +26,7 @@ help:
 
 lang:
   choose: "Choose your language:"
-  set: "Language set to <b>{lang}</b> ✅"
+  set: "Language set to <b>{language}</b> ✅"
   buttons:
     en: "🇬🇧 English"
     ru: "🇷🇺 Russian"

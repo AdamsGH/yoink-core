@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from typing import TYPE_CHECKING
 
 from telegram import (
     Bot,
     BotCommand,
+    BotCommandScope,
     BotCommandScopeAllChatAdministrators,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
@@ -29,6 +31,9 @@ from telegram.error import TelegramError
 
 from yoink.core.auth.rbac import ROLE_RANK as _ROLE_RANK
 from yoink.core.plugin import CommandSpec
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +97,7 @@ def _make_bot_commands(commands: list[CommandSpec], lang: str | None = None) -> 
 
 async def _set_commands_for_langs(
     bot: Bot,
-    scope: object,
+    scope: BotCommandScope,
     all_commands: list[CommandSpec],
     scope_filter_fn,
     role_filter: str,
@@ -247,7 +252,7 @@ async def refresh_user_commands(
     user_id: int,
     role: str,
     lang: str = "en",
-    session_factory: object = None,
+    session_factory: async_sessionmaker | None = None,
 ) -> None:
     """Re-register bot commands for a user after role, language, or permission change.
 
@@ -358,7 +363,7 @@ async def refresh_member_commands(
     user_id: int,
     role: str,
     lang: str = "en",
-    session_factory: object = None,
+    session_factory: async_sessionmaker | None = None,
 ) -> None:
     """Re-register BotCommandScopeChatMember for all groups a user belongs to.
 

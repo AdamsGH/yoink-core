@@ -234,8 +234,10 @@ async def _build_user_stats(session: AsyncSession, user_id: int, member_since: d
             total = item.get("total", 0)
             today_count = extra.get("today", 0)
             week_count = extra.get("this_week", 0)
-            top_domains = extra.get("top_domains", [])
-            by_category = extra.get("by_category", {})
+            td_raw = extra.get("top_domains", [])
+            top_domains = td_raw if isinstance(td_raw, list) else []
+            bc_raw = extra.get("by_category", {})
+            by_category = bc_raw if isinstance(bc_raw, dict) else {}
             dl_last_at = item.get("last_at")
         elif plugin == "music":
             music_total = item.get("total", 0)
