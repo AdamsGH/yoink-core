@@ -30,7 +30,9 @@ target_metadata = Base.metadata
 
 
 def _get_url() -> str:
-    url = os.environ.get("database_url", os.environ.get("DATABASE_URL", "postgresql+psycopg://yoink:yoink@localhost:5432/yoink"))
+    # Compose injects lowercase `database_url` from .env; honour the lowercase
+    # form first, then fall back to the conventional uppercase variant.
+    url = os.environ.get("database_url", os.environ.get("DATABASE_URL", "postgresql+psycopg://yoink:yoink@localhost:5432/yoink"))  # noqa: SIM112
     url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
     url = url.replace("postgresql://", "postgresql+psycopg://")
     return url

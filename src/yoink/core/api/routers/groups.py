@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from yoink.core.api.deps import get_db
 from yoink.core.api.exceptions import ConflictError, NotFoundError
+from yoink.core.api.photo import bot_api_params, resolve_chat_photo
 from yoink.core.api.schemas import GroupResponse, ThreadPolicyInline
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import Group, ThreadPolicy, User, UserGroupPolicy, UserRole
@@ -313,9 +314,6 @@ async def remove_member_override(
         raise NotFoundError("Override not found")
     await session.delete(policy)
     await session.commit()
-
-
-from yoink.core.api.photo import bot_api_params, resolve_chat_photo
 
 
 @router.get("/{group_id}/photo", summary="Proxy group chat photo")

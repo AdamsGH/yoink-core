@@ -240,9 +240,12 @@ def _register_inline_dispatcher(
                 elif raw.startswith(spec.prefix + " "):
                     query_text = raw[len(spec.prefix) + 1:].strip()
 
-            if query_text is None and spec.pattern is not None:
-                if spec.pattern.search(raw):
-                    query_text = raw
+            if (
+                query_text is None
+                and spec.pattern is not None
+                and spec.pattern.search(raw)
+            ):
+                query_text = raw
 
             if query_text is None and spec.prefix is None and spec.pattern is None:
                 query_text = raw

@@ -254,10 +254,13 @@ async def revoke_permission(
         )
     )
     row = existing.scalar_one_or_none()
-    if row is not None and getattr(row, "grant_source", "manual") == "tag":
-        if current_user.role != UserRole.owner:
-            from yoink.core.api.exceptions import ForbiddenError
-            raise ForbiddenError("Tag-sourced grants can only be revoked by the owner")
+    if (
+        row is not None
+        and getattr(row, "grant_source", "manual") == "tag"
+        and current_user.role != UserRole.owner
+    ):
+        from yoink.core.api.exceptions import ForbiddenError
+        raise ForbiddenError("Tag-sourced grants can only be revoked by the owner")
 
     user = await session.get(User, user_id)
     result = await session.execute(

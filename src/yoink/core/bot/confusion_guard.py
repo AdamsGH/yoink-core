@@ -76,10 +76,11 @@ def _is_bot_mention(message: Message, bot_username: str) -> bool:
         # /cmd@botname - explicitly addressed command
         if re.match(rf"^/[a-z_]+@{re.escape(bot_username.lower())}", text):
             return True
-    if message.reply_to_message and message.reply_to_message.from_user:
-        if message.reply_to_message.from_user.username == bot_username:
-            return True
-    return False
+    return bool(
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.username == bot_username
+    )
 
 
 def _is_any_command(message: Message) -> bool:
