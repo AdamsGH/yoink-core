@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -45,6 +46,22 @@ logger = logging.getLogger(__name__)
 
 
 FeatureProvider = Callable[[int, "async_sessionmaker", dict], Awaitable[bool]]
+
+
+class GrantSource(StrEnum):
+    """Why a user holds a plugin:feature grant.
+
+    Callers that gate UI on "is this a real RBAC grant or a side-channel
+    provider grant?" use grant_source() and compare against these values.
+    `owner` short-circuits everything; `explicit` is a row in
+    user_permissions; `role` is the default_min_role threshold; `provider`
+    is any registered FeatureProvider (e.g. BYOK readiness for insight:tldr).
+    """
+    owner = "owner"
+    explicit = "explicit"
+    role = "role"
+    provider = "provider"
+
 
 # key = "plugin:feature", value = list of providers
 _providers: dict[str, list[FeatureProvider]] = {}
@@ -84,12 +101,36 @@ class EffectiveFeatureResolver:
     ) -> bool:
         """Return True if the user has plugin:feature by any source.
 
-        Order: explicit grant -> role threshold (needs user) -> registered
-        providers. First True wins.
+        Thin convenience wrapper around grant_source() for callers that
+        don't care WHY the grant exists.
+        """
+        return await self.grant_source(user_id, plugin, feature, user=user) is not None
+
+    async def grant_source(
+        self,
+        user_id: int,
+        plugin: str,
+        feature: str,
+        user: Any | None = None,
+    ) -> GrantSource | None:
+        """Return the source of a plugin:feature grant, or None if not granted.
+
+        Order: owner -> explicit grant -> role threshold -> registered
+        providers. First match wins. Callers that need to distinguish
+        "real RBAC grant" from "provider-side grant" (e.g. UI that gates
+        gateway-only controls) use this directly. The plain boolean
+        is_allowed() wraps this.
         """
         from datetime import UTC, datetime
 
         now = datetime.now(UTC)
+
+        if user is None:
+            user = await self._load_user(user_id)
+
+        # Owner short-circuits: every registered feature is effective.
+        if user is not None and not user.is_blocked and user.role == UserRole.owner:
+            return GrantSource.owner
 
         async with self._sf() as s:
             row = await s.execute(
@@ -102,14 +143,9 @@ class EffectiveFeatureResolver:
                 )
             )
             if row.scalar_one_or_none() is not None:
-                return True
-
-        if user is None:
-            user = await self._load_user(user_id)
+                return GrantSource.explicit
 
         if user is not None and not user.is_blocked:
-            if user.role == UserRole.owner:
-                return True
             spec = _feature_spec(plugin, feature)
             if spec is not None and spec.default_min_role is not None:
                 try:
@@ -117,17 +153,17 @@ class EffectiveFeatureResolver:
                 except ValueError:
                     min_role = None
                 if min_role is not None and ROLE_ORDER.index(user.role) >= ROLE_ORDER.index(min_role):
-                    return True
+                    return GrantSource.role
 
         for provider in _providers_for(plugin, feature):
             try:
                 if await provider(user_id, self._sf, self._bot_data):
-                    return True
+                    return GrantSource.provider
             except Exception:
                 logger.exception(
                     "Feature provider raised for %s:%s user=%d", plugin, feature, user_id,
                 )
-        return False
+        return None
 
     async def resolve(
         self,

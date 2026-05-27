@@ -239,6 +239,8 @@ register_feature_provider("insight", "tldr", byok_tldr_provider)
 
 All command-menu refresh (`refresh_user_commands`), `/help` generation, and `PermissionChecker.check` calls go through `EffectiveFeatureResolver` so provider grants are reflected everywhere without additional wiring.
 
+Callers that need to distinguish a real RBAC grant from a side-channel provider grant (e.g. a settings UI that gates gateway-only controls behind an explicit grant, while still letting BYOK-only users edit their language) use `resolver.grant_source(user_id, plugin, feature)`. It returns a `GrantSource` enum (`owner`, `explicit`, `role`, `provider`) or `None`; the boolean `is_allowed()` is a thin wrapper over `grant_source() is not None`.
+
 ### Commands
 
 `CommandSpec` supports `required_feature="plugin:feature"` to hide a command from users who don't have access:

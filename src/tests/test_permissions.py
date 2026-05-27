@@ -177,9 +177,14 @@ class TestRoleThreshold:
             await _cleanup(session_factory, 200015)
 
     @pytest.mark.asyncio
-    async def test_none_threshold_requires_explicit_grant(self, session_factory):
-        """default_min_role=None: role alone is never enough."""
-        user = await _make_user(session_factory, 200016, UserRole.owner)
+    async def test_none_threshold_requires_explicit_grant_for_non_owner(self, session_factory):
+        """default_min_role=None: role alone is never enough for non-owners.
+
+        Owner short-circuits the threshold check entirely (sits above the
+        hierarchy), so a None-threshold feature is still effective for them.
+        Other roles must have an explicit user_permissions row.
+        """
+        user = await _make_user(session_factory, 200016, UserRole.admin)
         repo = UserPermissionRepo(session_factory)
         try:
             assert await repo.has(200016, _TEST_PLUGIN, _GATED_FEATURE, user=user) is False
@@ -240,8 +245,14 @@ class TestBlockedUser:
 
 class TestUnknownFeature:
     @pytest.mark.asyncio
-    async def test_unknown_feature_no_grant_denied(self, session_factory):
-        user = await _make_user(session_factory, 200030, UserRole.owner)
+    async def test_unknown_feature_no_grant_denied_for_non_owner(self, session_factory):
+        """Unknown feature + no grant: any non-owner is denied.
+
+        Owner short-circuits before the spec lookup so an unknown feature
+        still resolves to True for them; that path is exercised by the
+        owner-meets-any-threshold test above.
+        """
+        user = await _make_user(session_factory, 200030, UserRole.user)
         repo = UserPermissionRepo(session_factory)
         try:
             assert await repo.has(200030, _TEST_PLUGIN, "nonexistent", user=user) is False
