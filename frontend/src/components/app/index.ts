@@ -1,4 +1,5 @@
 export * from './CompactCardHeader'
+export * from './MarkdownBody'
 export * from './EmptyState'
 export * from './InlineSelect'
 export * from './SettingRow'
