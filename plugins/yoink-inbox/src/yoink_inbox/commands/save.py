@@ -111,13 +111,11 @@ async def _stream_comment(
     from yoink_insight.services.tldr import (  # noqa: PLC0415
         PreparedTldr, _NOBULLSHIT_PROMPT, _ALIAS_FORMAT_RULES, stream_llm,
     )
-    try:
-        from yoink_insight.services.md import md_to_entities  # noqa: PLC0415
-    except ImportError:
-        md_to_entities = None
+    from yoink_insight.services.md_entities import md_to_entities  # noqa: PLC0415
 
     config = InsightConfig()
-    cat_tags = " ".join(f"#{c.replace(' ', '_')}" for c in categories) if categories else ""
+    # Tags as monospace code block so Telegram renders them properly
+    cat_tags = "`" + " ".join(f"#{c.replace(' ', '_')}" for c in categories) + "`" if categories else ""
 
     # Build a minimal PreparedTldr from the already-enriched item content
     content_body = f"Title: {title or url}\nSummary: {summary or '(none)'}"
@@ -180,32 +178,33 @@ async def _stream_comment(
         # Fall back to plain summary+tags
         accumulated = f"{summary}\n\n{cat_tags}" if summary else cat_tags
 
-    body = accumulated.strip()
+    # Strip any hashtag lines the LLM may have added - we append ours canonically
+    body_lines = accumulated.strip().splitlines()
+    clean_lines = [ln for ln in body_lines if not ln.strip().startswith("#")]
+    body = "\n".join(clean_lines).strip()
     if not body:
-        body = cat_tags or title or url
+        body = title or url
 
-    # Append tags if LLM didn't include them
-    if cat_tags and cat_tags not in body:
+    # Tags as monospace last line
+    if cat_tags:
         body = f"{body}\n\n{cat_tags}"
 
-    # Final send_message (persists, clears the draft)
-    if md_to_entities is not None:
-        plain, entities = md_to_entities(body)
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=plain,
-                entities=entities or None,
-                reply_to_message_id=reply_to_message_id,
-            )
-            return
-        except Exception:
-            pass
-    await bot.send_message(
-        chat_id=chat_id,
-        text=body,
-        reply_to_message_id=reply_to_message_id,
-    )
+    # Final send_message via md_to_entities (handles em-dash strip, entity offsets)
+    plain, entities = md_to_entities(body)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=plain,
+            entities=entities or None,
+            reply_to_message_id=reply_to_message_id,
+        )
+    except Exception:
+        logger.warning("inbox.save send_message entities failed, retrying plain")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=plain,
+            reply_to_message_id=reply_to_message_id,
+        )
 
 
 @require_access(_SAVE_POLICY)
