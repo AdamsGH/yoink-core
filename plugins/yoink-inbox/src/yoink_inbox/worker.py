@@ -41,8 +41,9 @@ async def enrich_item(ctx: dict, item_id: int) -> None:
 
 async def classify_item(ctx: dict, item_id: int) -> None:
     """Run hybrid LLM categorisation on an enriched item."""
-    logger.info("inbox.classify_item stub item_id=%s", item_id)
-    # TODO: from yoink_inbox.services.classify import run_classify
+    from yoink_inbox.services.classify import run_classify
+
+    await run_classify(ctx["session_factory"], item_id)
 
 
 async def sync_user_stars(ctx: dict, user_id: int) -> None:
