@@ -21,6 +21,7 @@ import {
   ExternalLink,
   FolderOpen,
   FolderPlus,
+  Folders,
   GitFork,
   GripVertical,
   Inbox,
@@ -84,7 +85,7 @@ import { type FolderSelection, useStarsPage } from './useStarsPage'
 export default function StarsPage() {
   const page = useStarsPage()
   const [activeStar, setActiveStar] = useState<InboxGhStar | null>(null)
-  const { setContent } = useRightSidebar()
+  const { setContent, openMobileSheet } = useRightSidebar()
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -197,6 +198,19 @@ export default function StarsPage() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Sync now</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 md:hidden"
+                  onClick={openMobileSheet}
+                >
+                  <Folders className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Folders</TooltipContent>
             </Tooltip>
           </div>
         </div>
@@ -805,7 +819,7 @@ function StarCardContent({
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuContent align="end" className="max-h-[60vh] w-52 overflow-y-auto">
               {pinnedFolders.length > 0 && (
                 <>
                   <DropdownMenuLabel className="text-[10px] font-normal text-muted-foreground">Pinned</DropdownMenuLabel>
