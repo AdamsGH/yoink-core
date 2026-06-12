@@ -26,6 +26,8 @@
       "@stats-root/*": ["../plugins/yoink-stats/frontend/*"],
       "@insight/*":      ["../plugins/yoink-insight/frontend/src/*"],
       "@insight-root/*": ["../plugins/yoink-insight/frontend/*"],
+      "@inbox/*":        ["../plugins/yoink-inbox/frontend/src/*"],
+      "@inbox-root/*":   ["../plugins/yoink-inbox/frontend/*"],
       "@ui":               ["./src/components/ui"],
       "@app":              ["./src/components/app"]
     }
@@ -38,7 +40,9 @@
     "../plugins/yoink-stats/frontend/**/*.ts",
     "../plugins/yoink-stats/frontend/**/*.tsx",
     "../plugins/yoink-insight/frontend/**/*.ts",
-    "../plugins/yoink-insight/frontend/**/*.tsx"
+    "../plugins/yoink-insight/frontend/**/*.tsx",
+    "../plugins/yoink-inbox/frontend/**/*.ts",
+    "../plugins/yoink-inbox/frontend/**/*.tsx"
   ],
   "compileOnSave": false
 }

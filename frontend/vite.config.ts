@@ -28,6 +28,8 @@ export default defineConfig({
       '@stats-root':   resolve(__dirname, '../plugins/yoink-stats/frontend'),
       '@insight':      resolve(__dirname, '../plugins/yoink-insight/frontend/src'),
       '@insight-root': resolve(__dirname, '../plugins/yoink-insight/frontend'),
+      '@inbox':        resolve(__dirname, '../plugins/yoink-inbox/frontend/src'),
+      '@inbox-root':   resolve(__dirname, '../plugins/yoink-inbox/frontend'),
       '@ui':           resolve(__dirname, 'src/components/ui'),
       '@app':          resolve(__dirname, 'src/components/app'),
     },
