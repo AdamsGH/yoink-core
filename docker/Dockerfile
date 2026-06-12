@@ -31,12 +31,16 @@ COPY plugins/yoink-music/src/ /app/plugins/yoink-music/src/
 COPY plugins/yoink-insight/pyproject.toml /app/plugins/yoink-insight/
 COPY plugins/yoink-insight/src/ /app/plugins/yoink-insight/src/
 
+COPY plugins/yoink-inbox/pyproject.toml /app/plugins/yoink-inbox/
+COPY plugins/yoink-inbox/src/ /app/plugins/yoink-inbox/src/
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
     -e /app/plugins/yoink-dl \
     -e /app/plugins/yoink-stats \
     -e /app/plugins/yoink-music \
-    -e /app/plugins/yoink-insight
+    -e /app/plugins/yoink-insight \
+    -e /app/plugins/yoink-inbox
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system bgutil-ytdlp-pot-provider
@@ -74,6 +78,7 @@ COPY plugins/yoink-dl/src/ /app/plugins/yoink-dl/src/
 COPY plugins/yoink-stats/src/ /app/plugins/yoink-stats/src/
 COPY plugins/yoink-music/src/ /app/plugins/yoink-music/src/
 COPY plugins/yoink-insight/src/ /app/plugins/yoink-insight/src/
+COPY plugins/yoink-inbox/src/ /app/plugins/yoink-inbox/src/
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
