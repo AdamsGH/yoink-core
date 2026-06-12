@@ -331,7 +331,10 @@ async def _notify_classified(
 
 
 async def run_classify(
-    session_factory: "async_sessionmaker", item_id: int
+    session_factory: "async_sessionmaker",
+    item_id: int,
+    *,
+    notify: bool = True,
 ) -> None:
     """End-to-end classify pass on one inbox item.
 
@@ -453,10 +456,12 @@ async def run_classify(
         item_id, len(resolved),
     )
 
-    # Notify the user via Telegram with a short summary
-    await _notify_classified(
-        session_factory, item_id, user_id,
-        summary=parsed.summary,
-        categories=[cat.name for cat, _ in resolved],
-        response_language=response_language,
-    )
+    # Notify the user via Telegram only when called from the worker
+    # (notify=True). The bot command handler replies directly instead.
+    if notify:
+        await _notify_classified(
+            session_factory, item_id, user_id,
+            summary=parsed.summary,
+            categories=[cat.name for cat, _ in resolved],
+            response_language=response_language,
+        )
