@@ -34,6 +34,7 @@ Errors are classified into stable `last_status` values:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,6 +54,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
 logger = logging.getLogger(__name__)
+
+_PROXY = os.environ.get("proxy_url") or os.environ.get("PROXY_URL") or None
 
 
 _GITHUB_API = "https://api.github.com"
@@ -256,7 +259,10 @@ async def run_sync(
     # off the first response.
     can_unstar = False
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    client_kwargs: dict = {"timeout": 30.0}
+    if _PROXY:
+        client_kwargs["proxy"] = _PROXY
+    async with httpx.AsyncClient(**client_kwargs) as client:
         while next_url is not None:
             try:
                 resp = await _fetch_page(client, next_url, token, etag=prior_etag if first_page else None)
@@ -434,7 +440,7 @@ async def _sync_gh_lists(
     - Folders that were previously synced from a List but no longer exist
       on GitHub have their gh_list_id cleared (they become plain folders).
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, update as sql_update
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from yoink_inbox.services.gh_lists import GhListsClient
     from yoink_inbox.storage.models import InboxGhFolder, InboxGhFolderMember, InboxGhStar
@@ -496,27 +502,41 @@ async def _sync_gh_lists(
                     existing.name = gl.name
                 existing.gh_list_slug = gl.slug
 
-            # Sync memberships via gh_node_id
+            # Sync memberships: match by databaseId == gh_repo_id (canonical,
+            # stable, present in both REST and GraphQL responses).
+            # Also back-fill gh_node_id from GraphQL so write-back works even
+            # for stars that were synced before the column existed.
             folder_obj = existing_by_list_id.get(gl.id) or folder  # type: ignore[union-attr]
             actual_folder_id = folder_obj.id
 
             client2 = GhListsClient(token=token)
             try:
-                item_node_ids = await client2.get_list_item_ids(gl.id)
+                # Returns list of (databaseId, nodeId) tuples
+                list_items = await client2.get_list_items(gl.id)
             finally:
                 await client2.aclose()
 
-            if item_node_ids:
-                # Find inbox_gh_stars rows matching these node IDs
-                star_rows = list(
+            if list_items:
+                db_id_to_node_id = {db_id: node_id for db_id, node_id in list_items}
+                gh_repo_ids = list(db_id_to_node_id.keys())
+
+                # Back-fill gh_node_id for existing stars that are in this List
+                stars_in_list = list(
                     (await s.execute(
-                        select(InboxGhStar.id).where(
+                        select(InboxGhStar.id, InboxGhStar.gh_repo_id).where(
                             InboxGhStar.user_id == user_id,
-                            InboxGhStar.gh_node_id.in_(item_node_ids),
+                            InboxGhStar.gh_repo_id.in_(gh_repo_ids),
                         )
-                    )).scalars().all()
+                    )).all()
                 )
-                for star_id in star_rows:
+                for star_id, gh_repo_id in stars_in_list:
+                    node_id = db_id_to_node_id.get(gh_repo_id)
+                    if node_id:
+                        await s.execute(
+                            sql_update(InboxGhStar)
+                            .where(InboxGhStar.id == star_id)
+                            .values(gh_node_id=node_id)
+                        )
                     await s.execute(
                         pg_insert(InboxGhFolderMember)
                         .values(folder_id=actual_folder_id, gh_star_id=star_id, added_by="sync")

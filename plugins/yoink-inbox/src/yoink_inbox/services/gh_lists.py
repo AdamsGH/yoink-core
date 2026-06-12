@@ -50,7 +50,6 @@ class GhListsClient:
             "headers": {
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
-                "X-Github-Next-Global-ID": "1",
             },
             "timeout": 15,
         }
@@ -111,15 +110,19 @@ class GhListsClient:
             for n in nodes
         ]
 
-    async def get_list_item_ids(self, list_id: str) -> list[str]:
-        """Return global node IDs of all Repository items in a list."""
+    async def get_list_items(self, list_id: str) -> list[tuple[int, str]]:
+        """Return (databaseId, nodeId) pairs for all Repository items in a list.
+
+        databaseId == numeric gh_repo_id stored in inbox_gh_stars.gh_repo_id.
+        nodeId is needed for updateUserListsForItem write-back.
+        """
         query = """
-        query($listId: ID!) {
+        query($listId: ID!, $after: String) {
           node(id: $listId) {
             ... on UserList {
-              items(first: 100) {
+              items(first: 100, after: $after) {
                 nodes {
-                  ... on Repository { id }
+                  ... on Repository { id databaseId }
                 }
                 pageInfo { hasNextPage endCursor }
               }
@@ -127,10 +130,18 @@ class GhListsClient:
           }
         }
         """
-        # TODO: paginate past 100 items if needed
-        data = await self._gql(query, {"listId": list_id})
-        nodes = data["node"]["items"]["nodes"]
-        return [n["id"] for n in nodes if n.get("id")]
+        results: list[tuple[int, str]] = []
+        after: str | None = None
+        while True:
+            data = await self._gql(query, {"listId": list_id, "after": after})
+            page = data["node"]["items"]
+            for n in page["nodes"]:
+                if n.get("databaseId") and n.get("id"):
+                    results.append((int(n["databaseId"]), n["id"]))
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            after = page["pageInfo"]["endCursor"]
+        return results
 
     async def get_repo_list_memberships(self, repo_node_id: str) -> list[str]:
         """Return list IDs that this repo currently belongs to."""

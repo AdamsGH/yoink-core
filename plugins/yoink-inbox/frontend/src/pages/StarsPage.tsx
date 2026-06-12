@@ -382,32 +382,29 @@ function FolderSidebarContent({
                   />
                 )}
                 {renamingId !== folder.id && (
-                  <SidebarMenuAction
-                    className="peer-data-[active=true]/menu-button:opacity-100"
-                    showOnHover
-                    asChild
-                  >
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button type="button" className="flex h-full w-full items-center justify-center">
-                          <MoreHorizontal className="h-3.5 w-3.5" />
-                          <span className="sr-only">Folder actions</span>
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent side="right" align="start" className="w-36">
-                        <DropdownMenuItem onClick={() => startRename(folder)}>
-                          <Pencil className="mr-2 h-3.5 w-3.5" />Rename
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={() => void onDeleteFolder(folder.id)}
-                        >
-                          <Trash2 className="mr-2 h-3.5 w-3.5" />Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </SidebarMenuAction>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <SidebarMenuAction
+                        showOnHover
+                        className="peer-data-[active=true]/menu-button:opacity-100"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                        <span className="sr-only">Folder actions</span>
+                      </SidebarMenuAction>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="right" align="start" className="w-36">
+                      <DropdownMenuItem onClick={() => startRename(folder)}>
+                        <Pencil className="mr-2 h-3.5 w-3.5" />Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onClick={() => void onDeleteFolder(folder.id)}
+                      >
+                        <Trash2 className="mr-2 h-3.5 w-3.5" />Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
               </SidebarMenuItem>
             ))}
@@ -447,13 +444,13 @@ function DroppableMenuItem({
         ref={setNodeRef}
         isActive={isActive}
         onClick={onSelect}
-        className={isOver ? 'ring-2 ring-primary ring-inset' : undefined}
+        className={['pr-6', isOver ? 'ring-2 ring-primary ring-inset' : ''].join(' ')}
         // eslint-disable-next-line @typescript-eslint/no-misused-promises
         onDrop={async (e) => { e.preventDefault(); onDrop() }}
         onDragOver={(e) => e.preventDefault()}
       >
         {icon}
-        <span>{label}</span>
+        <span className="truncate">{label}</span>
       </SidebarMenuButton>
       {badge != null && <SidebarMenuBadge>{badge}</SidebarMenuBadge>}
     </SidebarMenuItem>
@@ -556,7 +553,7 @@ function StarCardContent({
       </div>
 
       {star.description && (
-        <p className="px-4 pb-2 text-xs leading-relaxed text-muted-foreground line-clamp-3">
+        <p className="px-4 pb-2 text-xs leading-relaxed text-muted-foreground line-clamp-2">
           {star.description}
         </p>
       )}
