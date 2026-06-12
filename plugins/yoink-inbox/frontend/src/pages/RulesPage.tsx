@@ -190,12 +190,10 @@ export default function RulesPage() {
 
   return (
     <PageContainer>
-    <div className="container mx-auto max-w-3xl space-y-4 py-4">
-      <div className="flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Automation Rules</h1>
-        <Button onClick={openCreate}>
-          <Plus className="mr-2 h-4 w-4" />
-          New rule
+        <Button variant="outline" size="sm" onClick={openCreate}>
+          <Plus className="mr-1.5 h-3.5 w-3.5" />New rule
         </Button>
       </div>
 
@@ -224,11 +222,11 @@ export default function RulesPage() {
                   {rule.actions?.length ?? 0} action(s)
                 </p>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => openEdit(rule)}>
-                <Pencil className="h-4 w-4" />
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(rule)}>
+                <Pencil className="h-3.5 w-3.5" />
               </Button>
-              <Button variant="ghost" size="icon" onClick={() => onDelete(rule.id)}>
-                <Trash2 className="h-4 w-4" />
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => void onDelete(rule.id)}>
+                <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>
           ))}
@@ -329,7 +327,6 @@ export default function RulesPage() {
           </DialogActions>
         </DialogContent>
       </Dialog>
-    </div>
     </PageContainer>
   )
 }

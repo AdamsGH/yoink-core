@@ -27,7 +27,7 @@ import {
   SkeletonList,
   Textarea,
 } from '@ui'
-import { CompactCardHeader, EmptyState } from '@app'
+import { CompactCardHeader, EmptyState, PageContainer } from '@app'
 
 import {
   addTeamMember,
@@ -141,11 +141,11 @@ export default function TeamsPage() {
   }
 
   return (
-    <div className="container mx-auto max-w-3xl space-y-4 py-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Inbox Teams</h1>
-        <Button onClick={() => setCreating((c) => !c)}>
-          {creating ? 'Cancel' : 'New team'}
+    <PageContainer>
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold">Teams</h1>
+        <Button variant="outline" size="sm" onClick={() => setCreating((c) => !c)}>
+          {creating ? 'Cancel' : '+ New team'}
         </Button>
       </div>
 
@@ -271,7 +271,7 @@ export default function TeamsPage() {
           })}
         </div>
       )}
-    </div>
+    </PageContainer>
   )
 }
 
