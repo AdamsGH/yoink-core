@@ -398,30 +398,32 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
           <SidebarRail />
         </Sidebar>
 
-        <ResizablePanelGroup
-          orientation="horizontal"
-          className="flex-1 min-w-0"
-          key={rightSidebarContent ? 'with-sidebar' : 'no-sidebar'}
-        >
-          <ResizablePanel defaultSize={rightSidebarContent ? 78 : 100} minSize={50}>
-            <SidebarInset className="min-w-0">
-              <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-                <span className="text-sm font-medium">
-                  {(() => {
-                    const item = visibleGroups.flatMap((g) => g.items).find((i) =>
-                      location.pathname === i.path || location.pathname.startsWith(i.path + '/')
-                    )
-                    return item ? getLabel(item) : appName
-                  })()}
-                </span>
-              </header>
-              <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
-                <Outlet />
+        <SidebarInset>
+          <ResizablePanelGroup
+            orientation="horizontal"
+            className="h-full"
+            key={rightSidebarContent ? 'with-sidebar' : 'no-sidebar'}
+          >
+            <ResizablePanel defaultSize={rightSidebarContent ? 78 : 100} minSize={40}>
+              <div className="flex h-full flex-col">
+                <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+                  <span className="text-sm font-medium">
+                    {(() => {
+                      const item = visibleGroups.flatMap((g) => g.items).find((i) =>
+                        location.pathname === i.path || location.pathname.startsWith(i.path + '/')
+                      )
+                      return item ? getLabel(item) : appName
+                    })()}
+                  </span>
+                </header>
+                <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
+                  <Outlet />
+                </div>
               </div>
-            </SidebarInset>
-          </ResizablePanel>
-          <RightSidebarPanel content={rightSidebarContent} />
-        </ResizablePanelGroup>
+            </ResizablePanel>
+            <RightSidebarPanel content={rightSidebarContent} />
+          </ResizablePanelGroup>
+        </SidebarInset>
 
         {/* Mobile right sidebar sheet */}
         <RightSidebarSlot
