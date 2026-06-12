@@ -224,16 +224,31 @@ class InboxPlugin:
         return []
 
     async def setup(self, ctx: PluginContext) -> None:
-        """Populate bot_data with inbox-specific services."""
-        # Repos and services are wired here so commands / routes / worker
-        # functions share a single instance per process. Imports are local to
-        # keep `import yoink_inbox` cheap for Alembic env discovery.
+        """Populate bot_data with inbox-specific services.
+
+        Wires:
+        - inbox_config: live InboxConfig
+        - inbox_arq_pool: ARQ Redis pool so handlers can enqueue jobs without
+          owning a separate connection. Failure to reach Redis is logged at
+          WARN and inbox falls back to inline enrich (no classify enqueue).
+        """
+        import logging
+
+        from arq import create_pool
+        from arq.connections import RedisSettings
+
+        log = logging.getLogger(__name__)
         ctx.bot_data["inbox_config"] = self._config
 
-        # TODO: wire the following once their modules land:
-        # - InboxItemRepo, InboxCategoryRepo, InboxGhStarRepo, InboxRuleRepo,
-        #   InboxTeamRepo from yoink_inbox.storage.repos
-        # - IngestService, EnrichService, ClassifyService, GhStarsService,
-        #   RulesEngine from yoink_inbox.services.*
-        # - ARQ Redis pool from yoink_inbox.worker (so REST handlers can
-        #   enqueue jobs without owning the connection).
+        try:
+            pool = await create_pool(
+                RedisSettings.from_dsn(self._config.inbox_redis_url),
+                default_queue_name="inbox:default",
+            )
+        except Exception as exc:
+            log.warning(
+                "inbox.setup ARQ pool init failed (redis_url=%s): %r",
+                self._config.inbox_redis_url, exc,
+            )
+            pool = None
+        ctx.bot_data["inbox_arq_pool"] = pool

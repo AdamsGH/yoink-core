@@ -1,54 +1,40 @@
-plugin:
-  name: Inbox
-  description: Сохраняй ссылки и GitHub-звёзды, раскладывай их с помощью AI.
-
 commands:
-  - command: save
-    description: Сохранить ссылку в инбокс.
-    min_role: user
-    required_feature: inbox:ingest
-  - command: inbox
-    description: Показать недавние записи в инбоксе.
-    min_role: user
-    required_feature: inbox:ingest
-  - command: stars
-    description: Показать синхронизированные звёзды GitHub.
-    min_role: user
-    required_feature: inbox:gh_sync
-  - command: stars_sync
-    description: Принудительно синхронизировать звёзды GitHub.
-    min_role: user
-    required_feature: inbox:gh_sync
+  - {command: save,       description: "Сохранить ссылку в инбокс",                       scope: default, required_feature: "inbox:ingest"}
+  - {command: inbox,      description: "Показать недавние записи в инбоксе",              scope: default, required_feature: "inbox:ingest"}
+  - {command: stars,      description: "Показать синхронизированные звёзды GitHub",       scope: default, required_feature: "inbox:gh_sync"}
+  - {command: stars_sync, description: "Принудительно синхронизировать звёзды GitHub",    scope: default, required_feature: "inbox:gh_sync"}
 
-features:
-  inbox_ingest:
-    label: Сохранение ссылок
-    description: Складывать ссылки в инбокс через бота, веб или REST.
-  inbox_classify:
-    label: AI-категоризация
-    description: Автоматически категоризовать сохранённые ссылки через LLM.
-  inbox_share:
-    label: Поделиться категориями
-    description: Делиться категориями с inbox-командой.
-  inbox_gh_sync:
-    label: Синхронизация звёзд GitHub
-    description: Синхронизировать звёзды GitHub пользователя.
-  inbox_gh_organise:
-    label: AI-раскладка звёзд
-    description: Раскладывать звёзды по папкам пакетно через LLM.
-  inbox_gh_write:
-    label: Star/Unstar из yoink
-    description: Ставить и снимать звёзды из UI yoink.
-  inbox_admin:
-    label: Inbox-админ
-    description: Управлять инбоксом любого пользователя.
-
-messages:
-  save_ok: "Сохранил. Обогащу и раскидаю в фоне."
-  save_dup: "Эта ссылка уже есть в твоём инбоксе."
-  save_fail: "Не получилось сохранить ссылку."
-  inbox_empty: "Инбокс пуст."
-  stars_empty: "Звёзды ещё не синхронизированы. Запусти /stars_sync для первой загрузки."
-  stars_sync_started: "Синхронизация звёзд запущена. Сообщу, когда закончу."
-  stars_sync_done: "Синхронизация завершена, {count} репозиториев на учёте."
-  not_authenticated_gh: "Сначала подключи GitHub в настройках."
+inbox:
+  messages:
+    save_ok: "Сохранил. Обогащу и разложу в фоне."
+    save_dup: "Эта ссылка уже есть в твоём инбоксе."
+    save_fail: "Не получилось сохранить ссылку."
+    save_usage: "Отправь <code>/save &lt;url&gt;</code> или ответь /save на сообщение со ссылкой."
+    inbox_empty: "Инбокс пуст."
+    inbox_header: "Последние {count} записей:"
+    stars_empty: "Звёзды ещё не синхронизированы. Запусти /stars_sync для первой загрузки."
+    stars_sync_started: "Синхронизация звёзд запущена. Сообщу, когда закончу."
+    stars_sync_done: "Синхронизация завершена, {count} репозиториев на учёте."
+    not_authenticated_gh: "Сначала подключи GitHub в настройках."
+  features:
+    ingest:
+      label: "Сохранение ссылок"
+      description: "Складывать ссылки в инбокс через бота, веб или REST."
+    classify:
+      label: "AI-категоризация"
+      description: "Автоматически категоризовать сохранённые ссылки через LLM."
+    share:
+      label: "Поделиться категориями"
+      description: "Делиться категориями с inbox-командой."
+    gh_sync:
+      label: "Синхронизация звёзд GitHub"
+      description: "Синхронизировать звёзды GitHub пользователя."
+    gh_organise:
+      label: "AI-раскладка звёзд"
+      description: "Раскладывать звёзды по папкам пакетно через LLM."
+    gh_write:
+      label: "Star/Unstar из yoink"
+      description: "Ставить и снимать звёзды из UI yoink."
+    admin:
+      label: "Inbox-админ"
+      description: "Управлять инбоксом любого пользователя."
