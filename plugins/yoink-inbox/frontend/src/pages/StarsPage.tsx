@@ -179,7 +179,7 @@ export default function StarsPage() {
               <SelectTrigger className="h-8 w-36">
                 <SelectValue placeholder="All languages" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="item-aligned">
                 <SelectItem value="__all__">All languages</SelectItem>
                 {page.languages.map((l) => (
                   <SelectItem key={l} value={l}>{l}</SelectItem>
