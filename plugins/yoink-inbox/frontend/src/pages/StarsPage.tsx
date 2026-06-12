@@ -51,7 +51,6 @@ import {
   SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuAction,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SkeletonList,
@@ -444,15 +443,20 @@ function DroppableMenuItem({
         ref={setNodeRef}
         isActive={isActive}
         onClick={onSelect}
-        className={['pr-6', isOver ? 'ring-2 ring-primary ring-inset' : ''].join(' ')}
+        className={['pr-8', isOver ? 'ring-2 ring-primary ring-inset' : ''].join(' ')}
         // eslint-disable-next-line @typescript-eslint/no-misused-promises
         onDrop={async (e) => { e.preventDefault(); onDrop() }}
         onDragOver={(e) => e.preventDefault()}
       >
         {icon}
-        <span className="truncate">{label}</span>
+        <span className="flex-1 truncate">{label}</span>
+        {badge != null && (
+          <span className="ml-auto shrink-0 tabular-nums text-[10px] text-sidebar-foreground/60
+            group-hover/menu-item:opacity-0 transition-opacity">
+            {badge}
+          </span>
+        )}
       </SidebarMenuButton>
-      {badge != null && <SidebarMenuBadge>{badge}</SidebarMenuBadge>}
     </SidebarMenuItem>
   )
 }
@@ -553,7 +557,7 @@ function StarCardContent({
       </div>
 
       {star.description && (
-        <p className="px-4 pb-2 text-xs leading-relaxed text-muted-foreground line-clamp-2">
+        <p className="px-4 pb-2 text-xs leading-relaxed text-muted-foreground line-clamp-3">
           {star.description}
         </p>
       )}
