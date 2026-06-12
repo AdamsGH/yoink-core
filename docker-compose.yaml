@@ -19,6 +19,21 @@ services:
       timeout: 5s
       retries: 10
 
+  yoink-redis:
+    image: redis:7-alpine
+    container_name: yoink-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - yoink
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   yoink-proxy-init:
     image: busybox:latest
     container_name: yoink-proxy-init
@@ -55,6 +70,8 @@ services:
     depends_on:
       yoink-postgres:
         condition: service_healthy
+      yoink-redis:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -77,6 +94,31 @@ services:
       driver: local
       options:
         max-size: "500M"
+        max-file: "3"
+
+  yoink-arq-worker:
+    image: yoink/yoink:latest
+    container_name: yoink-arq-worker
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "-m", "arq", "yoink_inbox.worker.WorkerSettings"]
+    depends_on:
+      yoink-postgres:
+        condition: service_healthy
+      yoink-redis:
+        condition: service_healthy
+    networks:
+      - yoink
+      - shared
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: local
+      options:
+        max-size: "100M"
         max-file: "3"
 
   yoink-frontend:
@@ -285,3 +327,4 @@ networks:
 
 volumes:
   postgres-data:
+  redis-data:

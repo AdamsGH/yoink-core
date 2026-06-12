@@ -41,7 +41,7 @@ class InboxConfig(BaseSettings):
     )
 
     # ---- ARQ worker ------------------------------------------------------
-    inbox_redis_url: str = Field(default="redis://redis:6379/3")
+    inbox_redis_url: str = Field(default="redis://yoink-redis:6379/3")
     inbox_arq_enrich_max_jobs: int = Field(default=3)
     inbox_arq_classify_max_jobs: int = Field(default=5)
     inbox_arq_gh_sync_max_jobs: int = Field(default=1)
