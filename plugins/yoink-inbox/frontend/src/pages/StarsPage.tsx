@@ -33,17 +33,18 @@ import {
   Button,
   Card,
   CardContent,
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   SidebarGroup,
   SidebarGroupAction,
   SidebarGroupContent,
@@ -144,20 +145,31 @@ export default function StarsPage() {
               onChange={(e) => page.setSearch(e.target.value)}
               className="h-8 w-48"
             />
-            <Select
-              value={page.language || '__all__'}
-              onValueChange={(v) => page.setLanguage(v === '__all__' ? '' : v)}
+            <Combobox<string>
+              items={['', ...page.languages]}
+              itemToStringLabel={(l) => l === '' ? 'All languages' : l}
+              itemToStringValue={(l) => l}
             >
-              <SelectTrigger className="h-8 w-36">
-                <SelectValue placeholder="Language" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">All languages</SelectItem>
-                {page.languages.map((lang) => (
-                  <SelectItem key={lang} value={lang}>{lang}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <ComboboxInput
+                value={page.language === '' ? 'All languages' : page.language}
+                placeholder="Language"
+                className="h-8 w-36"
+              />
+              <ComboboxContent>
+                <ComboboxEmpty>No languages found</ComboboxEmpty>
+                <ComboboxList>
+                  {(lang) => (
+                    <ComboboxItem
+                      key={lang}
+                      value={lang}
+                      onSelect={() => page.setLanguage(lang)}
+                    >
+                      {lang === '' ? 'All languages' : lang}
+                    </ComboboxItem>
+                  )}
+                </ComboboxList>
+              </ComboboxContent>
+            </Combobox>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => void page.onSync()}>
