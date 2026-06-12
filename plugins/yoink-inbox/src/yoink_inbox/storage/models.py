@@ -149,6 +149,11 @@ class InboxItem(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Telegram context for post-classify edit: the bot edits this message
+    # (in tg_chat_id) after classify to replace the placeholder with summary.
+    tg_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tg_reply_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )

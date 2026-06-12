@@ -45,7 +45,18 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     user_repo = get_user_repo(context)
     db_user = await user_repo.get_or_create(user.id)
+
+    # Prefer insight_access.lang (AI/response language) over system language
     lang = db_user.language
+    try:
+        session_factory = get_session_factory(context)
+        async with session_factory() as _s:
+            from yoink_insight.storage.models import InsightAccess  # noqa: PLC0415
+            access = await _s.get(InsightAccess, user.id)
+            if access and access.lang:
+                lang = access.lang
+    except Exception:  # noqa: BLE001
+        pass
 
     url = extract_url_from_args_or_reply(context.args or [], msg)
     if url is None:
@@ -77,20 +88,31 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.reply_text(t("inbox.messages.save_dup", lang))
         return
 
+    # Send placeholder; after classify the worker will edit it with a summary.
+    placeholder = await msg.reply_text(t("inbox.messages.save_ok", lang))
+
+    # Persist tg context so the worker can edit this message later.
+    try:
+        async with session_factory() as session:
+            from yoink_inbox.storage.models import InboxItem  # noqa: PLC0415
+            item = await session.get(InboxItem, result.item_id)
+            if item is not None:
+                item.tg_chat_id = placeholder.chat_id
+                item.tg_reply_message_id = placeholder.message_id
+                await session.commit()
+    except Exception:
+        logger.warning("inbox.save could not store tg_reply_message_id item_id=%s", result.item_id)
+
     if arq is None:
-        # Falls back to inline enrich so users do not see ghosts when Redis
-        # is down. Logged loudly because this is a degraded path.
         logger.warning(
             "inbox.save no ARQ pool, running enrich inline item_id=%s",
             result.item_id,
         )
-        from yoink_inbox.services.enrich import run_enrich
+        from yoink_inbox.services.enrich import run_enrich  # noqa: PLC0415
         try:
             await run_enrich(session_factory, result.item_id, arq=None)
         except Exception:
             logger.exception("inbox.save inline enrich failed item_id=%s", result.item_id)
-
-    await msg.reply_text(t("inbox.messages.save_ok", lang))
 
 
 def register(app: "Application") -> None:

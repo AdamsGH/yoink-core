@@ -142,6 +142,7 @@ def _build_prompt(
     allow_new: bool,
     system_prompt_override: str | None = None,
     user_hint: str | None = None,
+    response_language: str = "en",
 ) -> str:
     """Assemble the classification prompt.
 
@@ -161,13 +162,19 @@ def _build_prompt(
         else "You MUST pick from the existing categories only; never invent new ones."
     )
     hint_block = f"\nUser context: {user_hint.strip()}" if user_hint and user_hint.strip() else ""
+    lang_instruction = (
+        f"Write all category names and the summary in {response_language.upper()} language."
+        if response_language != "en"
+        else ""
+    )
+    lang_block = f"\n{lang_instruction}" if lang_instruction else ""
 
     return f"""{system_line}
 
 The user already has these categories:
 {existing_block}
 
-Pick UP TO {_MAX_CATEGORIES_PER_ITEM} categories that fit the item. {new_clause}{hint_block}
+Pick UP TO {_MAX_CATEGORIES_PER_ITEM} categories that fit the item. {new_clause}{hint_block}{lang_block}
 
 Output ONLY JSON with this exact shape:
 {{
@@ -272,6 +279,57 @@ async def _resolve_categories(
     return resolved
 
 
+async def _notify_classified(
+    session_factory: "async_sessionmaker",
+    item_id: int,
+    user_id: int,
+    *,
+    summary: str | None,
+    categories: list[str],
+    response_language: str,
+) -> None:
+    """Edit the placeholder bot message with the classification result.
+
+    `save.py` stores `tg_chat_id` / `tg_reply_message_id` on the item so
+    the worker can reach back and replace the placeholder text.  Uses
+    `python-telegram-bot.Bot` directly (no PTB Application needed in the
+    worker process).
+    """
+    try:
+        from yoink.core.config import CoreSettings  # noqa: PLC0415
+        from yoink_inbox.storage.models import InboxItem  # noqa: PLC0415
+        from telegram import Bot  # noqa: PLC0415
+
+        async with session_factory() as session:
+            item = await session.get(InboxItem, item_id)
+            if item is None or item.tg_chat_id is None or item.tg_reply_message_id is None:
+                return
+            chat_id = item.tg_chat_id
+            message_id = item.tg_reply_message_id
+            title = item.title or item.url
+
+        # Build the final text
+        cat_tags = " ".join(f"#{c.replace(' ', '_')}" for c in categories) if categories else ""
+        lines: list[str] = []
+        if summary:
+            lines.append(summary)
+        if cat_tags:
+            lines.append(cat_tags)
+        body = "\n\n".join(lines) if lines else title
+
+        cfg = CoreSettings()
+        bot = Bot(token=cfg.bot_token)
+        async with bot:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=body,
+            )
+        logger.info("inbox.classify notify edited message item_id=%s", item_id)
+    except Exception:
+        logger.debug("inbox.classify notify failed item_id=%s", item_id, exc_info=True)
+
+
 async def run_classify(
     session_factory: "async_sessionmaker", item_id: int
 ) -> None:
@@ -299,18 +357,29 @@ async def run_classify(
         existing = await _existing_category_names(session, user_id)
         existing_names = [c.name for c in existing]
 
-        # Load admin system prompt override and user hint
+        # Load admin system prompt override, user hint and AI language
         from yoink_inbox.storage.models import InboxAdminSettings, InboxUserSettings  # noqa: PLC0415
         admin_row = await session.get(InboxAdminSettings, "classify_system_prompt")
         user_row = await session.get(InboxUserSettings, user_id)
         system_override = admin_row.value if admin_row else None
         user_hint = user_row.classify_user_hint if user_row else None
 
+        # Prefer insight_access.lang as the AI response language
+        response_language = "en"
+        try:
+            from yoink_insight.storage.models import InsightAccess  # noqa: PLC0415
+            access_row = await session.get(InsightAccess, user_id)
+            if access_row and access_row.lang:
+                response_language = access_row.lang
+        except ImportError:
+            pass
+
     prompt = _build_prompt(
         title, url, content, existing_names,
         allow_new=True,
         system_prompt_override=system_override,
         user_hint=user_hint,
+        response_language=response_language,
     )
 
     try:
@@ -382,4 +451,12 @@ async def run_classify(
     logger.info(
         "inbox.classify wrote item_id=%s status=classified cats=%d",
         item_id, len(resolved),
+    )
+
+    # Notify the user via Telegram with a short summary
+    await _notify_classified(
+        session_factory, item_id, user_id,
+        summary=parsed.summary,
+        categories=[cat.name for cat, _ in resolved],
+        response_language=response_language,
     )
