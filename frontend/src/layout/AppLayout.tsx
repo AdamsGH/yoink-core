@@ -15,6 +15,8 @@ import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+  ResizableHandle, ResizablePanel, ResizablePanelGroup,
+  ScrollArea,
   Sheet, SheetContent, SheetHeader, SheetTitle,
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup,
   SidebarGroupContent, SidebarGroupLabel, SidebarHeader,
@@ -261,6 +263,21 @@ function BottomDrawer({ open, onClose, title, items, currentPath }: {
 // Right sidebar slot component
 // ---------------------------------------------------------------------------
 
+/** Rendered inside a ResizablePanelGroup together with SidebarInset. */
+export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
+  if (!content) return null
+  return (
+    <>
+      <ResizableHandle withHandle className="hidden md:flex" />
+      <ResizablePanel defaultSize={20} minSize={12} maxSize={40} className="hidden md:flex flex-col border-l border-border/60">
+        <ScrollArea className="h-full">
+          {content}
+        </ScrollArea>
+      </ResizablePanel>
+    </>
+  )
+}
+
 function RightSidebarSlot({
   content,
   mobileOpen,
@@ -270,30 +287,17 @@ function RightSidebarSlot({
   mobileOpen: boolean
   onMobileClose: () => void
 }) {
-  if (!content) return null
   return (
-    <>
-      {/* Desktop: inline sidebar */}
-      <Sidebar
-        side="right"
-        collapsible="offcanvas"
-        style={{ '--sidebar-width': '16rem' } as React.CSSProperties}
-        className="hidden md:flex"
-      >
-        <SidebarContent>{content}</SidebarContent>
-      </Sidebar>
-      {/* Mobile: Sheet overlay */}
-      <Sheet open={mobileOpen} onOpenChange={(o) => { if (!o) onMobileClose() }}>
-        <SheetContent side="right" className="w-72 p-0 md:hidden">
-          <SheetHeader className="sr-only">
-            <SheetTitle>Folders</SheetTitle>
-          </SheetHeader>
-          <div className="flex h-full flex-col overflow-y-auto py-2">
-            {content}
-          </div>
-        </SheetContent>
-      </Sheet>
-    </>
+    <Sheet open={mobileOpen} onOpenChange={(o) => { if (!o) onMobileClose() }}>
+      <SheetContent side="right" className="w-72 p-0 md:hidden">
+        <SheetHeader className="sr-only">
+          <SheetTitle>Folders</SheetTitle>
+        </SheetHeader>
+        <div className="flex h-full flex-col overflow-y-auto py-2">
+          {content}
+        </div>
+      </SheetContent>
+    </Sheet>
   )
 }
 
@@ -374,23 +378,28 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
           <SidebarRail />
         </Sidebar>
 
-        <SidebarInset>
-          <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-            <span className="text-sm font-medium">
-              {(() => {
-                const item = visibleGroups.flatMap((g) => g.items).find((i) =>
-                  location.pathname === i.path || location.pathname.startsWith(i.path + '/')
-                )
-                return item ? getLabel(item) : appName
-              })()}
-            </span>
-          </header>
-          <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
-            <Outlet />
-          </div>
-        </SidebarInset>
+        <ResizablePanelGroup orientation="horizontal" className="flex-1 min-w-0">
+          <ResizablePanel defaultSize={100} minSize={50}>
+            <SidebarInset className="min-w-0">
+              <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+                <span className="text-sm font-medium">
+                  {(() => {
+                    const item = visibleGroups.flatMap((g) => g.items).find((i) =>
+                      location.pathname === i.path || location.pathname.startsWith(i.path + '/')
+                    )
+                    return item ? getLabel(item) : appName
+                  })()}
+                </span>
+              </header>
+              <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
+                <Outlet />
+              </div>
+            </SidebarInset>
+          </ResizablePanel>
+          <RightSidebarPanel content={rightSidebarContent} />
+        </ResizablePanelGroup>
 
-        {/* Right sidebar slot - pages mount content here via useRightSidebar() */}
+        {/* Mobile right sidebar sheet */}
         <RightSidebarSlot
           content={rightSidebarContent}
           mobileOpen={rightMobileOpen}

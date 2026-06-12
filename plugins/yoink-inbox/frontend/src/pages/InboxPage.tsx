@@ -21,7 +21,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import {
   Badge,
@@ -42,9 +42,6 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
   Input,
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
   ScrollArea,
   Sheet,
   SheetContent,
@@ -59,6 +56,81 @@ import {
   TooltipTrigger,
 } from '@ui'
 import { cn } from '@core/lib/utils'
+import { useRightSidebar } from '@core/layout/AppLayout'
+
+// ---------------------------------------------------------------------------
+// Category sidebar content (mounted into right sidebar via useRightSidebar)
+// ---------------------------------------------------------------------------
+
+interface CategorySidebarProps {
+  items: ReturnType<typeof useInboxPage>['items']
+  categories: ReturnType<typeof useInboxPage>['categories']
+  selectedCategory: ReturnType<typeof useInboxPage>['selectedCategory']
+  draggingOver: ReturnType<typeof useInboxPage>['draggingOver']
+  setSelectedCategory: ReturnType<typeof useInboxPage>['setSelectedCategory']
+  onCreateCategory: ReturnType<typeof useInboxPage>['onCreateCategory']
+}
+
+function CategorySidebar({
+  items, categories, selectedCategory, draggingOver, setSelectedCategory, onCreateCategory,
+}: CategorySidebarProps) {
+  const [newCatName, setNewCatName] = useState('')
+  const [creatingCat, setCreatingCat] = useState(false)
+  const [showNewCat, setShowNewCat] = useState(false)
+
+  async function handleCreate() {
+    if (!newCatName.trim() || creatingCat) return
+    setCreatingCat(true)
+    try { await onCreateCategory(newCatName.trim()); setNewCatName(''); setShowNewCat(false) }
+    finally { setCreatingCat(false) }
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-3 pt-4 pb-2">
+        <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest px-2 mb-2">Categories</p>
+      </div>
+      <ScrollArea className="flex-1 px-2">
+        <div className="flex flex-col gap-0.5 pb-3">
+          <CategoryNode droppableId="all" label="All Items" count={items.length}
+            selected={selectedCategory === 'all'} isOver={draggingOver === 'all'}
+            icon={<Inbox className="w-3.5 h-3.5" />} onClick={() => setSelectedCategory('all')} />
+          <CategoryNode droppableId="uncategorized" label="Uncategorized"
+            selected={selectedCategory === 'uncategorized'} isOver={draggingOver === 'uncategorized'}
+            icon={<Tag className="w-3.5 h-3.5" />} onClick={() => setSelectedCategory('uncategorized')} />
+          {categories.length > 0 && <div className="mx-2 my-2 border-t border-border/50" />}
+          {categories.map((cat) => (
+            <CategoryNode key={cat.id} droppableId={`cat-${cat.id}`} label={cat.name}
+              count={cat.item_count} selected={selectedCategory === cat.id}
+              isOver={draggingOver === cat.id}
+              icon={<FolderOpen className="w-3.5 h-3.5" />}
+              onClick={() => setSelectedCategory(cat.id)} />
+          ))}
+        </div>
+      </ScrollArea>
+      <div className="px-2 pb-3 border-t border-border/40 pt-2">
+        {showNewCat ? (
+          <div className="flex gap-1">
+            <Input value={newCatName} onChange={(e) => setNewCatName(e.target.value)}
+              placeholder="Category name..." className="h-7 text-xs"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleCreate()
+                if (e.key === 'Escape') { setShowNewCat(false); setNewCatName('') }
+              }} autoFocus disabled={creatingCat} />
+            <Button size="icon" className="h-7 w-7 shrink-0" onClick={handleCreate} disabled={creatingCat}>
+              <Plus className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        ) : (
+          <button onClick={() => setShowNewCat(true)}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+            <Plus className="w-3.5 h-3.5" /> New category
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
 
 import type { InboxCategory, InboxItem } from '@inbox/types'
 import { useInboxPage } from './useInboxPage'
@@ -414,14 +486,27 @@ export default function InboxPage() {
     onAssignCategory, onReclassify, onDelete, onCreateCategory,
   } = useInboxPage()
 
+  const { setContent } = useRightSidebar()
   const [activeItemId, setActiveItemId] = useState<number | null>(null)
   const [view, setView] = useState<'list' | 'grid'>('list')
-  const [newCatName, setNewCatName] = useState('')
-  const [creatingCat, setCreatingCat] = useState(false)
-  const [showNewCat, setShowNewCat] = useState(false)
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
   const activeItem = items.find((i) => i.id === activeItemId) ?? null
+
+  useEffect(() => {
+    setContent(
+      <CategorySidebar
+        items={items}
+        categories={categories}
+        selectedCategory={selectedCategory}
+        draggingOver={draggingOver}
+        setSelectedCategory={setSelectedCategory}
+        onCreateCategory={onCreateCategory}
+      />
+    )
+    return () => setContent(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setContent, items.length, categories, selectedCategory, draggingOver])
 
   function handleDragStart(e: DragStartEvent) {
     setActiveItemId((e.active.data.current as { itemId: number }).itemId)
@@ -449,18 +534,6 @@ export default function InboxPage() {
     else setDraggingOver(null)
   }
 
-  async function handleCreateCat() {
-    if (!newCatName.trim() || creatingCat) return
-    setCreatingCat(true)
-    try {
-      await onCreateCategory(newCatName.trim())
-      setNewCatName('')
-      setShowNewCat(false)
-    } finally {
-      setCreatingCat(false)
-    }
-  }
-
   const selectedCatLabel = selectedCategory === 'all'
     ? 'All Items'
     : selectedCategory === 'uncategorized'
@@ -474,88 +547,7 @@ export default function InboxPage() {
       onDragEnd={handleDragEnd}
       onDragOver={handleDragOver as never}
     >
-      <ResizablePanelGroup className="h-full">
-        {/* ---- Sidebar ---- */}
-        <ResizablePanel defaultSize={18} minSize={14} maxSize={28} className="flex flex-col">
-          <div className="px-3 pt-4 pb-2">
-            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest px-2 mb-2">
-              Inbox
-            </p>
-          </div>
-          <ScrollArea className="flex-1 px-2">
-            <div className="flex flex-col gap-0.5 pb-3">
-              <CategoryNode
-                droppableId="all"
-                label="All Items"
-                count={items.length}
-                selected={selectedCategory === 'all'}
-                isOver={draggingOver === 'all'}
-                icon={<Inbox className="w-3.5 h-3.5" />}
-                onClick={() => setSelectedCategory('all')}
-              />
-              <CategoryNode
-                droppableId="uncategorized"
-                label="Uncategorized"
-                selected={selectedCategory === 'uncategorized'}
-                isOver={draggingOver === 'uncategorized'}
-                icon={<Tag className="w-3.5 h-3.5" />}
-                onClick={() => setSelectedCategory('uncategorized')}
-              />
-
-              {categories.length > 0 && (
-                <div className="mx-2 my-2 border-t border-border/50" />
-              )}
-
-              {categories.map((cat) => (
-                <CategoryNode
-                  key={cat.id}
-                  droppableId={`cat-${cat.id}`}
-                  label={cat.name}
-                  count={cat.item_count}
-                  selected={selectedCategory === cat.id}
-                  isOver={draggingOver === cat.id}
-                  icon={<FolderOpen className="w-3.5 h-3.5" />}
-                  onClick={() => setSelectedCategory(cat.id)}
-                />
-              ))}
-            </div>
-          </ScrollArea>
-
-          <div className="px-2 pb-3 border-t border-border/40 pt-2">
-            {showNewCat ? (
-              <div className="flex gap-1">
-                <Input
-                  value={newCatName}
-                  onChange={(e) => setNewCatName(e.target.value)}
-                  placeholder="Category name..."
-                  className="h-7 text-xs"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void handleCreateCat()
-                    if (e.key === 'Escape') { setShowNewCat(false); setNewCatName('') }
-                  }}
-                  autoFocus
-                  disabled={creatingCat}
-                />
-                <Button size="icon" className="h-7 w-7 shrink-0" onClick={handleCreateCat} disabled={creatingCat}>
-                  <Plus className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowNewCat(true)}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" /> New category
-              </button>
-            )}
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle withHandle />
-
-        {/* ---- Main ---- */}
-        <ResizablePanel defaultSize={82}>
-          <div className="flex flex-col h-full">
+      <div className="flex flex-col h-full">
             {/* Toolbar */}
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/60 shrink-0">
               <Breadcrumb>
@@ -689,8 +681,6 @@ export default function InboxPage() {
               )}
             </ScrollArea>
           </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
 
       {/* Drag overlay */}
       <DragOverlay dropAnimation={null}>
