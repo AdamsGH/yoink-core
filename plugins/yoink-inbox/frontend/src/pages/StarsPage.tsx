@@ -171,12 +171,15 @@ export default function StarsPage() {
                 <SelectItem value="name">Name</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={page.language} onValueChange={page.setLanguage}>
+            <Select
+              value={page.language === '' ? '__all__' : page.language}
+              onValueChange={(v) => page.setLanguage(v === '__all__' ? '' : v)}
+            >
               <SelectTrigger className="h-8 w-36">
                 <SelectValue placeholder="All languages" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All languages</SelectItem>
+                <SelectItem value="__all__">All languages</SelectItem>
                 {page.languages.map((l) => (
                   <SelectItem key={l} value={l}>{l}</SelectItem>
                 ))}
