@@ -25,8 +25,9 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
+import { useRightSidebar } from '@core/layout/AppLayout'
 import {
   Badge,
   Button,
@@ -37,8 +38,16 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  IconButton,
   Input,
+  SidebarGroup,
+  SidebarGroupAction,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
   SkeletonList,
   Tooltip,
   TooltipContent,
@@ -57,10 +66,32 @@ import { type FolderSelection, useStarsPage } from './useStarsPage'
 export default function StarsPage() {
   const page = useStarsPage()
   const [activeStar, setActiveStar] = useState<InboxGhStar | null>(null)
+  const { setContent } = useRightSidebar()
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   )
+
+  // Mount folder panel in the right sidebar for the lifetime of this page
+  useEffect(() => {
+    setContent(
+      <FolderSidebarContent
+        folders={page.folders}
+        selected={page.selectedFolder}
+        onSelect={page.setSelectedFolder}
+        onCreateFolder={page.onCreateFolder}
+        onRenameFolder={page.onRenameFolder}
+        onDeleteFolder={page.onDeleteFolder}
+        onDropOnFolder={async (folder) => {
+          if (activeStar !== null) {
+            await page.onMoveStar(activeStar.id, folder)
+          }
+        }}
+      />
+    )
+    return () => setContent(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setContent, page.folders, page.selectedFolder])
 
   function handleDragStart(event: DragStartEvent) {
     const star = page.stars.find((s) => s.id === event.active.id)
@@ -78,97 +109,94 @@ export default function StarsPage() {
   }
 
   return (
-    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={(e) => void handleDragEnd(e)}>
-      <div className="flex h-full min-h-0">
-        <FolderSidebar
-          folders={page.folders}
-          selected={page.selectedFolder}
-          onSelect={page.setSelectedFolder}
-          onCreateFolder={page.onCreateFolder}
-          onRenameFolder={page.onRenameFolder}
-          onDeleteFolder={page.onDeleteFolder}
-        />
-
-        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
-          {/* header */}
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h1 className="text-xl font-semibold">
-                {page.selectedFolder === 'all'
-                  ? 'GitHub Stars'
-                  : page.selectedFolder === 'unorganised'
-                    ? 'Unorganised'
-                    : (page.folders.find((f) => f.id === page.selectedFolder)?.name ?? 'Folder')}
-              </h1>
-              {page.syncStatus && (
-                <p className="text-xs text-muted-foreground">
-                  Last sync: {page.syncStatus}
-                  {page.lastSync ? ` (${new Date(page.lastSync).toLocaleString()})` : ''}
-                </p>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                placeholder="Search..."
-                value={page.search}
-                onChange={(e) => page.setSearch(e.target.value)}
-                className="h-8 w-full sm:w-52"
-              />
-              <Input
-                placeholder="Language"
-                value={page.language}
-                onChange={(e) => page.setLanguage(e.target.value)}
-                className="h-8 w-28"
-              />
-              <IconButton tooltip="Sync now" variant="outline" onClick={() => void page.onSync()}>
-                <RefreshCw className="h-4 w-4" />
-              </IconButton>
-            </div>
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragEnd={(e) => void handleDragEnd(e)}
+    >
+      <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+        {/* header */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-xl font-semibold">
+              {page.selectedFolder === 'all'
+                ? 'GitHub Stars'
+                : page.selectedFolder === 'unorganised'
+                  ? 'Unorganised'
+                  : (page.folders.find((f) => f.id === page.selectedFolder)?.name ?? 'Folder')}
+            </h1>
+            {page.syncStatus && (
+              <p className="text-xs text-muted-foreground">
+                Last sync: {page.syncStatus}
+                {page.lastSync ? ` (${new Date(page.lastSync).toLocaleString()})` : ''}
+              </p>
+            )}
           </div>
-
-          {/* grid */}
-          {page.loading ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              <SkeletonList count={6}>{() => <div className="h-44 rounded-lg bg-muted/40" />}</SkeletonList>
-            </div>
-          ) : page.stars.length === 0 ? (
-            <EmptyState message="No stars found" />
-          ) : (
-            <>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {page.stars.map((star) => (
-                  <DraggableStarCard
-                    key={star.id}
-                    star={star}
-                    folders={page.folders}
-                    selectedFolder={page.selectedFolder}
-                    moving={page.movingId === star.id}
-                    isDragging={activeStar?.id === star.id}
-                    onMoveTo={(fid) => void page.onMoveStar(star.id, fid)}
-                    onUnstar={() => void page.onUnstar(star.id, star.gh_repo_id)}
-                  />
-                ))}
-              </div>
-              {page.moreCursor && (
-                <div className="flex justify-center pt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void page.loadMore()}
-                    disabled={page.loadingMore}
-                  >
-                    {page.loadingMore
-                      ? <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Loading...</>
-                      : 'Load more'}
-                  </Button>
-                </div>
-              )}
-            </>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              placeholder="Search..."
+              value={page.search}
+              onChange={(e) => page.setSearch(e.target.value)}
+              className="h-8 w-full sm:w-52"
+            />
+            <Input
+              placeholder="Language"
+              value={page.language}
+              onChange={(e) => page.setLanguage(e.target.value)}
+              className="h-8 w-28"
+            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => void page.onSync()}>
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Sync now</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
+
+        {/* grid */}
+        {page.loading ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+            <SkeletonList count={8}>{() => <div className="h-44 rounded-lg bg-muted/40" />}</SkeletonList>
+          </div>
+        ) : page.stars.length === 0 ? (
+          <EmptyState message="No stars found" />
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+              {page.stars.map((star) => (
+                <DraggableStarCard
+                  key={star.id}
+                  star={star}
+                  folders={page.folders}
+                  selectedFolder={page.selectedFolder}
+                  moving={page.movingId === star.id}
+                  isDragging={activeStar?.id === star.id}
+                  onMoveTo={(fid) => void page.onMoveStar(star.id, fid)}
+                  onUnstar={() => void page.onUnstar(star.id, star.gh_repo_id)}
+                />
+              ))}
+            </div>
+            {page.moreCursor && (
+              <div className="flex justify-center pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void page.loadMore()}
+                  disabled={page.loadingMore}
+                >
+                  {page.loadingMore
+                    ? <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Loading...</>
+                    : 'Load more'}
+                </Button>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
-      {/* drag overlay - ghost card while dragging */}
       <DragOverlay dropAnimation={null}>
         {activeStar && (
           <div className="w-72 rotate-2 opacity-90 shadow-2xl">
@@ -181,26 +209,28 @@ export default function StarsPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Folder sidebar
+// Folder sidebar content - rendered inside the app-level right Sidebar
 // ---------------------------------------------------------------------------
 
-interface FolderSidebarProps {
+interface FolderSidebarContentProps {
   folders: InboxGhFolder[]
   selected: FolderSelection
   onSelect: (f: FolderSelection) => void
   onCreateFolder: (body: { name: string }) => Promise<InboxGhFolder | null>
   onRenameFolder: (id: number, body: { name: string }) => Promise<void>
   onDeleteFolder: (id: number) => Promise<void>
+  onDropOnFolder: (f: FolderSelection) => Promise<void>
 }
 
-function FolderSidebar({
+function FolderSidebarContent({
   folders,
   selected,
   onSelect,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
-}: FolderSidebarProps) {
+  onDropOnFolder,
+}: FolderSidebarContentProps) {
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [renamingId, setRenamingId] = useState<number | null>(null)
@@ -237,142 +267,167 @@ function FolderSidebar({
   }
 
   return (
-    <aside className="flex w-12 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-muted/20 py-3 sm:w-52 sm:px-2">
-      <SidebarEntry id="all" label="All stars" selected={selected} onSelect={onSelect}>
-        <Star className="h-4 w-4 shrink-0" />
-      </SidebarEntry>
-      <SidebarEntry id="unorganised" label="Unorganised" selected={selected} onSelect={onSelect}>
-        <Inbox className="h-4 w-4 shrink-0" />
-      </SidebarEntry>
-
-      {folders.length > 0 && (
-        <div className="mx-2 mb-1 mt-3 hidden border-t border-border sm:block" />
-      )}
-      {folders.length > 0 && (
-        <p className="hidden px-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 sm:block">
-          Folders
-        </p>
-      )}
-
-      {folders.map((folder) =>
-        renamingId === folder.id ? (
-          <div key={folder.id} className="mx-1 hidden items-center gap-1 sm:flex">
-            <input
-              ref={renameRef}
-              className="h-7 flex-1 rounded border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void confirmRename()
-                if (e.key === 'Escape') setRenamingId(null)
-              }}
-              onBlur={() => void confirmRename()}
+    <>
+      {/* Static entries */}
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <DroppableMenuItem
+              id="all"
+              isActive={selected === 'all'}
+              onSelect={() => onSelect('all')}
+              onDrop={() => onDropOnFolder('all')}
+              icon={<Star className="h-4 w-4" />}
+              label="All stars"
             />
-            <button type="button" className="p-0.5 text-muted-foreground hover:text-foreground" onClick={() => void confirmRename()}>
-              <Check className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ) : (
-          <div key={folder.id} className="group relative">
-            <SidebarEntry id={folder.id} label={folder.name} selected={selected} onSelect={onSelect} count={folder.star_count}>
-              <FolderOpen className="h-4 w-4 shrink-0" />
-            </SidebarEntry>
-            {/* folder actions - desktop only */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center justify-center rounded p-0.5 opacity-0 hover:bg-muted group-hover:opacity-100 sm:flex"
-                >
-                  <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-36">
-                <DropdownMenuItem onClick={() => startRename(folder)}>
-                  <Pencil className="mr-2 h-3.5 w-3.5" />Rename
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => void onDeleteFolder(folder.id)}
-                >
-                  <Trash2 className="mr-2 h-3.5 w-3.5" />Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )
-      )}
+            <DroppableMenuItem
+              id="unorganised"
+              isActive={selected === 'unorganised'}
+              onSelect={() => onSelect('unorganised')}
+              onDrop={() => onDropOnFolder('unorganised')}
+              icon={<Inbox className="h-4 w-4" />}
+              label="Unorganised"
+            />
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
 
-      {/* new folder */}
-      {creating ? (
-        <div className="mx-1 mt-1 hidden items-center gap-1 sm:flex">
-          <input
-            ref={createRef}
-            className="h-7 flex-1 rounded border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
-            placeholder="Folder name"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void confirmCreate()
-              if (e.key === 'Escape') setCreating(false)
-            }}
-            onBlur={() => void confirmCreate()}
-          />
-          <button type="button" className="p-0.5 text-muted-foreground hover:text-foreground" onClick={() => setCreating(false)}>
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={startCreate}
-          className="mt-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground/50 transition-colors hover:bg-muted hover:text-muted-foreground"
-        >
-          <FolderPlus className="h-4 w-4 shrink-0" />
-          <span className="hidden sm:block">New folder</span>
-        </button>
-      )}
-    </aside>
+      {/* Folders group */}
+      <SidebarGroup>
+        <SidebarGroupLabel>Folders</SidebarGroupLabel>
+        <SidebarGroupAction title="New folder" onClick={startCreate}>
+          <FolderPlus className="h-4 w-4" />
+          <span className="sr-only">New folder</span>
+        </SidebarGroupAction>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            {creating && (
+              <SidebarMenuItem>
+                <div className="flex items-center gap-1 px-2">
+                  <input
+                    ref={createRef}
+                    className="h-7 flex-1 rounded border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="Folder name"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void confirmCreate()
+                      if (e.key === 'Escape') setCreating(false)
+                    }}
+                    onBlur={() => void confirmCreate()}
+                  />
+                  <button type="button" className="p-0.5 text-muted-foreground hover:text-foreground" onClick={() => setCreating(false)}>
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </SidebarMenuItem>
+            )}
+            {folders.map((folder) => (
+              <SidebarMenuItem key={folder.id} className="group/folder-item">
+                {renamingId === folder.id ? (
+                  <div className="flex items-center gap-1 px-2">
+                    <input
+                      ref={renameRef}
+                      className="h-7 flex-1 rounded border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void confirmRename()
+                        if (e.key === 'Escape') setRenamingId(null)
+                      }}
+                      onBlur={() => void confirmRename()}
+                    />
+                    <button type="button" className="p-0.5 text-muted-foreground hover:text-foreground" onClick={() => void confirmRename()}>
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <DroppableMenuItem
+                    id={folder.id}
+                    isActive={selected === folder.id}
+                    onSelect={() => onSelect(folder.id)}
+                    onDrop={() => onDropOnFolder(folder.id)}
+                    icon={<FolderOpen className="h-4 w-4" />}
+                    label={folder.name}
+                    badge={folder.star_count ?? undefined}
+                  />
+                )}
+                {renamingId !== folder.id && (
+                  <SidebarMenuAction
+                    className="peer-data-[active=true]/menu-button:opacity-100"
+                    showOnHover
+                    asChild
+                  >
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button type="button" className="flex h-full w-full items-center justify-center">
+                          <MoreHorizontal className="h-3.5 w-3.5" />
+                          <span className="sr-only">Folder actions</span>
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent side="right" align="start" className="w-36">
+                        <DropdownMenuItem onClick={() => startRename(folder)}>
+                          <Pencil className="mr-2 h-3.5 w-3.5" />Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => void onDeleteFolder(folder.id)}
+                        >
+                          <Trash2 className="mr-2 h-3.5 w-3.5" />Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </SidebarMenuAction>
+                )}
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Droppable sidebar entry
+// Droppable menu item (dnd-kit useDroppable + SidebarMenuButton)
 // ---------------------------------------------------------------------------
 
-interface SidebarEntryProps {
+function DroppableMenuItem({
+  id,
+  isActive,
+  onSelect,
+  onDrop,
+  icon,
+  label,
+  badge,
+}: {
   id: FolderSelection
+  isActive: boolean
+  onSelect: () => void
+  onDrop: () => void
+  icon: React.ReactNode
   label: string
-  selected: FolderSelection
-  count?: number | null
-  onSelect: (f: FolderSelection) => void
-  children: React.ReactNode
-}
-
-function SidebarEntry({ id, label, selected, count, onSelect, children }: SidebarEntryProps) {
+  badge?: number
+}) {
   const { isOver, setNodeRef } = useDroppable({ id: id as string | number })
-  const active = selected === id
 
   return (
-    <button
-      ref={setNodeRef}
-      type="button"
-      onClick={() => onSelect(id)}
-      className={[
-        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
-        active
-          ? 'bg-primary/15 font-medium text-primary'
-          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-        isOver ? 'ring-2 ring-primary ring-inset' : '',
-      ].join(' ')}
-    >
-      {children}
-      <span className="hidden flex-1 truncate text-left sm:block">{label}</span>
-      {count != null && (
-        <span className="hidden shrink-0 text-[10px] text-muted-foreground sm:block">{count}</span>
-      )}
-    </button>
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        ref={setNodeRef}
+        isActive={isActive}
+        onClick={onSelect}
+        className={isOver ? 'ring-2 ring-primary ring-inset' : undefined}
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
+        onDrop={async (e) => { e.preventDefault(); onDrop() }}
+        onDragOver={(e) => e.preventDefault()}
+      >
+        {icon}
+        <span>{label}</span>
+      </SidebarMenuButton>
+      {badge != null && <SidebarMenuBadge>{badge}</SidebarMenuBadge>}
+    </SidebarMenuItem>
   )
 }
 
@@ -401,16 +456,10 @@ function DraggableStarCard({
 }: DraggableStarCardProps) {
   const { attributes, listeners, setNodeRef, transform } = useDraggable({ id: star.id })
 
-  const style = transform
-    ? { transform: CSS.Translate.toString(transform) }
-    : undefined
+  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={isDragging ? 'opacity-30' : undefined}
-    >
+    <div ref={setNodeRef} style={style} className={isDragging ? 'opacity-30' : undefined}>
       <StarCardContent
         star={star}
         folders={folders}
@@ -425,7 +474,7 @@ function DraggableStarCard({
 }
 
 // ---------------------------------------------------------------------------
-// Star card content (shared between draggable and overlay)
+// Star card content (shared between draggable and DragOverlay)
 // ---------------------------------------------------------------------------
 
 interface StarCardContentProps {
@@ -453,7 +502,6 @@ function StarCardContent({
 
   return (
     <Card className={['flex flex-col gap-0 select-none', ghost ? 'pointer-events-none' : ''].join(' ')}>
-      {/* drag handle + header */}
       <div
         className="flex cursor-grab items-start gap-3 px-4 pb-2 pt-3 active:cursor-grabbing"
         {...dragHandleProps}
@@ -464,14 +512,9 @@ function StarCardContent({
           <div className="h-7 w-7 shrink-0 rounded-full bg-muted" />
         )}
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm font-semibold leading-snug">
-            {star.full_name}
-          </span>
-          {star.language && (
-            <span className="text-xs text-muted-foreground">{star.language}</span>
-          )}
+          <span className="truncate text-sm font-semibold leading-snug">{star.full_name}</span>
+          {star.language && <span className="text-xs text-muted-foreground">{star.language}</span>}
         </div>
-        {/* external link - stops drag propagation so clicking still works */}
         <a
           href={repoUrl}
           target="_blank"
@@ -498,8 +541,7 @@ function StarCardContent({
         )}
         {star.fork && (
           <span className="flex items-center gap-0.5 text-xs text-muted-foreground">
-            <GitFork className="h-3 w-3" />
-            Fork
+            <GitFork className="h-3 w-3" />Fork
           </span>
         )}
         {star.topics?.slice(0, 4).map((t) => (
@@ -513,34 +555,25 @@ function StarCardContent({
         {!ghost && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="-mr-1 h-6 w-6"
-                    onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
-                  >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Actions</TooltipContent>
-              </Tooltip>
+              <button
+                type="button"
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-muted"
+                onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               {folders
                 .filter((f) => f.id !== (typeof selectedFolder === 'number' ? selectedFolder : -1))
                 .map((f) => (
                   <DropdownMenuItem key={f.id} onClick={() => onMoveTo?.(f.id)}>
-                    <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                    Move to {f.name}
+                    <FolderOpen className="mr-2 h-3.5 w-3.5" />Move to {f.name}
                   </DropdownMenuItem>
                 ))}
               {typeof selectedFolder === 'number' && (
                 <DropdownMenuItem onClick={() => onMoveTo?.('all')}>
-                  <X className="mr-2 h-3.5 w-3.5" />
-                  Remove from folder
+                  <X className="mr-2 h-3.5 w-3.5" />Remove from folder
                 </DropdownMenuItem>
               )}
               {(folders.length > 0 || typeof selectedFolder === 'number') && star.can_unstar && (
@@ -552,8 +585,7 @@ function StarCardContent({
                   onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
                   onClick={onUnstar}
                 >
-                  <Star className="mr-2 h-3.5 w-3.5" />
-                  Unstar on GitHub
+                  <Star className="mr-2 h-3.5 w-3.5" />Unstar on GitHub
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>

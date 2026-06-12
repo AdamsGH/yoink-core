@@ -22,7 +22,7 @@ import {
   Label,
   SkeletonList,
 } from '@ui'
-import { CompactCardHeader, EmptyState } from '@app'
+import { CompactCardHeader, EmptyState, PageContainer } from '@app'
 
 import {
   addStarToFolder,
@@ -126,13 +126,16 @@ export default function StarFolderPage() {
 
   if (!loading && !folder) {
     return (
-      <div className="container mx-auto max-w-5xl py-8">
-        <EmptyState message="Folder not found." />
-      </div>
+      <PageContainer>
+        <div className="container mx-auto max-w-5xl py-8">
+          <EmptyState message="Folder not found." />
+        </div>
+      </PageContainer>
     )
   }
 
   return (
+    <PageContainer>
     <div className="container mx-auto max-w-5xl space-y-4 py-4">
       <Card>
         <CompactCardHeader
@@ -258,5 +261,6 @@ export default function StarFolderPage() {
         )}
       </div>
     </div>
+    </PageContainer>
   )
 }

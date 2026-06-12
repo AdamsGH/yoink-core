@@ -2,7 +2,7 @@ import { ExternalLink, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import { Badge, Button, Card, CardContent, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SkeletonList } from '@ui'
-import { EmptyState } from '@app'
+import { EmptyState, PageContainer } from '@app'
 import { toast } from 'sonner'
 
 import {
@@ -126,6 +126,7 @@ export default function InboxPage() {
   }
 
   return (
+    <PageContainer>
     <div className="container mx-auto max-w-5xl space-y-4 py-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-semibold">Inbox</h1>
@@ -275,5 +276,6 @@ export default function InboxPage() {
         </div>
       )}
     </div>
+    </PageContainer>
   )
 }

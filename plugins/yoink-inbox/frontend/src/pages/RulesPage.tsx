@@ -22,7 +22,7 @@ import {
   SkeletonList,
   Switch,
 } from '@ui'
-import { EmptyState } from '@app'
+import { EmptyState, PageContainer } from '@app'
 
 import { createRule, deleteRule, listRules, updateRule } from '@inbox/api/rules'
 import type { InboxRule, RuleTrigger } from '@inbox/types'
@@ -189,6 +189,7 @@ export default function RulesPage() {
   }
 
   return (
+    <PageContainer>
     <div className="container mx-auto max-w-3xl space-y-4 py-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Automation Rules</h1>
@@ -329,5 +330,6 @@ export default function RulesPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </PageContainer>
   )
 }

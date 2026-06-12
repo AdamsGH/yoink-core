@@ -133,7 +133,6 @@ export function useStarsPage() {
     }
   }
 
-  // move star: remove from current folder if in one, add to target if it's a folder
   async function onMoveStar(starId: number, targetFolder: FolderSelection) {
     if (movingId === starId) return
     setMovingId(starId)
