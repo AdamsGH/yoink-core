@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yoink-inbox"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "yoink-core>=0.1.0",
+    "yoink-insight>=0.1.0",
+    "pydantic-settings>=2.7",
+    "arq>=0.26",
+    "redis>=5.0",
+    "httpx>=0.27",
+    "tiktoken>=0.7",
+]
+
+[project.entry-points."yoink.plugins"]
+inbox = "yoink_inbox:InboxPlugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.optional-dependencies]
+dev = [
+    "types-PyYAML>=6.0.12",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.pyrefly]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
+python-interpreter-path = "../../.venv/bin/python"
+search-path = [
+    "src",
+    "../../src",
+    "../yoink-insight/src",
+    "../yoink-dl/src",
+    "../yoink-music/src",
+    "../yoink-stats/src",
+]
+ignore-missing-imports = ["pytest", "pytest_asyncio"]

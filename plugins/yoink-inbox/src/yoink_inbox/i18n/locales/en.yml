@@ -1,0 +1,54 @@
+plugin:
+  name: Inbox
+  description: Save links and GitHub stars, organise with AI.
+
+commands:
+  - command: save
+    description: Save a URL into your inbox.
+    min_role: user
+    required_feature: inbox:ingest
+  - command: inbox
+    description: Show your recent inbox items.
+    min_role: user
+    required_feature: inbox:ingest
+  - command: stars
+    description: Show your synced GitHub starred repositories.
+    min_role: user
+    required_feature: inbox:gh_sync
+  - command: stars_sync
+    description: Force a sync of your GitHub starred repositories.
+    min_role: user
+    required_feature: inbox:gh_sync
+
+features:
+  inbox_ingest:
+    label: Inbox Ingest
+    description: Save links into the inbox via bot, web, or REST.
+  inbox_classify:
+    label: AI Categorisation
+    description: Automatically categorise saved links with an LLM.
+  inbox_share:
+    label: Share Categories
+    description: Share categories with an inbox team.
+  inbox_gh_sync:
+    label: GitHub Stars Sync
+    description: Sync the user's starred GitHub repositories.
+  inbox_gh_organise:
+    label: AI-Organise Stars
+    description: Batch-organise starred repositories with an LLM.
+  inbox_gh_write:
+    label: Star/Unstar From Yoink
+    description: Star or unstar repositories from the yoink UI.
+  inbox_admin:
+    label: Inbox Admin
+    description: Manage the inbox of any user.
+
+messages:
+  save_ok: "Saved. I will enrich and categorise it in the background."
+  save_dup: "You already have this link in your inbox."
+  save_fail: "Could not save that link."
+  inbox_empty: "Your inbox is empty."
+  stars_empty: "No starred repositories synced yet. Run /stars_sync to fetch them."
+  stars_sync_started: "Star sync started. I will let you know when it finishes."
+  stars_sync_done: "Star sync finished, {count} repositories on file."
+  not_authenticated_gh: "Connect your GitHub account in settings first."
