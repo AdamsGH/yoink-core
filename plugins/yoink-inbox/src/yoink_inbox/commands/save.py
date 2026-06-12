@@ -1,10 +1,8 @@
-"""`/save <url>` handler - inline enrich+classify pipeline, reply when done.
+"""`/save <url>` handler - inline enrich+classify pipeline, streamed reply.
 
-Mirrors the tldr pattern: the command handler runs the full pipeline inline
-(ingest -> enrich -> classify) while holding a `typing` chat action, then
-replies once with the final summary + category tags.  No ARQ job is enqueued
-for the primary path; ARQ is kept as a fallback only when Redis is present
-and the inline path fails (for fire-and-forget retries).
+Pipeline: ingest -> enrich -> classify (inline, with typing action).
+Reply: streamed via send_message_draft (Bot API 10.0) + final send_message,
+using the nobullshit alias prompt and format rules from yoink-insight.
 """
 from __future__ import annotations
 
@@ -37,12 +35,34 @@ _SAVE_POLICY = AccessPolicy(
     group_silent_deny=True,
 )
 
-# How often to re-send the typing action while the pipeline runs (seconds).
+# Mirrors tldr.py constants
+_DRAFT_MIN_CHARS = 80
+_DRAFT_MIN_INTERVAL = 1.5
+_TG_DRAFT_LIMIT_U16 = 3800
 _TYPING_INTERVAL = 4.0
+
+# Prompt for the post-save comment - reuses nobullshit voice + alias format rules
+_SAVE_PROMPT = """\
+{nobullshit}
+
+Below is an item just saved to the user's inbox. Give ONE punchy sentence \
+(max two) as a direct verdict on the topic itself - what this thing actually \
+is or does, not that it was saved.
+- No mention of saving, bookmarking, or the inbox
+- No hollow openers ("Interesting!", "Worth reading", "A solid...")
+- Concrete claim or observation, craftsman voice
+- After your sentence, on a new line: category hashtags only
+
+Categories: {categories}
+Title: {title}
+Summary: {summary}
+
+{format_rules}
+Reply in {lang}.
+"""
 
 
 async def _keep_typing(bot, chat_id: int, stop_event: asyncio.Event) -> None:
-    """Periodically send typing action until stop_event is set."""
     try:
         while not stop_event.is_set():
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
@@ -58,7 +78,6 @@ async def _keep_typing(bot, chat_id: int, stop_event: asyncio.Event) -> None:
 
 
 async def _resolve_lang(user_id: int, fallback: str, session_factory) -> str:
-    """Return the user's AI response language from insight_access, or fallback."""
     try:
         async with session_factory() as session:
             from yoink_insight.storage.models import InsightAccess  # noqa: PLC0415
@@ -70,23 +89,15 @@ async def _resolve_lang(user_id: int, fallback: str, session_factory) -> str:
     return fallback
 
 
-_SAVE_COMMENT_PROMPT = """\
-You saved a link. Give ONE punchy sentence (max two) as a gruff craftsman:
-- Lead with the actual substance, not "this is a link about X"
-- Use a direct verdict or observation on the topic
-- Craftsman/forge metaphors when they fit naturally, never forced
-- No hollow openers ("Interesting!", "Worth reading", "A solid...")
-- No mention of saving, inbox, or the act of bookmarking
-- End with the category hashtags on a new line
-
-Title: {title}
-Summary: {summary}
-Categories: {categories}
-Language: reply in {lang}
-"""
+def _utf16_len(s: str) -> int:
+    return len(s.encode("utf-16-le")) // 2
 
 
-async def _build_reply(
+async def _stream_comment(
+    bot,
+    chat_id: int,
+    reply_to_message_id: int,
+    draft_id: int,
     title: str | None,
     url: str,
     summary: str | None,
@@ -94,30 +105,107 @@ async def _build_reply(
     lang: str,
     session_factory,
     user_id: int,
-) -> str:
-    """One punchy sentence from the LLM, then category hashtags."""
-    cat_tags = " ".join(f"#{c.replace(' ', '_')}" for c in categories) if categories else ""
-    if not summary:
-        # Nothing to comment on; just return tags or title
-        return cat_tags or title or url
+) -> None:
+    """Stream the post-save comment via send_message_draft, then send_message."""
+    from yoink_insight.config import InsightConfig  # noqa: PLC0415
+    from yoink_insight.services.tldr import (  # noqa: PLC0415
+        PreparedTldr, _NOBULLSHIT_PROMPT, _ALIAS_FORMAT_RULES, stream_llm,
+    )
     try:
-        from yoink_insight.services.llm import complete  # noqa: PLC0415
-        prompt = _SAVE_COMMENT_PROMPT.format(
-            title=title or url,
-            summary=summary,
-            categories=", ".join(categories) if categories else "none",
-            lang=lang,
-        )
-        comment = await complete(session_factory, user_id, prompt)
-        comment = comment.strip()
-        if cat_tags and cat_tags not in comment:
-            comment = f"{comment}\n\n{cat_tags}"
-        return comment
-    except Exception:  # noqa: BLE001
-        lines = [summary]
-        if cat_tags:
-            lines.append(cat_tags)
-        return "\n\n".join(lines)
+        from yoink_insight.services.md import md_to_entities  # noqa: PLC0415
+    except ImportError:
+        md_to_entities = None
+
+    config = InsightConfig()
+    cat_tags = " ".join(f"#{c.replace(' ', '_')}" for c in categories) if categories else ""
+
+    # Build a minimal PreparedTldr from the already-enriched item content
+    content_body = f"Title: {title or url}\nSummary: {summary or '(none)'}"
+    prepared = PreparedTldr(
+        content=content_body,
+        source_desc=title or url,
+        is_youtube=False,
+        video_seconds=None,
+        via="inbox",
+    )
+
+    # Inject nobullshit + format rules into a custom instruction override
+    nobullshit = _NOBULLSHIT_PROMPT.replace("{lang}", lang)
+    prompt_instruction = _SAVE_PROMPT.format(
+        nobullshit=nobullshit,
+        categories=", ".join(categories) if categories else "none",
+        title=title or url,
+        summary=summary or "(none)",
+        format_rules=_ALIAS_FORMAT_RULES,
+        lang=lang,
+    )
+
+    accumulated = ""
+    last_sent_len = 0
+    last_sent_at = 0.0
+    draft_disabled = False
+
+    try:
+        async for chunk in stream_llm(
+            prepared, lang, config,
+            default_instruction_override=prompt_instruction,
+        ):
+            accumulated += chunk
+            now = asyncio.get_event_loop().time()
+            if draft_disabled:
+                continue
+            if (
+                len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS
+                and now - last_sent_at >= _DRAFT_MIN_INTERVAL
+            ):
+                try:
+                    if _utf16_len(accumulated) > _TG_DRAFT_LIMIT_U16:
+                        draft_disabled = True
+                        continue
+                    if md_to_entities is not None:
+                        draft_plain, _ = md_to_entities(accumulated.strip())
+                    else:
+                        draft_plain = accumulated.strip()
+                    await bot.send_message_draft(
+                        chat_id=chat_id,
+                        draft_id=draft_id,
+                        text=draft_plain,
+                    )
+                    last_sent_len = len(accumulated)
+                    last_sent_at = now
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("send_message_draft failed: %s", e)
+    except Exception:
+        logger.exception("inbox.save stream_llm failed user_id=%s", user_id)
+        # Fall back to plain summary+tags
+        accumulated = f"{summary}\n\n{cat_tags}" if summary else cat_tags
+
+    body = accumulated.strip()
+    if not body:
+        body = cat_tags or title or url
+
+    # Append tags if LLM didn't include them
+    if cat_tags and cat_tags not in body:
+        body = f"{body}\n\n{cat_tags}"
+
+    # Final send_message (persists, clears the draft)
+    if md_to_entities is not None:
+        plain, entities = md_to_entities(body)
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=plain,
+                entities=entities or None,
+                reply_to_message_id=reply_to_message_id,
+            )
+            return
+        except Exception:
+            pass
+    await bot.send_message(
+        chat_id=chat_id,
+        text=body,
+        reply_to_message_id=reply_to_message_id,
+    )
 
 
 @require_access(_SAVE_POLICY)
@@ -142,7 +230,7 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # --- ingest (dedup check) ---
+    # --- ingest ---
     try:
         async with session_factory() as session:
             result = await ingest_url(
@@ -150,7 +238,7 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 user_id=user.id,
                 url=url,
                 source="bot",
-                arq=None,  # we run inline; ARQ not needed for enqueue here
+                arq=None,
             )
             await session.commit()
     except Exception:
@@ -199,7 +287,6 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             categories = list(cat_rows)
     except Exception:
         logger.exception("inbox.save inline pipeline failed item_id=%s", item_id)
-        # Enqueue for retry via ARQ if available
         if arq is not None:
             try:
                 await arq.enqueue_job("enrich_item", item_id, _queue_name="inbox:default")
@@ -211,13 +298,20 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         stop_typing.set()
         await typing_task
 
-    reply_text = await _build_reply(
-        title, url, summary, categories,
+    # --- streamed comment in nobullshit voice ---
+    await _stream_comment(
+        bot=context.bot,
+        chat_id=msg.chat_id,
+        reply_to_message_id=msg.message_id,
+        draft_id=msg.message_id,
+        title=title,
+        url=url,
+        summary=summary,
+        categories=categories,
         lang=lang,
         session_factory=session_factory,
         user_id=user.id,
     )
-    await msg.reply_text(reply_text)
 
 
 def register(app: "Application") -> None:
