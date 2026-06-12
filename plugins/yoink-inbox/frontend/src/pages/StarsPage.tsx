@@ -819,7 +819,11 @@ function StarCardContent({
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="max-h-[60vh] w-52 overflow-y-auto">
+            <DropdownMenuContent
+              align="end"
+              className="w-52"
+              style={{ maxHeight: 'var(--radix-dropdown-menu-content-available-height)', overflowY: 'auto' }}
+            >
               {pinnedFolders.length > 0 && (
                 <>
                   <DropdownMenuLabel className="text-[10px] font-normal text-muted-foreground">Pinned</DropdownMenuLabel>
