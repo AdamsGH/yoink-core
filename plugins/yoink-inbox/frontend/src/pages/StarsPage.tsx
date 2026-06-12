@@ -136,8 +136,8 @@ export default function StarsPage() {
     >
       <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
         {/* header */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
             <h1 className="truncate text-xl font-semibold">
               {page.selectedFolder === 'all'
                 ? 'GitHub Stars'
@@ -146,28 +146,29 @@ export default function StarsPage() {
                   : (page.folders.find((f) => f.id === page.selectedFolder)?.name ?? 'Folder')}
             </h1>
             {page.syncStatus && (
-              <p className="text-xs text-muted-foreground">
-                Last sync: {page.syncStatus}
-                {page.lastSync ? ` (${new Date(page.lastSync).toLocaleString()})` : ''}
+              <p className="shrink-0 text-xs text-muted-foreground">
+                {page.syncStatus}
+                {page.lastSync ? ` · ${new Date(page.lastSync).toLocaleTimeString()}` : ''}
               </p>
             )}
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {/* toolbar row */}
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               placeholder="Search..."
               value={page.search}
               onChange={(e) => page.setSearch(e.target.value)}
-              className="h-8 w-44"
+              className="h-8 min-w-0 flex-1 basis-36"
             />
             <Select
               value={page.sort}
               onValueChange={(v) => page.setSort(v as GhStarSort)}
             >
-              <SelectTrigger className="h-8 w-40">
+              <SelectTrigger className="h-8 w-36">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="starred_at">Recently starred</SelectItem>
+                <SelectItem value="starred_at">Recent</SelectItem>
                 <SelectItem value="stargazers_count">Most stars</SelectItem>
                 <SelectItem value="name">Name</SelectItem>
               </SelectContent>
@@ -176,8 +177,8 @@ export default function StarsPage() {
               value={page.language === '' ? '__all__' : page.language}
               onValueChange={(v) => page.setLanguage(v === '__all__' ? '' : v)}
             >
-              <SelectTrigger className="h-8 w-36">
-                <SelectValue placeholder="All languages" />
+              <SelectTrigger className="h-8 w-32">
+                <SelectValue placeholder="Language" />
               </SelectTrigger>
               <SelectContent position="item-aligned">
                 <SelectItem value="__all__">All languages</SelectItem>
@@ -186,32 +187,24 @@ export default function StarsPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-8 w-8 shrink-0"
-                  onClick={() => void page.onSync()}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Sync now</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-8 w-8 shrink-0 md:hidden"
-                  onClick={openMobileSheet}
-                >
-                  <Folders className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Folders</TooltipContent>
-            </Tooltip>
+            <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => void page.onSync()}>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Sync now</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="icon" className="h-8 w-8 md:hidden" onClick={openMobileSheet}>
+                    <Folders className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Folders</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
         </div>
 
