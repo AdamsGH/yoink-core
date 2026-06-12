@@ -1,10 +1,13 @@
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
   Badge,
   Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   Dialog,
   DialogActions,
   DialogContent,
@@ -21,10 +24,16 @@ import {
   SelectValue,
   SkeletonList,
   Switch,
+  Textarea,
 } from '@ui'
 import { EmptyState, PageContainer } from '@app'
+import { usePermissions } from '@core/hooks/usePermissions'
 
-import { createRule, deleteRule, listRules, updateRule } from '@inbox/api/rules'
+import {
+  createRule, deleteRule, listRules, updateRule,
+  getClassifyHint, setClassifyHint, getAdminPrompt, setAdminPrompt,
+} from '@inbox/api/rules'
+import type { AdminPrompt } from '@inbox/api/rules'
 import type { InboxRule, RuleTrigger } from '@inbox/types'
 
 const TRIGGER_OPTIONS: { value: RuleTrigger; label: string }[] = [
@@ -327,6 +336,130 @@ export default function RulesPage() {
           </DialogActions>
         </DialogContent>
       </Dialog>
+
+      <ClassifierPromptsSection />
     </PageContainer>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Classifier prompts section
+// ---------------------------------------------------------------------------
+
+const ROLE_WEIGHT: Record<string, number> = { owner: 0, admin: 1, moderator: 2, user: 3, restricted: 4, banned: 5 }
+
+function ClassifierPromptsSection() {
+  const { role } = usePermissions()
+  const isModerator = role != null && (ROLE_WEIGHT[role] ?? 99) <= ROLE_WEIGHT.moderator
+
+  const [open, setOpen] = useState(false)
+  const [hint, setHint] = useState('')
+  const [hintSaving, setHintSaving] = useState(false)
+  const [adminPrompt, setAdminPromptState] = useState<AdminPrompt | null>(null)
+  const [adminValue, setAdminValue] = useState('')
+  const [adminSaving, setAdminSaving] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+
+  async function load() {
+    if (loaded) return
+    try {
+      const h = await getClassifyHint()
+      setHint(h.classify_user_hint ?? '')
+      if (isModerator) {
+        const a = await getAdminPrompt()
+        setAdminPromptState(a)
+        setAdminValue(a.classify_system_prompt ?? '')
+      }
+      setLoaded(true)
+    } catch {
+      toast.error('Failed to load classifier settings')
+    }
+  }
+
+  async function saveHint() {
+    setHintSaving(true)
+    try {
+      await setClassifyHint(hint.trim() || null)
+      toast.success('Hint saved')
+    } catch {
+      toast.error('Failed to save hint')
+    } finally {
+      setHintSaving(false)
+    }
+  }
+
+  async function saveAdmin() {
+    setAdminSaving(true)
+    try {
+      const r = await setAdminPrompt(adminValue.trim() || null)
+      setAdminPromptState(r)
+      toast.success('Prompt saved')
+    } catch {
+      toast.error('Failed to save prompt')
+    } finally {
+      setAdminSaving(false)
+    }
+  }
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={(v) => { setOpen(v); if (v) void load() }}
+      className="mt-6"
+    >
+      <CollapsibleTrigger asChild>
+        <button type="button" className="flex w-full items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground">
+          {open
+            ? <ChevronDown className="h-3.5 w-3.5" />
+            : <ChevronRight className="h-3.5 w-3.5" />}
+          Classifier settings
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-3 space-y-5">
+        {/* User hint */}
+        <div className="space-y-1.5">
+          <Label className="text-xs font-medium">Your hint</Label>
+          <p className="text-xs text-muted-foreground">
+            Appended to the classification prompt. Use it to steer labels: preferred language, domain context, tone.
+          </p>
+          <Textarea
+            rows={3}
+            placeholder="e.g. Prefer short English labels. Tag everything Rust-related as 'Rust'."
+            value={hint}
+            onChange={(e) => setHint(e.target.value)}
+            className="text-xs"
+          />
+          <Button size="sm" variant="outline" onClick={() => void saveHint()} disabled={hintSaving}>
+            {hintSaving ? 'Saving...' : 'Save hint'}
+          </Button>
+        </div>
+
+        {/* Admin prompt */}
+        {isModerator && adminPrompt && (
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">Base system prompt (admin)</Label>
+            <p className="text-xs text-muted-foreground">
+              Replaces the default system instruction for all users. Leave empty to use the built-in default.
+            </p>
+            <details className="text-xs">
+              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Default prompt</summary>
+              <pre className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 text-[10px]">
+                {adminPrompt.classify_default_prompt}
+              </pre>
+            </details>
+            <Textarea
+              rows={6}
+              placeholder="Leave empty to use the built-in default above."
+              value={adminValue}
+              onChange={(e) => setAdminValue(e.target.value)}
+              className="font-mono text-xs"
+            />
+            <Button size="sm" variant="outline" onClick={() => void saveAdmin()} disabled={adminSaving}>
+              {adminSaving ? 'Saving...' : 'Save base prompt'}
+            </Button>
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }

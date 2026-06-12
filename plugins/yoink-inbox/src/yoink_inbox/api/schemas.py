@@ -115,6 +115,28 @@ class InboxGhFolderPatch(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Prompt settings
+# ---------------------------------------------------------------------------
+
+
+class InboxClassifyHintRead(BaseModel):
+    classify_user_hint: str | None = None
+
+
+class InboxClassifyHintWrite(BaseModel):
+    classify_user_hint: str | None = Field(default=None, max_length=4000)
+
+
+class InboxAdminPromptRead(BaseModel):
+    classify_system_prompt: str | None = None
+    classify_default_prompt: str  # read-only, the hardcoded default
+
+
+class InboxAdminPromptWrite(BaseModel):
+    classify_system_prompt: str | None = Field(default=None, max_length=8000)
+
+
+# ---------------------------------------------------------------------------
 # Teams
 # ---------------------------------------------------------------------------
 

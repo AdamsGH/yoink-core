@@ -499,3 +499,42 @@ class InboxGhSyncState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
     )
+
+
+class InboxUserSettings(Base):
+    """Per-user inbox settings (classify hint, future prefs)."""
+
+    __tablename__ = "inbox_user_settings"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # Free-text hint appended to the classification prompt (e.g. preferred
+    # label language, domain hints, tone). Nullable = not set.
+    classify_user_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
+    )
+
+
+class InboxAdminSettings(Base):
+    """Global admin-controlled settings stored as key/value rows.
+
+    Keys in use:
+      classify_system_prompt  -- overrides the base classification prompt
+                                 built by classify._build_prompt
+    """
+
+    __tablename__ = "inbox_admin_settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
+    )

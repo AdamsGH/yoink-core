@@ -127,6 +127,12 @@ def _parse_response(raw: str) -> _ParsedResponse:
     return _ParsedResponse(categories=cats, summary=summary, is_github_repo=is_gh)
 
 
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are categorising an item for a personal inbox. "
+    "Be concise and accurate."
+)
+
+
 def _build_prompt(
     title: str | None,
     url: str,
@@ -134,15 +140,19 @@ def _build_prompt(
     existing_categories: list[str],
     *,
     allow_new: bool,
+    system_prompt_override: str | None = None,
+    user_hint: str | None = None,
 ) -> str:
     """Assemble the classification prompt.
 
-    `content` is truncated to `_CONTENT_BUDGET_CHARS`; a trailing marker tells
-    the model not to invent facts past the truncation.
+    `system_prompt_override` replaces the default system line when set (admin).
+    `user_hint` is appended after the main instruction (per-user personalisation).
+    `content` is truncated to `_CONTENT_BUDGET_CHARS`.
     """
     if content and len(content) > _CONTENT_BUDGET_CHARS:
         content = content[:_CONTENT_BUDGET_CHARS] + "\n\n[truncated]"
 
+    system_line = system_prompt_override or _DEFAULT_SYSTEM_PROMPT
     existing_block = "\n".join(f"- {n}" for n in existing_categories) or "(none yet)"
     new_clause = (
         f"You MAY propose AT MOST {_MAX_NEW_CATEGORIES_PER_CALL} new category "
@@ -150,13 +160,14 @@ def _build_prompt(
         if allow_new
         else "You MUST pick from the existing categories only; never invent new ones."
     )
+    hint_block = f"\nUser context: {user_hint.strip()}" if user_hint and user_hint.strip() else ""
 
-    return f"""You are categorising an item for a personal inbox.
+    return f"""{system_line}
 
 The user already has these categories:
 {existing_block}
 
-Pick UP TO {_MAX_CATEGORIES_PER_ITEM} categories that fit the item. {new_clause}
+Pick UP TO {_MAX_CATEGORIES_PER_ITEM} categories that fit the item. {new_clause}{hint_block}
 
 Output ONLY JSON with this exact shape:
 {{
@@ -288,8 +299,18 @@ async def run_classify(
         existing = await _existing_category_names(session, user_id)
         existing_names = [c.name for c in existing]
 
+        # Load admin system prompt override and user hint
+        from yoink_inbox.storage.models import InboxAdminSettings, InboxUserSettings  # noqa: PLC0415
+        admin_row = await session.get(InboxAdminSettings, "classify_system_prompt")
+        user_row = await session.get(InboxUserSettings, user_id)
+        system_override = admin_row.value if admin_row else None
+        user_hint = user_row.classify_user_hint if user_row else None
+
     prompt = _build_prompt(
-        title, url, content, existing_names, allow_new=True,
+        title, url, content, existing_names,
+        allow_new=True,
+        system_prompt_override=system_override,
+        user_hint=user_hint,
     )
 
     try:

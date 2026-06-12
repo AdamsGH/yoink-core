@@ -33,9 +33,13 @@ from yoink.core.api.deps import get_current_user, get_db
 from yoink.core.auth.effective_features import EffectiveFeatureResolver
 from yoink.core.db.models import User, UserRole
 from yoink_inbox.api.schemas import (
+    InboxAdminPromptRead,
+    InboxAdminPromptWrite,
     InboxCategoryCreate,
     InboxCategoryRead,
     InboxCategoryUpdate,
+    InboxClassifyHintRead,
+    InboxClassifyHintWrite,
     InboxGhFolderCreate,
     InboxGhFolderPatch,
     InboxGhFolderRead,
@@ -1143,6 +1147,85 @@ async def list_gh_stars(
         next_cursor=next_cursor,
         sync_status=sync_state.last_status if sync_state else None,
         last_synced_at=sync_state.last_synced_at if sync_state else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prompt settings
+# ---------------------------------------------------------------------------
+
+_CLASSIFY_ADMIN_KEY = "classify_system_prompt"
+
+
+@router.get("/settings/classify-hint", response_model=InboxClassifyHintRead)
+async def get_classify_hint(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxClassifyHintRead:
+    await _require_feature(request, user, "ingest")
+    from yoink_inbox.storage.models import InboxUserSettings  # noqa: PLC0415
+    row = await session.get(InboxUserSettings, user.id)
+    return InboxClassifyHintRead(classify_user_hint=row.classify_user_hint if row else None)
+
+
+@router.put("/settings/classify-hint", response_model=InboxClassifyHintRead)
+async def set_classify_hint(
+    request: Request,
+    payload: InboxClassifyHintWrite,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxClassifyHintRead:
+    await _require_feature(request, user, "ingest")
+    from yoink_inbox.storage.models import InboxUserSettings  # noqa: PLC0415
+    row = await session.get(InboxUserSettings, user.id)
+    if row is None:
+        row = InboxUserSettings(user_id=user.id, classify_user_hint=payload.classify_user_hint)
+        session.add(row)
+    else:
+        row.classify_user_hint = payload.classify_user_hint
+    await session.commit()
+    return InboxClassifyHintRead(classify_user_hint=row.classify_user_hint)
+
+
+@router.get("/admin/classify-prompt", response_model=InboxAdminPromptRead)
+async def get_admin_classify_prompt(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxAdminPromptRead:
+    if (user.role or "") not in {"moderator", "admin", "owner"}:
+        raise HTTPException(status_code=403, detail="Moderator role required")
+    from yoink_inbox.storage.models import InboxAdminSettings  # noqa: PLC0415
+    from yoink_inbox.services.classify import _DEFAULT_SYSTEM_PROMPT  # noqa: PLC0415
+    row = await session.get(InboxAdminSettings, _CLASSIFY_ADMIN_KEY)
+    return InboxAdminPromptRead(
+        classify_system_prompt=row.value if row else None,
+        classify_default_prompt=_DEFAULT_SYSTEM_PROMPT,
+    )
+
+
+@router.put("/admin/classify-prompt", response_model=InboxAdminPromptRead)
+async def set_admin_classify_prompt(
+    request: Request,
+    payload: InboxAdminPromptWrite,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxAdminPromptRead:
+    if (user.role or "") not in {"moderator", "admin", "owner"}:
+        raise HTTPException(status_code=403, detail="Moderator role required")
+    from yoink_inbox.storage.models import InboxAdminSettings  # noqa: PLC0415
+    from yoink_inbox.services.classify import _DEFAULT_SYSTEM_PROMPT  # noqa: PLC0415
+    row = await session.get(InboxAdminSettings, _CLASSIFY_ADMIN_KEY)
+    if row is None:
+        row = InboxAdminSettings(key=_CLASSIFY_ADMIN_KEY, value=payload.classify_system_prompt)
+        session.add(row)
+    else:
+        row.value = payload.classify_system_prompt
+    await session.commit()
+    return InboxAdminPromptRead(
+        classify_system_prompt=row.value,
+        classify_default_prompt=_DEFAULT_SYSTEM_PROMPT,
     )
 
 
