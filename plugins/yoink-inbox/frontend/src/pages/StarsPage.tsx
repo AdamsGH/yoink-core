@@ -9,7 +9,6 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
-import { CSS } from '@dnd-kit/utilities'
 import {
   Check,
   ExternalLink,
@@ -484,12 +483,10 @@ function DraggableStarCard({
   onMoveTo,
   onUnstar,
 }: DraggableStarCardProps) {
-  const { attributes, listeners, setNodeRef, transform } = useDraggable({ id: star.id })
-
-  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined
+  const { attributes, listeners, setNodeRef } = useDraggable({ id: star.id })
 
   return (
-    <div ref={setNodeRef} style={style} className={isDragging ? 'opacity-30' : undefined}>
+    <div ref={setNodeRef} className={isDragging ? 'opacity-30' : undefined}>
       <StarCardContent
         star={star}
         folders={folders}
