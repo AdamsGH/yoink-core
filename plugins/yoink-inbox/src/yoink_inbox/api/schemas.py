@@ -82,6 +82,8 @@ class InboxGhFolderRead(_Base):
     icon: str | None = None
     parent_id: int | None = None
     star_count: int = 0
+    gh_list_id: str | None = None
+    gh_list_slug: str | None = None
     created_at: datetime
 
 

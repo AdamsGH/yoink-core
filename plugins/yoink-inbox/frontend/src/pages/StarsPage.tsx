@@ -372,7 +372,11 @@ function FolderSidebarContent({
                     isActive={selected === folder.id}
                     onSelect={() => onSelect(folder.id)}
                     onDrop={() => onDropOnFolder(folder.id)}
-                    icon={<FolderOpen className="h-4 w-4" />}
+                    icon={
+                      folder.gh_list_id
+                        ? <GitFork className="h-4 w-4 text-muted-foreground/60" />
+                        : <FolderOpen className="h-4 w-4" />
+                    }
                     label={folder.name}
                     badge={folder.star_count ?? undefined}
                   />

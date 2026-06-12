@@ -714,6 +714,18 @@ async def add_star_to_folder(
         return {"status": "already_member"}
     session.add(InboxGhFolderMember(folder_id=folder_id, gh_star_id=star_id, added_by="user"))
     await session.commit()
+    # Write-back to GitHub List if folder is linked to one
+    if folder.gh_list_id and star.gh_node_id:
+        try:
+            from yoink_inbox.services.gh_write import add_to_gh_list
+            await add_to_gh_list(
+                request.app.state.session_factory,
+                user.id,
+                star.gh_node_id,
+                folder.gh_list_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("gh_list write-back failed: %s", exc)
     return {"status": "added"}
 
 
@@ -729,10 +741,23 @@ async def remove_star_from_folder(
     folder = await session.get(InboxGhFolder, folder_id)
     if folder is None or folder.user_id != user.id:
         raise HTTPException(status_code=404, detail="Folder not found")
+    star = await session.get(InboxGhStar, star_id)
     member = await session.get(InboxGhFolderMember, (folder_id, star_id))
     if member:
         await session.delete(member)
         await session.commit()
+    # Write-back to GitHub List if folder is linked to one
+    if folder.gh_list_id and star and star.gh_node_id:
+        try:
+            from yoink_inbox.services.gh_write import remove_from_gh_list
+            await remove_from_gh_list(
+                request.app.state.session_factory,
+                user.id,
+                star.gh_node_id,
+                folder.gh_list_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("gh_list write-back remove failed")
 
 
 # ---------------------------------------------------------------------------

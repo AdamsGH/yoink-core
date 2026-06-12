@@ -27,7 +27,7 @@ export const inboxPlugin: PluginManifest = {
       i18nKey: 'nav.inbox',
       icon: <Inbox className="h-4 w-4" />,
       items: [
-        { label: 'Items', i18nKey: 'nav.inbox_items', path: '/inbox', icon: <Inbox className="h-4 w-4" /> },
+        { label: 'Items', i18nKey: 'nav.inbox_items', path: '/inbox', icon: <Inbox className="h-4 w-4" />, exact: true },
         { label: 'GitHub Stars', i18nKey: 'nav.inbox_stars', path: '/inbox/stars', icon: <Star className="h-4 w-4" /> },
         { label: 'Rules', i18nKey: 'nav.inbox_rules', path: '/inbox/rules', icon: <Zap className="h-4 w-4" /> },
         { label: 'Teams', i18nKey: 'nav.inbox_teams', path: '/inbox/teams', icon: <Users className="h-4 w-4" /> },

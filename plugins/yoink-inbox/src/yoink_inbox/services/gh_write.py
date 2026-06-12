@@ -70,3 +70,43 @@ async def unstar_repo(session_factory, user_id: int, owner: str, repo: str) -> N
     if resp.status_code not in (204, 304):
         resp.raise_for_status()
     logger.info("inbox.gh_write: unstarred %s/%s for user_id=%s", owner, repo, user_id)
+
+
+async def add_to_gh_list(
+    session_factory,
+    user_id: int,
+    repo_node_id: str,
+    list_id: str,
+) -> None:
+    """Add a repo to a GitHub List (safe add, preserves other memberships)."""
+    from yoink_inbox.services.gh_lists import GhListsClient
+    token = await _get_public_repo_token(session_factory, user_id)
+    client = GhListsClient(token=token)
+    try:
+        await client.add_repo_to_list(repo_node_id, list_id)
+    finally:
+        await client.aclose()
+    logger.info(
+        "inbox.gh_write: added repo node=%s to list=%s for user_id=%s",
+        repo_node_id, list_id, user_id,
+    )
+
+
+async def remove_from_gh_list(
+    session_factory,
+    user_id: int,
+    repo_node_id: str,
+    list_id: str,
+) -> None:
+    """Remove a repo from a GitHub List (safe remove, preserves other memberships)."""
+    from yoink_inbox.services.gh_lists import GhListsClient
+    token = await _get_public_repo_token(session_factory, user_id)
+    client = GhListsClient(token=token)
+    try:
+        await client.remove_repo_from_list(repo_node_id, list_id)
+    finally:
+        await client.aclose()
+    logger.info(
+        "inbox.gh_write: removed repo node=%s from list=%s for user_id=%s",
+        repo_node_id, list_id, user_id,
+    )

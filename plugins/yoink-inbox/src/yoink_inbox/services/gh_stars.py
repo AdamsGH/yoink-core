@@ -135,6 +135,7 @@ async def _upsert_star(
     values = {
         "user_id": user_id,
         "gh_repo_id": int(repo_payload["id"]),
+        "gh_node_id": repo_payload.get("node_id"),
         "full_name": repo_payload.get("full_name") or "",
         "owner_login": (repo_payload.get("owner") or {}).get("login") or "",
         "owner_avatar_url": (repo_payload.get("owner") or {}).get("avatar_url"),
@@ -170,6 +171,7 @@ async def _upsert_star(
             "starred_at": stmt.excluded.starred_at,
             "updated_at": stmt.excluded.updated_at,
             "can_unstar": stmt.excluded.can_unstar,
+            "gh_node_id": stmt.excluded.gh_node_id,
             "last_synced_at": stmt.excluded.last_synced_at,
         },
     )
@@ -394,4 +396,141 @@ async def run_sync(
         "inbox.gh_stars sync done user_id=%s stars=%d removed=%d etag=%s",
         user_id, total_seen, removed, new_etag,
     )
+
+    # Sync GitHub Lists -> folders (best-effort; never fails the outer sync)
+    write_token = await _resolve_write_token(session_factory, user_id)
+    if write_token:
+        try:
+            await _sync_gh_lists(session_factory, user_id, write_token)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("inbox.gh_lists sync failed user_id=%s err=%s", user_id, exc)
+
     return SyncResult(status="ok", stars_count=total_seen, removed=removed)
+
+
+async def _resolve_write_token(
+    session_factory: "async_sessionmaker", user_id: int
+) -> str | None:
+    """Pull the public_repo write token (used for GitHub Lists GraphQL too)."""
+    try:
+        from yoink_insight.storage.repos import InsightUserSettingsRepo
+        repo = InsightUserSettingsRepo(session_factory)
+        return await repo.get_github_token_public_repo(user_id)
+    except ImportError:
+        return None
+
+
+async def _sync_gh_lists(
+    session_factory: "async_sessionmaker",
+    user_id: int,
+    token: str,
+) -> None:
+    """Sync GitHub Star Lists to inbox_gh_folders.
+
+    - Fetches all Lists for the authenticated user via GraphQL.
+    - For each List: upsert a folder row (keyed by gh_list_id).
+    - Syncs folder memberships: each repo in the List that exists in
+      inbox_gh_stars gets added to the corresponding folder.
+    - Folders that were previously synced from a List but no longer exist
+      on GitHub have their gh_list_id cleared (they become plain folders).
+    """
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from yoink_inbox.services.gh_lists import GhListsClient
+    from yoink_inbox.storage.models import InboxGhFolder, InboxGhFolderMember, InboxGhStar
+
+    client = GhListsClient(token=token)
+    try:
+        login = await client.get_viewer_login()
+        gh_lists = await client.list_user_lists(login)
+    finally:
+        await client.aclose()
+
+    gh_list_ids = {gl.id for gl in gh_lists}
+
+    async with session_factory() as s:
+        # Fetch existing gh_list-linked folders for this user
+        existing_rows = list(
+            (await s.execute(
+                select(InboxGhFolder).where(
+                    InboxGhFolder.user_id == user_id,
+                    InboxGhFolder.gh_list_id.is_not(None),
+                )
+            )).scalars().all()
+        )
+        existing_by_list_id = {r.gh_list_id: r for r in existing_rows}
+
+        # Upsert folders for each GH list
+        for gl in gh_lists:
+            existing = existing_by_list_id.get(gl.id)
+            if existing is None:
+                # Create a new folder linked to this GH list
+                slug = re.sub(r"[^a-z0-9]+", "-", gl.name.lower()).strip("-")[:64] or "list"
+                # Ensure slug uniqueness within user
+                slug_base = slug
+                attempt = 0
+                while True:
+                    clash = await s.scalar(
+                        select(InboxGhFolder.id).where(
+                            InboxGhFolder.user_id == user_id,
+                            InboxGhFolder.slug == slug,
+                        )
+                    )
+                    if clash is None:
+                        break
+                    attempt += 1
+                    slug = f"{slug_base}-{attempt}"
+                folder = InboxGhFolder(
+                    user_id=user_id,
+                    name=gl.name,
+                    slug=slug,
+                    description=gl.description,
+                    gh_list_id=gl.id,
+                    gh_list_slug=gl.slug,
+                )
+                s.add(folder)
+                await s.flush()
+            else:
+                # Update name/slug in case it changed on GitHub
+                if existing.name != gl.name:
+                    existing.name = gl.name
+                existing.gh_list_slug = gl.slug
+
+            # Sync memberships via gh_node_id
+            folder_obj = existing_by_list_id.get(gl.id) or folder  # type: ignore[union-attr]
+            actual_folder_id = folder_obj.id
+
+            client2 = GhListsClient(token=token)
+            try:
+                item_node_ids = await client2.get_list_item_ids(gl.id)
+            finally:
+                await client2.aclose()
+
+            if item_node_ids:
+                # Find inbox_gh_stars rows matching these node IDs
+                star_rows = list(
+                    (await s.execute(
+                        select(InboxGhStar.id).where(
+                            InboxGhStar.user_id == user_id,
+                            InboxGhStar.gh_node_id.in_(item_node_ids),
+                        )
+                    )).scalars().all()
+                )
+                for star_id in star_rows:
+                    await s.execute(
+                        pg_insert(InboxGhFolderMember)
+                        .values(folder_id=actual_folder_id, gh_star_id=star_id, added_by="sync")
+                        .on_conflict_do_nothing()
+                    )
+
+        # Detach folders whose GH list no longer exists
+        for row in existing_rows:
+            if row.gh_list_id not in gh_list_ids:
+                row.gh_list_id = None
+                row.gh_list_slug = None
+
+        await s.commit()
+    logger.info(
+        "inbox.gh_lists synced user_id=%s lists=%d",
+        user_id, len(gh_lists),
+    )

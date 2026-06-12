@@ -107,6 +107,8 @@ export interface InboxGhFolder {
   icon: string | null
   parent_id: number | null
   star_count: number
+  gh_list_id: string | null
+  gh_list_slug: string | null
   created_at: string
 }
 

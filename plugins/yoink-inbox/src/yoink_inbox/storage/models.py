@@ -295,6 +295,7 @@ class InboxGhStar(Base):
     gh_repo_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    gh_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     owner_login: Mapped[str] = mapped_column(String(128), nullable=False)
     owner_avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -347,12 +348,17 @@ class InboxGhFolder(Base):
         ForeignKey("inbox_gh_folders.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # GitHub List linkage (nullable - folders may have no GH List counterpart)
+    gh_list_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gh_list_slug: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )
 
     __table_args__ = (
         UniqueConstraint("user_id", "slug", name="uq_inbox_gh_folders_user_slug"),
+        Index("ix_inbox_gh_folders_gh_list_id", "user_id", "gh_list_id"),
     )
 
 
