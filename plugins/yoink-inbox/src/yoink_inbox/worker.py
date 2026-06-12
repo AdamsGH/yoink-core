@@ -13,22 +13,30 @@ import logging
 from arq.connections import RedisSettings
 from arq.worker import func
 
+from yoink.core.config import CoreSettings
+from yoink.core.db.engine import get_session_factory, init_engine
 from yoink_inbox.config import InboxConfig
 
 logger = logging.getLogger(__name__)
 _config = InboxConfig()
+_core = CoreSettings()
 
 
 async def enrich_item(ctx: dict, item_id: int) -> None:
     """Fetch metadata + readable content for an inbox item.
 
-    Wraps yoink_insight.services.fetch.fetch_web_content. Service module
-    lands in the next commit; until then this is a noop stub that logs and
-    returns so ARQ wiring is observable.
+    Wraps yoink_insight.services.fetch.fetch_web_content plus a cheap OG /
+    GitHub-API scrape for the inbox card preview. Enqueues classify on
+    success.
     """
-    logger.info("inbox.enrich_item stub item_id=%s", item_id)
-    # TODO: from yoink_inbox.services.enrich import run_enrich
-    # await run_enrich(ctx, item_id)
+    from yoink_inbox.services.enrich import run_enrich
+
+    await run_enrich(
+        ctx["session_factory"],
+        item_id,
+        arq=ctx.get("redis"),
+        max_chars=_config.inbox_max_content_chars,
+    )
 
 
 async def classify_item(ctx: dict, item_id: int) -> None:
@@ -50,9 +58,28 @@ async def organise_stars_batch(ctx: dict, user_id: int) -> None:
 
 
 async def startup(ctx: dict) -> None:
-    """ARQ startup hook. Place to instantiate shared HTTP clients later."""
+    """ARQ startup hook.
+
+    Wires the async DB engine (worker process has no FastAPI lifespan to do
+    it) and stores the session factory in ARQ ctx so handlers can pull it
+    without re-importing the global accessor everywhere.
+    """
     logger.info("inbox.worker startup")
+    # Ensure all relevant models are imported before init_engine so SQLA's
+    # mapper registry can resolve FK references. Core users table is needed
+    # because inbox_items.user_id targets it; insight settings are needed for
+    # enrich to load the user's GitHub token.
+    import yoink.core.db.models  # noqa: F401 - core (User, Group, ...)
+    import yoink_inbox.storage.models  # noqa: F401
+
+    try:
+        import yoink_insight.storage.models  # noqa: F401
+    except ImportError:
+        pass
+
+    init_engine(_core.database_url, echo=_core.database_echo)
     ctx["config"] = _config
+    ctx["session_factory"] = get_session_factory()
 
 
 async def shutdown(ctx: dict) -> None:
