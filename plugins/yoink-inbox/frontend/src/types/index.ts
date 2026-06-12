@@ -71,6 +71,7 @@ export interface InboxGhStar {
   ai_summary: string | null
   can_unstar: boolean
   last_synced_at: string | null
+  folder_ids: number[]
 }
 
 export interface InboxGhStarListResponse {
@@ -109,6 +110,8 @@ export interface InboxGhFolder {
   star_count: number
   gh_list_id: string | null
   gh_list_slug: string | null
+  is_pinned: boolean
+  sort_order: number
   created_at: string
 }
 
@@ -118,6 +121,14 @@ export interface InboxGhFolderCreate {
   description?: string
   icon?: string
   parent_id?: number
+  is_local?: boolean
+}
+
+export interface InboxGhFolderPatch {
+  name?: string
+  is_pinned?: boolean
+  sort_order?: number
+  description?: string
 }
 
 // ---------------------------------------------------------------------------

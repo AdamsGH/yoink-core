@@ -5,6 +5,7 @@ import type {
   InboxCategoryCreate,
   InboxGhFolder,
   InboxGhFolderCreate,
+  InboxGhFolderPatch,
   InboxGhStar,
   InboxGhStarListResponse,
   InboxItem,
@@ -117,6 +118,11 @@ export async function createFolder(body: InboxGhFolderCreate): Promise<InboxGhFo
 
 export async function updateFolder(id: number, body: InboxGhFolderCreate): Promise<InboxGhFolder> {
   const { data } = await apiClient.put<InboxGhFolder>(`/inbox/folders/${id}`, body)
+  return data
+}
+
+export async function patchFolder(id: number, body: InboxGhFolderPatch): Promise<InboxGhFolder> {
+  const { data } = await apiClient.patch<InboxGhFolder>(`/inbox/folders/${id}`, body)
   return data
 }
 

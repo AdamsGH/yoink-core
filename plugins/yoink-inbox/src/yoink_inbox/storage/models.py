@@ -352,6 +352,10 @@ class InboxGhFolder(Base):
     gh_list_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     gh_list_slug: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    # UI ordering / pinning
+    is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )

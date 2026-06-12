@@ -8,6 +8,7 @@ import {
   listFolders,
   listGhStars,
   listStarLanguages,
+  patchFolder,
   removeStarFromFolder,
   triggerGhSync,
   unstarRepo,
@@ -121,12 +122,42 @@ export function useStarsPage() {
     try {
       const f = await createFolder(body)
       setFolders((p) => [...p, f])
-      toast.success('Folder created')
+      toast.success(body.is_local === false ? 'Folder created and synced to GitHub Lists' : 'Folder created')
       return f
     } catch {
       toast.error('Failed to create folder')
       return null
     }
+  }
+
+  async function onPinFolder(id: number, pinned: boolean) {
+    try {
+      const f = await patchFolder(id, { is_pinned: pinned })
+      setFolders((p) => p.map((x) => (x.id === id ? f : x)))
+    } catch {
+      toast.error('Failed to update folder')
+    }
+  }
+
+  async function onReorderPinned(orderedIds: number[]) {
+    // optimistic update
+    setFolders((prev) => {
+      const map = new Map(prev.map((f) => [f.id, f]))
+      return prev.map((f) => {
+        const idx = orderedIds.indexOf(f.id)
+        return idx >= 0 ? { ...f, sort_order: idx } : f
+      }).sort((a, b) => {
+        if (a.is_pinned && b.is_pinned) return a.sort_order - b.sort_order
+        if (a.is_pinned) return -1
+        if (b.is_pinned) return 1
+        return a.name.localeCompare(b.name)
+      })
+      void map
+    })
+    // persist each changed order
+    await Promise.all(
+      orderedIds.map((id, idx) => patchFolder(id, { sort_order: idx }).catch(() => null))
+    )
   }
 
   async function onRenameFolder(id: number, body: InboxGhFolderCreate) {
@@ -192,6 +223,7 @@ export function useStarsPage() {
     movingId,
     loadMore, onSync,
     onCreateFolder, onRenameFolder, onDeleteFolder,
+    onPinFolder, onReorderPinned,
     languages,
     onMoveStar, onUnstar,
     reload: loadStars,

@@ -10,15 +10,25 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import {
-  Check,
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import {
+  ChevronRight,
   ExternalLink,
   FolderOpen,
   FolderPlus,
   GitFork,
+  GripVertical,
   Inbox,
   Loader2,
   MoreHorizontal,
   Pencil,
+  Pin,
+  PinOff,
   RefreshCw,
   Star,
   Trash2,
@@ -32,15 +42,13 @@ import {
   Button,
   Card,
   CardContent,
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
@@ -82,7 +90,6 @@ export default function StarsPage() {
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   )
 
-  // Mount folder panel in the right sidebar for the lifetime of this page
   useEffect(() => {
     setContent(
       <FolderSidebarContent
@@ -92,16 +99,18 @@ export default function StarsPage() {
         onCreateFolder={page.onCreateFolder}
         onRenameFolder={page.onRenameFolder}
         onDeleteFolder={page.onDeleteFolder}
+        onPinFolder={page.onPinFolder}
+        onReorderPinned={page.onReorderPinned}
         onDropOnFolder={async (folder) => {
           if (activeStar !== null) {
             await page.onMoveStar(activeStar.id, folder)
           }
         }}
-      />
+      />,
     )
     return () => setContent(null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setContent, page.folders, page.selectedFolder])
+  }, [setContent, page.folders, page.selectedFolder, activeStar])
 
   function handleDragStart(event: DragStartEvent) {
     const star = page.stars.find((s) => s.id === event.active.id)
@@ -142,7 +151,7 @@ export default function StarsPage() {
               </p>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Input
               placeholder="Search..."
               value={page.search}
@@ -162,34 +171,25 @@ export default function StarsPage() {
                 <SelectItem value="name">Name</SelectItem>
               </SelectContent>
             </Select>
-            <Combobox<string>
-              items={['', ...page.languages]}
-              itemToStringLabel={(l) => l === '' ? 'All languages' : l}
-              itemToStringValue={(l) => l}
-            >
-              <ComboboxInput
-                value={page.language === '' ? 'All languages' : page.language}
-                placeholder="Language"
-                className="h-8 w-36"
-              />
-              <ComboboxContent>
-                <ComboboxEmpty>No languages found</ComboboxEmpty>
-                <ComboboxList>
-                  {(lang) => (
-                    <ComboboxItem
-                      key={lang}
-                      value={lang}
-                      onSelect={() => page.setLanguage(lang)}
-                    >
-                      {lang === '' ? 'All languages' : lang}
-                    </ComboboxItem>
-                  )}
-                </ComboboxList>
-              </ComboboxContent>
-            </Combobox>
+            <Select value={page.language} onValueChange={page.setLanguage}>
+              <SelectTrigger className="h-8 w-36">
+                <SelectValue placeholder="All languages" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">All languages</SelectItem>
+                {page.languages.map((l) => (
+                  <SelectItem key={l} value={l}>{l}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => void page.onSync()}>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => void page.onSync()}
+                >
                   <RefreshCw className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
@@ -207,7 +207,7 @@ export default function StarsPage() {
           <EmptyState message="No stars found" />
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 items-start">
+            <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
               {page.stars.map((star) => (
                 <DraggableStarCard
                   key={star.id}
@@ -251,16 +251,18 @@ export default function StarsPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Folder sidebar content - rendered inside the app-level right Sidebar
+// Folder sidebar
 // ---------------------------------------------------------------------------
 
 interface FolderSidebarContentProps {
   folders: InboxGhFolder[]
   selected: FolderSelection
   onSelect: (f: FolderSelection) => void
-  onCreateFolder: (body: { name: string }) => Promise<InboxGhFolder | null>
+  onCreateFolder: (body: { name: string; is_local?: boolean }) => Promise<InboxGhFolder | null>
   onRenameFolder: (id: number, body: { name: string }) => Promise<void>
   onDeleteFolder: (id: number) => Promise<void>
+  onPinFolder: (id: number, pinned: boolean) => Promise<void>
+  onReorderPinned: (orderedIds: number[]) => Promise<void>
   onDropOnFolder: (f: FolderSelection) => Promise<void>
 }
 
@@ -271,16 +273,50 @@ function FolderSidebarContent({
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
+  onPinFolder,
+  onReorderPinned,
   onDropOnFolder,
 }: FolderSidebarContentProps) {
   const [creating, setCreating] = useState(false)
+  const [createIsLocal, setCreateIsLocal] = useState(true)
   const [newName, setNewName] = useState('')
   const [renamingId, setRenamingId] = useState<number | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const createRef = useRef<HTMLInputElement>(null)
   const renameRef = useRef<HTMLInputElement>(null)
 
-  function startCreate() {
+  const ghListsCollapsedKey = 'stars-sidebar-gh-lists-collapsed'
+  const [ghListsCollapsed, setGhListsCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(ghListsCollapsedKey) !== 'false' }
+    catch { return true }
+  })
+
+  function toggleGhLists(open: boolean) {
+    setGhListsCollapsed(!open)
+    try { localStorage.setItem(ghListsCollapsedKey, String(!open)) } catch { /* ignore */ }
+  }
+
+  const pinned = [...folders.filter((f) => f.is_pinned)].sort((a, b) => a.sort_order - b.sort_order)
+  const local = folders.filter((f) => !f.is_pinned && f.gh_list_id === null).sort((a, b) => a.name.localeCompare(b.name))
+  const ghLists = folders.filter((f) => f.gh_list_id !== null).sort((a, b) => a.name.localeCompare(b.name))
+
+  // Sortable DnD for pinned folders (separate context from star card DnD)
+  const pinnedSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  )
+
+  function handlePinnedDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIdx = pinned.findIndex((f) => f.id === active.id)
+    const newIdx = pinned.findIndex((f) => f.id === over.id)
+    if (oldIdx < 0 || newIdx < 0) return
+    const reordered = arrayMove(pinned, oldIdx, newIdx)
+    void onReorderPinned(reordered.map((f) => f.id))
+  }
+
+  function startCreate(isLocal: boolean) {
+    setCreateIsLocal(isLocal)
     setCreating(true)
     setNewName('')
     setTimeout(() => createRef.current?.focus(), 0)
@@ -291,7 +327,7 @@ function FolderSidebarContent({
     setCreating(false)
     setNewName('')
     if (!name) return
-    const f = await onCreateFolder({ name })
+    const f = await onCreateFolder({ name, is_local: createIsLocal })
     if (f) onSelect(f.id)
   }
 
@@ -308,9 +344,99 @@ function FolderSidebarContent({
     if (name) await onRenameFolder(renamingId, { name })
   }
 
+  function renderInlineEdit(ref: React.RefObject<HTMLInputElement | null>, value: string, onChange: (v: string) => void, onConfirm: () => void, onCancel: () => void) {
+    return (
+      <div className="flex items-center gap-1 px-2">
+        <input
+          ref={ref}
+          className="h-7 flex-1 rounded border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+          placeholder="Folder name"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onConfirm()
+            if (e.key === 'Escape') onCancel()
+          }}
+          onBlur={onConfirm}
+        />
+        <button type="button" className="p-0.5 text-muted-foreground hover:text-foreground" onClick={onCancel}>
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    )
+  }
+
+  function renderFolderItem(folder: InboxGhFolder, actions: React.ReactNode, extraProps?: { sortable?: boolean }) {
+    const isRenaming = renamingId === folder.id
+    if (isRenaming) {
+      return (
+        <SidebarMenuItem key={folder.id}>
+          {renderInlineEdit(renameRef, renameValue, setRenameValue, () => void confirmRename(), () => setRenamingId(null))}
+        </SidebarMenuItem>
+      )
+    }
+    return (
+      <SidebarMenuItem key={folder.id} className="group/folder-item">
+        <DroppableMenuItem
+          id={folder.id}
+          isActive={selected === folder.id}
+          onSelect={() => onSelect(folder.id)}
+          onDrop={() => onDropOnFolder(folder.id)}
+          icon={folder.gh_list_id
+            ? <GitFork className="h-4 w-4 text-muted-foreground/60" />
+            : <FolderOpen className="h-4 w-4" />}
+          label={folder.name}
+          badge={folder.star_count ?? undefined}
+          sortable={extraProps?.sortable}
+          folderId={folder.id}
+        />
+        {actions}
+      </SidebarMenuItem>
+    )
+  }
+
+  function folderActionMenu(folder: InboxGhFolder, opts: { canPin?: boolean; canUnpin?: boolean; canDelete?: boolean }) {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <SidebarMenuAction showOnHover className="peer-data-[active=true]/menu-button:opacity-100">
+            <MoreHorizontal className="h-3.5 w-3.5" />
+            <span className="sr-only">Folder actions</span>
+          </SidebarMenuAction>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="right" align="start" className="w-40">
+          <DropdownMenuItem onClick={() => startRename(folder)}>
+            <Pencil className="mr-2 h-3.5 w-3.5" />Rename
+          </DropdownMenuItem>
+          {opts.canPin && (
+            <DropdownMenuItem onClick={() => void onPinFolder(folder.id, true)}>
+              <Pin className="mr-2 h-3.5 w-3.5" />Pin
+            </DropdownMenuItem>
+          )}
+          {opts.canUnpin && (
+            <DropdownMenuItem onClick={() => void onPinFolder(folder.id, false)}>
+              <PinOff className="mr-2 h-3.5 w-3.5" />Unpin
+            </DropdownMenuItem>
+          )}
+          {opts.canDelete && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onClick={() => void onDeleteFolder(folder.id)}
+              >
+                <Trash2 className="mr-2 h-3.5 w-3.5" />Delete
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    )
+  }
+
   return (
     <>
-      {/* Static entries */}
+      {/* All / Unorganised */}
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
@@ -334,106 +460,112 @@ function FolderSidebarContent({
         </SidebarGroupContent>
       </SidebarGroup>
 
-      {/* Folders group */}
+      {/* Pinned */}
+      {pinned.length > 0 && (
+        <SidebarGroup>
+          <SidebarGroupLabel>Pinned</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <DndContext sensors={pinnedSensors} onDragEnd={handlePinnedDragEnd}>
+                <SortableContext items={pinned.map((f) => f.id)} strategy={verticalListSortingStrategy}>
+                  {pinned.map((folder) =>
+                    renderFolderItem(
+                      folder,
+                      folderActionMenu(folder, { canUnpin: true, canDelete: true }),
+                      { sortable: true },
+                    ),
+                  )}
+                </SortableContext>
+              </DndContext>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      )}
+
+      {/* My Folders */}
       <SidebarGroup>
-        <SidebarGroupLabel>Folders</SidebarGroupLabel>
-        <SidebarGroupAction title="New folder" onClick={startCreate}>
-          <FolderPlus className="h-4 w-4" />
-          <span className="sr-only">New folder</span>
-        </SidebarGroupAction>
+        <SidebarGroupLabel>My Folders</SidebarGroupLabel>
+        {!creating ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <SidebarGroupAction title="New folder">
+                <FolderPlus className="h-4 w-4" />
+                <span className="sr-only">New folder</span>
+              </SidebarGroupAction>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="right" align="start" className="w-44">
+              <DropdownMenuItem onClick={() => startCreate(true)}>
+                <FolderOpen className="mr-2 h-3.5 w-3.5" />Local folder
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => startCreate(false)}>
+                <GitFork className="mr-2 h-3.5 w-3.5" />GitHub List
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         <SidebarGroupContent>
           <SidebarMenu>
             {creating && (
               <SidebarMenuItem>
-                <div className="flex items-center gap-1 px-2">
-                  <input
-                    ref={createRef}
-                    className="h-7 flex-1 rounded border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
-                    placeholder="Folder name"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void confirmCreate()
-                      if (e.key === 'Escape') setCreating(false)
-                    }}
-                    onBlur={() => void confirmCreate()}
-                  />
-                  <button type="button" className="p-0.5 text-muted-foreground hover:text-foreground" onClick={() => setCreating(false)}>
-                    <X className="h-3.5 w-3.5" />
-                  </button>
+                <div className="px-2 pb-1">
+                  <p className="mb-1 text-[10px] text-muted-foreground">
+                    {createIsLocal ? 'Local folder' : 'GitHub List (synced)'}
+                  </p>
+                  {renderInlineEdit(createRef, newName, setNewName, () => void confirmCreate(), () => setCreating(false))}
                 </div>
               </SidebarMenuItem>
             )}
-            {folders.map((folder) => (
-              <SidebarMenuItem key={folder.id} className="group/folder-item">
-                {renamingId === folder.id ? (
-                  <div className="flex items-center gap-1 px-2">
-                    <input
-                      ref={renameRef}
-                      className="h-7 flex-1 rounded border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void confirmRename()
-                        if (e.key === 'Escape') setRenamingId(null)
-                      }}
-                      onBlur={() => void confirmRename()}
-                    />
-                    <button type="button" className="p-0.5 text-muted-foreground hover:text-foreground" onClick={() => void confirmRename()}>
-                      <Check className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ) : (
-                  <DroppableMenuItem
-                    id={folder.id}
-                    isActive={selected === folder.id}
-                    onSelect={() => onSelect(folder.id)}
-                    onDrop={() => onDropOnFolder(folder.id)}
-                    icon={
-                      folder.gh_list_id
-                        ? <GitFork className="h-4 w-4 text-muted-foreground/60" />
-                        : <FolderOpen className="h-4 w-4" />
-                    }
-                    label={folder.name}
-                    badge={folder.star_count ?? undefined}
-                  />
-                )}
-                {renamingId !== folder.id && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <SidebarMenuAction
-                        showOnHover
-                        className="peer-data-[active=true]/menu-button:opacity-100"
-                      >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
-                        <span className="sr-only">Folder actions</span>
-                      </SidebarMenuAction>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent side="right" align="start" className="w-36">
-                      <DropdownMenuItem onClick={() => startRename(folder)}>
-                        <Pencil className="mr-2 h-3.5 w-3.5" />Rename
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-destructive focus:text-destructive"
-                        onClick={() => void onDeleteFolder(folder.id)}
-                      >
-                        <Trash2 className="mr-2 h-3.5 w-3.5" />Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </SidebarMenuItem>
-            ))}
+            {local.map((folder) =>
+              renderFolderItem(
+                folder,
+                folderActionMenu(folder, { canPin: true, canDelete: true }),
+              ),
+            )}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
+
+      {/* GitHub Lists (collapsible) */}
+      {ghLists.length > 0 && (
+        <SidebarGroup>
+          <Collapsible open={!ghListsCollapsed} onOpenChange={toggleGhLists}>
+            <CollapsibleTrigger asChild>
+              <SidebarGroupLabel className="cursor-pointer select-none">
+                <span className="flex flex-1 items-center gap-1">
+                  <ChevronRight
+                    className={[
+                      'h-3.5 w-3.5 transition-transform duration-200',
+                      ghListsCollapsed ? '' : 'rotate-90',
+                    ].join(' ')}
+                  />
+                  GitHub Lists
+                  <span className="ml-auto text-[10px] tabular-nums text-muted-foreground/60">
+                    {ghLists.length}
+                  </span>
+                </span>
+              </SidebarGroupLabel>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {ghLists.map((folder) =>
+                    renderFolderItem(
+                      folder,
+                      folderActionMenu(folder, { canPin: true }),
+                    ),
+                  )}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </CollapsibleContent>
+          </Collapsible>
+        </SidebarGroup>
+      )}
     </>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Droppable menu item (dnd-kit useDroppable + SidebarMenuButton)
+// Droppable + optionally sortable menu item
 // ---------------------------------------------------------------------------
 
 function DroppableMenuItem({
@@ -444,6 +576,8 @@ function DroppableMenuItem({
   icon,
   label,
   badge,
+  sortable,
+  folderId,
 }: {
   id: FolderSelection
   isActive: boolean
@@ -452,16 +586,43 @@ function DroppableMenuItem({
   icon: React.ReactNode
   label: string
   badge?: number
+  sortable?: boolean
+  folderId?: number
 }) {
-  const { isOver, setNodeRef } = useDroppable({ id: id as string | number })
+  const { isOver, setNodeRef: setDropRef } = useDroppable({ id: id as string | number })
+  const sortable_ = useSortable({ id: folderId ?? 0, disabled: !sortable })
+
+  const setRef = (el: HTMLElement | null) => {
+    setDropRef(el)
+    if (sortable) sortable_.setNodeRef(el)
+  }
+
+  const style = sortable
+    ? { transform: CSS.Transform.toString(sortable_.transform), transition: sortable_.transition }
+    : undefined
 
   return (
-    <SidebarMenuItem>
+    <SidebarMenuItem style={style}>
+      {sortable && (
+        <SidebarMenuAction
+          className="left-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing"
+          {...sortable_.attributes}
+          {...sortable_.listeners}
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </SidebarMenuAction>
+      )}
       <SidebarMenuButton
-        ref={setNodeRef}
+        ref={setRef as React.Ref<HTMLButtonElement>}
         isActive={isActive}
         onClick={onSelect}
-        className={['pr-8', isOver ? 'ring-2 ring-primary ring-inset' : ''].join(' ')}
+        className={[
+          'pr-8',
+          sortable ? 'pl-7' : '',
+          isOver
+            ? 'bg-primary/15 ring-2 ring-primary/60 ring-inset transition-colors duration-150'
+            : 'transition-colors duration-150',
+        ].join(' ')}
         // eslint-disable-next-line @typescript-eslint/no-misused-promises
         onDrop={async (e) => { e.preventDefault(); onDrop() }}
         onDragOver={(e) => e.preventDefault()}
@@ -469,8 +630,7 @@ function DroppableMenuItem({
         {icon}
         <span className="flex-1 truncate">{label}</span>
         {badge != null && (
-          <span className="ml-auto shrink-0 tabular-nums text-[10px] text-sidebar-foreground/60
-            group-hover/menu-item:opacity-0 transition-opacity">
+          <span className="ml-auto shrink-0 tabular-nums text-[10px] text-sidebar-foreground/60 transition-opacity group-hover/menu-item:opacity-0">
             {badge}
           </span>
         )}
@@ -520,7 +680,7 @@ function DraggableStarCard({
 }
 
 // ---------------------------------------------------------------------------
-// Star card content (shared between draggable and DragOverlay)
+// Star card content
 // ---------------------------------------------------------------------------
 
 interface StarCardContentProps {
@@ -545,6 +705,17 @@ function StarCardContent({
   onUnstar,
 }: StarCardContentProps) {
   const repoUrl = `https://github.com/${star.full_name}`
+
+  const folderIds = star.folder_ids ?? []
+  const memberFolders = folderIds
+    .map((fid) => folders.find((f) => f.id === fid))
+    .filter((f): f is InboxGhFolder => f !== undefined)
+
+  // Group folders for move-to menu
+  const pinnedFolders = folders.filter((f) => f.is_pinned)
+  const localFolders = folders.filter((f) => !f.is_pinned && f.gh_list_id === null)
+  const ghListFolders = folders.filter((f) => f.gh_list_id !== null)
+  const currentFolderId = typeof selectedFolder === 'number' ? selectedFolder : -1
 
   return (
     <Card className={['select-none', ghost ? 'pointer-events-none' : ''].join(' ')}>
@@ -578,6 +749,28 @@ function StarCardContent({
         </p>
       )}
 
+      {/* Folder membership badges */}
+      {!ghost && memberFolders.length > 0 && (
+        <div className="flex flex-wrap gap-1 px-4 pb-2">
+          {memberFolders.slice(0, 3).map((f) => (
+            <Badge
+              key={f.id}
+              variant="outline"
+              className="cursor-pointer gap-1 px-1.5 py-0 text-[10px] hover:bg-accent"
+              onClick={() => onMoveTo?.(f.id)}
+            >
+              <FolderOpen className="h-2.5 w-2.5" />
+              {f.name}
+            </Badge>
+          ))}
+          {memberFolders.length > 3 && (
+            <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+              +{memberFolders.length - 3}
+            </Badge>
+          )}
+        </div>
+      )}
+
       <CardContent className="flex flex-wrap items-center gap-1.5 px-4 pb-3 pt-0">
         {star.stargazers_count != null && (
           <span className="flex items-center gap-0.5 text-xs text-muted-foreground">
@@ -609,30 +802,64 @@ function StarCardContent({
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {folders
-                .filter((f) => f.id !== (typeof selectedFolder === 'number' ? selectedFolder : -1))
-                .map((f) => (
-                  <DropdownMenuItem key={f.id} onClick={() => onMoveTo?.(f.id)}>
-                    <FolderOpen className="mr-2 h-3.5 w-3.5" />Move to {f.name}
-                  </DropdownMenuItem>
-                ))}
-              {typeof selectedFolder === 'number' && (
-                <DropdownMenuItem onClick={() => onMoveTo?.('all')}>
-                  <X className="mr-2 h-3.5 w-3.5" />Remove from folder
-                </DropdownMenuItem>
+            <DropdownMenuContent align="end" className="w-52">
+              {pinnedFolders.length > 0 && (
+                <>
+                  <DropdownMenuLabel className="text-[10px] font-normal text-muted-foreground">Pinned</DropdownMenuLabel>
+                  {pinnedFolders
+                    .filter((f) => f.id !== currentFolderId)
+                    .map((f) => (
+                      <DropdownMenuItem key={f.id} onClick={() => onMoveTo?.(f.id)}>
+                        <FolderOpen className="mr-2 h-3.5 w-3.5" />{f.name}
+                      </DropdownMenuItem>
+                    ))}
+                </>
               )}
-              {(folders.length > 0 || typeof selectedFolder === 'number') && star.can_unstar && (
-                <DropdownMenuSeparator />
+              {localFolders.length > 0 && (
+                <>
+                  {pinnedFolders.length > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className="text-[10px] font-normal text-muted-foreground">My Folders</DropdownMenuLabel>
+                  {localFolders
+                    .filter((f) => f.id !== currentFolderId)
+                    .map((f) => (
+                      <DropdownMenuItem key={f.id} onClick={() => onMoveTo?.(f.id)}>
+                        <FolderOpen className="mr-2 h-3.5 w-3.5" />{f.name}
+                      </DropdownMenuItem>
+                    ))}
+                </>
+              )}
+              {ghListFolders.length > 0 && (
+                <>
+                  {(pinnedFolders.length > 0 || localFolders.length > 0) && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className="text-[10px] font-normal text-muted-foreground">GitHub Lists</DropdownMenuLabel>
+                  {ghListFolders
+                    .filter((f) => f.id !== currentFolderId)
+                    .map((f) => (
+                      <DropdownMenuItem key={f.id} onClick={() => onMoveTo?.(f.id)}>
+                        <GitFork className="mr-2 h-3.5 w-3.5" />{f.name}
+                      </DropdownMenuItem>
+                    ))}
+                </>
+              )}
+              {typeof selectedFolder === 'number' && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => onMoveTo?.('all')}>
+                    <X className="mr-2 h-3.5 w-3.5" />Remove from folder
+                  </DropdownMenuItem>
+                </>
               )}
               {star.can_unstar && (
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
-                  onClick={onUnstar}
-                >
-                  <Star className="mr-2 h-3.5 w-3.5" />Unstar on GitHub
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
+                    onClick={onUnstar}
+                  >
+                    <Star className="mr-2 h-3.5 w-3.5" />Unstar on GitHub
+                  </DropdownMenuItem>
+                </>
               )}
             </DropdownMenuContent>
           </DropdownMenu>

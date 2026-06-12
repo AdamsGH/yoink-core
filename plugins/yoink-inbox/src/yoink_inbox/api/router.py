@@ -37,6 +37,7 @@ from yoink_inbox.api.schemas import (
     InboxCategoryRead,
     InboxCategoryUpdate,
     InboxGhFolderCreate,
+    InboxGhFolderPatch,
     InboxGhFolderRead,
     InboxGhStarListResponse,
     InboxGhStarRead,
@@ -629,6 +630,21 @@ async def create_folder(
     session.add(folder)
     await session.commit()
     await session.refresh(folder)
+
+    # Optionally create a matching GitHub List
+    if not payload.is_local:
+        try:
+            from yoink_inbox.services.gh_lists import GhListsClient
+            from yoink_inbox.services.gh_write import _get_public_repo_token
+            token = await _get_public_repo_token(request.app.state.session_factory, user.id)
+            client = GhListsClient(token)
+            gh_list = await client.create_list(payload.name)
+            folder.gh_list_id = gh_list.id
+            folder.gh_list_slug = gh_list.slug
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("gh_list create failed for folder %s: %s", folder.id, exc)
+
     return InboxGhFolderRead.model_validate({**folder.__dict__, "star_count": 0})
 
 
@@ -670,6 +686,35 @@ async def update_folder(
     folder.description = payload.description
     folder.icon = payload.icon
     folder.parent_id = payload.parent_id
+    await session.commit()
+    await session.refresh(folder)
+    cnt = await session.scalar(
+        select(func.count(InboxGhFolderMember.gh_star_id))
+        .where(InboxGhFolderMember.folder_id == folder_id)
+    ) or 0
+    return InboxGhFolderRead.model_validate({**folder.__dict__, "star_count": cnt})
+
+
+@router.patch("/folders/{folder_id}", response_model=InboxGhFolderRead)
+async def patch_folder(
+    request: Request,
+    folder_id: int,
+    payload: InboxGhFolderPatch,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxGhFolderRead:
+    await _require_feature(request, user, "ingest")
+    folder = await session.get(InboxGhFolder, folder_id)
+    if folder is None or folder.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    if payload.name is not None:
+        folder.name = payload.name
+    if payload.is_pinned is not None:
+        folder.is_pinned = payload.is_pinned
+    if payload.sort_order is not None:
+        folder.sort_order = payload.sort_order
+    if payload.description is not None:
+        folder.description = payload.description
     await session.commit()
     await session.refresh(folder)
     cnt = await session.scalar(
@@ -1072,9 +1117,29 @@ async def list_gh_stars(
             rows = rows[:limit]
             next_cursor = str(offset + limit)
 
+    # Attach folder membership to each star (one extra query)
+    star_ids = [r.id for r in rows]
+    membership_rows = (
+        await session.execute(
+            select(InboxGhFolderMember.gh_star_id, InboxGhFolderMember.folder_id)
+            .where(
+                InboxGhFolderMember.gh_star_id.in_(star_ids),
+                InboxGhFolderMember.folder_id.in_(
+                    select(InboxGhFolder.id).where(InboxGhFolder.user_id == user.id)
+                ),
+            )
+        )
+    ).all()
+    folder_map: dict[int, list[int]] = {}
+    for sid, fid in membership_rows:
+        folder_map.setdefault(sid, []).append(fid)
+
     sync_state = await session.get(InboxGhSyncState, user.id)
     return InboxGhStarListResponse(
-        items=[InboxGhStarRead.model_validate(r) for r in rows],
+        items=[
+            InboxGhStarRead.model_validate({**r.__dict__, "folder_ids": folder_map.get(r.id, [])})
+            for r in rows
+        ],
         next_cursor=next_cursor,
         sync_status=sync_state.last_status if sync_state else None,
         last_synced_at=sync_state.last_synced_at if sync_state else None,

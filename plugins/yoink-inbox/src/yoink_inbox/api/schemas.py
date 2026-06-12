@@ -84,6 +84,8 @@ class InboxGhFolderRead(_Base):
     star_count: int = 0
     gh_list_id: str | None = None
     gh_list_slug: str | None = None
+    is_pinned: bool = False
+    sort_order: int = 0
     created_at: datetime
 
 
@@ -93,6 +95,8 @@ class InboxGhFolderCreate(BaseModel):
     description: str | None = None
     icon: str | None = None
     parent_id: int | None = None
+    # When True (default) folder is local only; False = also create a GitHub List
+    is_local: bool = True
 
     @field_validator('slug', mode='before')
     @classmethod
@@ -101,6 +105,13 @@ class InboxGhFolderCreate(BaseModel):
             return v[:64]
         name = info.data.get('name', '')
         return _derive_slug(name) if name else ''
+
+
+class InboxGhFolderPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    is_pinned: bool | None = None
+    sort_order: int | None = None
+    description: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +226,7 @@ class InboxGhStarRead(_Base):
     ai_summary: str | None = None
     can_unstar: bool
     last_synced_at: datetime | None = None
+    folder_ids: list[int] = Field(default_factory=list)
 
 
 class InboxGhStarListResponse(BaseModel):
