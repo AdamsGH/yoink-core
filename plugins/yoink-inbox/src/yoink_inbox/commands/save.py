@@ -70,20 +70,54 @@ async def _resolve_lang(user_id: int, fallback: str, session_factory) -> str:
     return fallback
 
 
-def _build_reply(
+_SAVE_COMMENT_PROMPT = """\
+You saved a link. Give ONE punchy sentence (max two) as a gruff craftsman:
+- Lead with the actual substance, not "this is a link about X"
+- Use a direct verdict or observation on the topic
+- Craftsman/forge metaphors when they fit naturally, never forced
+- No hollow openers ("Interesting!", "Worth reading", "A solid...")
+- No mention of saving, inbox, or the act of bookmarking
+- End with the category hashtags on a new line
+
+Title: {title}
+Summary: {summary}
+Categories: {categories}
+Language: reply in {lang}
+"""
+
+
+async def _build_reply(
     title: str | None,
     url: str,
     summary: str | None,
     categories: list[str],
+    lang: str,
+    session_factory,
+    user_id: int,
 ) -> str:
-    """Format the final reply text: summary + hashtag list."""
+    """One punchy sentence from the LLM, then category hashtags."""
     cat_tags = " ".join(f"#{c.replace(' ', '_')}" for c in categories) if categories else ""
-    lines: list[str] = []
-    if summary:
-        lines.append(summary)
-    if cat_tags:
-        lines.append(cat_tags)
-    return "\n\n".join(lines) if lines else (title or url)
+    if not summary:
+        # Nothing to comment on; just return tags or title
+        return cat_tags or title or url
+    try:
+        from yoink_insight.services.llm import complete  # noqa: PLC0415
+        prompt = _SAVE_COMMENT_PROMPT.format(
+            title=title or url,
+            summary=summary,
+            categories=", ".join(categories) if categories else "none",
+            lang=lang,
+        )
+        comment = await complete(session_factory, user_id, prompt)
+        comment = comment.strip()
+        if cat_tags and cat_tags not in comment:
+            comment = f"{comment}\n\n{cat_tags}"
+        return comment
+    except Exception:  # noqa: BLE001
+        lines = [summary]
+        if cat_tags:
+            lines.append(cat_tags)
+        return "\n\n".join(lines)
 
 
 @require_access(_SAVE_POLICY)
@@ -177,7 +211,12 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         stop_typing.set()
         await typing_task
 
-    reply_text = _build_reply(title, url, summary, categories)
+    reply_text = await _build_reply(
+        title, url, summary, categories,
+        lang=lang,
+        session_factory=session_factory,
+        user_id=user.id,
+    )
     await msg.reply_text(reply_text)
 
 
