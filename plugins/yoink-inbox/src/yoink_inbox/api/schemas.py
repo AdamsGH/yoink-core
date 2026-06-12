@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+import re
+
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
 
 class _Base(BaseModel):
@@ -32,6 +34,111 @@ class InboxCategoryRead(_Base):
     owner_user_id: int
     shared_with_team_id: int | None = None
     item_count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Categories (write)
+# ---------------------------------------------------------------------------
+
+
+def _derive_slug(name: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:64]
+
+
+class InboxCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    slug: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    description: str | None = None
+    parent_id: int | None = None
+    shared_with_team_id: int | None = None
+
+    @field_validator('slug', mode='before')
+    @classmethod
+    def _auto_slug(cls, v: str | None, info) -> str:
+        if v:
+            return v[:64]
+        # derive from name if present in validated data
+        name = info.data.get('name', '')
+        return _derive_slug(name) if name else ''
+
+
+class InboxCategoryUpdate(InboxCategoryCreate):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# GH Folders
+# ---------------------------------------------------------------------------
+
+
+class InboxGhFolderRead(_Base):
+    id: int
+    user_id: int
+    name: str
+    slug: str
+    description: str | None = None
+    icon: str | None = None
+    parent_id: int | None = None
+    star_count: int = 0
+    created_at: datetime
+
+
+class InboxGhFolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    slug: str | None = None
+    description: str | None = None
+    icon: str | None = None
+    parent_id: int | None = None
+
+    @field_validator('slug', mode='before')
+    @classmethod
+    def _auto_slug(cls, v: str | None, info) -> str:
+        if v:
+            return v[:64]
+        name = info.data.get('name', '')
+        return _derive_slug(name) if name else ''
+
+
+# ---------------------------------------------------------------------------
+# Teams
+# ---------------------------------------------------------------------------
+
+
+class InboxTeamMemberRead(_Base):
+    user_id: int
+    role: str
+    joined_at: datetime
+
+
+class InboxTeamRead(_Base):
+    id: int
+    name: str
+    slug: str
+    description: str | None = None
+    owner_user_id: int
+    created_at: datetime
+    members: list[InboxTeamMemberRead] = Field(default_factory=list)
+
+
+class InboxTeamCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    slug: str | None = None
+    description: str | None = None
+
+    @field_validator('slug', mode='before')
+    @classmethod
+    def _auto_slug(cls, v: str | None, info) -> str:
+        if v:
+            return v[:64]
+        name = info.data.get('name', '')
+        return _derive_slug(name) if name else ''
+
+
+class InboxTeamMemberUpsert(BaseModel):
+    user_id: int
+    role: str = 'member'   # owner | admin | member
 
 
 # ---------------------------------------------------------------------------

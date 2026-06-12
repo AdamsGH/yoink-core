@@ -2,9 +2,16 @@ import { apiClient } from '@core/lib/api-client'
 
 import type {
   InboxCategory,
+  InboxCategoryCreate,
+  InboxGhFolder,
+  InboxGhFolderCreate,
+  InboxGhStar,
   InboxGhStarListResponse,
   InboxItem,
   InboxItemListResponse,
+  InboxTeam,
+  InboxTeamCreate,
+  InboxTeamMember,
 } from '@inbox/types'
 
 export interface InboxItemFilters {
@@ -54,6 +61,7 @@ export interface GhStarFilters {
   limit?: number
   language?: string
   search?: string
+  folder_id?: number
 }
 
 export async function listGhStars(
@@ -69,4 +77,98 @@ export async function listGhStars(
 export async function triggerGhSync(): Promise<{ status: string }> {
   const { data } = await apiClient.post<{ status: string }>('/inbox/gh_stars/sync')
   return data
+}
+
+// ---------------------------------------------------------------------------
+// Categories CRUD
+// ---------------------------------------------------------------------------
+
+export async function createCategory(body: InboxCategoryCreate): Promise<InboxCategory> {
+  const { data } = await apiClient.post<InboxCategory>('/inbox/categories', body)
+  return data
+}
+
+export async function updateCategory(id: number, body: InboxCategoryCreate): Promise<InboxCategory> {
+  const { data } = await apiClient.put<InboxCategory>(`/inbox/categories/${id}`, body)
+  return data
+}
+
+export async function deleteCategory(id: number): Promise<void> {
+  await apiClient.delete(`/inbox/categories/${id}`)
+}
+
+// ---------------------------------------------------------------------------
+// GH Folders
+// ---------------------------------------------------------------------------
+
+export async function listFolders(): Promise<InboxGhFolder[]> {
+  const { data } = await apiClient.get<InboxGhFolder[]>('/inbox/folders')
+  return data
+}
+
+export async function createFolder(body: InboxGhFolderCreate): Promise<InboxGhFolder> {
+  const { data } = await apiClient.post<InboxGhFolder>('/inbox/folders', body)
+  return data
+}
+
+export async function updateFolder(id: number, body: InboxGhFolderCreate): Promise<InboxGhFolder> {
+  const { data } = await apiClient.put<InboxGhFolder>(`/inbox/folders/${id}`, body)
+  return data
+}
+
+export async function deleteFolder(id: number): Promise<void> {
+  await apiClient.delete(`/inbox/folders/${id}`)
+}
+
+export async function addStarToFolder(folderId: number, starId: number): Promise<void> {
+  await apiClient.post(`/inbox/folders/${folderId}/stars`, null, { params: { star_id: starId } })
+}
+
+export async function removeStarFromFolder(folderId: number, starId: number): Promise<void> {
+  await apiClient.delete(`/inbox/folders/${folderId}/stars/${starId}`)
+}
+
+export async function listFolderStars(folderId: number): Promise<InboxGhStar[]> {
+  // stars in a folder come via the regular gh_stars endpoint filtered by folder_id
+  const { data } = await apiClient.get<InboxGhStarListResponse>('/inbox/gh_stars', {
+    params: { folder_id: folderId, limit: 200 },
+  })
+  return data.items
+}
+
+// ---------------------------------------------------------------------------
+// Teams
+// ---------------------------------------------------------------------------
+
+export async function listTeams(): Promise<InboxTeam[]> {
+  const { data } = await apiClient.get<InboxTeam[]>('/inbox/teams')
+  return data
+}
+
+export async function createTeam(body: InboxTeamCreate): Promise<InboxTeam> {
+  const { data } = await apiClient.post<InboxTeam>('/inbox/teams', body)
+  return data
+}
+
+export async function updateTeam(id: number, body: InboxTeamCreate): Promise<InboxTeam> {
+  const { data } = await apiClient.put<InboxTeam>(`/inbox/teams/${id}`, body)
+  return data
+}
+
+export async function deleteTeam(id: number): Promise<void> {
+  await apiClient.delete(`/inbox/teams/${id}`)
+}
+
+export async function addTeamMember(teamId: number, userId: number, role: string): Promise<InboxTeamMember> {
+  const { data } = await apiClient.post<InboxTeamMember>(`/inbox/teams/${teamId}/members`, { user_id: userId, role })
+  return data
+}
+
+export async function patchTeamMember(teamId: number, userId: number, role: string): Promise<InboxTeamMember> {
+  const { data } = await apiClient.patch<InboxTeamMember>(`/inbox/teams/${teamId}/members/${userId}`, { user_id: userId, role })
+  return data
+}
+
+export async function removeTeamMember(teamId: number, userId: number): Promise<void> {
+  await apiClient.delete(`/inbox/teams/${teamId}/members/${userId}`)
 }

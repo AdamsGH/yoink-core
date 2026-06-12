@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -32,7 +33,11 @@ from yoink.core.api.deps import get_current_user, get_db
 from yoink.core.auth.effective_features import EffectiveFeatureResolver
 from yoink.core.db.models import User, UserRole
 from yoink_inbox.api.schemas import (
+    InboxCategoryCreate,
     InboxCategoryRead,
+    InboxCategoryUpdate,
+    InboxGhFolderCreate,
+    InboxGhFolderRead,
     InboxGhStarListResponse,
     InboxGhStarRead,
     InboxItemCategoryRef,
@@ -43,14 +48,21 @@ from yoink_inbox.api.schemas import (
     InboxRuleRead,
     InboxRuleTestResult,
     InboxRuleUpdate,
+    InboxTeamCreate,
+    InboxTeamMemberRead,
+    InboxTeamMemberUpsert,
+    InboxTeamRead,
 )
 from yoink_inbox.storage.models import (
     InboxCategory,
+    InboxGhFolder,
+    InboxGhFolderMember,
     InboxGhStar,
     InboxGhSyncState,
     InboxItem,
     InboxItemCategory,
     InboxRule,
+    InboxTeam,
     InboxTeamMember,
 )
 
@@ -58,6 +70,62 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify(name: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')[:64]
+
+
+async def _unique_slug_category(
+    session: AsyncSession, user_id: int, base: str, exclude_id: int | None = None
+) -> str:
+    slug = base or 'category'
+    for suffix in ['', *[f'-{i}' for i in range(2, 20)]]:
+        candidate = (slug + suffix)[:64]
+        stmt = select(InboxCategory.id).where(
+            InboxCategory.owner_user_id == user_id,
+            InboxCategory.slug == candidate,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(InboxCategory.id != exclude_id)
+        if not await session.scalar(stmt):
+            return candidate
+    return slug + '-x'
+
+
+async def _unique_slug_folder(
+    session: AsyncSession, user_id: int, base: str, exclude_id: int | None = None
+) -> str:
+    slug = base or 'folder'
+    for suffix in ['', *[f'-{i}' for i in range(2, 20)]]:
+        candidate = (slug + suffix)[:64]
+        stmt = select(InboxGhFolder.id).where(
+            InboxGhFolder.user_id == user_id,
+            InboxGhFolder.slug == candidate,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(InboxGhFolder.id != exclude_id)
+        if not await session.scalar(stmt):
+            return candidate
+    return slug + '-x'
+
+
+async def _unique_slug_team(
+    session: AsyncSession, user_id: int, base: str, exclude_id: int | None = None
+) -> str:
+    slug = base or 'team'
+    for suffix in ['', *[f'-{i}' for i in range(2, 20)]]:
+        candidate = (slug + suffix)[:64]
+        stmt = select(InboxTeam.id).where(
+            InboxTeam.owner_user_id == user_id,
+            InboxTeam.slug == candidate,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(InboxTeam.id != exclude_id)
+        if not await session.scalar(stmt):
+            return candidate
+    return slug + '-x'
+
 
 # NOTE: no prefix here. yoink-core mounts this router at /api/v1/inbox via
 # `app.include_router(router, prefix=f"/api/v1/{plugin.name}")`. A prefix here
@@ -419,6 +487,465 @@ async def list_categories(
 
 
 # ---------------------------------------------------------------------------
+# Categories CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.post("/categories", response_model=InboxCategoryRead, status_code=status.HTTP_201_CREATED)
+async def create_category(
+    request: Request,
+    payload: InboxCategoryCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxCategoryRead:
+    await _require_feature(request, user, "ingest")
+    slug = payload.slug or _slugify(payload.name)
+    slug = await _unique_slug_category(session, user.id, slug)
+    cat = InboxCategory(
+        owner_user_id=user.id,
+        name=payload.name,
+        slug=slug,
+        icon=payload.icon,
+        color=payload.color,
+        description=payload.description,
+        parent_id=payload.parent_id,
+        shared_with_team_id=payload.shared_with_team_id,
+        kind="user",
+    )
+    session.add(cat)
+    await session.commit()
+    await session.refresh(cat)
+    return InboxCategoryRead.model_validate({**cat.__dict__, "item_count": 0})
+
+
+@router.get("/categories/{cat_id}", response_model=InboxCategoryRead)
+async def get_category(
+    request: Request,
+    cat_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxCategoryRead:
+    await _require_feature(request, user, "ingest")
+    cat = await session.get(InboxCategory, cat_id)
+    if cat is None or cat.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Category not found")
+    cnt = await session.scalar(
+        select(func.count(InboxItemCategory.item_id))
+        .where(InboxItemCategory.category_id == cat_id)
+    ) or 0
+    return InboxCategoryRead.model_validate({**cat.__dict__, "item_count": cnt})
+
+
+@router.put("/categories/{cat_id}", response_model=InboxCategoryRead)
+async def update_category(
+    request: Request,
+    cat_id: int,
+    payload: InboxCategoryUpdate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxCategoryRead:
+    await _require_feature(request, user, "ingest")
+    cat = await session.get(InboxCategory, cat_id)
+    if cat is None or cat.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Category not found")
+    slug = payload.slug or _slugify(payload.name)
+    if slug != cat.slug:
+        slug = await _unique_slug_category(session, user.id, slug, exclude_id=cat_id)
+    cat.name = payload.name
+    cat.slug = slug
+    cat.icon = payload.icon
+    cat.color = payload.color
+    cat.description = payload.description
+    cat.parent_id = payload.parent_id
+    cat.shared_with_team_id = payload.shared_with_team_id
+    await session.commit()
+    await session.refresh(cat)
+    cnt = await session.scalar(
+        select(func.count(InboxItemCategory.item_id))
+        .where(InboxItemCategory.category_id == cat_id)
+    ) or 0
+    return InboxCategoryRead.model_validate({**cat.__dict__, "item_count": cnt})
+
+
+@router.delete("/categories/{cat_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_category(
+    request: Request,
+    cat_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    await _require_feature(request, user, "ingest")
+    cat = await session.get(InboxCategory, cat_id)
+    if cat is None or cat.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Category not found")
+    await session.delete(cat)
+    await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# GH Folders CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("/folders", response_model=list[InboxGhFolderRead])
+async def list_folders(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[InboxGhFolderRead]:
+    await _require_feature(request, user, "ingest")
+    count_sq = (
+        select(InboxGhFolderMember.folder_id, func.count().label("cnt"))
+        .group_by(InboxGhFolderMember.folder_id)
+        .subquery()
+    )
+    rows = (await session.execute(
+        select(InboxGhFolder, func.coalesce(count_sq.c.cnt, 0))
+        .outerjoin(count_sq, count_sq.c.folder_id == InboxGhFolder.id)
+        .where(InboxGhFolder.user_id == user.id)
+        .order_by(InboxGhFolder.name.asc())
+    )).all()
+    return [InboxGhFolderRead.model_validate({**f.__dict__, "star_count": int(c)}) for f, c in rows]
+
+
+@router.post("/folders", response_model=InboxGhFolderRead, status_code=status.HTTP_201_CREATED)
+async def create_folder(
+    request: Request,
+    payload: InboxGhFolderCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxGhFolderRead:
+    await _require_feature(request, user, "ingest")
+    slug = payload.slug or _slugify(payload.name)
+    slug = await _unique_slug_folder(session, user.id, slug)
+    folder = InboxGhFolder(
+        user_id=user.id,
+        name=payload.name,
+        slug=slug,
+        description=payload.description,
+        icon=payload.icon,
+        parent_id=payload.parent_id,
+    )
+    session.add(folder)
+    await session.commit()
+    await session.refresh(folder)
+    return InboxGhFolderRead.model_validate({**folder.__dict__, "star_count": 0})
+
+
+@router.get("/folders/{folder_id}", response_model=InboxGhFolderRead)
+async def get_folder(
+    request: Request,
+    folder_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxGhFolderRead:
+    await _require_feature(request, user, "ingest")
+    folder = await session.get(InboxGhFolder, folder_id)
+    if folder is None or folder.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    cnt = await session.scalar(
+        select(func.count(InboxGhFolderMember.gh_star_id))
+        .where(InboxGhFolderMember.folder_id == folder_id)
+    ) or 0
+    return InboxGhFolderRead.model_validate({**folder.__dict__, "star_count": cnt})
+
+
+@router.put("/folders/{folder_id}", response_model=InboxGhFolderRead)
+async def update_folder(
+    request: Request,
+    folder_id: int,
+    payload: InboxGhFolderCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxGhFolderRead:
+    await _require_feature(request, user, "ingest")
+    folder = await session.get(InboxGhFolder, folder_id)
+    if folder is None or folder.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    slug = payload.slug or _slugify(payload.name)
+    if slug != folder.slug:
+        slug = await _unique_slug_folder(session, user.id, slug, exclude_id=folder_id)
+    folder.name = payload.name
+    folder.slug = slug
+    folder.description = payload.description
+    folder.icon = payload.icon
+    folder.parent_id = payload.parent_id
+    await session.commit()
+    await session.refresh(folder)
+    cnt = await session.scalar(
+        select(func.count(InboxGhFolderMember.gh_star_id))
+        .where(InboxGhFolderMember.folder_id == folder_id)
+    ) or 0
+    return InboxGhFolderRead.model_validate({**folder.__dict__, "star_count": cnt})
+
+
+@router.delete("/folders/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_folder(
+    request: Request,
+    folder_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    await _require_feature(request, user, "ingest")
+    folder = await session.get(InboxGhFolder, folder_id)
+    if folder is None or folder.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    await session.delete(folder)
+    await session.commit()
+
+
+@router.post("/folders/{folder_id}/stars", status_code=status.HTTP_201_CREATED)
+async def add_star_to_folder(
+    request: Request,
+    folder_id: int,
+    star_id: int = Query(),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    await _require_feature(request, user, "ingest")
+    folder = await session.get(InboxGhFolder, folder_id)
+    if folder is None or folder.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    star = await session.get(InboxGhStar, star_id)
+    if star is None or star.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Star not found")
+    existing = await session.get(InboxGhFolderMember, (folder_id, star_id))
+    if existing:
+        return {"status": "already_member"}
+    session.add(InboxGhFolderMember(folder_id=folder_id, gh_star_id=star_id, added_by="user"))
+    await session.commit()
+    return {"status": "added"}
+
+
+@router.delete("/folders/{folder_id}/stars/{star_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_star_from_folder(
+    request: Request,
+    folder_id: int,
+    star_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    await _require_feature(request, user, "ingest")
+    folder = await session.get(InboxGhFolder, folder_id)
+    if folder is None or folder.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    member = await session.get(InboxGhFolderMember, (folder_id, star_id))
+    if member:
+        await session.delete(member)
+        await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Teams CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("/teams", response_model=list[InboxTeamRead])
+async def list_teams(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[InboxTeamRead]:
+    await _require_feature(request, user, "share")
+    member_team_ids = (
+        await session.scalars(
+            select(InboxTeamMember.team_id).where(InboxTeamMember.user_id == user.id)
+        )
+    ).all()
+    teams = (await session.scalars(
+        select(InboxTeam)
+        .where(
+            or_(InboxTeam.owner_user_id == user.id, InboxTeam.id.in_(member_team_ids))
+        )
+        .order_by(InboxTeam.name.asc())
+    )).all()
+    result = []
+    for team in teams:
+        members = (await session.scalars(
+            select(InboxTeamMember).where(InboxTeamMember.team_id == team.id)
+        )).all()
+        d = team.__dict__.copy()
+        d["members"] = [InboxTeamMemberRead.model_validate(m) for m in members]
+        result.append(InboxTeamRead.model_validate(d))
+    return result
+
+
+@router.post("/teams", response_model=InboxTeamRead, status_code=status.HTTP_201_CREATED)
+async def create_team(
+    request: Request,
+    payload: InboxTeamCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxTeamRead:
+    await _require_feature(request, user, "share")
+    slug = payload.slug or _slugify(payload.name)
+    slug = await _unique_slug_team(session, user.id, slug)
+    team = InboxTeam(
+        owner_user_id=user.id,
+        name=payload.name,
+        slug=slug,
+        description=payload.description,
+    )
+    session.add(team)
+    await session.flush()
+    # owner is also a member
+    session.add(InboxTeamMember(team_id=team.id, user_id=user.id, role="owner"))
+    await session.commit()
+    await session.refresh(team)
+    members = (await session.scalars(
+        select(InboxTeamMember).where(InboxTeamMember.team_id == team.id)
+    )).all()
+    d = team.__dict__.copy()
+    d["members"] = [InboxTeamMemberRead.model_validate(m) for m in members]
+    return InboxTeamRead.model_validate(d)
+
+
+@router.get("/teams/{team_id}", response_model=InboxTeamRead)
+async def get_team(
+    request: Request,
+    team_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxTeamRead:
+    await _require_feature(request, user, "share")
+    team = await session.get(InboxTeam, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+    # visible if owner or member
+    is_member = await session.scalar(
+        select(InboxTeamMember)
+        .where(InboxTeamMember.team_id == team_id, InboxTeamMember.user_id == user.id)
+    )
+    if not is_member and team.owner_user_id != user.id:
+        raise HTTPException(status_code=404, detail="Team not found")
+    members = (await session.scalars(
+        select(InboxTeamMember).where(InboxTeamMember.team_id == team_id)
+    )).all()
+    d = team.__dict__.copy()
+    d["members"] = [InboxTeamMemberRead.model_validate(m) for m in members]
+    return InboxTeamRead.model_validate(d)
+
+
+@router.put("/teams/{team_id}", response_model=InboxTeamRead)
+async def update_team(
+    request: Request,
+    team_id: int,
+    payload: InboxTeamCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxTeamRead:
+    await _require_feature(request, user, "share")
+    team = await session.get(InboxTeam, team_id)
+    if team is None or team.owner_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not the team owner")
+    slug = payload.slug or _slugify(payload.name)
+    if slug != team.slug:
+        slug = await _unique_slug_team(session, user.id, slug, exclude_id=team_id)
+    team.name = payload.name
+    team.slug = slug
+    team.description = payload.description
+    await session.commit()
+    await session.refresh(team)
+    members = (await session.scalars(
+        select(InboxTeamMember).where(InboxTeamMember.team_id == team_id)
+    )).all()
+    d = team.__dict__.copy()
+    d["members"] = [InboxTeamMemberRead.model_validate(m) for m in members]
+    return InboxTeamRead.model_validate(d)
+
+
+@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_team(
+    request: Request,
+    team_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    await _require_feature(request, user, "share")
+    team = await session.get(InboxTeam, team_id)
+    if team is None or team.owner_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not the team owner")
+    await session.delete(team)
+    await session.commit()
+
+
+@router.post("/teams/{team_id}/members", response_model=InboxTeamMemberRead,
+             status_code=status.HTTP_201_CREATED)
+async def add_team_member(
+    request: Request,
+    team_id: int,
+    payload: InboxTeamMemberUpsert,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxTeamMemberRead:
+    await _require_feature(request, user, "share")
+    team = await session.get(InboxTeam, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+    caller = await session.scalar(
+        select(InboxTeamMember)
+        .where(InboxTeamMember.team_id == team_id, InboxTeamMember.user_id == user.id)
+    )
+    if not caller or caller.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Need owner or admin role")
+    existing = await session.get(InboxTeamMember, (team_id, payload.user_id))
+    if existing:
+        raise HTTPException(status_code=409, detail="User already a member")
+    member = InboxTeamMember(team_id=team_id, user_id=payload.user_id, role=payload.role)
+    session.add(member)
+    await session.commit()
+    await session.refresh(member)
+    return InboxTeamMemberRead.model_validate(member)
+
+
+@router.patch("/teams/{team_id}/members/{uid}", response_model=InboxTeamMemberRead)
+async def patch_team_member(
+    request: Request,
+    team_id: int,
+    uid: int,
+    payload: InboxTeamMemberUpsert,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxTeamMemberRead:
+    await _require_feature(request, user, "share")
+    team = await session.get(InboxTeam, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+    if team.owner_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Only owner can change roles")
+    member = await session.get(InboxTeamMember, (team_id, uid))
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    member.role = payload.role
+    await session.commit()
+    await session.refresh(member)
+    return InboxTeamMemberRead.model_validate(member)
+
+
+@router.delete("/teams/{team_id}/members/{uid}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_team_member(
+    request: Request,
+    team_id: int,
+    uid: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    await _require_feature(request, user, "share")
+    team = await session.get(InboxTeam, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="Team not found")
+    # owner can remove anyone; members can only remove themselves
+    if user.id != uid and team.owner_user_id != user.id:
+        caller = await session.get(InboxTeamMember, (team_id, user.id))
+        if not caller or caller.role not in ("owner", "admin"):
+            raise HTTPException(status_code=403, detail="Insufficient role")
+    member = await session.get(InboxTeamMember, (team_id, uid))
+    if member:
+        await session.delete(member)
+        await session.commit()
+
+
+# ---------------------------------------------------------------------------
 # GitHub stars
 # ---------------------------------------------------------------------------
 
@@ -432,6 +959,7 @@ async def list_gh_stars(
     limit: int = Query(default=30, ge=1, le=100),
     language: str | None = Query(default=None),
     search: str | None = Query(default=None, min_length=2, max_length=128),
+    folder_id: int | None = Query(default=None),
 ) -> InboxGhStarListResponse:
     """List the user's starred repos with optional filters.
 
@@ -442,6 +970,11 @@ async def list_gh_stars(
     await _require_feature(request, user, "gh_sync")
 
     stmt = select(InboxGhStar).where(InboxGhStar.user_id == user.id)
+    if folder_id is not None:
+        stmt = stmt.join(
+            InboxGhFolderMember,
+            InboxGhFolderMember.gh_star_id == InboxGhStar.id,
+        ).where(InboxGhFolderMember.folder_id == folder_id)
     if language:
         stmt = stmt.where(InboxGhStar.language == language)
     if search:
@@ -656,6 +1189,35 @@ async def test_rule(
         conditions_result=conditions_result,
         actions_would_fire=list(rule.actions or []) if matched else [],
     )
+
+
+@router.post("/rules/{rule_id}/run", status_code=status.HTTP_202_ACCEPTED)
+async def run_rule_sweep(
+    request: Request,
+    rule_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    """Apply one rule against all non-archived items of the user (max 500)."""
+    await _require_feature(request, user, "ingest")
+    rule = await session.get(InboxRule, rule_id)
+    if rule is None or rule.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    from yoink_inbox.services.rules import run_rules
+
+    items = (await session.scalars(
+        select(InboxItem)
+        .where(InboxItem.user_id == user.id, InboxItem.archived_at.is_(None))
+        .order_by(InboxItem.created_at.desc())
+        .limit(500)
+    )).all()
+
+    fired = 0
+    for item in items:
+        fired += await run_rules(session, user_id=user.id, trigger=rule.trigger, item_id=item.id)
+    await session.commit()
+    return {"fired": fired, "scanned": len(items)}
 
 
 @router.post("/gh_stars/sync", status_code=status.HTTP_202_ACCEPTED)

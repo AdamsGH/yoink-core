@@ -81,6 +81,70 @@ export interface InboxGhStarListResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Categories (write)
+// ---------------------------------------------------------------------------
+
+export interface InboxCategoryCreate {
+  name: string
+  slug?: string
+  icon?: string
+  color?: string
+  description?: string
+  parent_id?: number
+  shared_with_team_id?: number
+}
+
+// ---------------------------------------------------------------------------
+// GH Folders
+// ---------------------------------------------------------------------------
+
+export interface InboxGhFolder {
+  id: number
+  user_id: number
+  name: string
+  slug: string
+  description: string | null
+  icon: string | null
+  parent_id: number | null
+  star_count: number
+  created_at: string
+}
+
+export interface InboxGhFolderCreate {
+  name: string
+  slug?: string
+  description?: string
+  icon?: string
+  parent_id?: number
+}
+
+// ---------------------------------------------------------------------------
+// Teams
+// ---------------------------------------------------------------------------
+
+export interface InboxTeamMember {
+  user_id: number
+  role: 'owner' | 'admin' | 'member'
+  joined_at: string
+}
+
+export interface InboxTeam {
+  id: number
+  name: string
+  slug: string
+  description: string | null
+  owner_user_id: number
+  created_at: string
+  members: InboxTeamMember[]
+}
+
+export interface InboxTeamCreate {
+  name: string
+  slug?: string
+  description?: string
+}
+
+// ---------------------------------------------------------------------------
 // Rules
 // ---------------------------------------------------------------------------
 

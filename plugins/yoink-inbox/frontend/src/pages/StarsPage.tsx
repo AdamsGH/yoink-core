@@ -1,17 +1,24 @@
-import { ExternalLink, GitFork, RefreshCw, Star } from 'lucide-react'
+import { ExternalLink, FolderOpen, GitFork, RefreshCw, Star } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 
-import { Badge, Button, Card, CardContent, Input, SkeletonList } from '@ui'
+import {
+  Badge, Button, Card, CardContent, Input,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  SkeletonList,
+} from '@ui'
 import { EmptyState } from '@app'
 
-import { listGhStars, triggerGhSync } from '@inbox/api/items'
-import type { InboxGhStar } from '@inbox/types'
+import { listFolders, listGhStars, triggerGhSync } from '@inbox/api/items'
+import type { InboxGhFolder, InboxGhStar } from '@inbox/types'
 
 const PAGE_SIZE = 30
 
 export default function StarsPage() {
+  const navigate = useNavigate()
   const [stars, setStars] = useState<InboxGhStar[]>([])
+  const [folders, setFolders] = useState<InboxGhFolder[]>([])
   const [loading, setLoading] = useState(true)
   const [syncStatus, setSyncStatus] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<string | null>(null)
@@ -19,6 +26,7 @@ export default function StarsPage() {
   const [language, setLanguage] = useState('')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [folderId, setFolderId] = useState<string>('all')
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 350)
@@ -26,11 +34,16 @@ export default function StarsPage() {
   }, [search])
 
   useEffect(() => {
+    listFolders().then(setFolders).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     setLoading(true)
     listGhStars({
       limit: PAGE_SIZE,
       language: language || undefined,
       search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
+      folder_id: folderId !== 'all' ? Number(folderId) : undefined,
     })
       .then((res) => {
         setStars(res.items)
@@ -43,7 +56,7 @@ export default function StarsPage() {
         toast.error('Failed to load stars')
       })
       .finally(() => setLoading(false))
-  }, [language, debouncedSearch])
+  }, [language, debouncedSearch, folderId])
 
   async function loadMore() {
     if (!moreCursor) return
@@ -97,6 +110,21 @@ export default function StarsPage() {
             onChange={(e) => setLanguage(e.target.value)}
             className="w-32"
           />
+          {folders.length > 0 && (
+            <Select value={folderId} onValueChange={setFolderId}>
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="All folders" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All folders</SelectItem>
+                {folders.map((f) => (
+                  <SelectItem key={f.id} value={String(f.id)}>
+                    {f.icon ? `${f.icon} ` : ''}{f.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Button variant="outline" onClick={onSync}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Sync
@@ -143,6 +171,16 @@ export default function StarsPage() {
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                   </Button>
+                  {folderId !== 'all' && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Open folder"
+                      onClick={() => navigate(`/inbox/folders/${folderId}`)}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                 </div>
                 {s.description && (
                   <p className="line-clamp-3 flex-1 text-sm text-muted-foreground">
