@@ -14,7 +14,8 @@ inbox:
     inbox_header: "Last {count} items:"
     stars_empty: "No starred repositories synced yet. Run /stars_sync to fetch them."
     stars_sync_started: "Star sync started. I will let you know when it finishes."
-    stars_sync_done: "Star sync finished, {count} repositories on file."
+    stars_sync_done: "Star sync finished: status={status}, count={count}, removed={removed}."
+    stars_sync_fail: "Star sync failed; check the logs."
     not_authenticated_gh: "Connect your GitHub account in settings first."
   features:
     ingest:

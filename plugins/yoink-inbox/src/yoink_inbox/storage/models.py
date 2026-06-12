@@ -446,3 +446,46 @@ class InboxRule(Base):
     __table_args__ = (
         Index("ix_inbox_rules_user_enabled_priority", "user_id", "enabled", "priority"),
     )
+
+
+# ---------------------------------------------------------------------------
+# GitHub stars sync bookkeeping (one row per user)
+# ---------------------------------------------------------------------------
+
+
+class InboxGhSyncState(Base):
+    """Per-user GitHub stars sync state.
+
+    One row per user. `etag` is the value returned by GitHub on the previous
+    successful /user/starred call; on the next call we send it back as
+    `If-None-Match` and treat 304 as "nothing to do". `last_synced_at` gates
+    the periodic refresh; the worker skips users whose sync is younger than
+    the configured interval.
+
+    Lives in inbox (not insight_user_settings) so the OAuth token table stays
+    owned by the insight plugin and the sync bookkeeping stays owned by the
+    plugin that uses it.
+    """
+
+    __tablename__ = "inbox_gh_sync_state"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    etag: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # "ok" | "not_modified" | "auth_failed" | "rate_limited" | "error"
+    last_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stars_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
+    )

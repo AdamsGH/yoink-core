@@ -14,7 +14,8 @@ inbox:
     inbox_header: "Последние {count} записей:"
     stars_empty: "Звёзды ещё не синхронизированы. Запусти /stars_sync для первой загрузки."
     stars_sync_started: "Синхронизация звёзд запущена. Сообщу, когда закончу."
-    stars_sync_done: "Синхронизация завершена, {count} репозиториев на учёте."
+    stars_sync_done: "Синхронизация завершена: status={status}, count={count}, removed={removed}."
+    stars_sync_fail: "Не получилось синхронизировать звёзды; смотри логи."
     not_authenticated_gh: "Сначала подключи GitHub в настройках."
   features:
     ingest:

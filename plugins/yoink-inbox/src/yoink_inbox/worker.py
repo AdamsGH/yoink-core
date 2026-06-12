@@ -46,10 +46,17 @@ async def classify_item(ctx: dict, item_id: int) -> None:
     await run_classify(ctx["session_factory"], item_id)
 
 
-async def sync_user_stars(ctx: dict, user_id: int) -> None:
+async def sync_user_stars(ctx: dict, user_id: int) -> dict:
     """Snapshot the user's full GitHub starred list."""
-    logger.info("inbox.sync_user_stars stub user_id=%s", user_id)
-    # TODO: from yoink_inbox.services.gh_stars import run_sync
+    from yoink_inbox.services.gh_stars import run_sync
+
+    res = await run_sync(ctx["session_factory"], user_id)
+    return {
+        "status": res.status,
+        "stars_count": res.stars_count,
+        "removed": res.removed,
+        "error": res.error,
+    }
 
 
 async def organise_stars_batch(ctx: dict, user_id: int) -> None:
