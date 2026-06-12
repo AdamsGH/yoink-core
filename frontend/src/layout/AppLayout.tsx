@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { usePanelRef } from 'react-resizable-panels'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
@@ -265,11 +266,30 @@ function BottomDrawer({ open, onClose, title, items, currentPath }: {
 
 /** Rendered inside a ResizablePanelGroup together with SidebarInset. */
 export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
-  if (!content) return null
+  const panelRef = usePanelRef()
+
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return
+    if (content) {
+      panel.expand()
+    } else {
+      panel.collapse()
+    }
+  }, [content, panelRef])
+
   return (
     <>
-      <ResizableHandle withHandle className="hidden md:flex" />
-      <ResizablePanel defaultSize={20} minSize={12} maxSize={40} className="hidden md:flex flex-col border-l border-border/60">
+      <ResizableHandle withHandle className={cn('hidden md:flex', !content && 'hidden')} />
+      <ResizablePanel
+        panelRef={panelRef}
+        defaultSize={22}
+        minSize={14}
+        maxSize={42}
+        collapsible
+        collapsedSize={0}
+        className="hidden md:flex flex-col border-l border-border/60"
+      >
         <ScrollArea className="h-full">
           {content}
         </ScrollArea>
