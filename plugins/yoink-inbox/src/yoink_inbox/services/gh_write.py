@@ -10,6 +10,7 @@ a clear 403 rather than a generic 500.
 from __future__ import annotations
 
 import logging
+import os
 
 import httpx
 
@@ -17,6 +18,13 @@ logger = logging.getLogger(__name__)
 
 _GH_STAR_URL = "https://api.github.com/user/starred/{owner}/{repo}"
 _USER_AGENT = "yoink-inbox-gh-write/1.0"
+_PROXY = os.environ.get("proxy_url") or os.environ.get("PROXY_URL") or None
+
+
+def _make_client(**kwargs) -> httpx.AsyncClient:
+    if _PROXY:
+        kwargs.setdefault("proxy", _PROXY)
+    return httpx.AsyncClient(**kwargs)
 
 
 async def _get_public_repo_token(session_factory, user_id: int) -> str:
@@ -35,7 +43,7 @@ async def star_repo(session_factory, user_id: int, owner: str, repo: str) -> Non
     """Star a repository on behalf of the user."""
     token = await _get_public_repo_token(session_factory, user_id)
     url = _GH_STAR_URL.format(owner=owner, repo=repo)
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with _make_client(timeout=15) as client:
         resp = await client.put(
             url,
             headers={
@@ -56,7 +64,7 @@ async def unstar_repo(session_factory, user_id: int, owner: str, repo: str) -> N
     """Unstar a repository on behalf of the user."""
     token = await _get_public_repo_token(session_factory, user_id)
     url = _GH_STAR_URL.format(owner=owner, repo=repo)
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with _make_client(timeout=15) as client:
         resp = await client.delete(
             url,
             headers={

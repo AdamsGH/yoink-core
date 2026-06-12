@@ -18,9 +18,12 @@ target, then write back the merged set).
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 
 import httpx
+
+_PROXY = os.environ.get("proxy_url") or os.environ.get("PROXY_URL") or None
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 
@@ -43,14 +46,17 @@ class GhListsClient:
     _client: httpx.AsyncClient = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._client = httpx.AsyncClient(
-            headers={
+        kwargs: dict = {
+            "headers": {
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
-                "X-Github-Next-Global-ID": "1",  # opt-in to new global node ids
+                "X-Github-Next-Global-ID": "1",
             },
-            timeout=15,
-        )
+            "timeout": 15,
+        }
+        if _PROXY:
+            kwargs["proxy"] = _PROXY
+        self._client = httpx.AsyncClient(**kwargs)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -106,13 +112,15 @@ class GhListsClient:
         ]
 
     async def get_list_item_ids(self, list_id: str) -> list[str]:
-        """Return global node IDs of all items in a list."""
+        """Return global node IDs of all Repository items in a list."""
         query = """
         query($listId: ID!) {
           node(id: $listId) {
             ... on UserList {
               items(first: 100) {
-                nodes { id }
+                nodes {
+                  ... on Repository { id }
+                }
                 pageInfo { hasNextPage endCursor }
               }
             }
@@ -121,7 +129,8 @@ class GhListsClient:
         """
         # TODO: paginate past 100 items if needed
         data = await self._gql(query, {"listId": list_id})
-        return [n["id"] for n in data["node"]["items"]["nodes"]]
+        nodes = data["node"]["items"]["nodes"]
+        return [n["id"] for n in nodes if n.get("id")]
 
     async def get_repo_list_memberships(self, repo_node_id: str) -> list[str]:
         """Return list IDs that this repo currently belongs to."""

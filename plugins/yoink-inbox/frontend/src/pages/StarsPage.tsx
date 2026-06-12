@@ -190,7 +190,7 @@ export default function StarsPage() {
           <EmptyState message="No stars found" />
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 items-start">
               {page.stars.map((star) => (
                 <DraggableStarCard
                   key={star.id}
@@ -530,7 +530,7 @@ function StarCardContent({
   const repoUrl = `https://github.com/${star.full_name}`
 
   return (
-    <Card className={['flex flex-col gap-0 select-none', ghost ? 'pointer-events-none' : ''].join(' ')}>
+    <Card className={['select-none', ghost ? 'pointer-events-none' : ''].join(' ')}>
       <div
         className="flex cursor-grab items-start gap-3 px-4 pb-2 pt-3 active:cursor-grabbing"
         {...dragHandleProps}
