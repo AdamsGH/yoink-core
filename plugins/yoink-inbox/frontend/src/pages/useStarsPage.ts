@@ -7,6 +7,7 @@ import {
   deleteFolder,
   listFolders,
   listGhStars,
+  listStarLanguages,
   removeStarFromFolder,
   triggerGhSync,
   unstarRepo,
@@ -31,6 +32,7 @@ export function useStarsPage() {
   const [language, setLanguage] = useState('')
   const [selectedFolder, setSelectedFolder] = useState<FolderSelection>('all')
   const [movingId, setMovingId] = useState<number | null>(null)
+  const [languages, setLanguages] = useState<string[]>([])
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -42,6 +44,12 @@ export function useStarsPage() {
   const loadFolders = useCallback(async () => {
     try {
       setFolders(await listFolders())
+    } catch { /* non-critical */ }
+  }, [])
+
+  const loadLanguages = useCallback(async () => {
+    try {
+      setLanguages(await listStarLanguages())
     } catch { /* non-critical */ }
   }, [])
 
@@ -70,6 +78,7 @@ export function useStarsPage() {
   }, [language, debouncedSearch, selectedFolder])
 
   useEffect(() => { void loadFolders() }, [loadFolders])
+  useEffect(() => { void loadLanguages() }, [loadLanguages])
   useEffect(() => { void loadStars() }, [loadStars])
 
   async function loadMore() {
@@ -175,6 +184,7 @@ export function useStarsPage() {
     movingId,
     loadMore, onSync,
     onCreateFolder, onRenameFolder, onDeleteFolder,
+    languages,
     onMoveStar, onUnstar,
     reload: loadStars,
   }

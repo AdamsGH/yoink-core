@@ -950,6 +950,24 @@ async def remove_team_member(
 # ---------------------------------------------------------------------------
 
 
+@router.get("/gh_stars/languages", response_model=list[str])
+async def list_gh_star_languages(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[str]:
+    """Distinct non-null languages for the user's starred repos, sorted alpha."""
+    await _require_feature(request, user, "gh_sync")
+    stmt = (
+        select(InboxGhStar.language)
+        .where(InboxGhStar.user_id == user.id, InboxGhStar.language.is_not(None))
+        .distinct()
+        .order_by(InboxGhStar.language.asc())
+    )
+    rows: list[str] = [r for r in (await session.execute(stmt)).scalars().all() if r is not None]
+    return rows
+
+
 @router.get("/gh_stars", response_model=InboxGhStarListResponse)
 async def list_gh_stars(
     request: Request,
@@ -971,10 +989,18 @@ async def list_gh_stars(
 
     stmt = select(InboxGhStar).where(InboxGhStar.user_id == user.id)
     if folder_id is not None:
-        stmt = stmt.join(
-            InboxGhFolderMember,
-            InboxGhFolderMember.gh_star_id == InboxGhStar.id,
-        ).where(InboxGhFolderMember.folder_id == folder_id)
+        if folder_id == 0:
+            # Unorganised: stars not in any folder (anti-join)
+            stmt = stmt.where(
+                ~InboxGhStar.id.in_(
+                    select(InboxGhFolderMember.gh_star_id)
+                )
+            )
+        else:
+            stmt = stmt.join(
+                InboxGhFolderMember,
+                InboxGhFolderMember.gh_star_id == InboxGhStar.id,
+            ).where(InboxGhFolderMember.folder_id == folder_id)
     if language:
         stmt = stmt.where(InboxGhStar.language == language)
     if search:

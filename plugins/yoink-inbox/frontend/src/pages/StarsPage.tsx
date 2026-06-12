@@ -39,6 +39,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   SidebarGroup,
   SidebarGroupAction,
   SidebarGroupContent,
@@ -116,9 +121,9 @@ export default function StarsPage() {
     >
       <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
         {/* header */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="text-xl font-semibold">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-semibold">
               {page.selectedFolder === 'all'
                 ? 'GitHub Stars'
                 : page.selectedFolder === 'unorganised'
@@ -132,22 +137,27 @@ export default function StarsPage() {
               </p>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <Input
               placeholder="Search..."
               value={page.search}
               onChange={(e) => page.setSearch(e.target.value)}
-              className="h-8 w-full sm:w-52"
+              className="h-8 w-48"
             />
-            <Input
-              placeholder="Language"
-              value={page.language}
-              onChange={(e) => page.setLanguage(e.target.value)}
-              className="h-8 w-28"
-            />
+            <Select value={page.language} onValueChange={page.setLanguage}>
+              <SelectTrigger className="h-8 w-36">
+                <SelectValue placeholder="Language" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">All languages</SelectItem>
+                {page.languages.map((lang) => (
+                  <SelectItem key={lang} value={lang}>{lang}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => void page.onSync()}>
+                <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => void page.onSync()}>
                   <RefreshCw className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>

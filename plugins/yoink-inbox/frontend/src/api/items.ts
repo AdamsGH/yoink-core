@@ -184,3 +184,8 @@ export async function starRepo(starId: number): Promise<void> {
 export async function unstarRepo(starId: number): Promise<void> {
   await apiClient.delete(`/inbox/gh_stars/${starId}/star`)
 }
+
+export async function listStarLanguages(): Promise<string[]> {
+  const { data } = await apiClient.get<string[]>('/inbox/gh_stars/languages')
+  return data
+}
