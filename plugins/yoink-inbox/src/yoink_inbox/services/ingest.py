@@ -199,6 +199,11 @@ async def ingest_url(
         "inbox.ingest created user_id=%s item_id=%s kind=%s url=%s enrich_job=%s",
         user_id, item.id, kind, normalized, enrich_job_id,
     )
+
+    from yoink_inbox.services.rules import run_rules
+
+    await run_rules(session, user_id=user_id, item_id=item.id, trigger="item_ingested")
+
     return IngestResult(
         item_id=item.id,
         normalized_url=normalized,

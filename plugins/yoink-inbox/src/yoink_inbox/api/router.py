@@ -39,6 +39,10 @@ from yoink_inbox.api.schemas import (
     InboxItemCreate,
     InboxItemListResponse,
     InboxItemRead,
+    InboxRuleCreate,
+    InboxRuleRead,
+    InboxRuleTestResult,
+    InboxRuleUpdate,
 )
 from yoink_inbox.storage.models import (
     InboxCategory,
@@ -46,6 +50,7 @@ from yoink_inbox.storage.models import (
     InboxGhSyncState,
     InboxItem,
     InboxItemCategory,
+    InboxRule,
     InboxTeamMember,
 )
 
@@ -476,6 +481,180 @@ async def list_gh_stars(
         next_cursor=next_cursor,
         sync_status=sync_state.last_status if sync_state else None,
         last_synced_at=sync_state.last_synced_at if sync_state else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Rules
+# ---------------------------------------------------------------------------
+
+_VALID_TRIGGERS = frozenset({"item_ingested", "item_classified", "star_synced"})
+
+
+@router.get("/rules", response_model=list[InboxRuleRead])
+async def list_rules(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[InboxRuleRead]:
+    """List the user's rules ordered by priority, then id."""
+    await _require_feature(request, user, "ingest")
+    rows = (
+        await session.scalars(
+            select(InboxRule)
+            .where(InboxRule.user_id == user.id)
+            .order_by(InboxRule.priority.asc(), InboxRule.id.asc())
+        )
+    ).all()
+    return [InboxRuleRead.model_validate(r) for r in rows]
+
+
+@router.post("/rules", response_model=InboxRuleRead, status_code=status.HTTP_201_CREATED)
+async def create_rule(
+    request: Request,
+    payload: InboxRuleCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxRuleRead:
+    """Create a new automation rule."""
+    await _require_feature(request, user, "ingest")
+    if payload.trigger not in _VALID_TRIGGERS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"trigger must be one of {sorted(_VALID_TRIGGERS)}",
+        )
+    rule = InboxRule(
+        user_id=user.id,
+        name=payload.name,
+        enabled=payload.enabled,
+        priority=payload.priority,
+        trigger=payload.trigger,
+        conditions=payload.conditions,
+        actions=payload.actions,
+    )
+    session.add(rule)
+    await session.commit()
+    await session.refresh(rule)
+    return InboxRuleRead.model_validate(rule)
+
+
+@router.get("/rules/{rule_id}", response_model=InboxRuleRead)
+async def get_rule(
+    request: Request,
+    rule_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxRuleRead:
+    await _require_feature(request, user, "ingest")
+    rule = await session.get(InboxRule, rule_id)
+    if rule is None or rule.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return InboxRuleRead.model_validate(rule)
+
+
+@router.patch("/rules/{rule_id}", response_model=InboxRuleRead)
+async def update_rule(
+    request: Request,
+    rule_id: int,
+    payload: InboxRuleUpdate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxRuleRead:
+    """Partial-update a rule; omit any field to leave it unchanged."""
+    await _require_feature(request, user, "ingest")
+    rule = await session.get(InboxRule, rule_id)
+    if rule is None or rule.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    if payload.trigger is not None and payload.trigger not in _VALID_TRIGGERS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"trigger must be one of {sorted(_VALID_TRIGGERS)}",
+        )
+    for field, val in payload.model_dump(exclude_unset=True).items():
+        setattr(rule, field, val)
+    await session.commit()
+    await session.refresh(rule)
+    return InboxRuleRead.model_validate(rule)
+
+
+@router.put("/rules/{rule_id}", response_model=InboxRuleRead)
+async def replace_rule(
+    request: Request,
+    rule_id: int,
+    payload: InboxRuleCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxRuleRead:
+    """Full replace of a rule."""
+    await _require_feature(request, user, "ingest")
+    rule = await session.get(InboxRule, rule_id)
+    if rule is None or rule.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    if payload.trigger not in _VALID_TRIGGERS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"trigger must be one of {sorted(_VALID_TRIGGERS)}",
+        )
+    rule.name = payload.name
+    rule.enabled = payload.enabled
+    rule.priority = payload.priority
+    rule.trigger = payload.trigger
+    rule.conditions = payload.conditions
+    rule.actions = payload.actions
+    await session.commit()
+    await session.refresh(rule)
+    return InboxRuleRead.model_validate(rule)
+
+
+@router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rule(
+    request: Request,
+    rule_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    await _require_feature(request, user, "ingest")
+    rule = await session.get(InboxRule, rule_id)
+    if rule is None or rule.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    await session.delete(rule)
+    await session.commit()
+
+
+@router.post("/rules/{rule_id}/test", response_model=InboxRuleTestResult)
+async def test_rule(
+    request: Request,
+    rule_id: int,
+    item_id: int | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> InboxRuleTestResult:
+    """Dry-run a rule against a specific item (no actions executed)."""
+    await _require_feature(request, user, "ingest")
+    rule = await session.get(InboxRule, rule_id)
+    if rule is None or rule.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    if item_id is None:
+        raise HTTPException(status_code=400, detail="item_id query param required")
+    item = await session.get(InboxItem, item_id)
+    if item is None or item.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    from yoink_inbox.services.rules import evaluate_rule_conditions
+
+    cat_rows = await session.scalars(
+        select(InboxCategory.name)
+        .join(InboxItemCategory, InboxItemCategory.category_id == InboxCategory.id)
+        .where(InboxItemCategory.item_id == item_id)
+    )
+    category_names = list(cat_rows.all())
+    conditions_result = evaluate_rule_conditions(rule, item, category_names)
+    matched = all(r["passed"] for r in conditions_result) if conditions_result else True
+    return InboxRuleTestResult(
+        rule_id=rule_id,
+        matched=matched,
+        conditions_result=conditions_result,
+        actions_would_fire=list(rule.actions or []) if matched else [],
     )
 
 

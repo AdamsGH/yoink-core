@@ -352,6 +352,10 @@ async def run_classify(
 
         item.status = "classified"
         item.llm_status = "success"
+
+        from yoink_inbox.services.rules import run_rules
+
+        await run_rules(session, user_id=user_id, item_id=item_id, trigger="item_classified")
         await session.commit()
 
     logger.info(

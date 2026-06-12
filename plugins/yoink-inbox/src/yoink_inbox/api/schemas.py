@@ -113,3 +113,45 @@ class InboxGhStarListResponse(BaseModel):
     next_cursor: str | None = None
     sync_status: str | None = None
     last_synced_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Rules
+# ---------------------------------------------------------------------------
+
+
+class InboxRuleRead(_Base):
+    id: int
+    name: str
+    enabled: bool
+    priority: int
+    trigger: str
+    conditions: list[dict] | None = None
+    actions: list[dict] | None = None
+    created_at: datetime
+    modified_at: datetime
+
+
+class InboxRuleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    enabled: bool = True
+    priority: int = Field(default=100, ge=0, le=9999)
+    trigger: str  # item_ingested | item_classified | star_synced
+    conditions: list[dict] | None = None
+    actions: list[dict] | None = None
+
+
+class InboxRuleUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    enabled: bool | None = None
+    priority: int | None = Field(default=None, ge=0, le=9999)
+    trigger: str | None = None
+    conditions: list[dict] | None = None
+    actions: list[dict] | None = None
+
+
+class InboxRuleTestResult(BaseModel):
+    rule_id: int
+    matched: bool
+    conditions_result: list[dict]   # [{field, op, value, passed}]
+    actions_would_fire: list[dict]  # [{type, value}], only when matched=True

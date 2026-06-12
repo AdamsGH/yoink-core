@@ -79,3 +79,32 @@ export interface InboxGhStarListResponse {
   sync_status: string | null
   last_synced_at: string | null
 }
+
+// ---------------------------------------------------------------------------
+// Rules
+// ---------------------------------------------------------------------------
+
+export type RuleTrigger = 'item_ingested' | 'item_classified' | 'star_synced'
+
+export interface RuleCondition {
+  field: string
+  op: string
+  value: string
+}
+
+export interface RuleAction {
+  type: string
+  params: Record<string, string>
+}
+
+export interface InboxRule {
+  id: number
+  name: string
+  enabled: boolean
+  priority: number
+  trigger: RuleTrigger
+  conditions: RuleCondition[] | null
+  actions: RuleAction[] | null
+  created_at: string
+  modified_at: string
+}
