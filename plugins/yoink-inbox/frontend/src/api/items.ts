@@ -56,12 +56,16 @@ export async function listCategories(): Promise<InboxCategory[]> {
   return data
 }
 
+export type GhStarSort = 'starred_at' | 'stargazers_count' | 'name'
+
 export interface GhStarFilters {
   cursor?: string
+  offset?: number
   limit?: number
   language?: string
   search?: string
   folder_id?: number
+  sort?: GhStarSort
 }
 
 export async function listGhStars(

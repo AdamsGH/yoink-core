@@ -44,6 +44,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   SidebarGroup,
   SidebarGroupAction,
   SidebarGroupContent,
@@ -61,6 +66,7 @@ import { EmptyState } from '@app'
 
 import type { InboxGhFolder, InboxGhStar } from '@inbox/types'
 
+import type { GhStarSort } from '@inbox/api/items'
 import { type FolderSelection, useStarsPage } from './useStarsPage'
 
 // ---------------------------------------------------------------------------
@@ -141,8 +147,21 @@ export default function StarsPage() {
               placeholder="Search..."
               value={page.search}
               onChange={(e) => page.setSearch(e.target.value)}
-              className="h-8 w-48"
+              className="h-8 w-44"
             />
+            <Select
+              value={page.sort}
+              onValueChange={(v) => page.setSort(v as GhStarSort)}
+            >
+              <SelectTrigger className="h-8 w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="starred_at">Recently starred</SelectItem>
+                <SelectItem value="stargazers_count">Most stars</SelectItem>
+                <SelectItem value="name">Name</SelectItem>
+              </SelectContent>
+            </Select>
             <Combobox<string>
               items={['', ...page.languages]}
               itemToStringLabel={(l) => l === '' ? 'All languages' : l}
@@ -486,7 +505,7 @@ function DraggableStarCard({
   const { attributes, listeners, setNodeRef } = useDraggable({ id: star.id })
 
   return (
-    <div ref={setNodeRef} className={isDragging ? 'opacity-30' : undefined}>
+    <div ref={setNodeRef} className={isDragging ? 'opacity-0' : undefined}>
       <StarCardContent
         star={star}
         folders={folders}

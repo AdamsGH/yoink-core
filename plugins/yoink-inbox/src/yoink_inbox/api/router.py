@@ -999,16 +999,18 @@ async def list_gh_stars(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
     cursor: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=30, ge=1, le=100),
     language: str | None = Query(default=None),
     search: str | None = Query(default=None, min_length=2, max_length=128),
     folder_id: int | None = Query(default=None),
+    sort: str = Query(default="starred_at"),
 ) -> InboxGhStarListResponse:
     """List the user's starred repos with optional filters.
 
-    Sort: starred_at DESC, id DESC (matches GitHub's own \"recent\" view).
-    `sync_status` and `last_synced_at` from inbox_gh_sync_state ride along
-    so the UI can show \"synced 3h ago\" without a second request.
+    sort=starred_at (default): cursor-paginated, newest first.
+    sort=stargazers_count:     offset-paginated, most-starred first.
+    sort=name:                 offset-paginated, alphabetical.
     """
     await _require_feature(request, user, "gh_sync")
 
@@ -1037,27 +1039,38 @@ async def list_gh_stars(
             )
         )
 
-    after = _decode_cursor(cursor)
-    if after is not None:
-        after_dt, after_id = after
-        stmt = stmt.where(
-            or_(
-                InboxGhStar.starred_at < after_dt,
-                and_(InboxGhStar.starred_at == after_dt, InboxGhStar.id < after_id),
-            )
-        )
-
-    stmt = stmt.order_by(
-        InboxGhStar.starred_at.desc().nullslast(), InboxGhStar.id.desc()
-    ).limit(limit + 1)
-    rows = list((await session.execute(stmt)).scalars().all())
+    _SORT_FIELDS: dict[str, tuple] = {
+        "starred_at": (InboxGhStar.starred_at.desc().nullslast(), InboxGhStar.id.desc()),
+        "stargazers_count": (InboxGhStar.stargazers_count.desc().nullslast(), InboxGhStar.id.desc()),
+        "name": (InboxGhStar.full_name.asc(),),
+    }
+    sort_key = sort if sort in _SORT_FIELDS else "starred_at"
+    stmt = stmt.order_by(*_SORT_FIELDS[sort_key])
 
     next_cursor: str | None = None
-    if len(rows) > limit:
-        rows = rows[:limit]
-        last = rows[-1]
-        if last.starred_at is not None:
-            next_cursor = _encode_cursor(last.starred_at, last.id)
+    if sort_key == "starred_at":
+        after = _decode_cursor(cursor)
+        if after is not None:
+            after_dt, after_id = after
+            stmt = stmt.where(
+                or_(
+                    InboxGhStar.starred_at < after_dt,
+                    and_(InboxGhStar.starred_at == after_dt, InboxGhStar.id < after_id),
+                )
+            )
+        stmt = stmt.limit(limit + 1)
+        rows = list((await session.execute(stmt)).scalars().all())
+        if len(rows) > limit:
+            rows = rows[:limit]
+            last = rows[-1]
+            if last.starred_at is not None:
+                next_cursor = _encode_cursor(last.starred_at, last.id)
+    else:
+        stmt = stmt.offset(offset).limit(limit + 1)
+        rows = list((await session.execute(stmt)).scalars().all())
+        if len(rows) > limit:
+            rows = rows[:limit]
+            next_cursor = str(offset + limit)
 
     sync_state = await session.get(InboxGhSyncState, user.id)
     return InboxGhStarListResponse(

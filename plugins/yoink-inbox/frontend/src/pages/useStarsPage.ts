@@ -13,6 +13,7 @@ import {
   unstarRepo,
   updateFolder,
 } from '@inbox/api/items'
+import type { GhStarSort } from '@inbox/api/items'
 import type { InboxGhFolder, InboxGhFolderCreate, InboxGhStar } from '@inbox/types'
 
 export type FolderSelection = 'all' | 'unorganised' | number
@@ -30,6 +31,7 @@ export function useStarsPage() {
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [language, setLanguage] = useState('')
+  const [sort, setSort] = useState<GhStarSort>('starred_at')
   const [selectedFolder, setSelectedFolder] = useState<FolderSelection>('all')
   const [movingId, setMovingId] = useState<number | null>(null)
   const [languages, setLanguages] = useState<string[]>([])
@@ -64,6 +66,7 @@ export function useStarsPage() {
           typeof selectedFolder === 'number' ? selectedFolder :
           selectedFolder === 'unorganised' ? 0 :
           undefined,
+        sort,
       })
       setStars(res.items)
       setMoreCursor(res.next_cursor ?? null)
@@ -75,7 +78,7 @@ export function useStarsPage() {
     } finally {
       setLoading(false)
     }
-  }, [language, debouncedSearch, selectedFolder])
+  }, [language, debouncedSearch, selectedFolder, sort])
 
   useEffect(() => { void loadFolders() }, [loadFolders])
   useEffect(() => { void loadLanguages() }, [loadLanguages])
@@ -85,11 +88,15 @@ export function useStarsPage() {
     if (!moreCursor || loadingMore) return
     setLoadingMore(true)
     try {
+      const isOffset = sort !== 'starred_at'
       const res = await listGhStars({
         limit: PAGE_SIZE,
-        cursor: moreCursor,
+        ...(isOffset
+          ? { offset: Number(moreCursor) }
+          : { cursor: moreCursor }),
         language: language || undefined,
         search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
+        sort,
       })
       setStars((p) => [...p, ...res.items])
       setMoreCursor(res.next_cursor ?? null)
@@ -180,6 +187,7 @@ export function useStarsPage() {
     syncStatus, lastSync,
     search, setSearch,
     language, setLanguage,
+    sort, setSort,
     selectedFolder, setSelectedFolder,
     movingId,
     loadMore, onSync,
