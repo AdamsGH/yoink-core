@@ -272,22 +272,22 @@ export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
     const panel = panelRef.current
     if (!panel) return
     if (content) {
-      panel.expand()
+      panel.resize(22)
     } else {
-      panel.collapse()
+      panel.resize(0)
     }
   }, [content, panelRef])
 
+  if (!content) return null
+
   return (
     <>
-      <ResizableHandle withHandle className={cn('hidden md:flex', !content && 'hidden')} />
+      <ResizableHandle withHandle className="hidden md:flex" />
       <ResizablePanel
         panelRef={panelRef}
         defaultSize={22}
         minSize={14}
         maxSize={42}
-        collapsible
-        collapsedSize={0}
         className="hidden md:flex flex-col border-l border-border/60"
       >
         <ScrollArea className="h-full">
@@ -398,8 +398,12 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
           <SidebarRail />
         </Sidebar>
 
-        <ResizablePanelGroup orientation="horizontal" className="flex-1 min-w-0">
-          <ResizablePanel defaultSize={100} minSize={50}>
+        <ResizablePanelGroup
+          orientation="horizontal"
+          className="flex-1 min-w-0"
+          key={rightSidebarContent ? 'with-sidebar' : 'no-sidebar'}
+        >
+          <ResizablePanel defaultSize={rightSidebarContent ? 78 : 100} minSize={50}>
             <SidebarInset className="min-w-0">
               <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
                 <span className="text-sm font-medium">
