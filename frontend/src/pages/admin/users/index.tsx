@@ -6,7 +6,7 @@ import { cn } from '@core/lib/utils'
 import { RING_BY_ROLE, userInitials, userPhotoUrl } from '@core/lib/user-utils'
 import type { UserRole } from '@core/types/api'
 import { Avatar, AvatarFallback, AvatarImage, Button, Card, CardContent, CardHeader, CardTitle, DividedList, IconButton, Input, Item, ItemActions, ItemContent, ItemDescription, ItemTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SkeletonList, Skeleton, TooltipProvider } from '@ui'
-import { EmptyState, RoleBadge } from '@app'
+import { EmptyState, PageContainer, RoleBadge } from '@app'
 import { UserDrawer } from './UserDrawer'
 import { useAdminUsers, type StatusFilter, type UserSortField, type UserPeriod } from './useAdminUsers'
 
@@ -29,6 +29,7 @@ export default function AdminUsersPage() {
   const [showFilters, setShowFilters] = useState(false)
 
   return (
+    <PageContainer>
     <TooltipProvider delayDuration={300}>
       <div className="space-y-3">
         <Card>
@@ -190,5 +191,6 @@ export default function AdminUsersPage() {
         <UserDrawer user={viewed} onClose={() => setViewed(null)} onUpdated={handleUpdated} />
       </div>
     </TooltipProvider>
+    </PageContainer>
   )
 }

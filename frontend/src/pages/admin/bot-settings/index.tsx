@@ -4,7 +4,7 @@ import { Globe, HardDrive, Shield, Tag } from 'lucide-react'
 
 import { plugins } from '@core/plugin-registry'
 import { usePermissions } from '@core/hooks/usePermissions'
-import { CompactCardHeader, SettingRow } from '@app'
+import { CompactCardHeader, PageContainer, SettingRow } from '@app'
 import { botSettingsApi } from '@core/lib/api'
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Separator, Skeleton } from '@ui'
 import { toast } from '@core/components/ui/toast'
@@ -112,16 +112,19 @@ export default function AdminBotSettingsPage() {
 
   if (loading) {
     return (
-      <div className="space-y-4">
+      <PageContainer>
+        <div className="space-y-4">
         <SectionSkeleton />
         <SectionSkeleton />
         <SectionSkeleton />
       </div>
+      </PageContainer>
     )
   }
 
   return (
-    <div className="space-y-4">
+    <PageContainer>
+      <div className="space-y-4">
 
       {/* Access Mode */}
       <Card>
@@ -249,5 +252,6 @@ export default function AdminBotSettingsPage() {
       ))}
 
     </div>
+    </PageContainer>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
@@ -24,6 +24,36 @@ import {
 } from '@ui'
 
 export type { NavItem, NavGroup }
+
+// ---------------------------------------------------------------------------
+// Right sidebar slot
+//
+// AppLayout owns one <Sidebar side="right"> inside the shared SidebarProvider.
+// Pages mount content into it via useRightSidebar():
+//
+//   const { setContent } = useRightSidebar()
+//   useEffect(() => {
+//     setContent(<FolderPanel />)
+//     return () => setContent(null)   // unmount on leave
+//   }, [setContent])
+//
+// The sidebar is collapsible="offcanvas" so on mobile it slides in from the
+// right; on desktop it sits beside SidebarInset and can be toggled via the
+// RightSidebarTrigger exported below.
+// ---------------------------------------------------------------------------
+
+interface RightSidebarCtx {
+  setContent: (node: React.ReactNode) => void
+}
+
+const RightSidebarContext = createContext<RightSidebarCtx>({
+  setContent: () => {},
+})
+
+/** Mount content into the app-level right sidebar. Call setContent(null) in the cleanup. */
+export function useRightSidebar(): RightSidebarCtx {
+  return useContext(RightSidebarContext)
+}
 
 interface AppLayoutProps {
   navGroups: NavGroup[]
@@ -223,6 +253,29 @@ function BottomDrawer({ open, onClose, title, items, currentPath }: {
   )
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Right sidebar slot component
+// ---------------------------------------------------------------------------
+
+function RightSidebarSlot({ contentRef }: { contentRef: { current: React.ReactNode } }) {
+  const content = contentRef.current
+  if (!content) return null
+  return (
+    <Sidebar
+      side="right"
+      collapsible="offcanvas"
+      style={{ '--sidebar-width': '16rem' } as React.CSSProperties}
+      className="hidden md:flex"
+    >
+      <SidebarContent>
+        {content}
+      </SidebarContent>
+    </Sidebar>
+  )
+}
+
 export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: AppLayoutProps) {
   const { t } = useTranslation()
   const { role } = usePermissions()
@@ -253,9 +306,17 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
   const hasOverflow = overflowItems.length > 0
   const [moreDrawerOpen, setMoreDrawerOpen] = useState(false)
 
+  // Right sidebar slot state
+  const rightSidebarContent = useRef<React.ReactNode>(null)
+  const [, forceRightRender] = useState(0)
+  const setRightContent = (node: React.ReactNode) => {
+    rightSidebarContent.current = node
+    forceRightRender((n) => n + 1)
+  }
+
   return (
-    <>
-      {/* Desktop sidebar — standard shadcn layout, no extra className on Sidebar */}
+    <RightSidebarContext.Provider value={{ setContent: setRightContent }}>
+      {/* Desktop sidebar - standard shadcn layout, no extra className on Sidebar */}
       <SidebarProvider>
         <Sidebar collapsible="icon">
           <SidebarHeader>
@@ -302,15 +363,16 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
               })()}
             </span>
           </header>
-          <div className="flex-1 overflow-y-auto pb-16 md:pb-0">
-            <div className="mx-auto max-w-4xl px-4 py-6">
-              <Outlet />
-            </div>
+          <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
+            <Outlet />
           </div>
         </SidebarInset>
-      </SidebarProvider>
 
-      {/* Mobile bottom nav — max 5 slots total */}
+        {/* Right sidebar slot - pages mount content here via useRightSidebar() */}
+        <RightSidebarSlot contentRef={rightSidebarContent} />
+
+      </SidebarProvider>
+      {/* Mobile bottom nav - max 5 slots total */}
       {/* right-scroll-bar-position: react-remove-scroll-bar compensates fixed elements with this class */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 flex border-t bg-background md:hidden right-scroll-bar-position">
         {pinnedItems.map((item) => {
@@ -375,6 +437,6 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
           currentPath={location.pathname}
         />
       )}
-    </>
+    </RightSidebarContext.Provider>
   )
 }

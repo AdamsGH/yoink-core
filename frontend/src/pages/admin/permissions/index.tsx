@@ -5,6 +5,7 @@ import { permissionsApi, usersApi } from '@core/lib/api'
 import { formatDate } from '@core/lib/utils'
 import type { Feature, Permission, User } from '@core/types/api'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Tooltip, TooltipContent, TooltipTrigger } from '@ui'
+import { PageContainer } from '@app'
 import { toast } from '@core/components/ui/toast'
 
 interface PermissionWithUser extends Permission {
@@ -125,6 +126,7 @@ export default function AdminPermissionsPage() {
   }
 
   return (
+    <PageContainer>
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-end">
         <Button size="sm" className="h-7 px-2.5 text-xs" onClick={() => setGrantOpen(true)}>
@@ -336,5 +338,6 @@ export default function AdminPermissionsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </PageContainer>
   )
 }

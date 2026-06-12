@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ApiReferenceReact } from '@scalar/api-reference-react'
 import '@scalar/api-reference-react/style.css'
 import { useSidebar } from '@ui'
+import { PageContainer } from '@app'
 import { metaApi } from '@core/lib/api/meta'
 
 const APP_TOKEN_KEY = 'access_token'
@@ -29,6 +30,7 @@ export default function ApiDocsPage() {
   const token = localStorage.getItem(APP_TOKEN_KEY) ?? ''
 
   return (
+    <PageContainer>
     <div
       className="fixed top-12 right-0 overflow-auto transition-[left,bottom] duration-200 ease-linear"
       style={{ left, bottom }}
@@ -53,5 +55,6 @@ export default function ApiDocsPage() {
         />
       )}
     </div>
+    </PageContainer>
   )
 }

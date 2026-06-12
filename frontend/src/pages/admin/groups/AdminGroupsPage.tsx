@@ -9,7 +9,7 @@ import type { ThreadPolicy } from '@core/lib/api'
 import { useAdminGroups } from './useAdminGroups'
 import type { EditState } from './useAdminGroups'
 import { Avatar, AvatarFallback, AvatarImage, Badge, Button, Card, CardContent, Dialog, DialogActions, DialogContent, DialogDescription, DialogHeader, DialogTitle, DividedList, IconButton, Input, Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Skeleton, SkeletonList, Switch, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@ui'
-import { CompactCardHeader, EmptyState, InlineSelect, SuccessBadge } from '@app'
+import { CompactCardHeader, EmptyState, InlineSelect, PageContainer, SuccessBadge } from '@app'
 import { toast } from '@core/components/ui/toast'
 
 const ROLES: UserRole[] = ['owner', 'admin', 'moderator', 'user', 'restricted', 'banned']
@@ -419,6 +419,7 @@ export default function AdminGroupsPage() {
   const { items, total, loading, edit, setEdit, saving, save } = useAdminGroups()
 
   return (
+    <PageContainer>
     <TooltipProvider delayDuration={300}>
       <div className="space-y-4">
         <Card>
@@ -567,5 +568,6 @@ export default function AdminGroupsPage() {
         </Dialog>
       </div>
     </TooltipProvider>
+    </PageContainer>
   )
 }
