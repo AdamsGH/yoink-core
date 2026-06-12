@@ -172,3 +172,15 @@ export async function patchTeamMember(teamId: number, userId: number, role: stri
 export async function removeTeamMember(teamId: number, userId: number): Promise<void> {
   await apiClient.delete(`/inbox/teams/${teamId}/members/${userId}`)
 }
+
+// ---------------------------------------------------------------------------
+// Star / unstar (requires gh_write feature + public_repo token)
+// ---------------------------------------------------------------------------
+
+export async function starRepo(starId: number): Promise<void> {
+  await apiClient.put(`/inbox/gh_stars/${starId}/star`)
+}
+
+export async function unstarRepo(starId: number): Promise<void> {
+  await apiClient.delete(`/inbox/gh_stars/${starId}/star`)
+}

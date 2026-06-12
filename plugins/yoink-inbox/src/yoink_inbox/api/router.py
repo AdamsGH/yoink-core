@@ -1220,6 +1220,54 @@ async def run_rule_sweep(
     return {"fired": fired, "scanned": len(items)}
 
 
+@router.put("/gh_stars/{star_id}/star", status_code=status.HTTP_204_NO_CONTENT)
+async def star_repo(
+    request: Request,
+    star_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    """Star the repo on GitHub using the user's public_repo token."""
+    await _require_feature(request, user, "gh_write")
+    star = await session.get(InboxGhStar, star_id)
+    if star is None or star.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Star not found")
+    owner, repo = star.full_name.split("/", 1)
+    sf = request.app.state.session_factory
+    from yoink_inbox.services.gh_write import star_repo as _star
+    try:
+        await _star(sf, user.id, owner, repo)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    star.can_unstar = True
+    await session.commit()
+
+
+@router.delete("/gh_stars/{star_id}/star", status_code=status.HTTP_204_NO_CONTENT)
+async def unstar_repo(
+    request: Request,
+    star_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    """Unstar the repo on GitHub using the user's public_repo token."""
+    await _require_feature(request, user, "gh_write")
+    star = await session.get(InboxGhStar, star_id)
+    if star is None or star.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Star not found")
+    owner, repo = star.full_name.split("/", 1)
+    sf = request.app.state.session_factory
+    from yoink_inbox.services.gh_write import unstar_repo as _unstar
+    try:
+        await _unstar(sf, user.id, owner, repo)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    # Soft-remove: mark can_unstar=False but keep the local star row
+    # (GitHub will stop returning it on the next sync; hard-delete happens then).
+    star.can_unstar = False
+    await session.commit()
+
+
 @router.post("/gh_stars/sync", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_gh_sync(
     request: Request,

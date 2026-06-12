@@ -10,7 +10,7 @@ import {
 } from '@ui'
 import { EmptyState } from '@app'
 
-import { listFolders, listGhStars, triggerGhSync } from '@inbox/api/items'
+import { listFolders, listGhStars, triggerGhSync, unstarRepo } from '@inbox/api/items'
 import type { InboxGhFolder, InboxGhStar } from '@inbox/types'
 
 const PAGE_SIZE = 30
@@ -179,6 +179,25 @@ export default function StarsPage() {
                       onClick={() => navigate(`/inbox/folders/${folderId}`)}
                     >
                       <FolderOpen className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {s.can_unstar && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Unstar on GitHub"
+                      onClick={async () => {
+                        try {
+                          await unstarRepo(s.id)
+                          setStars((p) => p.filter((x) => x.id !== s.id))
+                          toast.success('Unstarred')
+                        } catch (err) {
+                          if (import.meta.env.DEV) console.error(err)
+                          toast.error('Failed to unstar')
+                        }
+                      }}
+                    >
+                      <Star className="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
                     </Button>
                   )}
                 </div>
