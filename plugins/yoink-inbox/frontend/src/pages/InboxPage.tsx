@@ -42,12 +42,6 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
   Input,
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -66,7 +60,6 @@ import {
 } from '@ui'
 import { cn } from '@core/lib/utils'
 
-import { createCategory } from '@inbox/api/items'
 import type { InboxCategory, InboxItem } from '@inbox/types'
 import { useInboxPage } from './useInboxPage'
 
@@ -154,96 +147,115 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
 
   const displayStatus = item.llm_status === 'failed' ? 'llm:failed' : item.llm_status ?? item.status
 
+  const isGrid = view === 'grid'
+
   const row = (
-    <Item
+    <div
       ref={setNodeRef}
       style={style}
       {...attributes}
       {...listeners}
-      variant="default"
-      size={view === 'grid' ? 'default' : 'sm'}
-      className={cn(
-        'cursor-grab active:cursor-grabbing border-b border-border/40 rounded-none hover:bg-accent/50 transition-colors',
-        view === 'grid' && 'rounded-lg border border-border/50 hover:border-primary/30 flex-col items-start',
-        isDragging && 'opacity-30',
-      )}
       onClick={() => onOpen(item)}
+      className={cn(
+        'group relative flex cursor-grab active:cursor-grabbing transition-all duration-150',
+        'rounded-xl border border-border/50 bg-card hover:border-primary/40 hover:shadow-md hover:shadow-black/20',
+        isGrid ? 'flex-col overflow-hidden' : 'flex-row items-start gap-4 p-3',
+        isDragging && 'opacity-30 scale-95',
+      )}
     >
-      <ItemMedia variant="image" className={cn(view === 'grid' && 'w-full h-24 rounded-md mb-1 size-auto')}>
-        {item.og_image_url ? (
-          <img
-            src={item.og_image_url}
-            alt=""
-            className={cn('rounded object-cover', view === 'grid' ? 'w-full h-24' : 'w-9 h-9')}
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-          />
-        ) : (
-          <div className={cn(
-            'rounded bg-muted/60 flex items-center justify-center border border-border/40',
-            view === 'grid' ? 'w-full h-24' : 'w-9 h-9',
-          )}>
-            <Inbox className="w-4 h-4 text-muted-foreground/40" />
-          </div>
-        )}
-      </ItemMedia>
+      {/* Thumbnail */}
+      {isGrid ? (
+        <div className="w-full h-36 bg-muted/40 overflow-hidden border-b border-border/40 shrink-0">
+          {item.og_image_url ? (
+            <img src={item.og_image_url} alt="" className="w-full h-full object-cover"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <Inbox className="w-8 h-8 text-muted-foreground/20" />
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="shrink-0 w-10 h-10 rounded-lg bg-muted/50 border border-border/40 overflow-hidden mt-0.5">
+          {item.og_image_url ? (
+            <img src={item.og_image_url} alt="" className="w-full h-full object-cover"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <Inbox className="w-4 h-4 text-muted-foreground/30" />
+            </div>
+          )}
+        </div>
+      )}
 
-      <ItemContent>
-        <ItemTitle>
-          <span className="truncate">{item.title || item.url}</span>
-        </ItemTitle>
+      {/* Content */}
+      <div className={cn('flex flex-col min-w-0 flex-1', isGrid ? 'p-3 gap-1' : 'gap-1')}>
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-semibold text-sm leading-snug truncate flex-1">
+            {item.title || item.url}
+          </p>
+          <span className="shrink-0 text-[11px] text-muted-foreground/50 tabular-nums pt-px">
+            {timeAgo(item.created_at)}
+          </span>
+        </div>
+
         {item.summary && (
-          <ItemDescription className={view === 'grid' ? 'line-clamp-3' : 'line-clamp-1'}>
+          <p className={cn('text-xs text-muted-foreground leading-relaxed', isGrid ? 'line-clamp-3' : 'line-clamp-1')}>
             {item.summary}
-          </ItemDescription>
+          </p>
         )}
-        <div className="flex flex-wrap gap-1 mt-0.5">
-          <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-mono', statusBadgeClass(displayStatus))}>
+
+        <div className="flex flex-wrap gap-1 mt-1">
+          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-md border font-mono', statusBadgeClass(displayStatus))}>
             {displayStatus}
           </span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded border bg-muted/40 text-muted-foreground/70 font-mono border-transparent">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-md border border-border/40 bg-muted/30 text-muted-foreground font-mono">
             {item.kind}
           </span>
           {item.categories.map((cat) => (
-            <span key={cat.id} className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/15">
+            <span key={cat.id} className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
               {cat.name}
             </span>
           ))}
         </div>
-      </ItemContent>
+      </div>
 
-      <ItemActions className={cn('opacity-0 group-hover/item:opacity-100 transition-opacity', view === 'grid' && 'opacity-100')}>
-        <span className="text-[11px] text-muted-foreground/60 tabular-nums mr-1">{timeAgo(item.created_at)}</span>
+      {/* Hover actions */}
+      <div className={cn(
+        'absolute top-2 right-2 flex items-center gap-0.5',
+        'opacity-0 group-hover:opacity-100 transition-opacity',
+      )}>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7"
+              <Button variant="secondary" size="icon" className="h-6 w-6"
                 onClick={(e) => { e.stopPropagation(); window.open(item.url, '_blank') }}>
-                <ExternalLink className="w-3.5 h-3.5" />
+                <ExternalLink className="w-3 h-3" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Open URL</TooltipContent>
+            <TooltipContent side="bottom">Open URL</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7"
+              <Button variant="secondary" size="icon" className="h-6 w-6"
                 onClick={(e) => { e.stopPropagation(); onReclassify(item.id) }}>
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RefreshCw className="w-3 h-3" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Reclassify</TooltipContent>
+            <TooltipContent side="bottom">Reclassify</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive"
+              <Button variant="secondary" size="icon" className="h-6 w-6 hover:text-destructive"
                 onClick={(e) => { e.stopPropagation(); onDelete(item.id) }}>
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 className="w-3 h-3" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Delete</TooltipContent>
+            <TooltipContent side="bottom">Delete</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-      </ItemActions>
-    </Item>
+      </div>
+    </div>
   )
 
   return (
@@ -399,7 +411,7 @@ export default function InboxPage() {
     openItem, setOpenItem,
     draggingOver, setDraggingOver,
     loadMore,
-    onAssignCategory, onReclassify, onDelete,
+    onAssignCategory, onReclassify, onDelete, onCreateCategory,
   } = useInboxPage()
 
   const [activeItemId, setActiveItemId] = useState<number | null>(null)
@@ -441,7 +453,7 @@ export default function InboxPage() {
     if (!newCatName.trim() || creatingCat) return
     setCreatingCat(true)
     try {
-      await createCategory({ name: newCatName.trim() })
+      await onCreateCategory(newCatName.trim())
       setNewCatName('')
       setShowNewCat(false)
     } finally {
@@ -604,19 +616,33 @@ export default function InboxPage() {
             {/* List */}
             <ScrollArea className="flex-1">
               {loading && (
-                <div className={cn(view === 'grid' && 'grid grid-cols-3 gap-3 p-4')}>
-                  {Array.from({ length: 10 }).map((_, i) => (
+                <div className={cn(
+                  'p-4',
+                  view === 'grid' ? 'grid grid-cols-3 gap-3' : 'flex flex-col gap-2.5',
+                )}>
+                  {Array.from({ length: 9 }).map((_, i) => (
                     <div key={i} className={cn(
-                      'flex items-start gap-3 px-4 py-3',
-                      view === 'grid' && 'rounded-lg border border-border/50 p-3 flex-col',
-                      view === 'list' && 'border-b border-border/40',
+                      'rounded-xl border border-border/50 bg-card',
+                      view === 'grid' ? 'flex flex-col overflow-hidden' : 'flex flex-row items-start gap-4 p-3',
                     )}>
-                      <Skeleton className={cn('shrink-0', view === 'grid' ? 'w-full h-24 rounded-md' : 'w-9 h-9 rounded')} />
-                      <div className="flex-1 space-y-2 w-full">
-                        <Skeleton className="h-3.5 w-3/4" />
-                        <Skeleton className="h-3 w-full" />
-                        <Skeleton className="h-3 w-1/2" />
-                      </div>
+                      {view === 'grid'
+                        ? (<>
+                          <Skeleton className="w-full h-36" />
+                          <div className="p-3 space-y-2">
+                            <Skeleton className="h-4 w-3/4" />
+                            <Skeleton className="h-3 w-full" />
+                            <Skeleton className="h-3 w-2/3" />
+                          </div>
+                        </>)
+                        : (<>
+                          <Skeleton className="w-10 h-10 rounded-lg shrink-0" />
+                          <div className="flex-1 space-y-2">
+                            <Skeleton className="h-4 w-2/3" />
+                            <Skeleton className="h-3 w-full" />
+                            <Skeleton className="h-3 w-1/3" />
+                          </div>
+                        </>)
+                      }
                     </div>
                   ))}
                 </div>
@@ -631,7 +657,10 @@ export default function InboxPage() {
               )}
 
               {!loading && (
-                <div className={cn(view === 'grid' && 'grid grid-cols-3 gap-3 p-4')}>
+                <div className={cn(
+                  'p-4',
+                  view === 'grid' ? 'grid grid-cols-3 gap-3' : 'flex flex-col gap-2.5',
+                )}>
                   {items.map((item) => (
                     <ItemRow
                       key={item.id}

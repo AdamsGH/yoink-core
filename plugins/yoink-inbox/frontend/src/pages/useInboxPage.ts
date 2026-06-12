@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
+  createCategory,
   deleteItem,
   listCategories,
   listItems,
@@ -155,7 +156,6 @@ export function useInboxPage(): UseInboxPage {
   }, [openItem, loadCategories])
 
   const onCreateCategory = useCallback(async (name: string) => {
-    const { createCategory } = await import('@inbox/api/items')
     await createCategory({ name })
     await loadCategories()
   }, [loadCategories])
