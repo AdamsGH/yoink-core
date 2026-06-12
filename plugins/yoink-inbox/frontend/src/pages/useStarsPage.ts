@@ -183,16 +183,34 @@ export function useStarsPage() {
   async function onMoveStar(starId: number, targetFolder: FolderSelection) {
     if (movingId === starId) return
     setMovingId(starId)
+    const fromFolderId = typeof selectedFolder === 'number' ? selectedFolder : null
+    const toFolderId = typeof targetFolder === 'number' ? targetFolder : null
     try {
-      if (typeof selectedFolder === 'number') {
-        await removeStarFromFolder(selectedFolder, starId)
+      if (fromFolderId !== null) {
+        await removeStarFromFolder(fromFolderId, starId)
       }
-      if (typeof targetFolder === 'number') {
-        await addStarToFolder(targetFolder, starId)
-        toast.success(`Moved to ${folders.find((f) => f.id === targetFolder)?.name ?? 'folder'}`)
+      if (toFolderId !== null) {
+        await addStarToFolder(toFolderId, starId)
+        toast.success(`Moved to ${folders.find((f) => f.id === toFolderId)?.name ?? 'folder'}`)
       } else {
         toast.success('Removed from folder')
       }
+      // Optimistic folder star_count update
+      setFolders((prev) => prev.map((f) => {
+        if (f.id === fromFolderId) return { ...f, star_count: Math.max(0, f.star_count - 1) }
+        if (f.id === toFolderId) return { ...f, star_count: f.star_count + 1 }
+        return f
+      }))
+      // Optimistic folder_ids update on star cards
+      setStars((prev) => prev.map((s) => {
+        if (s.id !== starId) return s
+        const ids = s.folder_ids ?? []
+        const next = toFolderId !== null
+          ? [...ids.filter((id) => id !== fromFolderId), toFolderId]
+          : ids.filter((id) => id !== fromFolderId)
+        return { ...s, folder_ids: next }
+      }))
+      // Remove from view when browsing a specific folder
       if (selectedFolder !== 'all') {
         setStars((p) => p.filter((s) => s.id !== starId))
       }
