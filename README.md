@@ -292,7 +292,11 @@ frontend/
       plugin.ts      # PluginManifest, UserStats, NavGroup, ...
 ```
 
-**Aliases:** `@core/*` = `frontend/src/*`, `@ui` = `frontend/src/components/ui`, `@app` = `frontend/src/components/app`, `@dl/*` = `plugins/yoink-dl/frontend/src/*`, `@stats/*` = `plugins/yoink-stats/frontend/src/*`, `@insight/*` = `plugins/yoink-insight/frontend/src/*`.
+**Aliases:** `@core/*` = `frontend/src/*`, `@ui` = `frontend/src/components/ui`, `@app` = `frontend/src/components/app`, `@dl/*` = `plugins/yoink-dl/frontend/src/*`, `@stats/*` = `plugins/yoink-stats/frontend/src/*`, `@insight/*` = `plugins/yoink-insight/frontend/src/*`, `@inbox/*` = `plugins/yoink-inbox/frontend/src/*`.
+
+**`@app` components:** `UserPanel`, `SettingRow`, `InlineSelect`, `StatusBadge`, `CompactCardHeader`, `EmptyState`, `MarkdownBody`, `PageContainer` (max-w-4xl prose wrapper; omit in full-width pages like StarsPage).
+
+**Right sidebar slot:** `AppLayout` exposes `useRightSidebar()` (from `@core/layout/AppLayout`) that returns `setContent(node)`. Pages that need a page-level right panel (e.g. `StarsPage` folder navigator) call `setContent(<Panel />)` in `useEffect` and `setContent(null)` in the cleanup. The slot renders a shadcn `<Sidebar side="right">` inside the shared `SidebarProvider` (sidebar-15 pattern); `setContent` is a stable `useCallback` to prevent render-loop issues.
 
 **Alias resolution:** `vite.config.ts` `resolve.alias` is the sole runtime resolver (no `vite-tsconfig-paths` plugin). `tsconfig.json` paths remain in sync for tsc/editor only.
 

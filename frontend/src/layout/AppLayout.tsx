@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
@@ -259,8 +259,7 @@ function BottomDrawer({ open, onClose, title, items, currentPath }: {
 // Right sidebar slot component
 // ---------------------------------------------------------------------------
 
-function RightSidebarSlot({ contentRef }: { contentRef: { current: React.ReactNode } }) {
-  const content = contentRef.current
+function RightSidebarSlot({ content }: { content: React.ReactNode }) {
   if (!content) return null
   return (
     <Sidebar
@@ -306,13 +305,12 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
   const hasOverflow = overflowItems.length > 0
   const [moreDrawerOpen, setMoreDrawerOpen] = useState(false)
 
-  // Right sidebar slot state
-  const rightSidebarContent = useRef<React.ReactNode>(null)
-  const [, forceRightRender] = useState(0)
-  const setRightContent = (node: React.ReactNode) => {
-    rightSidebarContent.current = node
-    forceRightRender((n) => n + 1)
-  }
+  // Right sidebar slot - useState so updates go through normal React scheduling,
+  // useCallback so the setter reference is stable (avoids useEffect re-fire loop).
+  const [rightSidebarContent, setRightSidebarContent] = useState<React.ReactNode>(null)
+  const setRightContent = useCallback((node: React.ReactNode) => {
+    setRightSidebarContent(node)
+  }, [])
 
   return (
     <RightSidebarContext.Provider value={{ setContent: setRightContent }}>
@@ -369,7 +367,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
         </SidebarInset>
 
         {/* Right sidebar slot - pages mount content here via useRightSidebar() */}
-        <RightSidebarSlot contentRef={rightSidebarContent} />
+        <RightSidebarSlot content={rightSidebarContent} />
 
       </SidebarProvider>
       {/* Mobile bottom nav - max 5 slots total */}
