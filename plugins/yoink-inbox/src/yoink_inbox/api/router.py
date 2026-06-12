@@ -250,6 +250,7 @@ async def list_items(
     status_filter: str | None = Query(default=None, alias="status"),
     kind: str | None = Query(default=None),
     category_id: int | None = Query(default=None),
+    uncategorized: bool = Query(default=False),
     search: str | None = Query(default=None, min_length=2, max_length=128),
 ) -> InboxItemListResponse:
     """Paginated inbox feed for the authenticated user.
@@ -282,6 +283,14 @@ async def list_items(
         stmt = stmt.join(
             InboxItemCategory, InboxItemCategory.item_id == InboxItem.id
         ).where(InboxItemCategory.category_id == category_id)
+    elif uncategorized:
+        stmt = stmt.where(
+            ~InboxItem.id.in_(
+                select(InboxItemCategory.item_id).where(
+                    InboxItemCategory.item_id == InboxItem.id
+                )
+            )
+        )
 
     after = _decode_cursor(cursor)
     if after is not None:
@@ -428,6 +437,71 @@ async def reclassify_item(
 
     await run_classify(sf, item_id)
     return {"status": "done"}
+
+
+# ---------------------------------------------------------------------------
+# Item category assignment (user drag-and-drop)
+# ---------------------------------------------------------------------------
+
+
+@router.put("/items/{item_id}/categories", status_code=status.HTTP_204_NO_CONTENT)
+async def set_item_categories(
+    request: Request,
+    item_id: int,
+    category_ids: list[int],
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    """Replace the full set of categories on an item (user-assigned).
+
+    Existing AI/rule bindings are removed; new bindings are created with
+    attached_by='user'. Pass an empty list to clear all categories.
+    """
+    await _require_feature(request, user, "ingest")
+    item = await session.get(InboxItem, item_id)
+    if item is None or item.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Verify all requested category IDs belong to the user (or their teams)
+    if category_ids:
+        team_ids_rows = (
+            await session.execute(
+                select(InboxTeamMember.team_id).where(InboxTeamMember.user_id == user.id)
+            )
+        ).scalars().all()
+        if team_ids_rows:
+            visibility = or_(
+                InboxCategory.owner_user_id == user.id,
+                InboxCategory.shared_with_team_id.in_(team_ids_rows),
+            )
+        else:
+            visibility = InboxCategory.owner_user_id == user.id
+        valid_ids = (
+            await session.execute(
+                select(InboxCategory.id).where(
+                    InboxCategory.id.in_(category_ids), visibility
+                )
+            )
+        ).scalars().all()
+        invalid = set(category_ids) - set(valid_ids)
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Unknown category ids: {sorted(invalid)}")
+
+    # Replace bindings
+    await session.execute(
+        sql_delete(InboxItemCategory).where(InboxItemCategory.item_id == item_id)
+    )
+    for cat_id in category_ids:
+        session.add(
+            InboxItemCategory(
+                item_id=item_id,
+                category_id=cat_id,
+                attached_by="user",
+                attached_by_user_id=user.id,
+                confidence=None,
+            )
+        )
+    await session.commit()
 
 
 # ---------------------------------------------------------------------------

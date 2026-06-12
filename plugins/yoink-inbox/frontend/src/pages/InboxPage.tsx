@@ -1,286 +1,689 @@
-import { ExternalLink, RefreshCw, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core'
+import {
+  ExternalLink,
+  FolderOpen,
+  Inbox,
+  LayoutGrid,
+  LayoutList,
+  Plus,
+  RefreshCw,
+  Search,
+  Tag,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { useState } from 'react'
 
 import {
   Badge,
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
   Button,
   Card,
-  CardContent,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
   Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  SkeletonList,
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+  ScrollArea,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  Skeleton,
+  ToggleGroup,
+  ToggleGroupItem,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from '@ui'
-import { EmptyState, PageContainer } from '@app'
-import { toast } from 'sonner'
+import { cn } from '@core/lib/utils'
 
-import {
-  deleteItem,
-  listCategories,
-  listItems,
-  reclassifyItem,
-} from '@inbox/api/items'
+import { createCategory } from '@inbox/api/items'
 import type { InboxCategory, InboxItem } from '@inbox/types'
+import { useInboxPage } from './useInboxPage'
 
-const PAGE_SIZE = 25
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-const STATUS_OPTIONS = [
-  { value: 'all', label: 'All statuses' },
-  { value: 'pending', label: 'Pending' },
-  { value: 'enriched', label: 'Enriched' },
-  { value: 'classified', label: 'Classified' },
-  { value: 'archived', label: 'Archived' },
-  { value: 'failed', label: 'Failed' },
-]
-
-const KIND_OPTIONS = [
-  { value: 'all', label: 'All kinds' },
-  { value: 'link', label: 'Link' },
-  { value: 'github_repo', label: 'GitHub' },
-  { value: 'article', label: 'Article' },
-  { value: 'video', label: 'Video' },
-  { value: 'other', label: 'Other' },
-]
-
-function relTime(iso: string): string {
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
 }
 
-export default function InboxPage() {
-  const [items, setItems] = useState<InboxItem[]>([])
-  const [categories, setCategories] = useState<InboxCategory[]>([])
-  const [loading, setLoading] = useState(true)
-  const [moreCursor, setMoreCursor] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [kindFilter, setKindFilter] = useState('all')
-  const [search, setSearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
+function statusBadgeClass(s: string): string {
+  if (s === 'classified') return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25'
+  if (s === 'enriched') return 'bg-sky-500/15 text-sky-400 border-sky-500/25'
+  if (s === 'pending') return 'bg-amber-500/15 text-amber-400 border-amber-500/25'
+  if (s === 'failed' || s === 'llm:failed') return 'bg-red-500/15 text-red-400 border-red-500/25'
+  return 'bg-muted/60 text-muted-foreground border-transparent'
+}
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 350)
-    return () => clearTimeout(t)
-  }, [search])
+// ---------------------------------------------------------------------------
+// Droppable category node
+// ---------------------------------------------------------------------------
 
-  useEffect(() => {
-    setLoading(true)
-    Promise.all([
-      listItems({
-        limit: PAGE_SIZE,
-        status: statusFilter === 'all' ? undefined : statusFilter,
-        kind: kindFilter === 'all' ? undefined : kindFilter,
-        search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
-      }),
-      listCategories(),
-    ])
-      .then(([list, cats]) => {
-        setItems(list.items)
-        setMoreCursor(list.next_cursor)
-        setCategories(cats)
-      })
-      .catch((err) => {
-        if (import.meta.env.DEV) console.error(err)
-        toast.error('Failed to load inbox')
-      })
-      .finally(() => setLoading(false))
-  }, [statusFilter, kindFilter, debouncedSearch])
+interface CategoryNodeProps {
+  droppableId: string
+  label: string
+  count?: number
+  selected: boolean
+  isOver: boolean
+  icon: React.ReactNode
+  onClick: () => void
+}
 
-  async function loadMore() {
-    if (!moreCursor) return
-    try {
-      const list = await listItems({
-        limit: PAGE_SIZE,
-        cursor: moreCursor,
-        status: statusFilter === 'all' ? undefined : statusFilter,
-        kind: kindFilter === 'all' ? undefined : kindFilter,
-        search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
-      })
-      setItems((prev) => [...prev, ...list.items])
-      setMoreCursor(list.next_cursor)
-    } catch (err) {
-      if (import.meta.env.DEV) console.error(err)
-      toast.error('Failed to load more')
-    }
-  }
-
-  async function onDelete(id: number) {
-    try {
-      await deleteItem(id)
-      setItems((prev) => prev.filter((i) => i.id !== id))
-      toast.success('Archived')
-    } catch (err) {
-      if (import.meta.env.DEV) console.error(err)
-      toast.error('Failed to archive')
-    }
-  }
-
-  async function onReclassify(id: number) {
-    try {
-      const r = await reclassifyItem(id)
-      toast.success(`Reclassify ${r.status}`)
-    } catch (err) {
-      if (import.meta.env.DEV) console.error(err)
-      toast.error('Failed to enqueue reclassify')
-    }
-  }
-
+function CategoryNode({ droppableId, label, count, selected, isOver, icon, onClick }: CategoryNodeProps) {
+  const { setNodeRef } = useDroppable({ id: droppableId })
   return (
-    <PageContainer>
-      {/* Toolbar */}
-      <div className="mb-4 flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Inbox</h1>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Input
-            placeholder="Search title, url, summary..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-8 min-w-0 flex-1 basis-48"
-          />
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-8 w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {STATUS_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={kindFilter} onValueChange={setKindFilter}>
-            <SelectTrigger className="h-8 w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {KIND_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+    <button
+      ref={setNodeRef}
+      onClick={onClick}
+      className={cn(
+        'w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm transition-all duration-100 text-left',
+        selected && !isOver && 'bg-primary/15 text-primary font-medium',
+        !selected && !isOver && 'text-muted-foreground hover:bg-accent hover:text-foreground',
+        isOver && 'bg-primary/25 text-primary ring-1 ring-primary/40 scale-[1.01]',
+      )}
+    >
+      <span className="shrink-0">{icon}</span>
+      <span className="flex-1 truncate">{label}</span>
+      {count !== undefined && (
+        <span className="text-[11px] tabular-nums text-muted-foreground/70 font-mono">{count}</span>
+      )}
+    </button>
+  )
+}
 
-        {categories.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {categories.map((c) => (
-              <Badge key={c.id} variant="secondary" className="h-6 font-normal">
-                {c.name}
-                <span className="ml-1 text-muted-foreground/70">{c.item_count}</span>
-              </Badge>
-            ))}
+// ---------------------------------------------------------------------------
+// Draggable item row with ContextMenu
+// ---------------------------------------------------------------------------
+
+interface ItemRowProps {
+  item: InboxItem
+  view: 'list' | 'grid'
+  isDragging: boolean
+  categories: InboxCategory[]
+  onOpen: (item: InboxItem) => void
+  onAssign: (itemId: number, catId: number | null) => void
+  onReclassify: (id: number) => void
+  onDelete: (id: number) => void
+}
+
+function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onReclassify, onDelete }: ItemRowProps) {
+  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+    id: `item-${item.id}`,
+    data: { itemId: item.id },
+  })
+  const style = transform
+    ? { transform: `translate(${transform.x}px,${transform.y}px)`, zIndex: 50, position: 'relative' as const }
+    : undefined
+
+  const displayStatus = item.llm_status === 'failed' ? 'llm:failed' : item.llm_status ?? item.status
+
+  const row = (
+    <Item
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      variant="default"
+      size={view === 'grid' ? 'default' : 'sm'}
+      className={cn(
+        'cursor-grab active:cursor-grabbing border-b border-border/40 rounded-none hover:bg-accent/50 transition-colors',
+        view === 'grid' && 'rounded-lg border border-border/50 hover:border-primary/30 flex-col items-start',
+        isDragging && 'opacity-30',
+      )}
+      onClick={() => onOpen(item)}
+    >
+      <ItemMedia variant="image" className={cn(view === 'grid' && 'w-full h-24 rounded-md mb-1 size-auto')}>
+        {item.og_image_url ? (
+          <img
+            src={item.og_image_url}
+            alt=""
+            className={cn('rounded object-cover', view === 'grid' ? 'w-full h-24' : 'w-9 h-9')}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+          />
+        ) : (
+          <div className={cn(
+            'rounded bg-muted/60 flex items-center justify-center border border-border/40',
+            view === 'grid' ? 'w-full h-24' : 'w-9 h-9',
+          )}>
+            <Inbox className="w-4 h-4 text-muted-foreground/40" />
           </div>
         )}
-      </div>
+      </ItemMedia>
 
-      {/* List */}
-      {loading ? (
-        <SkeletonList count={5}>
-          {(i) => <Card key={i}><CardContent className="h-20" /></Card>}
-        </SkeletonList>
-      ) : items.length === 0 ? (
-        <EmptyState message="No items match the current filters." />
-      ) : (
-        <div className="space-y-2">
-          {items.map((item) => (
-            <Card key={item.id}>
-              <CardContent className="flex gap-3 p-3">
-                {item.og_image_url && (
-                  <img
-                    src={item.og_image_url}
-                    alt=""
-                    className="h-14 w-14 shrink-0 rounded object-cover"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                  />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-2">
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="line-clamp-2 text-sm font-medium hover:underline"
-                    >
-                      {item.title ?? item.url}
-                    </a>
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        title="Open"
-                        onClick={() => window.open(item.url, '_blank')}
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        title="Reclassify"
-                        onClick={() => void onReclassify(item.id)}
-                      >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                        title="Archive"
-                        onClick={() => void onDelete(item.id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                  {item.summary && (
-                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                      {item.summary}
-                    </p>
-                  )}
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                    <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{item.kind}</Badge>
-                    <Badge
-                      variant={item.status === 'failed' ? 'destructive' : 'secondary'}
-                      className="h-5 px-1.5 text-[10px]"
-                    >
-                      {item.status}
-                    </Badge>
-                    {item.llm_status && item.llm_status !== 'success' && (
-                      <Badge
-                        variant={item.llm_status === 'failed' ? 'destructive' : 'outline'}
-                        className="h-5 px-1.5 text-[10px]"
-                      >
-                        llm:{item.llm_status}
-                      </Badge>
-                    )}
-                    {item.categories.map((c) => (
-                      <Badge key={c.id} variant="default" className="h-5 px-1.5 text-[10px]">
-                        {c.name}
-                      </Badge>
-                    ))}
-                    <span className="ml-auto text-[10px] text-muted-foreground">
-                      {relTime(item.created_at)}
-                    </span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+      <ItemContent>
+        <ItemTitle>
+          <span className="truncate">{item.title || item.url}</span>
+        </ItemTitle>
+        {item.summary && (
+          <ItemDescription className={view === 'grid' ? 'line-clamp-3' : 'line-clamp-1'}>
+            {item.summary}
+          </ItemDescription>
+        )}
+        <div className="flex flex-wrap gap-1 mt-0.5">
+          <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-mono', statusBadgeClass(displayStatus))}>
+            {displayStatus}
+          </span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded border bg-muted/40 text-muted-foreground/70 font-mono border-transparent">
+            {item.kind}
+          </span>
+          {item.categories.map((cat) => (
+            <span key={cat.id} className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/15">
+              {cat.name}
+            </span>
           ))}
-          {moreCursor && (
-            <div className="flex justify-center pt-2">
-              <Button variant="outline" size="sm" onClick={() => void loadMore()}>
-                Load more
+        </div>
+      </ItemContent>
+
+      <ItemActions className={cn('opacity-0 group-hover/item:opacity-100 transition-opacity', view === 'grid' && 'opacity-100')}>
+        <span className="text-[11px] text-muted-foreground/60 tabular-nums mr-1">{timeAgo(item.created_at)}</span>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7"
+                onClick={(e) => { e.stopPropagation(); window.open(item.url, '_blank') }}>
+                <ExternalLink className="w-3.5 h-3.5" />
               </Button>
+            </TooltipTrigger>
+            <TooltipContent>Open URL</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7"
+                onClick={(e) => { e.stopPropagation(); onReclassify(item.id) }}>
+                <RefreshCw className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Reclassify</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7 hover:text-destructive"
+                onClick={(e) => { e.stopPropagation(); onDelete(item.id) }}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Delete</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </ItemActions>
+    </Item>
+  )
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem onSelect={() => window.open(item.url, '_blank')}>
+          <ExternalLink className="w-4 h-4 mr-2" /> Open URL
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <Tag className="w-4 h-4 mr-2" /> Assign category
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-48">
+            <ContextMenuItem onSelect={() => onAssign(item.id, null)}>
+              <X className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Clear categories
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            {categories.map((cat) => (
+              <ContextMenuItem key={cat.id} onSelect={() => onAssign(item.id, cat.id)}>
+                <FolderOpen className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
+                {cat.name}
+                {item.categories.find((c) => c.id === cat.id) && (
+                  <span className="ml-auto text-primary">✓</span>
+                )}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuItem onSelect={() => onReclassify(item.id)}>
+          <RefreshCw className="w-4 h-4 mr-2" /> Reclassify
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() => onDelete(item.id)}
+          className="text-destructive focus:text-destructive"
+        >
+          <Trash2 className="w-4 h-4 mr-2" /> Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Item detail sheet
+// ---------------------------------------------------------------------------
+
+function ItemSheet({
+  item,
+  categories,
+  onClose,
+  onAssign,
+  onReclassify,
+  onDelete,
+}: {
+  item: InboxItem
+  categories: InboxCategory[]
+  onClose: () => void
+  onAssign: (catId: number | null) => void
+  onReclassify: () => void
+  onDelete: () => void
+}) {
+  const displayStatus = item.llm_status === 'failed' ? 'llm:failed' : item.llm_status ?? item.status
+
+  return (
+    <Sheet open onOpenChange={(o) => !o && onClose()}>
+      <SheetContent className="w-[420px] sm:w-[480px] flex flex-col gap-0 p-0 overflow-y-auto">
+        <SheetHeader className="px-5 pt-5 pb-3 border-b border-border/60">
+          <SheetTitle className="text-base leading-snug pr-6">{item.title || item.url}</SheetTitle>
+          <a href={item.url} target="_blank" rel="noopener noreferrer"
+            className="text-xs text-muted-foreground hover:text-primary truncate block mt-0.5">
+            {item.url}
+          </a>
+        </SheetHeader>
+
+        {item.og_image_url && (
+          <img src={item.og_image_url} alt=""
+            className="w-full h-44 object-cover border-b border-border/60" />
+        )}
+
+        <div className="flex-1 px-5 py-4 space-y-5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn('text-xs px-2 py-0.5 rounded border font-mono', statusBadgeClass(displayStatus))}>
+              {displayStatus}
+            </span>
+            <span className="text-xs px-2 py-0.5 rounded bg-muted/40 text-muted-foreground font-mono">
+              {item.kind}
+            </span>
+            <span className="text-xs text-muted-foreground ml-auto">{timeAgo(item.created_at)}</span>
+          </div>
+
+          {item.summary && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Summary</p>
+              <p className="text-sm leading-relaxed">{item.summary}</p>
             </div>
           )}
+
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Categories</p>
+            <div className="flex flex-wrap gap-1.5">
+              {item.categories.map((cat) => (
+                <Badge key={cat.id} variant="secondary"
+                  className="gap-1 cursor-pointer hover:bg-destructive/20 hover:text-destructive"
+                  onClick={() => onAssign(null)}>
+                  {cat.name} <X className="w-3 h-3" />
+                </Badge>
+              ))}
+              {categories
+                .filter((c) => !item.categories.find((ic) => ic.id === c.id))
+                .map((cat) => (
+                  <Badge key={cat.id} variant="outline"
+                    className="gap-1 cursor-pointer hover:bg-primary/10 hover:text-primary hover:border-primary/30"
+                    onClick={() => onAssign(cat.id)}>
+                    <Plus className="w-3 h-3" /> {cat.name}
+                  </Badge>
+                ))}
+            </div>
+          </div>
         </div>
+
+        <div className="px-5 py-4 border-t border-border/60 flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onReclassify} className="gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5" /> Reclassify
+          </Button>
+          <Button asChild variant="outline" size="sm" className="gap-1.5">
+            <a href={item.url} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="w-3.5 h-3.5" /> Open
+            </a>
+          </Button>
+          <Button variant="outline" size="sm"
+            className="gap-1.5 ml-auto text-destructive hover:bg-destructive/10 hover:border-destructive/30"
+            onClick={onDelete}>
+            <Trash2 className="w-3.5 h-3.5" /> Delete
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
+export default function InboxPage() {
+  const {
+    items, categories, loading, loadingMore, moreCursor,
+    selectedCategory, setSelectedCategory,
+    search, setSearch, status, setStatus,
+    openItem, setOpenItem,
+    draggingOver, setDraggingOver,
+    loadMore,
+    onAssignCategory, onReclassify, onDelete,
+  } = useInboxPage()
+
+  const [activeItemId, setActiveItemId] = useState<number | null>(null)
+  const [view, setView] = useState<'list' | 'grid'>('list')
+  const [newCatName, setNewCatName] = useState('')
+  const [creatingCat, setCreatingCat] = useState(false)
+  const [showNewCat, setShowNewCat] = useState(false)
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
+  const activeItem = items.find((i) => i.id === activeItemId) ?? null
+
+  function handleDragStart(e: DragStartEvent) {
+    setActiveItemId((e.active.data.current as { itemId: number }).itemId)
+  }
+
+  async function handleDragEnd(e: DragEndEvent) {
+    setActiveItemId(null)
+    setDraggingOver(null)
+    const itemId = (e.active.data.current as { itemId: number }).itemId
+    const overId = e.over?.id as string | undefined
+    if (!overId) return
+    if (overId.startsWith('cat-')) {
+      await onAssignCategory(itemId, parseInt(overId.replace('cat-', ''), 10))
+    } else if (overId === 'uncategorized') {
+      await onAssignCategory(itemId, null)
+    }
+  }
+
+  function handleDragOver(e: { over: { id: string } | null }) {
+    if (!e.over) { setDraggingOver(null); return }
+    const id = e.over.id as string
+    if (id === 'all') setDraggingOver('all')
+    else if (id === 'uncategorized') setDraggingOver('uncategorized')
+    else if (id.startsWith('cat-')) setDraggingOver(parseInt(id.replace('cat-', ''), 10))
+    else setDraggingOver(null)
+  }
+
+  async function handleCreateCat() {
+    if (!newCatName.trim() || creatingCat) return
+    setCreatingCat(true)
+    try {
+      await createCategory({ name: newCatName.trim() })
+      setNewCatName('')
+      setShowNewCat(false)
+    } finally {
+      setCreatingCat(false)
+    }
+  }
+
+  const selectedCatLabel = selectedCategory === 'all'
+    ? 'All Items'
+    : selectedCategory === 'uncategorized'
+      ? 'Uncategorized'
+      : categories.find((c) => c.id === selectedCategory)?.name ?? 'Items'
+
+  return (
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver as never}
+    >
+      <ResizablePanelGroup className="h-full">
+        {/* ---- Sidebar ---- */}
+        <ResizablePanel defaultSize={18} minSize={14} maxSize={28} className="flex flex-col">
+          <div className="px-3 pt-4 pb-2">
+            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest px-2 mb-2">
+              Inbox
+            </p>
+          </div>
+          <ScrollArea className="flex-1 px-2">
+            <div className="flex flex-col gap-0.5 pb-3">
+              <CategoryNode
+                droppableId="all"
+                label="All Items"
+                count={items.length}
+                selected={selectedCategory === 'all'}
+                isOver={draggingOver === 'all'}
+                icon={<Inbox className="w-3.5 h-3.5" />}
+                onClick={() => setSelectedCategory('all')}
+              />
+              <CategoryNode
+                droppableId="uncategorized"
+                label="Uncategorized"
+                selected={selectedCategory === 'uncategorized'}
+                isOver={draggingOver === 'uncategorized'}
+                icon={<Tag className="w-3.5 h-3.5" />}
+                onClick={() => setSelectedCategory('uncategorized')}
+              />
+
+              {categories.length > 0 && (
+                <div className="mx-2 my-2 border-t border-border/50" />
+              )}
+
+              {categories.map((cat) => (
+                <CategoryNode
+                  key={cat.id}
+                  droppableId={`cat-${cat.id}`}
+                  label={cat.name}
+                  count={cat.item_count}
+                  selected={selectedCategory === cat.id}
+                  isOver={draggingOver === cat.id}
+                  icon={<FolderOpen className="w-3.5 h-3.5" />}
+                  onClick={() => setSelectedCategory(cat.id)}
+                />
+              ))}
+            </div>
+          </ScrollArea>
+
+          <div className="px-2 pb-3 border-t border-border/40 pt-2">
+            {showNewCat ? (
+              <div className="flex gap-1">
+                <Input
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  placeholder="Category name..."
+                  className="h-7 text-xs"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleCreateCat()
+                    if (e.key === 'Escape') { setShowNewCat(false); setNewCatName('') }
+                  }}
+                  autoFocus
+                  disabled={creatingCat}
+                />
+                <Button size="icon" className="h-7 w-7 shrink-0" onClick={handleCreateCat} disabled={creatingCat}>
+                  <Plus className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowNewCat(true)}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" /> New category
+              </button>
+            )}
+          </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        {/* ---- Main ---- */}
+        <ResizablePanel defaultSize={82}>
+          <div className="flex flex-col h-full">
+            {/* Toolbar */}
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/60 shrink-0">
+              <Breadcrumb>
+                <BreadcrumbList>
+                  <BreadcrumbItem>
+                    <BreadcrumbLink className="text-muted-foreground hover:text-foreground text-sm cursor-pointer"
+                      onClick={() => setSelectedCategory('all')}>
+                      Inbox
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
+                  {selectedCategory !== 'all' && (
+                    <>
+                      <BreadcrumbSeparator />
+                      <BreadcrumbItem>
+                        <BreadcrumbPage className="text-sm">{selectedCatLabel}</BreadcrumbPage>
+                      </BreadcrumbItem>
+                    </>
+                  )}
+                </BreadcrumbList>
+              </Breadcrumb>
+
+              <div className="flex-1" />
+
+              <div className="relative w-56">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search..."
+                  className="pl-8 h-8 text-sm"
+                />
+              </div>
+
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2.5 text-sm text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">All statuses</option>
+                <option value="pending">Pending</option>
+                <option value="enriched">Enriched</option>
+                <option value="classified">Classified</option>
+                <option value="failed">Failed</option>
+              </select>
+
+              <ToggleGroup type="single" value={view} onValueChange={(v) => v && setView(v as 'list' | 'grid')} className="h-8">
+                <ToggleGroupItem value="list" className="h-8 w-8 p-0">
+                  <LayoutList className="w-3.5 h-3.5" />
+                </ToggleGroupItem>
+                <ToggleGroupItem value="grid" className="h-8 w-8 p-0">
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                </ToggleGroupItem>
+              </ToggleGroup>
+
+              <span className="text-xs text-muted-foreground tabular-nums">{items.length} items</span>
+            </div>
+
+            {/* List */}
+            <ScrollArea className="flex-1">
+              {loading && (
+                <div className={cn(view === 'grid' && 'grid grid-cols-3 gap-3 p-4')}>
+                  {Array.from({ length: 10 }).map((_, i) => (
+                    <div key={i} className={cn(
+                      'flex items-start gap-3 px-4 py-3',
+                      view === 'grid' && 'rounded-lg border border-border/50 p-3 flex-col',
+                      view === 'list' && 'border-b border-border/40',
+                    )}>
+                      <Skeleton className={cn('shrink-0', view === 'grid' ? 'w-full h-24 rounded-md' : 'w-9 h-9 rounded')} />
+                      <div className="flex-1 space-y-2 w-full">
+                        <Skeleton className="h-3.5 w-3/4" />
+                        <Skeleton className="h-3 w-full" />
+                        <Skeleton className="h-3 w-1/2" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!loading && items.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-64 gap-3 text-muted-foreground">
+                  <Inbox className="w-10 h-10 opacity-20" />
+                  <p className="text-sm">No items here</p>
+                  <p className="text-xs opacity-60">Drop items from other categories or save a new link</p>
+                </div>
+              )}
+
+              {!loading && (
+                <div className={cn(view === 'grid' && 'grid grid-cols-3 gap-3 p-4')}>
+                  {items.map((item) => (
+                    <ItemRow
+                      key={item.id}
+                      item={item}
+                      view={view}
+                      isDragging={activeItemId === item.id}
+                      categories={categories}
+                      onOpen={setOpenItem}
+                      onAssign={onAssignCategory}
+                      onReclassify={onReclassify}
+                      onDelete={onDelete}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {moreCursor && !loadingMore && (
+                <div className="flex justify-center py-5">
+                  <Button variant="outline" size="sm" onClick={loadMore}>Load more</Button>
+                </div>
+              )}
+              {loadingMore && (
+                <div className="flex justify-center py-5">
+                  <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </ScrollArea>
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+
+      {/* Drag overlay */}
+      <DragOverlay dropAnimation={null}>
+        {activeItem && (
+          <Card className="px-3 py-2 shadow-xl border-primary/40 bg-card max-w-xs opacity-90">
+            <p className="text-sm font-medium truncate">{activeItem.title || activeItem.url}</p>
+            <p className="text-xs text-muted-foreground mt-0.5 truncate">{activeItem.url}</p>
+          </Card>
+        )}
+      </DragOverlay>
+
+      {/* Detail sheet */}
+      {openItem && (
+        <ItemSheet
+          item={openItem}
+          categories={categories}
+          onClose={() => setOpenItem(null)}
+          onAssign={(catId) => void onAssignCategory(openItem.id, catId)}
+          onReclassify={() => void onReclassify(openItem.id)}
+          onDelete={() => void onDelete(openItem.id)}
+        />
       )}
-    </PageContainer>
+    </DndContext>
   )
 }

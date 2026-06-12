@@ -21,6 +21,7 @@ export interface InboxItemFilters {
   status?: string
   kind?: string
   category_id?: number
+  uncategorized?: boolean
   search?: string
 }
 
@@ -43,6 +44,10 @@ export async function createItem(url: string, source = 'web'): Promise<InboxItem
 
 export async function deleteItem(id: number, hard = false): Promise<void> {
   await apiClient.delete(`/inbox/items/${id}`, { params: { hard } })
+}
+
+export async function setItemCategories(itemId: number, categoryIds: number[]): Promise<void> {
+  await apiClient.put(`/inbox/items/${itemId}/categories`, categoryIds)
 }
 
 export async function reclassifyItem(id: number): Promise<{ status: string }> {

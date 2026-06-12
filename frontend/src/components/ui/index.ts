@@ -30,6 +30,13 @@ export * from './tabs'
 export * from './textarea'
 // toast.tsx re-exports Toaster/toast from sonner, colliding with sonner.tsx;
 // import directly from './toast' when the shim is needed
+export * from './breadcrumb'
+export * from './context-menu'
+export * from './resizable'
+export * from './scroll-area'
+export * from './spinner'
+export * from './toggle'
+export * from './toggle-group'
 export * from './tooltip'
 export * from './DialogActions'
 export * from './DividedList'
