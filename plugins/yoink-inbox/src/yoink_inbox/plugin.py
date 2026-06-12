@@ -218,10 +218,17 @@ class InboxPlugin:
         ]
 
     def get_jobs(self) -> list[JobSpec] | None:
-        # Periodic GH stars sync wakes up and enqueues per-user ARQ jobs.
-        # Real callback wired in once services/gh_stars.py lands; until then
-        # JobSpec list is empty so the bot starts cleanly.
-        return []
+        from yoink_inbox.services.jobs import scheduled_gh_sync
+
+        interval_seconds = self._config.inbox_gh_sync_interval_hours * 3600
+        return [
+            JobSpec(
+                callback=scheduled_gh_sync,
+                interval=interval_seconds,
+                first=300,  # first run 5 min after bot startup
+                name="inbox_gh_sync_periodic",
+            ),
+        ]
 
     async def setup(self, ctx: PluginContext) -> None:
         """Populate bot_data with inbox-specific services.
