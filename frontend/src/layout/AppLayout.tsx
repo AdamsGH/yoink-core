@@ -44,10 +44,12 @@ export type { NavItem, NavGroup }
 
 interface RightSidebarCtx {
   setContent: (node: React.ReactNode) => void
+  openMobileSheet: () => void
 }
 
 const RightSidebarContext = createContext<RightSidebarCtx>({
   setContent: () => {},
+  openMobileSheet: () => {},
 })
 
 /** Mount content into the app-level right sidebar. Call setContent(null) in the cleanup. */
@@ -259,19 +261,39 @@ function BottomDrawer({ open, onClose, title, items, currentPath }: {
 // Right sidebar slot component
 // ---------------------------------------------------------------------------
 
-function RightSidebarSlot({ content }: { content: React.ReactNode }) {
+function RightSidebarSlot({
+  content,
+  mobileOpen,
+  onMobileClose,
+}: {
+  content: React.ReactNode
+  mobileOpen: boolean
+  onMobileClose: () => void
+}) {
   if (!content) return null
   return (
-    <Sidebar
-      side="right"
-      collapsible="offcanvas"
-      style={{ '--sidebar-width': '16rem' } as React.CSSProperties}
-      className="hidden md:flex"
-    >
-      <SidebarContent>
-        {content}
-      </SidebarContent>
-    </Sidebar>
+    <>
+      {/* Desktop: inline sidebar */}
+      <Sidebar
+        side="right"
+        collapsible="offcanvas"
+        style={{ '--sidebar-width': '16rem' } as React.CSSProperties}
+        className="hidden md:flex"
+      >
+        <SidebarContent>{content}</SidebarContent>
+      </Sidebar>
+      {/* Mobile: Sheet overlay */}
+      <Sheet open={mobileOpen} onOpenChange={(o) => { if (!o) onMobileClose() }}>
+        <SheetContent side="right" className="w-72 p-0 md:hidden">
+          <SheetHeader className="sr-only">
+            <SheetTitle>Folders</SheetTitle>
+          </SheetHeader>
+          <div className="flex h-full flex-col overflow-y-auto py-2">
+            {content}
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
   )
 }
 
@@ -308,12 +330,14 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
   // Right sidebar slot - useState so updates go through normal React scheduling,
   // useCallback so the setter reference is stable (avoids useEffect re-fire loop).
   const [rightSidebarContent, setRightSidebarContent] = useState<React.ReactNode>(null)
+  const [rightMobileOpen, setRightMobileOpen] = useState(false)
+  const openMobileSheet = useCallback(() => setRightMobileOpen(true), [])
   const setRightContent = useCallback((node: React.ReactNode) => {
     setRightSidebarContent(node)
   }, [])
 
   return (
-    <RightSidebarContext.Provider value={{ setContent: setRightContent }}>
+    <RightSidebarContext.Provider value={{ setContent: setRightContent, openMobileSheet }}>
       {/* Desktop sidebar - standard shadcn layout, no extra className on Sidebar */}
       <SidebarProvider>
         <Sidebar collapsible="icon">
@@ -367,7 +391,11 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
         </SidebarInset>
 
         {/* Right sidebar slot - pages mount content here via useRightSidebar() */}
-        <RightSidebarSlot content={rightSidebarContent} />
+        <RightSidebarSlot
+          content={rightSidebarContent}
+          mobileOpen={rightMobileOpen}
+          onMobileClose={() => setRightMobileOpen(false)}
+        />
 
       </SidebarProvider>
       {/* Mobile bottom nav - max 5 slots total */}
