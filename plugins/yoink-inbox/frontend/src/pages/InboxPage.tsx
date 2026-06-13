@@ -2,7 +2,7 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
-  useDndMonitor,
+  useDndContext,
   useDraggable,
   useDroppable,
   useSensor,
@@ -22,7 +22,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { snapCenterToCursor } from '@dnd-kit/modifiers'
 import { pointerWithin } from '@dnd-kit/core'
 
@@ -100,45 +100,54 @@ function MobileDragDock({
   isDragging: boolean
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const rafRef = useRef<number | null>(null)
-  const pointerXRef = useRef<number>(0)
+  // ref, not state - avoids re-renders on every pointermove
+  const scrollDirectionRef = useRef<number | null>(null)
+  // canonical pattern from dnd-kit issue #1108 (Innders / romulloqueiroz):
+  // useDndContext().active is available as long as component is mounted inside DndContext
+  const { active } = useDndContext()
 
-  // Track pointer position via native event - independent of dnd-kit pipeline
+  // Interval that does the actual scrolling - runs only while dragging
   useEffect(() => {
-    const onMove = (e: PointerEvent) => { pointerXRef.current = e.clientX }
-    window.addEventListener('pointermove', onMove, { passive: true })
-    return () => window.removeEventListener('pointermove', onMove)
-  }, [])
-
-  // Start/stop scroll loop based on drag state
-  const startScroll = useCallback(() => {
-    const EDGE = 56
-    const SPEED = 12
-    const tick = () => {
+    if (!active) return
+    const SPEED = 10
+    const id = setInterval(() => {
       const el = scrollRef.current
-      if (el) {
-        const rect = el.getBoundingClientRect()
-        const x = pointerXRef.current
-        if (x < rect.left + EDGE) el.scrollLeft -= SPEED
-        else if (x > rect.right - EDGE) el.scrollLeft += SPEED
+      if (el && scrollDirectionRef.current !== null) {
+        el.scrollLeft += SPEED * scrollDirectionRef.current
       }
-      rafRef.current = requestAnimationFrame(tick)
+    }, 5)
+    return () => clearInterval(id)
+  }, [active])
+
+  // pointermove listener - computes scroll direction from pointer proximity to dock edges
+  useEffect(() => {
+    if (!active) {
+      scrollDirectionRef.current = null
+      return
     }
-    rafRef.current = requestAnimationFrame(tick)
-  }, [])
-
-  const stopScroll = useCallback(() => {
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
-  }, [])
-
-  useDndMonitor({
-    onDragStart: startScroll,
-    onDragEnd: stopScroll,
-    onDragCancel: stopScroll,
-  })
+    const EDGE = 64
+    const onMove = (e: PointerEvent) => {
+      const el = scrollRef.current
+      if (!el) return
+      const { left, right } = el.getBoundingClientRect()
+      const x = e.clientX
+      scrollDirectionRef.current =
+        x < left + EDGE ? -1 :
+        x > right - EDGE ? 1 :
+        null
+    }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      scrollDirectionRef.current = null
+    }
+  }, [active])
 
   return (
-    <div className={cn('md:hidden shrink-0 border-b border-border/60 bg-muted/20 transition-all', isDragging ? 'block' : 'hidden')}>
+    <div className={cn(
+      'md:hidden shrink-0 border-b border-border/60 bg-muted/20 transition-all duration-150 overflow-hidden',
+      isDragging ? 'max-h-16 opacity-100' : 'max-h-0 opacity-0 pointer-events-none',
+    )}>
       <div ref={scrollRef} className="flex gap-2 px-3 py-2 overflow-x-auto">
         <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
           isOver={draggingOver === 'uncategorized'}
