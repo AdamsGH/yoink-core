@@ -22,32 +22,8 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { Modifier } from '@dnd-kit/core'
-
-// DragOverlay modifier: snap overlay top-left corner to pointer
-// pointerCoordinates = current pointer position in viewport coords
-// draggingNodeRect = original element bounding rect
-// transform = running delta from drag start
-// Without this modifier, overlay renders at draggingNodeRect translated by transform.
-// We want it centred under the current pointer instead.
-const snapToCursor: Modifier = ({ draggingNodeRect, transform, ...rest }) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pointerCoordinates = (rest as any).pointerCoordinates as { x: number; y: number } | null
-  if (!draggingNodeRect || !pointerCoordinates) return transform
-  // Where overlay would naturally be (top-left corner)
-  const naturalX = draggingNodeRect.left + transform.x
-  const naturalY = draggingNodeRect.top + transform.y
-  // Where we want overlay center: under the pointer
-  const targetX = pointerCoordinates.x - draggingNodeRect.width / 2
-  const targetY = pointerCoordinates.y - draggingNodeRect.height / 2
-  return {
-    ...transform,
-    x: transform.x + (targetX - naturalX),
-    y: transform.y + (targetY - naturalY),
-    scaleX: 1,
-    scaleY: 1,
-  }
-}
+import { snapCenterToCursor } from '@dnd-kit/modifiers'
+import { pointerWithin } from '@dnd-kit/core'
 
 import {
   Breadcrumb,
@@ -650,6 +626,7 @@ export default function InboxPage() {
   return (
     <DndContext
       sensors={sensors}
+      collisionDetection={pointerWithin}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragOver={handleDragOver as never}
@@ -811,7 +788,7 @@ export default function InboxPage() {
           </div>
 
       {/* Drag overlay - mirrors list-mode card */}
-      <DragOverlay modifiers={[snapToCursor]}>
+      <DragOverlay modifiers={[snapCenterToCursor]}>
         {activeItem && (
           <div className={cn(
             'flex flex-row items-start gap-4 p-3 rounded-xl border border-primary/50 bg-card',
