@@ -575,6 +575,27 @@ export default function InboxPage() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
   const activeItem = items.find((i) => i.id === activeItemId) ?? null
+  const dockScrollRef = useRef<HTMLDivElement>(null)
+  const dockScrollRaf = useRef<number | null>(null)
+
+  function handleDragMove({ activatorEvent, delta }: { activatorEvent: Event; delta: { x: number; y: number } }) {
+    const dock = dockScrollRef.current
+    if (!dock) return
+    const rect = dock.getBoundingClientRect()
+    // Get current pointer X from activatorEvent + running delta
+    const pointerX = (activatorEvent as PointerEvent).clientX + delta.x
+    const edgeZone = 60
+    const speed = 8
+    if (dockScrollRaf.current) cancelAnimationFrame(dockScrollRaf.current)
+    const scrollStep = () => {
+      if (!dockScrollRef.current) return
+      const nearLeft = pointerX < rect.left + edgeZone
+      const nearRight = pointerX > rect.right - edgeZone
+      if (nearLeft) dockScrollRef.current.scrollLeft -= speed
+      else if (nearRight) dockScrollRef.current.scrollLeft += speed
+    }
+    dockScrollRaf.current = requestAnimationFrame(scrollStep)
+  }
 
   useEffect(() => {
     setContent(
@@ -629,10 +650,11 @@ export default function InboxPage() {
       collisionDetection={pointerWithin}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragMove={handleDragMove as never}
       onDragOver={handleDragOver as never}
       autoScroll={{ threshold: { x: 0.1, y: 0.2 } }}
     >
-      <div className="flex flex-col h-full min-w-0 overflow-x-clip">
+      <div className="flex flex-col h-full min-w-0">
             {/* Toolbar */}
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-border/60 shrink-0 min-w-0">
               <Breadcrumb className="min-w-0">
@@ -697,7 +719,7 @@ export default function InboxPage() {
             {/* Mobile drag dock - inline under toolbar, visible only while dragging */}
             {activeItem && (
               <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20">
-                <div className="flex gap-2 px-3 py-2 overflow-x-auto">
+                <div ref={dockScrollRef} className="flex gap-2 px-3 py-2 overflow-x-auto">
                   <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
                     isOver={draggingOver === 'uncategorized'}
                     icon={<Tag className="w-3.5 h-3.5" />} />
@@ -788,7 +810,7 @@ export default function InboxPage() {
           </div>
 
       {/* Drag overlay - mirrors list-mode card */}
-      <DragOverlay modifiers={[snapCenterToCursor]}>
+      <DragOverlay modifiers={[snapCenterToCursor]} style={{ opacity: 0.85 }}>
         {activeItem && (
           <div className={cn(
             'flex flex-row items-start gap-4 p-3 rounded-xl border border-primary/50 bg-card',
