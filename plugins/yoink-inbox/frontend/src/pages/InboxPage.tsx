@@ -2,6 +2,7 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  useDndMonitor,
   useDraggable,
   useDroppable,
   useSensor,
@@ -21,7 +22,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { snapCenterToCursor } from '@dnd-kit/modifiers'
 import { pointerWithin } from '@dnd-kit/core'
 
@@ -80,6 +81,72 @@ function CategoryDropTarget({
     >
       {icon}
       <span>{label}</span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Mobile drag dock with self-contained horizontal edge scroll
+// Must be inside DndContext to use useDndMonitor.
+// ---------------------------------------------------------------------------
+
+function MobileDragDock({
+  categories,
+  draggingOver,
+}: {
+  categories: InboxCategory[]
+  draggingOver: number | 'all' | 'uncategorized' | null
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const rafRef = useRef<number | null>(null)
+  const pointerXRef = useRef<number>(0)
+
+  // Track pointer position via native event - independent of dnd-kit pipeline
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => { pointerXRef.current = e.clientX }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [])
+
+  // Start/stop scroll loop based on drag state
+  const startScroll = useCallback(() => {
+    const EDGE = 56
+    const SPEED = 12
+    const tick = () => {
+      const el = scrollRef.current
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        const x = pointerXRef.current
+        if (x < rect.left + EDGE) el.scrollLeft -= SPEED
+        else if (x > rect.right - EDGE) el.scrollLeft += SPEED
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }, [])
+
+  const stopScroll = useCallback(() => {
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+  }, [])
+
+  useDndMonitor({
+    onDragStart: startScroll,
+    onDragEnd: stopScroll,
+    onDragCancel: stopScroll,
+  })
+
+  return (
+    <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20">
+      <div ref={scrollRef} className="flex gap-2 px-3 py-2 overflow-x-auto">
+        <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
+          isOver={draggingOver === 'uncategorized'}
+          icon={<Tag className="w-3.5 h-3.5" />} />
+        {categories.map((cat) => (
+          <CategoryDropTarget key={cat.id} droppableId={`cat-${cat.id}`} label={cat.name}
+            isOver={draggingOver === cat.id}
+            icon={<FolderOpen className="w-3.5 h-3.5" />} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -575,39 +642,7 @@ export default function InboxPage() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
   const activeItem = items.find((i) => i.id === activeItemId) ?? null
-  const dockScrollRef = useRef<HTMLDivElement>(null)
-  const dockScrollRaf = useRef<number | null>(null)
 
-  // Dock edge-scroll: listen to raw pointermove on window while dragging.
-  // Runs a rAF loop that keeps scrolling as long as pointer is near edge.
-  useEffect(() => {
-    if (!activeItemId) {
-      if (dockScrollRaf.current) { cancelAnimationFrame(dockScrollRaf.current); dockScrollRaf.current = null }
-      return
-    }
-    let pointerX = 0
-    const onMove = (e: PointerEvent) => { pointerX = e.clientX }
-    window.addEventListener('pointermove', onMove, { passive: true })
-    const EDGE = 60
-    const SPEED = 10
-    const tick = () => {
-      const dock = dockScrollRef.current
-      if (dock) {
-        const rect = dock.getBoundingClientRect()
-        const inDockY = pointerX >= rect.left && pointerX <= rect.right
-        if (inDockY) {
-          if (pointerX < rect.left + EDGE) dock.scrollLeft -= SPEED
-          else if (pointerX > rect.right - EDGE) dock.scrollLeft += SPEED
-        }
-      }
-      dockScrollRaf.current = requestAnimationFrame(tick)
-    }
-    dockScrollRaf.current = requestAnimationFrame(tick)
-    return () => {
-      window.removeEventListener('pointermove', onMove)
-      if (dockScrollRaf.current) { cancelAnimationFrame(dockScrollRaf.current); dockScrollRaf.current = null }
-    }
-  }, [activeItemId])
 
   useEffect(() => {
     setContent(
@@ -663,11 +698,7 @@ export default function InboxPage() {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragOver={handleDragOver as never}
-      autoScroll={{
-          threshold: { x: 0.1, y: 0.2 },
-          // Only allow autoscroll on the dock element, not the document
-          canScroll: (element) => element === dockScrollRef.current,
-        }}
+      autoScroll={false}
     >
       <div className="flex flex-col h-full min-w-0 overflow-x-clip">
             {/* Toolbar */}
@@ -731,20 +762,9 @@ export default function InboxPage() {
               <span className="text-xs text-muted-foreground tabular-nums shrink-0">{items.length} items</span>
             </div>
 
-            {/* Mobile drag dock - inline under toolbar, visible only while dragging */}
+            {/* Mobile drag dock - self-contained scroll via useDndMonitor */}
             {activeItem && (
-              <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20">
-                <div ref={dockScrollRef} className="flex gap-2 px-3 py-2 overflow-x-auto">
-                  <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
-                    isOver={draggingOver === 'uncategorized'}
-                    icon={<Tag className="w-3.5 h-3.5" />} />
-                  {categories.map((cat) => (
-                    <CategoryDropTarget key={cat.id} droppableId={`cat-${cat.id}`} label={cat.name}
-                      isOver={draggingOver === cat.id}
-                      icon={<FolderOpen className="w-3.5 h-3.5" />} />
-                  ))}
-                </div>
-              </div>
+              <MobileDragDock categories={categories} draggingOver={draggingOver} />
             )}
 
             {/* List */}
