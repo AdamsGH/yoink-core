@@ -665,7 +665,7 @@ export default function InboxPage() {
       onDragOver={handleDragOver as never}
       autoScroll={{ threshold: { x: 0.1, y: 0.2 } }}
     >
-      <div className="flex flex-col h-full min-w-0 overflow-x-clip">
+      <div className="flex flex-col h-full min-w-0">
             {/* Toolbar */}
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-border/60 shrink-0 min-w-0">
               <Breadcrumb className="min-w-0">
@@ -744,7 +744,7 @@ export default function InboxPage() {
             )}
 
             {/* List */}
-            <div className="flex-1 overflow-y-auto overflow-x-hidden">
+            <div className="flex-1 overflow-y-auto overflow-x-clip">
               {loading && (
                 <div className={cn(
                   'p-4',
