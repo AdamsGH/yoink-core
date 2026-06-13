@@ -488,7 +488,14 @@ export default function InboxPage() {
 
   const { setContent } = useRightSidebar()
   const [activeItemId, setActiveItemId] = useState<number | null>(null)
-  const [view, setView] = useState<'list' | 'grid'>('list')
+  const [view, setView] = useState<'list' | 'grid'>(() => {
+    if (typeof window === 'undefined') return 'list'
+    const stored = window.localStorage.getItem('inbox:view')
+    return stored === 'grid' || stored === 'list' ? stored : 'list'
+  })
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.localStorage.setItem('inbox:view', view)
+  }, [view])
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
   const activeItem = items.find((i) => i.id === activeItemId) ?? null

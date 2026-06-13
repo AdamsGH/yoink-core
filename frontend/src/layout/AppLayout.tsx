@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { usePanelRef } from 'react-resizable-panels'
+import { useDefaultLayout } from 'react-resizable-panels'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
@@ -266,25 +266,12 @@ function BottomDrawer({ open, onClose, title, items, currentPath }: {
 
 /** Rendered inside a ResizablePanelGroup together with SidebarInset. */
 export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
-  const panelRef = usePanelRef()
-
-  useEffect(() => {
-    const panel = panelRef.current
-    if (!panel) return
-    if (content) {
-      panel.resize(22)
-    } else {
-      panel.resize(0)
-    }
-  }, [content, panelRef])
-
   if (!content) return null
-
   return (
     <>
       <ResizableHandle withHandle className="hidden md:flex" />
       <ResizablePanel
-        panelRef={panelRef}
+        id="right-sidebar"
         defaultSize={22}
         minSize={14}
         maxSize={42}
@@ -295,6 +282,35 @@ export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
         </ScrollArea>
       </ResizablePanel>
     </>
+  )
+}
+
+function AppShellPanels({
+  rightSidebarContent,
+  children,
+}: {
+  rightSidebarContent: React.ReactNode
+  children: React.ReactNode
+}) {
+  const panelIds = rightSidebarContent ? ['main', 'right-sidebar'] : ['main']
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: 'app-shell',
+    panelIds,
+  })
+  return (
+    <ResizablePanelGroup
+      id="app-shell"
+      orientation="horizontal"
+      className="h-full w-full flex-1"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
+      key={rightSidebarContent ? 'with-sidebar' : 'no-sidebar'}
+    >
+      <ResizablePanel id="main" defaultSize={rightSidebarContent ? 78 : 100} minSize={40}>
+        {children}
+      </ResizablePanel>
+      <RightSidebarPanel content={rightSidebarContent} />
+    </ResizablePanelGroup>
   )
 }
 
@@ -399,12 +415,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
         </Sidebar>
 
         <SidebarInset>
-          <ResizablePanelGroup
-            orientation="horizontal"
-            className="h-full"
-            key={rightSidebarContent ? 'with-sidebar' : 'no-sidebar'}
-          >
-            <ResizablePanel defaultSize={rightSidebarContent ? 78 : 100} minSize={40}>
+          <AppShellPanels rightSidebarContent={rightSidebarContent}>
               <div className="flex h-full flex-col">
                 <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
                   <span className="text-sm font-medium">
@@ -420,9 +431,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
                   <Outlet />
                 </div>
               </div>
-            </ResizablePanel>
-            <RightSidebarPanel content={rightSidebarContent} />
-          </ResizablePanelGroup>
+          </AppShellPanels>
         </SidebarInset>
 
         {/* Mobile right sidebar sheet */}
