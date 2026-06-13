@@ -54,6 +54,35 @@ import { BlurDialog, BlurDialogContent, BlurDialogHeader, BlurDialogBody, BlurDi
 import { Popover, PopoverContent, PopoverTrigger } from '@ui'
 
 // ---------------------------------------------------------------------------
+// Reusable droppable zone chip (used in sidebar + mobile dock)
+// ---------------------------------------------------------------------------
+
+function CategoryDropTarget({
+  droppableId, label, isOver, icon,
+}: {
+  droppableId: string
+  label: string
+  isOver: boolean
+  icon: React.ReactNode
+}) {
+  const { setNodeRef } = useDroppable({ id: droppableId })
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-medium shrink-0 transition-all duration-150',
+        isOver
+          ? 'bg-primary text-primary-foreground border-primary scale-105 shadow-md'
+          : 'bg-muted/40 text-muted-foreground border-border/50 hover:bg-muted',
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Shared category badge
 // ---------------------------------------------------------------------------
 
@@ -736,6 +765,25 @@ export default function InboxPage() {
               )}
             </div>
           </div>
+
+      {/* Mobile drag dock - visible drop targets while dragging on small screens */}
+      {activeItem && (
+        <div className={cn(
+          'fixed bottom-20 left-0 right-0 z-50 md:hidden',
+          'px-3 pb-2',
+        )}>
+          <div className="flex gap-2 overflow-x-auto rounded-xl border border-border/60 bg-background/95 backdrop-blur-sm p-2 shadow-xl">
+            <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
+              isOver={draggingOver === 'uncategorized'}
+              icon={<Tag className="w-3.5 h-3.5" />} />
+            {categories.map((cat) => (
+              <CategoryDropTarget key={cat.id} droppableId={`cat-${cat.id}`} label={cat.name}
+                isOver={draggingOver === cat.id}
+                icon={<FolderOpen className="w-3.5 h-3.5" />} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Drag overlay - mirrors list-mode card */}
       <DragOverlay>
