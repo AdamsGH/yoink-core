@@ -309,7 +309,7 @@ function AppShellPanels({
   // reserve flex-basis space on screens that have no room for it. Mobile users
   // reach the right content through the Sheet (RightSidebarSheet).
   if (!showRight) {
-    return <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-x-hidden">{children}</div>
+    return <div className="flex h-full w-full min-w-0 flex-1 flex-col">{children}</div>
   }
 
   return (
@@ -428,7 +428,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
 
         <SidebarInset>
           <AppShellPanels rightSidebarContent={rightSidebarContent}>
-              <div className="flex h-full min-w-0 flex-col">
+              <div className="flex h-full min-w-0 flex-col overflow-x-clip">
                 <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
                   <span className="text-sm font-medium">
                     {(() => {

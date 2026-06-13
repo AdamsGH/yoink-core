@@ -638,6 +638,7 @@ export default function InboxPage() {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragOver={handleDragOver as never}
+      autoScroll={{ threshold: { x: 0, y: 0.2 } }}
     >
       <div className="flex flex-col h-full min-w-0">
             {/* Toolbar */}
