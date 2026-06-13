@@ -663,9 +663,13 @@ export default function InboxPage() {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragOver={handleDragOver as never}
-      autoScroll={{ threshold: { x: 0.1, y: 0.2 } }}
+      autoScroll={{
+          threshold: { x: 0.1, y: 0.2 },
+          // Only allow autoscroll on the dock element, not the document
+          canScroll: (element) => element === dockScrollRef.current,
+        }}
     >
-      <div className="flex flex-col h-full min-w-0">
+      <div className="flex flex-col h-full min-w-0 overflow-x-clip">
             {/* Toolbar */}
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-border/60 shrink-0 min-w-0">
               <Breadcrumb className="min-w-0">
@@ -744,7 +748,7 @@ export default function InboxPage() {
             )}
 
             {/* List */}
-            <div className="flex-1 overflow-y-auto overflow-x-clip">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden">
               {loading && (
                 <div className={cn(
                   'p-4',
