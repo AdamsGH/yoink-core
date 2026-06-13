@@ -689,6 +689,22 @@ export default function InboxPage() {
               <span className="text-xs text-muted-foreground tabular-nums shrink-0">{items.length} items</span>
             </div>
 
+            {/* Mobile drag dock - inline under toolbar, visible only while dragging */}
+            {activeItem && (
+              <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20">
+                <div className="flex gap-2 px-3 py-2 overflow-x-auto">
+                  <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
+                    isOver={draggingOver === 'uncategorized'}
+                    icon={<Tag className="w-3.5 h-3.5" />} />
+                  {categories.map((cat) => (
+                    <CategoryDropTarget key={cat.id} droppableId={`cat-${cat.id}`} label={cat.name}
+                      isOver={draggingOver === cat.id}
+                      icon={<FolderOpen className="w-3.5 h-3.5" />} />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* List */}
             <div className="flex-1 overflow-y-auto overflow-x-hidden">
               {loading && (
@@ -765,25 +781,6 @@ export default function InboxPage() {
               )}
             </div>
           </div>
-
-      {/* Mobile drag dock - visible drop targets while dragging on small screens */}
-      {activeItem && (
-        <div className={cn(
-          'fixed bottom-20 left-0 right-0 z-50 md:hidden',
-          'px-3 pb-2',
-        )}>
-          <div className="flex gap-2 overflow-x-auto rounded-xl border border-border/60 bg-background/95 backdrop-blur-sm p-2 shadow-xl">
-            <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
-              isOver={draggingOver === 'uncategorized'}
-              icon={<Tag className="w-3.5 h-3.5" />} />
-            {categories.map((cat) => (
-              <CategoryDropTarget key={cat.id} droppableId={`cat-${cat.id}`} label={cat.name}
-                isOver={draggingOver === cat.id}
-                icon={<FolderOpen className="w-3.5 h-3.5" />} />
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Drag overlay - mirrors list-mode card */}
       <DragOverlay>
