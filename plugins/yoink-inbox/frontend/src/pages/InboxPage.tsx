@@ -578,24 +578,36 @@ export default function InboxPage() {
   const dockScrollRef = useRef<HTMLDivElement>(null)
   const dockScrollRaf = useRef<number | null>(null)
 
-  function handleDragMove({ activatorEvent, delta }: { activatorEvent: Event; delta: { x: number; y: number } }) {
-    const dock = dockScrollRef.current
-    if (!dock) return
-    const rect = dock.getBoundingClientRect()
-    // Get current pointer X from activatorEvent + running delta
-    const pointerX = (activatorEvent as PointerEvent).clientX + delta.x
-    const edgeZone = 60
-    const speed = 8
-    if (dockScrollRaf.current) cancelAnimationFrame(dockScrollRaf.current)
-    const scrollStep = () => {
-      if (!dockScrollRef.current) return
-      const nearLeft = pointerX < rect.left + edgeZone
-      const nearRight = pointerX > rect.right - edgeZone
-      if (nearLeft) dockScrollRef.current.scrollLeft -= speed
-      else if (nearRight) dockScrollRef.current.scrollLeft += speed
+  // Dock edge-scroll: listen to raw pointermove on window while dragging.
+  // Runs a rAF loop that keeps scrolling as long as pointer is near edge.
+  useEffect(() => {
+    if (!activeItemId) {
+      if (dockScrollRaf.current) { cancelAnimationFrame(dockScrollRaf.current); dockScrollRaf.current = null }
+      return
     }
-    dockScrollRaf.current = requestAnimationFrame(scrollStep)
-  }
+    let pointerX = 0
+    const onMove = (e: PointerEvent) => { pointerX = e.clientX }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    const EDGE = 60
+    const SPEED = 10
+    const tick = () => {
+      const dock = dockScrollRef.current
+      if (dock) {
+        const rect = dock.getBoundingClientRect()
+        const inDockY = pointerX >= rect.left && pointerX <= rect.right
+        if (inDockY) {
+          if (pointerX < rect.left + EDGE) dock.scrollLeft -= SPEED
+          else if (pointerX > rect.right - EDGE) dock.scrollLeft += SPEED
+        }
+      }
+      dockScrollRaf.current = requestAnimationFrame(tick)
+    }
+    dockScrollRaf.current = requestAnimationFrame(tick)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      if (dockScrollRaf.current) { cancelAnimationFrame(dockScrollRaf.current); dockScrollRaf.current = null }
+    }
+  }, [activeItemId])
 
   useEffect(() => {
     setContent(
@@ -650,11 +662,10 @@ export default function InboxPage() {
       collisionDetection={pointerWithin}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragMove={handleDragMove as never}
       onDragOver={handleDragOver as never}
       autoScroll={{ threshold: { x: 0.1, y: 0.2 } }}
     >
-      <div className="flex flex-col h-full min-w-0">
+      <div className="flex flex-col h-full min-w-0 overflow-x-clip">
             {/* Toolbar */}
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-border/60 shrink-0 min-w-0">
               <Breadcrumb className="min-w-0">
