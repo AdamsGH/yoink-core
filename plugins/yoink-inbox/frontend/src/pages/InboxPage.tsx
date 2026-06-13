@@ -24,7 +24,6 @@ import {
 import { useEffect, useState } from 'react'
 
 import {
-  Badge,
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbLink,
@@ -54,6 +53,32 @@ import { cn } from '@core/lib/utils'
 import { useRightSidebar } from '@core/layout/AppLayout'
 import { BlurDialog, BlurDialogContent, BlurDialogHeader, BlurDialogBody, BlurDialogFooter } from '@app'
 import { Popover, PopoverContent, PopoverTrigger } from '@ui'
+
+// ---------------------------------------------------------------------------
+// Shared category badge
+// ---------------------------------------------------------------------------
+
+function CategoryBadge({
+  name,
+  onRemove,
+}: {
+  name: string
+  onRemove?: () => void
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full',
+        'bg-primary/10 text-primary border border-primary/20 font-medium',
+        onRemove && 'cursor-pointer hover:bg-destructive/10 hover:text-destructive hover:border-destructive/20 transition-colors',
+      )}
+      onClick={onRemove}
+    >
+      <span className="max-w-[8rem] truncate">{name}</span>
+      {onRemove && <X className="w-2.5 h-2.5 shrink-0" />}
+    </span>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Category sidebar content (mounted into right sidebar via useRightSidebar)
@@ -282,9 +307,7 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
             {item.kind}
           </span>
           {item.categories.map((cat) => (
-            <span key={cat.id} className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium max-w-[8rem] truncate">
-              {cat.name}
-            </span>
+            <CategoryBadge key={cat.id} name={cat.name} />
           ))}
         </div>
       </div>
@@ -428,18 +451,14 @@ function ItemSheet({
               </div>
             )}
 
-            <div>
+            <div className="pb-2">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Categories</p>
               <div className="flex flex-wrap gap-1.5 items-center">
                 {item.categories.length === 0 && (
                   <span className="text-xs text-muted-foreground">No categories assigned</span>
                 )}
                 {item.categories.map((cat) => (
-                  <Badge key={cat.id} variant="secondary"
-                    className="gap-1 cursor-pointer hover:bg-destructive/20 hover:text-destructive transition-colors"
-                    onClick={() => onAssign(null)}>
-                    {cat.name} <X className="w-3 h-3" />
-                  </Badge>
+                  <CategoryBadge key={cat.id} name={cat.name} onRemove={() => onAssign(null)} />
                 ))}
                 {categories.filter((c) => !item.categories.find((ic) => ic.id === c.id)).length > 0 && (
                   <Popover>
