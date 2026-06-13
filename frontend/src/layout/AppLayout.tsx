@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
 
+import { useIsMobile } from '@core/hooks/use-mobile'
 import { usePermissions } from '@core/hooks/usePermissions'
 import { apiClient } from '@core/lib/api-client'
 import { cn } from '@core/lib/utils'
@@ -263,19 +264,27 @@ function BottomDrawer({ open, onClose, title, items, currentPath }: {
 // Right sidebar slot component
 // ---------------------------------------------------------------------------
 
-/** Rendered inside a ResizablePanelGroup together with SidebarInset. */
-export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
-  if (!content) return null
+// ---------------------------------------------------------------------------
+// Right sidebar slot
+//
+// Desktop: ResizablePanelGroup inside SidebarInset; right panel uses pixel
+// minSize/maxSize/defaultSize (v4 native, applied to the flex-item itself).
+// Mobile: Sheet wired to openMobileSheet() from useRightSidebar(); pages
+// surface a FolderOpen button that triggers it.
+// ---------------------------------------------------------------------------
+
+function RightSidebarPanel({ content }: { content: React.ReactNode }) {
+  // Caller (AppShellPanels) already guards: this is only rendered on desktop
+  // when content is non-null, so no need for the hidden md:flex stunt.
   return (
     <>
-      <ResizableHandle withHandle className="hidden md:flex" />
+      <ResizableHandle withHandle />
       <ResizablePanel
         id="right-sidebar"
-        defaultSize={25}
-        minSize={18}
-        maxSize={45}
-        style={{ minWidth: 200, maxWidth: 500 }}
-        className="hidden md:flex flex-col border-l border-border/60"
+        defaultSize="280px"
+        minSize="220px"
+        maxSize="520px"
+        className="flex flex-col border-l border-border/60"
       >
         <ScrollArea className="h-full">
           {content}
@@ -285,8 +294,6 @@ export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
   )
 }
 
-const LAYOUT_KEY = 'app-shell:layout'
-
 function AppShellPanels({
   rightSidebarContent,
   children,
@@ -294,27 +301,24 @@ function AppShellPanels({
   rightSidebarContent: React.ReactNode
   children: React.ReactNode
 }) {
-  const hasSidebar = Boolean(rightSidebarContent)
-  const storedLayout = hasSidebar ? (() => {
-    try {
-      const raw = window.localStorage.getItem(LAYOUT_KEY)
-      if (raw) return JSON.parse(raw) as Record<string, number>
-    } catch { /* ignore */ }
-    return { main: 75, 'right-sidebar': 25 }
-  })() : undefined
+  const isMobile = useIsMobile()
+  const showRight = Boolean(rightSidebarContent) && !isMobile
+
+  // On mobile (and on desktop pages without right content) we render no Group:
+  // just the main column at full width. That way the right Panel does not
+  // reserve flex-basis space on screens that have no room for it. Mobile users
+  // reach the right content through the Sheet (RightSidebarSheet).
+  if (!showRight) {
+    return <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-x-hidden">{children}</div>
+  }
+
   return (
     <ResizablePanelGroup
       id="app-shell"
       orientation="horizontal"
       className="h-full w-full flex-1"
-      onLayoutChange={(layout: Record<string, number>) => {
-        if (hasSidebar) {
-          try { window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)) } catch { /* ignore */ }
-        }
-      }}
-      key={hasSidebar ? 'with-sidebar' : 'no-sidebar'}
     >
-      <ResizablePanel id="main" defaultSize={storedLayout?.main ?? 100} minSize={30}>
+      <ResizablePanel id="main" minSize="320px">
         {children}
       </ResizablePanel>
       <RightSidebarPanel content={rightSidebarContent} />
@@ -322,18 +326,18 @@ function AppShellPanels({
   )
 }
 
-function RightSidebarSlot({
+function RightSidebarSheet({
   content,
-  mobileOpen,
-  onMobileClose,
+  open,
+  onOpenChange,
 }: {
   content: React.ReactNode
-  mobileOpen: boolean
-  onMobileClose: () => void
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
   return (
-    <Sheet open={mobileOpen} onOpenChange={(o) => { if (!o) onMobileClose() }}>
-      <SheetContent side="right" className="w-72 p-0 md:hidden">
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="w-80 p-0 md:hidden">
         <SheetHeader className="sr-only">
           <SheetTitle>Folders</SheetTitle>
         </SheetHeader>
@@ -424,7 +428,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
 
         <SidebarInset>
           <AppShellPanels rightSidebarContent={rightSidebarContent}>
-              <div className="flex h-full flex-col">
+              <div className="flex h-full min-w-0 flex-col">
                 <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
                   <span className="text-sm font-medium">
                     {(() => {
@@ -435,7 +439,7 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
                     })()}
                   </span>
                 </header>
-                <div className="flex h-full min-h-0 flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
+                <div className="flex h-full min-h-0 min-w-0 w-full flex-1 flex-col overflow-y-auto pb-16 md:pb-0">
                   <Outlet />
                 </div>
               </div>
@@ -443,10 +447,10 @@ export function AppLayout({ navGroups, appName = 'Yoink', userStatsEndpoint }: A
         </SidebarInset>
 
         {/* Mobile right sidebar sheet */}
-        <RightSidebarSlot
+        <RightSidebarSheet
           content={rightSidebarContent}
-          mobileOpen={rightMobileOpen}
-          onMobileClose={() => setRightMobileOpen(false)}
+          open={rightMobileOpen}
+          onOpenChange={setRightMobileOpen}
         />
 
       </SidebarProvider>

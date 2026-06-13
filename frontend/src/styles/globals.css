@@ -57,6 +57,7 @@
     color: var(--color-foreground);
     font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
   h1, h2, h3, h4, h5, h6,
   [data-slot=card-title],
