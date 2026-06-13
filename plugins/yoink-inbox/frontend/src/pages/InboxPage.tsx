@@ -103,26 +103,25 @@ function MobileDragDock({
   // canonical pattern from dnd-kit issue #1108 (Innders / romulloqueiroz):
   // useDndContext().active is available as long as component is mounted inside DndContext
   const { active } = useDndContext()
+  // Stable boolean - avoids restarting effects on every dnd-kit context update
+  const isDragging = !!active
 
-  // Interval that does the actual scrolling - runs only while dragging
+  // Interval that does the actual scrolling
   useEffect(() => {
-    if (!active) return
+    if (!isDragging) return
     const SPEED = 10
     const id = setInterval(() => {
       const el = scrollRef.current
       if (el && scrollDirectionRef.current !== null) {
         el.scrollLeft += SPEED * scrollDirectionRef.current
       }
-    }, 5)
+    }, 16)
     return () => clearInterval(id)
-  }, [active])
+  }, [isDragging])
 
-  // pointermove listener - computes scroll direction from pointer proximity to dock edges
+  // pointermove -> scroll direction ref
   useEffect(() => {
-    if (!active) {
-      scrollDirectionRef.current = null
-      return
-    }
+    if (!isDragging) return
     const EDGE = 64
     const onMove = (e: PointerEvent) => {
       const el = scrollRef.current
@@ -139,7 +138,7 @@ function MobileDragDock({
       window.removeEventListener('pointermove', onMove)
       scrollDirectionRef.current = null
     }
-  }, [active])
+  }, [isDragging])
 
   return (
     <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20">
