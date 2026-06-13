@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { useDefaultLayout } from 'react-resizable-panels'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { ChevronDown, Ellipsis, Palette, Shield } from 'lucide-react'
@@ -272,9 +271,10 @@ export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
       <ResizableHandle withHandle className="hidden md:flex" />
       <ResizablePanel
         id="right-sidebar"
-        defaultSize={22}
-        minSize={14}
-        maxSize={42}
+        defaultSize={25}
+        minSize={18}
+        maxSize={45}
+        style={{ minWidth: 200, maxWidth: 500 }}
         className="hidden md:flex flex-col border-l border-border/60"
       >
         <ScrollArea className="h-full">
@@ -285,6 +285,8 @@ export function RightSidebarPanel({ content }: { content: React.ReactNode }) {
   )
 }
 
+const LAYOUT_KEY = 'app-shell:layout'
+
 function AppShellPanels({
   rightSidebarContent,
   children,
@@ -292,21 +294,27 @@ function AppShellPanels({
   rightSidebarContent: React.ReactNode
   children: React.ReactNode
 }) {
-  const panelIds = rightSidebarContent ? ['main', 'right-sidebar'] : ['main']
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: 'app-shell',
-    panelIds,
-  })
+  const hasSidebar = Boolean(rightSidebarContent)
+  const storedLayout = hasSidebar ? (() => {
+    try {
+      const raw = window.localStorage.getItem(LAYOUT_KEY)
+      if (raw) return JSON.parse(raw) as Record<string, number>
+    } catch { /* ignore */ }
+    return { main: 75, 'right-sidebar': 25 }
+  })() : undefined
   return (
     <ResizablePanelGroup
       id="app-shell"
       orientation="horizontal"
       className="h-full w-full flex-1"
-      defaultLayout={defaultLayout}
-      onLayoutChanged={onLayoutChanged}
-      key={rightSidebarContent ? 'with-sidebar' : 'no-sidebar'}
+      onLayoutChange={(layout: Record<string, number>) => {
+        if (hasSidebar) {
+          try { window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)) } catch { /* ignore */ }
+        }
+      }}
+      key={hasSidebar ? 'with-sidebar' : 'no-sidebar'}
     >
-      <ResizablePanel id="main" defaultSize={rightSidebarContent ? 78 : 100} minSize={40}>
+      <ResizablePanel id="main" defaultSize={storedLayout?.main ?? 100} minSize={30}>
         {children}
       </ResizablePanel>
       <RightSidebarPanel content={rightSidebarContent} />

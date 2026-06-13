@@ -262,11 +262,11 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
 
       {/* Content */}
       <div className={cn('flex flex-col min-w-0 flex-1', isGrid ? 'p-3 gap-1' : 'gap-1')}>
-        <div className="flex items-start justify-between gap-2">
-          <p className="font-semibold text-sm leading-snug truncate flex-1">
+        <div className="flex items-start justify-between gap-2 min-w-0">
+          <p className="font-semibold text-sm leading-snug truncate flex-1 min-w-0">
             {item.title || item.url}
           </p>
-          <span className="shrink-0 text-[11px] text-muted-foreground/50 tabular-nums pt-px">
+          <span className="shrink-0 text-[11px] text-muted-foreground/50 tabular-nums pt-px whitespace-nowrap">
             {timeAgo(item.created_at)}
           </span>
         </div>
@@ -277,15 +277,15 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
           </p>
         )}
 
-        <div className="flex flex-wrap gap-1 mt-1">
-          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-md border font-mono', statusBadgeClass(displayStatus))}>
+        <div className="flex flex-wrap gap-1 mt-1 overflow-hidden">
+          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-md border font-mono shrink-0', statusBadgeClass(displayStatus))}>
             {displayStatus}
           </span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-md border border-border/40 bg-muted/30 text-muted-foreground font-mono">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-md border border-border/40 bg-muted/30 text-muted-foreground font-mono shrink-0">
             {item.kind}
           </span>
           {item.categories.map((cat) => (
-            <span key={cat.id} className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
+            <span key={cat.id} className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium max-w-[8rem] truncate">
               {cat.name}
             </span>
           ))}
@@ -486,7 +486,7 @@ export default function InboxPage() {
     onAssignCategory, onReclassify, onDelete, onCreateCategory,
   } = useInboxPage()
 
-  const { setContent } = useRightSidebar()
+  const { setContent, openMobileSheet } = useRightSidebar()
   const [activeItemId, setActiveItemId] = useState<number | null>(null)
   const [view, setView] = useState<'list' | 'grid'>(() => {
     if (typeof window === 'undefined') return 'list'
@@ -600,6 +600,10 @@ export default function InboxPage() {
                 <option value="failed">Failed</option>
               </select>
 
+              <Button variant="outline" size="icon" className="h-8 w-8 md:hidden" onClick={openMobileSheet}>
+                <FolderOpen className="w-3.5 h-3.5" />
+              </Button>
+
               <ToggleGroup type="single" value={view} onValueChange={(v) => v && setView(v as 'list' | 'grid')} className="h-8">
                 <ToggleGroupItem value="list" className="h-8 w-8 p-0">
                   <LayoutList className="w-3.5 h-3.5" />
@@ -609,7 +613,7 @@ export default function InboxPage() {
                 </ToggleGroupItem>
               </ToggleGroup>
 
-              <span className="text-xs text-muted-foreground tabular-nums">{items.length} items</span>
+              <span className="text-xs text-muted-foreground tabular-nums shrink-0">{items.length} items</span>
             </div>
 
             {/* List */}
@@ -617,7 +621,7 @@ export default function InboxPage() {
               {loading && (
                 <div className={cn(
                   'p-4',
-                  view === 'grid' ? 'grid grid-cols-3 gap-3' : 'flex flex-col gap-2.5',
+                  view === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3' : 'flex flex-col gap-2.5',
                 )}>
                   {Array.from({ length: 9 }).map((_, i) => (
                     <div key={i} className={cn(
@@ -658,7 +662,7 @@ export default function InboxPage() {
               {!loading && (
                 <div className={cn(
                   'p-4',
-                  view === 'grid' ? 'grid grid-cols-3 gap-3' : 'flex flex-col gap-2.5',
+                  view === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3' : 'flex flex-col gap-2.5',
                 )}>
                   {items.map((item) => (
                     <ItemRow
