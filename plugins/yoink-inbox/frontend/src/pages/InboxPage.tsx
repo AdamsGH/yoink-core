@@ -21,7 +21,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   Breadcrumb,
@@ -238,6 +238,12 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
   const style = transform
     ? { transform: `translate(${transform.x}px,${transform.y}px)`, zIndex: 50, position: 'relative' as const }
     : undefined
+  // Suppress click after drag: track whether pointer moved more than threshold
+  const didDragRef = useRef(false)
+  useEffect(() => {
+    if (transform) { didDragRef.current = true }
+    else { setTimeout(() => { didDragRef.current = false }, 50) }
+  }, [transform])
 
   const displayStatus = item.llm_status === 'failed' ? 'llm:failed' : item.llm_status ?? item.status
 
@@ -249,7 +255,7 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
       style={style}
       {...attributes}
       {...listeners}
-      onClick={() => onOpen(item)}
+      onClick={() => { if (!didDragRef.current) onOpen(item) }}
       className={cn(
         'group relative flex cursor-grab active:cursor-grabbing transition-all duration-150 min-w-0',
         'rounded-xl border border-border/50 bg-card hover:border-primary/40 hover:shadow-md hover:shadow-black/20',
