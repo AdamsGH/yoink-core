@@ -22,6 +22,17 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import type { Modifier } from '@dnd-kit/core'
+
+// DragOverlay modifier: keep the overlay centred under the pointer
+const snapToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
+  if (draggingNodeRect && activatorEvent && 'clientX' in activatorEvent) {
+    const offsetX = (activatorEvent as PointerEvent).clientX - (draggingNodeRect.left + draggingNodeRect.width / 2)
+    const offsetY = (activatorEvent as PointerEvent).clientY - (draggingNodeRect.top + draggingNodeRect.height / 2)
+    return { ...transform, x: transform.x - offsetX, y: transform.y - offsetY }
+  }
+  return transform
+}
 
 import {
   Breadcrumb,
@@ -263,9 +274,10 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
     id: `item-${item.id}`,
     data: { itemId: item.id },
   })
-  const style = transform
-    ? { transform: `translate(${transform.x}px,${transform.y}px)`, zIndex: 50, position: 'relative' as const }
-    : undefined
+  // When dragging: hide the original (opacity-0) and let DragOverlay do the
+  // visual. Don't apply transform to the source - it creates overflow and
+  // shifts layout. The overlay handles positioning.
+  const style = undefined
   // Suppress click after drag: track whether pointer moved more than threshold
   const didDragRef = useRef(false)
   useEffect(() => {
@@ -783,7 +795,7 @@ export default function InboxPage() {
           </div>
 
       {/* Drag overlay - mirrors list-mode card */}
-      <DragOverlay>
+      <DragOverlay modifiers={[snapToCursor]}>
         {activeItem && (
           <div className={cn(
             'flex flex-row items-start gap-4 p-3 rounded-xl border border-primary/50 bg-card',
