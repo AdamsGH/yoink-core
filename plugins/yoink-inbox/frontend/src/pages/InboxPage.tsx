@@ -93,9 +93,11 @@ function CategoryDropTarget({
 function MobileDragDock({
   categories,
   draggingOver,
+  isDragging,
 }: {
   categories: InboxCategory[]
   draggingOver: number | 'all' | 'uncategorized' | null
+  isDragging: boolean
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef<number | null>(null)
@@ -136,7 +138,7 @@ function MobileDragDock({
   })
 
   return (
-    <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20">
+    <div className={cn('md:hidden shrink-0 border-b border-border/60 bg-muted/20 transition-all', isDragging ? 'block' : 'hidden')}>
       <div ref={scrollRef} className="flex gap-2 px-3 py-2 overflow-x-auto">
         <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
           isOver={draggingOver === 'uncategorized'}
@@ -762,10 +764,8 @@ export default function InboxPage() {
               <span className="text-xs text-muted-foreground tabular-nums shrink-0">{items.length} items</span>
             </div>
 
-            {/* Mobile drag dock - self-contained scroll via useDndMonitor */}
-            {activeItem && (
-              <MobileDragDock categories={categories} draggingOver={draggingOver} />
-            )}
+            {/* Mobile drag dock - always mounted so useDndMonitor fires on first drag */}
+            <MobileDragDock categories={categories} draggingOver={draggingOver} isDragging={!!activeItem} />
 
             {/* List */}
             <div className="flex-1 overflow-y-auto overflow-x-hidden">
