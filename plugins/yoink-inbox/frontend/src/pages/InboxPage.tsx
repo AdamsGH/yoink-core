@@ -31,7 +31,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
   Button,
-  Card,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -260,7 +259,7 @@ function ItemRow({ item, view, isDragging, categories, onOpen, onAssign, onRecla
         'group relative flex cursor-grab active:cursor-grabbing transition-all duration-150 min-w-0',
         'rounded-xl border border-border/50 bg-card hover:border-primary/40 hover:shadow-md hover:shadow-black/20',
         isGrid ? 'flex-col overflow-hidden' : 'flex-row items-start gap-4 p-3',
-        isDragging && 'opacity-30 scale-95',
+        isDragging && 'opacity-0',
       )}
     >
       {/* Thumbnail */}
@@ -738,13 +737,32 @@ export default function InboxPage() {
             </div>
           </div>
 
-      {/* Drag overlay */}
-      <DragOverlay dropAnimation={null}>
+      {/* Drag overlay - mirrors list-mode card */}
+      <DragOverlay>
         {activeItem && (
-          <Card className="px-3 py-2 shadow-xl border-primary/40 bg-card max-w-xs opacity-90">
-            <p className="text-sm font-medium truncate">{activeItem.title || activeItem.url}</p>
-            <p className="text-xs text-muted-foreground mt-0.5 truncate">{activeItem.url}</p>
-          </Card>
+          <div className={cn(
+            'flex flex-row items-start gap-4 p-3 rounded-xl border border-primary/50 bg-card',
+            'shadow-2xl shadow-black/40 scale-[1.02] cursor-grabbing ring-1 ring-primary/20',
+            'w-[calc(100vw-2rem)] max-w-lg',
+          )}>
+            <div className="shrink-0 w-10 h-10 rounded-lg bg-muted/50 border border-border/40 overflow-hidden mt-0.5">
+              {activeItem.og_image_url ? (
+                <img src={activeItem.og_image_url} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  <Inbox className="w-4 h-4 text-muted-foreground/30" />
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col min-w-0 flex-1 gap-1">
+              <p className="font-semibold text-sm leading-snug truncate">
+                {activeItem.title || activeItem.url}
+              </p>
+              {activeItem.summary && (
+                <p className="text-xs text-muted-foreground line-clamp-1">{activeItem.summary}</p>
+              )}
+            </div>
+          </div>
         )}
       </DragOverlay>
 
