@@ -1,7 +1,8 @@
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useDndContext,
   useDraggable,
   useDroppable,
@@ -97,41 +98,43 @@ function MobileDragDock({
   categories: InboxCategory[]
   draggingOver: number | 'all' | 'uncategorized' | null
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-  // ref, not state - avoids re-renders on every pointermove
+  const innerRef = useRef<HTMLDivElement>(null)
+  const offsetRef = useRef(0)
   const scrollDirectionRef = useRef<number | null>(null)
-  // canonical pattern from dnd-kit issue #1108 (Innders / romulloqueiroz):
-  // useDndContext().active is available as long as component is mounted inside DndContext
   const { active } = useDndContext()
-  // Stable boolean - avoids restarting effects on every dnd-kit context update
   const isDragging = !!active
 
-  // Interval that does the actual scrolling
+  // Use transform instead of scrollLeft - dnd-kit resets scrollLeft on droppable containers
+  // but never touches transform on non-overlay elements.
   useEffect(() => {
-    if (!isDragging) return
+    if (!isDragging) {
+      offsetRef.current = 0
+      if (innerRef.current) innerRef.current.style.transform = ''
+      return
+    }
     const SPEED = 10
     const id = setInterval(() => {
-      const el = scrollRef.current
-      if (el && scrollDirectionRef.current !== null) {
-        el.scrollLeft += SPEED * scrollDirectionRef.current
-      }
+      const inner = innerRef.current
+      const dir = scrollDirectionRef.current
+      if (!inner || dir === null) return
+      const containerWidth = inner.parentElement?.clientWidth ?? 0
+      const innerWidth = inner.scrollWidth
+      const maxOffset = Math.max(0, innerWidth - containerWidth)
+      offsetRef.current = Math.max(-maxOffset, Math.min(0, offsetRef.current - SPEED * dir))
+      inner.style.transform = `translateX(${offsetRef.current}px)`
     }, 16)
     return () => clearInterval(id)
   }, [isDragging])
 
-  // pointermove -> scroll direction ref
   useEffect(() => {
     if (!isDragging) return
     const EDGE = 64
     const onMove = (e: PointerEvent) => {
-      const el = scrollRef.current
-      if (!el) return
-      const { left, right } = el.getBoundingClientRect()
+      const container = innerRef.current?.parentElement
+      if (!container) return
+      const { left, right } = container.getBoundingClientRect()
       const x = e.clientX
-      scrollDirectionRef.current =
-        x < left + EDGE ? -1 :
-        x > right - EDGE ? 1 :
-        null
+      scrollDirectionRef.current = x < left + EDGE ? -1 : x > right - EDGE ? 1 : null
     }
     window.addEventListener('pointermove', onMove, { passive: true })
     return () => {
@@ -141,8 +144,8 @@ function MobileDragDock({
   }, [isDragging])
 
   return (
-    <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20">
-      <div ref={scrollRef} className="flex gap-2 px-3 py-2 overflow-x-auto">
+    <div className="md:hidden shrink-0 border-b border-border/60 bg-muted/20 overflow-hidden">
+      <div ref={innerRef} className="flex gap-2 px-3 py-2 w-max transition-none">
         <CategoryDropTarget droppableId="uncategorized" label="Uncategorized"
           isOver={draggingOver === 'uncategorized'}
           icon={<Tag className="w-3.5 h-3.5" />} />
@@ -645,7 +648,10 @@ export default function InboxPage() {
     if (typeof window !== 'undefined') window.localStorage.setItem('inbox:view', view)
   }, [view])
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+  )
   const activeItem = items.find((i) => i.id === activeItemId) ?? null
 
 
@@ -705,7 +711,7 @@ export default function InboxPage() {
       onDragOver={handleDragOver as never}
       autoScroll={false}
     >
-      <div className="flex flex-col h-full min-w-0 overflow-x-clip">
+      <div className="flex flex-col h-full min-w-0">
             {/* Toolbar */}
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-border/60 shrink-0 min-w-0">
               <Breadcrumb className="min-w-0">
