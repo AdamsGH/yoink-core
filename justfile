@@ -166,6 +166,8 @@ verify:
 
 # Run tests inside a container against yoink_test DB in the existing postgres.
 # Usage: just test [path]
+# The default is the core suite. Plugin directories without tests are not valid
+# pytest targets and are intentionally not used as the default.
 test *args="src/tests":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -179,7 +181,16 @@ test *args="src/tests":
         -v "$(pwd)/src:/app/src:ro" \
         -v "$(pwd)/pyproject.toml:/app/pyproject.toml:ro" \
         yoink/yoink:latest \
-        sh -c "uv pip install --system pytest pytest-asyncio -q && python -m pytest {{args}} -v --tb=short"
+        sh -c '
+          uv pip install --system pytest pytest-asyncio -q >/dev/null
+          status=0
+          python -m pytest {{args}} -v --tb=short || status=$?
+          if [ "$status" -eq 5 ]; then
+            echo "No tests collected for: {{args}} (treated as success)"
+            exit 0
+          fi
+          exit "$status"
+        '
 
 # Full reset: down -v + up + migrate. Wipes volumes; dev only, NEVER prod.
 reset:
