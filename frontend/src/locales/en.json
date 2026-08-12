@@ -145,6 +145,8 @@
     "status_ok": "OK",
     "status_cached": "Cached",
     "status_error": "Error",
+    "downloaded": "Downloaded",
+    "more": "More details",
     "apply": "Apply",
     "clear_all": "Clear all",
     "date_range": "Date range",

@@ -145,6 +145,8 @@
     "status_ok": "OK",
     "status_cached": "Кэш",
     "status_error": "Ошибка",
+    "downloaded": "Скачано",
+    "more": "Подробнее",
     "apply": "Применить",
     "clear_all": "Сбросить",
     "date_range": "Период",
