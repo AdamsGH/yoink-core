@@ -41,7 +41,7 @@ services:
     restart: "no"
     env_file: .env
     environment:
-      BOT_API_URL: "http://yoink-tg-bot-api:8082"
+      BOT_API_URL: "http://tg-bot-api:8082"
       socks5_host: "host.docker.internal"
       socks5_port: "1080"
     extra_hosts:
@@ -53,7 +53,7 @@ services:
     networks:
       - yoink
     depends_on:
-      yoink-tg-bot-api:
+      tg-bot-api:
         condition: service_healthy
 
   yoink:
@@ -72,16 +72,18 @@ services:
         condition: service_healthy
       yoink-redis:
         condition: service_healthy
+      tg-bot-api:
+        condition: service_healthy
+      bgutil:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data/cookies:/app/data/cookies
       - ./data/kasm/profile/chromium:/app/data/browser-profile:ro
-      - /opt/docker/shared/tg-bot-api/data:/app/data/tg-bot-api:ro
-
+      - ./data/tg-bot-api:/app/data/tg-bot-api:ro
     networks:
       - yoink
-      - shared
     ports:
       - "8003:8000"
     healthcheck:
@@ -112,7 +114,6 @@ services:
         condition: service_healthy
     networks:
       - yoink
-      - shared
     extra_hosts:
       - "host.docker.internal:host-gateway"
     logging:
@@ -176,10 +177,12 @@ services:
         max-size: "50M"
         max-file: "3"
 
-  yoink-tg-bot-api:
+  tg-bot-api:
     image: yoink/tg-bot-api:latest
-    container_name: yoink-tg-bot-api
-    profiles: [legacy]
+    container_name: tg-bot-api
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tg-bot-api
     restart: unless-stopped
     entrypoint: ["/entrypoint.sh"]
     environment:
@@ -231,10 +234,9 @@ services:
         max-size: "50M"
         max-file: "3"
 
-  yoink-bgutil:
+  bgutil:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
-    container_name: yoink-bgutil
-    profiles: [legacy]
+    container_name: bgutil
     restart: unless-stopped
     environment:
       PROXY: "${proxy_url:-}"
@@ -321,9 +323,6 @@ networks:
     # ipam:
     #   config:
     #     - subnet: 10.10.0.0/24
-  shared:
-    name: shared
-    external: true
 
 volumes:
   postgres-data:

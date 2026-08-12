@@ -1,12 +1,16 @@
---- a/telegram-bot-api/Client.cpp	2026-03-20 06:05:46.955596796 +0300
-+++ b/telegram-bot-api/Client.cpp	2026-03-20 06:05:46.945691404 +0300
-@@ -13420,6 +13420,14 @@
+diff --git a/telegram-bot-api/Client.cpp b/telegram-bot-api/Client.cpp
+index 91c33e6..28b8b2c 100644
+--- a/telegram-bot-api/Client.cpp
++++ b/telegram-bot-api/Client.cpp
+@@ -14445,6 +14445,16 @@ void Client::on_cmd(PromisedQueryPtr query, bool force) {
      } else if (query->method() == "registeruser" && parameters_->allow_users_registration_) {
        return process_register_user_query(query);
      } else {
-+      auto m = query->method().str();
-+      if (m == "addproxy" || m == "getproxies" || m == "enableproxy" || m == "disableproxy" || m == "deleteproxy") {
-+        auto method_it = methods_.find(m);
++      // Proxy access must be available before login so TDLib can reach Telegram through SOCKS5.
++      auto method = query->method().str();
++      if (method == "addproxy" || method == "getproxies" || method == "enableproxy" ||
++          method == "disableproxy" || method == "deleteproxy") {
++        auto method_it = methods_.find(method);
 +        if (method_it != methods_.end()) {
 +          (this->*(method_it->second))(query);
 +          return;

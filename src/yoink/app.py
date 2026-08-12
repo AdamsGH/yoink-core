@@ -42,7 +42,7 @@ async def _kick_proxy(bot: object) -> None:
     if not isinstance(bot, Bot):
         return
 
-    base = bot.base_url  # e.g. "http://yoink-tg-bot-api:8082/bot<token>"
+    base = bot.base_url  # e.g. "http://tg-bot-api:8082/bot<token>"
     # Only kick when using a non-official Bot API (local tdlight instance)
     if "api.telegram.org" in base:
         return

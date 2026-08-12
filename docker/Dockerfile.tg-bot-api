@@ -6,8 +6,14 @@ RUN apk add --no-cache \
 
 WORKDIR /src
 
-# Clone and init submodule in one layer (cache-friendly: rarely changes)
-RUN git clone --depth=1 https://github.com/tdlight-team/tdlight-telegram-bot-api.git . \
+# Verified upstream revision for the repository-owned patches below.
+ARG TDLIGHT_COMMIT=4b08ca4ea328b5503bbe5989944867b57af0a722
+
+# Fetch the pinned source and initialize submodules in one cacheable layer.
+RUN git init . \
+ && git remote add origin https://github.com/tdlight-team/tdlight-telegram-bot-api.git \
+ && git fetch --depth=1 origin "${TDLIGHT_COMMIT}" \
+ && git checkout --detach FETCH_HEAD \
  && git submodule update --init --recursive --depth=1
 
 # Patch in a separate layer so source clone is cached

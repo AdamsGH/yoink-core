@@ -5,7 +5,7 @@
 
 set -e
 
-BOT_API_URL="${BOT_API_URL:-http://yoink-tg-bot-api:8082}"
+BOT_API_URL="${BOT_API_URL:-http://tg-bot-api:8082}"
 BOT_TOKEN="${bot_token}"
 SOCKS5_HOST="${socks5_host:-host.docker.internal}"
 SOCKS5_PORT="${socks5_port:-1080}"

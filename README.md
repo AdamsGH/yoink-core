@@ -32,7 +32,7 @@ just migrate up             # run migrations
 | `yoink` | Bot + API | 8003 |
 | `yoink-postgres` | PostgreSQL 16 | - |
 | `yoink-frontend` | React SPA (nginx) | 3010 |
-| `yoink-tg-bot-api` | Custom tdlight Bot API server | 8082 |
+| `tg-bot-api` | Custom tdlight Bot API server | 8082 |
 | `yoink-backup` | pg_dump + S3 (profile `backup`) | - |
 | `yoink-browser` | Kasmweb Chromium (profile `cookies`) | 6902 |
 | `yoink-youtubei` | Node.js youtubei.js sidecar for OAuth YouTube downloads | 9173 |

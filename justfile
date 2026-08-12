@@ -52,7 +52,7 @@ restart service:
     {{compose}} up -d --force-recreate --no-deps {{service}}
 
 # Build + recreate in one step. The standard 'after editing code' command.
-# Usage: just rebuild [yoink|yoink-frontend|fe|yoink-nginx|nginx|yoink-tg|tg|yoink-backup|backup|all] [no_cache=1]
+# Usage: just rebuild [yoink|yoink-frontend|fe|yoink-nginx|nginx|tg-bot-api|tg|yoink-backup|backup|all] [no_cache=1]
 rebuild service="" no_cache="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -61,7 +61,7 @@ rebuild service="" no_cache="":
       yoink)               just build yoink    {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink ;;
       yoink-frontend|fe)   just build frontend {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink-frontend ;;
       yoink-nginx|nginx)   just build nginx    {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink-nginx ;;
-      yoink-tg|tg)         just build tg       {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink-tg ;;
+      tg-bot-api|tg)       just build tg       {{no_cache}} && {{compose}} up -d --force-recreate --no-deps tg-bot-api ;;
       yoink-backup|backup) just build backup   {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink-backup ;;
       *) echo "Unknown service: {{service}}" >&2; exit 1 ;;
     esac
@@ -116,7 +116,7 @@ proxy-init:
         --network yoink \
         --add-host host.docker.internal:host-gateway \
         -e bot_token="${bot_token}" \
-        -e BOT_API_URL="http://yoink-tg-bot-api:8082" \
+        -e BOT_API_URL="http://tg-bot-api:8082" \
         -e socks5_host="host.docker.internal" \
         -e socks5_port="1080" \
         -e USER_TOKEN_FILE="/data/tg-bot-api/user.token" \
