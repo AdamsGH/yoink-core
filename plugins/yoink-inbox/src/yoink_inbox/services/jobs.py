@@ -72,13 +72,16 @@ async def scheduled_gh_sync(context) -> None:  # context: telegram.ext.CallbackC
     enqueued = 0
     for user_id in all_user_ids:
         state = states.get(user_id)
-        if state is not None and state.last_synced_at is not None:
-            if state.last_synced_at >= cutoff:
-                logger.debug(
-                    "inbox.scheduled_gh_sync: user_id=%s synced recently (%s), skip",
-                    user_id, state.last_synced_at,
-                )
-                continue
+        if (
+            state is not None
+            and state.last_synced_at is not None
+            and state.last_synced_at >= cutoff
+        ):
+            logger.debug(
+                "inbox.scheduled_gh_sync: user_id=%s synced recently (%s), skip",
+                user_id, state.last_synced_at,
+            )
+            continue
         try:
             await arq.enqueue_job("sync_user_stars", user_id, _queue_name="inbox:default")
             enqueued += 1

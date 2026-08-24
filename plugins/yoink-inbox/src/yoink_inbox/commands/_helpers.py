@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 _URL_RE = re.compile(r"https?://[^\s\)\]\>\"\']+", re.IGNORECASE)
 
 
-def extract_first_url(message: "Message | None") -> str | None:
+def extract_first_url(message: Message | None) -> str | None:
     """Return the first URL found in `message`, looking at entities then text.
 
     Mirrors yoink-dl's `extract_url`, kept local so inbox does not take a hard
@@ -34,7 +34,7 @@ def extract_first_url(message: "Message | None") -> str | None:
     return None
 
 
-def extract_url_from_args_or_reply(text_args: list[str], message: "Message") -> str | None:
+def extract_url_from_args_or_reply(text_args: list[str], message: Message) -> str | None:
     """For `/save <url>` style commands: prefer the explicit arg, fall back to the replied message."""
     for arg in text_args:
         if (m := _URL_RE.search(arg)) is not None:

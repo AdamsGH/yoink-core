@@ -6,9 +6,8 @@ self-documenting against the DB.
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 import re
+from datetime import datetime
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 

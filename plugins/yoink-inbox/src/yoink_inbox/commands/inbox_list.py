@@ -95,5 +95,5 @@ async def _cmd_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
-def register(app: "Application") -> None:
+def register(app: Application) -> None:
     app.add_handler(CommandHandler("inbox", _cmd_inbox))

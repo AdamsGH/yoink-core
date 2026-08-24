@@ -29,7 +29,7 @@ breaks existing rules silently.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -131,7 +131,7 @@ def evaluate_rule_conditions(
 
 
 async def _exec_action(
-    session: "AsyncSession",
+    session: AsyncSession,
     action: dict[str, Any],
     item: InboxItem,
     user_id: int,
@@ -168,7 +168,7 @@ async def _exec_action(
 
     elif action_type == "archive":
         item.status = "archived"
-        item.archived_at = datetime.now(timezone.utc)
+        item.archived_at = datetime.now(UTC)
         logger.info("inbox.rules archive item_id=%s", item.id)
 
     else:
@@ -176,7 +176,7 @@ async def _exec_action(
 
 
 async def _get_or_create_category(
-    session: "AsyncSession", user_id: int, name: str
+    session: AsyncSession, user_id: int, name: str
 ) -> InboxCategory | None:
     from re import sub as re_sub
 
@@ -218,7 +218,7 @@ async def _get_or_create_category(
 
 
 async def run_rules(
-    session: "AsyncSession",
+    session: AsyncSession,
     *,
     user_id: int,
     item_id: int,

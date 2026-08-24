@@ -7,10 +7,10 @@ using the nobullshit alias prompt and format rules from yoink-insight.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
-from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import CommandHandler, ContextTypes
 
@@ -23,6 +23,7 @@ from yoink_inbox.commands._helpers import extract_url_from_args_or_reply
 from yoink_inbox.services.ingest import ingest_url
 
 if TYPE_CHECKING:
+    from telegram import Update
     from telegram.ext import Application
 
 logger = logging.getLogger(__name__)
@@ -66,13 +67,11 @@ async def _keep_typing(bot, chat_id: int, stop_event: asyncio.Event) -> None:
     try:
         while not stop_event.is_set():
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     asyncio.shield(stop_event.wait()),
                     timeout=_TYPING_INTERVAL,
                 )
-            except asyncio.TimeoutError:
-                pass
     except Exception:  # noqa: BLE001
         pass
 
@@ -108,10 +107,13 @@ async def _stream_comment(
 ) -> None:
     """Stream the post-save comment via send_message_draft, then send_message."""
     from yoink_insight.config import InsightConfig  # noqa: PLC0415
-    from yoink_insight.services.tldr import (  # noqa: PLC0415
-        PreparedTldr, _NOBULLSHIT_PROMPT, _ALIAS_FORMAT_RULES, stream_llm,
-    )
     from yoink_insight.services.md_entities import md_to_entities  # noqa: PLC0415
+    from yoink_insight.services.tldr import (  # noqa: PLC0415
+        _ALIAS_FORMAT_RULES,
+        _NOBULLSHIT_PROMPT,
+        PreparedTldr,
+        stream_llm,
+    )
 
     config = InsightConfig()
     # Tags as monospace code block so Telegram renders them properly
@@ -262,12 +264,15 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     title: str | None = None
 
     try:
-        from yoink_inbox.services.enrich import run_enrich  # noqa: PLC0415
-        from yoink_inbox.services.classify import run_classify  # noqa: PLC0415
-        from yoink_inbox.storage.models import InboxItem  # noqa: PLC0415
-        from yoink_inbox.storage.models import InboxItemCategory  # noqa: PLC0415
-        from yoink_inbox.storage.models import InboxCategory  # noqa: PLC0415
         from sqlalchemy import select  # noqa: PLC0415
+
+        from yoink_inbox.services.classify import run_classify  # noqa: PLC0415
+        from yoink_inbox.services.enrich import run_enrich  # noqa: PLC0415
+        from yoink_inbox.storage.models import (
+            InboxCategory,  # noqa: PLC0415
+            InboxItem,  # noqa: PLC0415
+            InboxItemCategory,  # noqa: PLC0415
+        )
 
         await run_enrich(session_factory, item_id, arq=None)
         await run_classify(session_factory, item_id, notify=False)
@@ -313,5 +318,5 @@ async def _cmd_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-def register(app: "Application") -> None:
+def register(app: Application) -> None:
     app.add_handler(CommandHandler("save", _cmd_save))

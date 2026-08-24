@@ -23,10 +23,10 @@ import base64
 import logging
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import and_, delete as sql_delete, func, or_, select
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy import delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_current_user, get_db
@@ -70,9 +70,6 @@ from yoink_inbox.storage.models import (
     InboxTeam,
     InboxTeamMember,
 )
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -1270,8 +1267,8 @@ async def get_admin_classify_prompt(
 ) -> InboxAdminPromptRead:
     if (user.role or "") not in {"moderator", "admin", "owner"}:
         raise HTTPException(status_code=403, detail="Moderator role required")
-    from yoink_inbox.storage.models import InboxAdminSettings  # noqa: PLC0415
     from yoink_inbox.services.classify import _DEFAULT_SYSTEM_PROMPT  # noqa: PLC0415
+    from yoink_inbox.storage.models import InboxAdminSettings  # noqa: PLC0415
     row = await session.get(InboxAdminSettings, _CLASSIFY_ADMIN_KEY)
     return InboxAdminPromptRead(
         classify_system_prompt=row.value if row else None,
@@ -1288,8 +1285,8 @@ async def set_admin_classify_prompt(
 ) -> InboxAdminPromptRead:
     if (user.role or "") not in {"moderator", "admin", "owner"}:
         raise HTTPException(status_code=403, detail="Moderator role required")
-    from yoink_inbox.storage.models import InboxAdminSettings  # noqa: PLC0415
     from yoink_inbox.services.classify import _DEFAULT_SYSTEM_PROMPT  # noqa: PLC0415
+    from yoink_inbox.storage.models import InboxAdminSettings  # noqa: PLC0415
     row = await session.get(InboxAdminSettings, _CLASSIFY_ADMIN_KEY)
     if row is None:
         row = InboxAdminSettings(key=_CLASSIFY_ADMIN_KEY, value=payload.classify_system_prompt)
@@ -1524,7 +1521,7 @@ async def star_repo(
     try:
         await _star(sf, user.id, owner, repo)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     star.can_unstar = True
     await session.commit()
 
@@ -1547,7 +1544,7 @@ async def unstar_repo(
     try:
         await _unstar(sf, user.id, owner, repo)
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     # Soft-remove: mark can_unstar=False but keep the local star row
     # (GitHub will stop returning it on the next sync; hard-delete happens then).
     star.can_unstar = False

@@ -14,12 +14,12 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink_inbox.storage.models import InboxItem
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ async def ingest_url(
     user_id: int,
     url: str,
     source: str = "bot",
-    arq: "ArqRedis | None" = None,
+    arq: ArqRedis | None = None,
 ) -> IngestResult:
     """Insert an inbox item for `url` if not already present.
 

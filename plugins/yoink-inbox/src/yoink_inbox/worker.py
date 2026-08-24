@@ -8,6 +8,7 @@ verified end-to-end before the logic is written.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 
 from arq.connections import RedisSettings
@@ -80,10 +81,8 @@ async def startup(ctx: dict) -> None:
     import yoink.core.db.models  # noqa: F401 - core (User, Group, ...)
     import yoink_inbox.storage.models  # noqa: F401
 
-    try:
+    with contextlib.suppress(ImportError):
         import yoink_insight.storage.models  # noqa: F401
-    except ImportError:
-        pass
 
     init_engine(_core.database_url, echo=_core.database_echo)
     ctx["config"] = _config

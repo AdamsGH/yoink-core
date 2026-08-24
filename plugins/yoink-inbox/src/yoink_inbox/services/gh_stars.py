@@ -37,7 +37,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -95,7 +95,7 @@ def _parse_starred_at(value: Any) -> datetime | None:
         return None
 
 
-async def _resolve_token(session_factory: "async_sessionmaker", user_id: int) -> str | None:
+async def _resolve_token(session_factory: async_sessionmaker, user_id: int) -> str | None:
     """Pull the GitHub OAuth token from insight's user settings.
 
     Returns None if the user never linked GitHub or revoked the link.
@@ -213,7 +213,7 @@ async def _write_sync_state(
 
 
 async def run_sync(
-    session_factory: "async_sessionmaker", user_id: int
+    session_factory: async_sessionmaker, user_id: int
 ) -> SyncResult:
     """Snapshot-sync this user's starred repos.
 
@@ -235,7 +235,7 @@ async def run_sync(
                 status="no_token",
                 error=None,
                 stars_count=0,
-                last_synced_at=datetime.now(timezone.utc),
+                last_synced_at=datetime.now(UTC),
             )
             await s.commit()
         return SyncResult(status="no_token", stars_count=0, removed=0)
@@ -246,7 +246,7 @@ async def run_sync(
             select(InboxGhSyncState.etag).where(InboxGhSyncState.user_id == user_id)
         )
 
-    sync_started = datetime.now(timezone.utc)
+    sync_started = datetime.now(UTC)
     page_size = cfg.inbox_gh_sync_page_size
     next_url: str | None = (
         f"{_GITHUB_API}/user/starred?per_page={page_size}&sort=created&direction=desc"
@@ -415,7 +415,7 @@ async def run_sync(
 
 
 async def _resolve_write_token(
-    session_factory: "async_sessionmaker", user_id: int
+    session_factory: async_sessionmaker, user_id: int
 ) -> str | None:
     """Pull the public_repo write token (used for GitHub Lists GraphQL too)."""
     try:
@@ -427,7 +427,7 @@ async def _resolve_write_token(
 
 
 async def _sync_gh_lists(
-    session_factory: "async_sessionmaker",
+    session_factory: async_sessionmaker,
     user_id: int,
     token: str,
 ) -> None:
@@ -440,8 +440,10 @@ async def _sync_gh_lists(
     - Folders that were previously synced from a List but no longer exist
       on GitHub have their gh_list_id cleared (they become plain folders).
     """
-    from sqlalchemy import select, update as sql_update
+    from sqlalchemy import select
+    from sqlalchemy import update as sql_update
     from sqlalchemy.dialects.postgresql import insert as pg_insert
+
     from yoink_inbox.services.gh_lists import GhListsClient
     from yoink_inbox.storage.models import InboxGhFolder, InboxGhFolderMember, InboxGhStar
 

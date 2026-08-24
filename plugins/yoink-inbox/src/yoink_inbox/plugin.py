@@ -14,8 +14,7 @@ This module is the protocol entry point. Real work lives under:
 from __future__ import annotations
 
 from pathlib import Path
-
-from fastapi import APIRouter
+from typing import TYPE_CHECKING
 
 from yoink.core.plugin import (
     FeatureSpec,
@@ -27,6 +26,9 @@ from yoink.core.plugin import (
     WebPage,
 )
 from yoink_inbox.config import InboxConfig
+
+if TYPE_CHECKING:
+    from fastapi import APIRouter
 
 
 class InboxPlugin:

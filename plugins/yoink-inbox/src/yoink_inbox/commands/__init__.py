@@ -9,11 +9,12 @@ import importlib
 import logging
 import pkgutil
 from pathlib import Path
-from typing import Any
-
-from telegram.ext import BaseHandler
+from typing import TYPE_CHECKING, Any
 
 from yoink.core.plugin import HandlerSpec
+
+if TYPE_CHECKING:
+    from telegram.ext import BaseHandler
 
 logger = logging.getLogger(__name__)
 

@@ -32,8 +32,8 @@ async def _get_public_repo_token(session_factory, user_id: int) -> str:
     try:
         from yoink_insight.storage.repos import InsightUserSettingsRepo
         token = await InsightUserSettingsRepo(session_factory).get_github_token_public_repo(user_id)
-    except ImportError:
-        raise PermissionError("yoink-insight not installed; cannot access GitHub write token")
+    except ImportError as exc:
+        raise PermissionError("yoink-insight not installed; cannot access GitHub write token") from exc
     if not token:
         raise PermissionError("No public_repo token. Connect GitHub write access in settings first.")
     return token

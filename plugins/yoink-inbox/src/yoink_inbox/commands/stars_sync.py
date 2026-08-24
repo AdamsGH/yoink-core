@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import CommandHandler, ContextTypes
 
@@ -24,6 +23,7 @@ from yoink.core.i18n import t
 from yoink_inbox.bot.middleware import get_inbox_arq, get_session_factory
 
 if TYPE_CHECKING:
+    from telegram import Update
     from telegram.ext import Application
 
 logger = logging.getLogger(__name__)
@@ -86,5 +86,5 @@ async def _cmd_stars_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
-def register(app: "Application") -> None:
+def register(app: Application) -> None:
     app.add_handler(CommandHandler("stars_sync", _cmd_stars_sync))

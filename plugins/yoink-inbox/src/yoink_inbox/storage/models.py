@@ -41,7 +41,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from yoink.core.db.base import Base, _now
 
-
 # ---------------------------------------------------------------------------
 # Teams (category sharing abstraction; deliberately independent of TG groups)
 # ---------------------------------------------------------------------------

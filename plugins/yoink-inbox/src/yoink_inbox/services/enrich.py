@@ -97,9 +97,8 @@ async def _scrape_opengraph(client: httpx.AsyncClient, url: str) -> OpenGraph:
         elif key == "author" and not og.author:
             og.author = val
 
-    if not og.title:
-        if (tm := _TITLE_RE.search(html)) is not None:
-            og.title = re.sub(r"\s+", " ", tm.group(1)).strip() or None
+    if not og.title and (tm := _TITLE_RE.search(html)) is not None:
+        og.title = re.sub(r"\s+", " ", tm.group(1)).strip() or None
 
     if (fm := _FAVICON_RE.search(html)) is not None:
         og.favicon = _absolutise(url, fm.group(1))
@@ -178,7 +177,7 @@ def _parse_github_repo(normalized_url: str) -> tuple[str, str] | None:
 
 
 async def _load_github_token(
-    session_factory: "async_sessionmaker", user_id: int
+    session_factory: async_sessionmaker, user_id: int
 ) -> str | None:
     """Pull the user's stored GitHub token from yoink-insight settings.
 
@@ -198,10 +197,10 @@ async def _load_github_token(
 
 
 async def run_enrich(
-    session_factory: "async_sessionmaker",
+    session_factory: async_sessionmaker,
     item_id: int,
     *,
-    arq: "ArqRedis | None" = None,
+    arq: ArqRedis | None = None,
     max_chars: int = 12000,
 ) -> None:
     """Enrich one inbox item and (optionally) enqueue the classify follow-up.

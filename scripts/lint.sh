@@ -18,10 +18,15 @@ done
 targets="src plugins"
 [ "$has_path" = "1" ] && targets=""
 
+mount_mode="ro"
+for a in $args; do
+    case "$a" in --fix|--unsafe-fixes) mount_mode="rw" ;; esac
+done
+
 docker run --rm \
-    -v "$(pwd)/src:/app/src:ro" \
-    -v "$(pwd)/plugins:/app/plugins:ro" \
+    -v "$(pwd)/src:/app/src:$mount_mode" \
+    -v "$(pwd)/plugins:/app/plugins:$mount_mode" \
     -v "$(pwd)/pyproject.toml:/app/pyproject.toml:ro" \
     -w /app \
     yoink/yoink:latest \
-    sh -c "uv pip install --system ruff -q && ruff check --no-cache $args $targets"
+    sh -c "uv pip install --system ruff -q && ruff check --config /app/pyproject.toml --no-cache $args $targets"

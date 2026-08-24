@@ -21,15 +21,15 @@ _BOT_DATA_ARQ = "inbox_arq_pool"
 _BOT_DATA_SESSION_FACTORY = "session_factory"
 
 
-def get_inbox_config(context: "ContextTypes.DEFAULT_TYPE") -> "InboxConfig":
+def get_inbox_config(context: ContextTypes.DEFAULT_TYPE) -> InboxConfig:
     return context.bot_data[_BOT_DATA_CONFIG]
 
 
-def get_inbox_arq(context: "ContextTypes.DEFAULT_TYPE") -> "ArqRedis | None":
+def get_inbox_arq(context: ContextTypes.DEFAULT_TYPE) -> ArqRedis | None:
     """Return the inbox ARQ pool. None if startup did not wire it (Redis down)."""
     return context.bot_data.get(_BOT_DATA_ARQ)
 
 
-def get_session_factory(context: "ContextTypes.DEFAULT_TYPE") -> "async_sessionmaker":
+def get_session_factory(context: ContextTypes.DEFAULT_TYPE) -> async_sessionmaker:
     """Pulled from core's bot_data (set up by yoink core, not the plugin)."""
     return context.bot_data[_BOT_DATA_SESSION_FACTORY]

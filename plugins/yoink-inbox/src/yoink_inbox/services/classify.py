@@ -280,7 +280,7 @@ async def _resolve_categories(
 
 
 async def _notify_classified(
-    session_factory: "async_sessionmaker",
+    session_factory: async_sessionmaker,
     item_id: int,
     user_id: int,
     *,
@@ -296,9 +296,10 @@ async def _notify_classified(
     worker process).
     """
     try:
+        from telegram import Bot  # noqa: PLC0415
+
         from yoink.core.config import CoreSettings  # noqa: PLC0415
         from yoink_inbox.storage.models import InboxItem  # noqa: PLC0415
-        from telegram import Bot  # noqa: PLC0415
 
         async with session_factory() as session:
             item = await session.get(InboxItem, item_id)
@@ -331,7 +332,7 @@ async def _notify_classified(
 
 
 async def run_classify(
-    session_factory: "async_sessionmaker",
+    session_factory: async_sessionmaker,
     item_id: int,
     *,
     notify: bool = True,
@@ -361,7 +362,10 @@ async def run_classify(
         existing_names = [c.name for c in existing]
 
         # Load admin system prompt override, user hint and AI language
-        from yoink_inbox.storage.models import InboxAdminSettings, InboxUserSettings  # noqa: PLC0415
+        from yoink_inbox.storage.models import (  # noqa: PLC0415
+            InboxAdminSettings,
+            InboxUserSettings,
+        )
         admin_row = await session.get(InboxAdminSettings, "classify_system_prompt")
         user_row = await session.get(InboxUserSettings, user_id)
         system_override = admin_row.value if admin_row else None
