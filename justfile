@@ -179,6 +179,7 @@ test *args="src/tests":
     docker run --rm \
         --network yoink \
         -v "$(pwd)/src:/app/src:ro" \
+        -v "$(pwd)/plugins:/app/plugins:ro" \
         -v "$(pwd)/pyproject.toml:/app/pyproject.toml:ro" \
         yoink/yoink:latest \
         sh -c '
