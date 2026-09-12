@@ -76,6 +76,8 @@ services:
         condition: service_healthy
       bgutil:
         condition: service_healthy
+      yoink-proxy:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -234,12 +236,38 @@ services:
         max-size: "50M"
         max-file: "3"
 
+  # HTTP facade over the host SOCKS proxy. yt-dlp can use SOCKS directly, but
+  # ffmpeg's HTTP client (used for time-range downloads) only supports an HTTP
+  # CONNECT proxy. Keeping the bridge inside the compose network gives both
+  # clients one proxy URL and prevents ffmpeg from silently going direct.
+  yoink-proxy:
+    image: gogost/gost:3.3.0
+    container_name: yoink-proxy
+    restart: unless-stopped
+    command:
+      - "-L"
+      - "http://:8080"
+      - "-F"
+      - "${proxy_upstream_url:-socks5://host.docker.internal:1080}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - yoink
+    logging:
+      driver: local
+      options:
+        max-size: "50M"
+        max-file: "3"
+
   bgutil:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
     container_name: bgutil
     restart: unless-stopped
     environment:
       PROXY: "${proxy_url:-}"
+    depends_on:
+      yoink-proxy:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
