@@ -155,8 +155,13 @@ verify-py *args="src/tests":
     just lint
     just test {{args}}
 
-# Frontend verify: tsc across core + plugin frontends.
+# Translation coverage and regression tests across core + plugin frontends.
+verify-i18n:
+    cd frontend && npm run test:i18n && npm run check:i18n
+
+# Frontend verify: translations + tsc across core and plugin frontends.
 verify-fe *args="":
+    just verify-i18n
     just tsc {{args}}
 
 # Full verify: python (lint + tests) + frontend (tsc). Mirrors CI.

@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
+    "build": "npm run check:i18n && vite build",
     "typecheck": "tsc --noEmit",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "test:i18n": "node --test scripts/check-i18n.test.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
