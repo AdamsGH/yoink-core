@@ -483,7 +483,15 @@
     "byok": {
       "admin_title": "Bring Your Own Key",
       "admin_label": "Allow users without the insight:tldr grant to bring their own LLM key",
-      "admin_hint": "When enabled, any authorized user can configure an OpenAI, Anthropic, Gemini, OpenRouter, Perplexity, or custom endpoint in AI settings for /tldr requests."
+      "admin_hint": "When enabled, any authorized user can configure an OpenAI, Anthropic, Gemini, OpenRouter, Perplexity, or custom endpoint in AI settings for /tldr requests.",
+      "test_err": {
+        "invalid_api_key": "The API key was rejected. Check that it is correct and active.",
+        "provider_forbidden": "The provider denied the request. Check key permissions, account restrictions, or endpoint access.",
+        "provider_rate_limited": "The provider is rate limiting requests. Try again later.",
+        "provider_unavailable": "The provider is temporarily unavailable. Try again later.",
+        "network_error": "Could not reach the provider through the configured network or proxy.",
+        "http_403": "The provider denied the request. This does not necessarily mean the key is invalid."
+      }
     },
     "tldr_gateway_title": "AI routing",
     "tldr_route_label": "Target",
