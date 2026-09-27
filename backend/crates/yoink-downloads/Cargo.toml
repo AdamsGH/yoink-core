@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 tokio.workspace = true
 tokio-util.workspace = true
+tracing.workspace = true
 yoink-access.workspace = true
 yoink-identity.workspace = true
 yoink-storage.workspace = true

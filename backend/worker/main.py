@@ -1,29 +1,34 @@
-"""One-request NDJSON media worker. All diagnostics are deliberately redacted."""
+"""One-request NDJSON worker. Credentials enter on stdin, never in diagnostics."""
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
-import selectors
-import stat
-import subprocess
 import sys
-import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-from urllib.parse import urlsplit
+import unicodedata
 import warnings
+from dataclasses import dataclass
+from typing import Any
 
 warnings.filterwarnings("ignore")
 logging.disable(logging.CRITICAL)
 
-from network_guard import install_guard, validate_source_url
+# Isolated Python excludes the script directory. Add only the immutable worker
+# source directory, never the operation workspace or caller-controlled PYTHONPATH.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-MAX_FRAME_BYTES = 64 * 1024
+from failures import classify_error as _classify_error
+from media_engine import MediaFailure, download_media
+from network_guard import configure_proxy, guard_context, validate_source_url
+from proxy_tunnel import proxy_route
+
+MAX_FRAME_BYTES = 1024 * 1024
 MAX_CONFIG_BYTES = 50 * 1024 * 1024
-PROTOCOL_VERSION = 1
+MAX_ARTIFACT_BYTES = 2 * 1024 ** 3
+MAX_TOTAL_BYTES = 8 * 1024 ** 3
+PROTOCOL_VERSION = 2
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -32,25 +37,34 @@ _UUID_RE = re.compile(
 @dataclass(frozen=True)
 class Settings:
     max_bytes: int
+    total_max_bytes: int
+    max_items: int
     socket_timeout_secs: int
     allowed_private_origins: tuple[str, ...]
+    allowed_proxy_origins: tuple[str, ...]
+    processing_timeout_secs: int = 300
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "Settings":
         env = os.environ if env is None else env
-        max_bytes = _bounded_integer(env.get("YOINK_WORKER_MAX_BYTES", str(MAX_CONFIG_BYTES)), 1, MAX_CONFIG_BYTES)
+        max_bytes = _bounded_integer(env.get("YOINK_WORKER_MAX_BYTES", str(MAX_CONFIG_BYTES)), 1, MAX_ARTIFACT_BYTES)
+        total_bytes = _bounded_integer(env.get("YOINK_WORKER_TOTAL_MAX_BYTES", str(MAX_CONFIG_BYTES)), 1, MAX_TOTAL_BYTES)
+        max_items = _bounded_integer(env.get("YOINK_WORKER_MAX_ITEMS", "20"), 1, 100)
         timeout = _bounded_integer(env.get("YOINK_WORKER_SOCKET_TIMEOUT_SECS", "30"), 1, 300)
+        processing = _bounded_integer(env.get("YOINK_WORKER_PROCESSING_TIMEOUT_SECS", "300"), 1, 86400)
         try:
             raw_origins = json.loads(env.get("YOINK_WORKER_ALLOWED_PRIVATE_ORIGINS", "[]"))
+            raw_proxies = json.loads(env.get("YOINK_WORKER_ALLOWED_PROXY_ORIGINS", "[]"))
         except (TypeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid settings") from exc
-        if not isinstance(raw_origins, list) or any(not isinstance(item, str) for item in raw_origins):
+        if any(not isinstance(values, list) or any(not isinstance(item, str) for item in values) for values in (raw_origins, raw_proxies)):
             raise ValueError("invalid settings")
         from network_guard import _origin_host_port
         origins = tuple(raw_origins)
-        for origin in origins:
+        proxy_origins = tuple(raw_proxies)
+        for origin in origins + proxy_origins:
             _origin_host_port(origin)
-        return cls(max_bytes, timeout, origins)
+        return cls(max_bytes, total_bytes, max_items, timeout, origins, proxy_origins, processing)
 
 
 def _bounded_integer(raw: str, minimum: int, maximum: int) -> int:
@@ -64,7 +78,7 @@ def _bounded_integer(raw: str, minimum: int, maximum: int) -> int:
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    line = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    line = json.dumps(payload, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     if len(line.encode("utf-8")) > MAX_FRAME_BYTES:
         raise RuntimeError("event too large")
     sys.stdout.write(line + "\n")
@@ -75,8 +89,13 @@ def _event_prefix(request: dict[str, Any]) -> dict[str, Any]:
     return {"version": PROTOCOL_VERSION, "operation_id": request["operation_id"], "attempt": request["attempt"]}
 
 
-def _progress(request: dict[str, Any], percent: float) -> None:
-    _emit({**_event_prefix(request), "event": {"type": "progress", "percent": max(0.0, min(99.0, percent)), "stage": "fetching"}})
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("invalid request")
+        result[key] = value
+    return result
 
 
 def _failure(request: dict[str, Any], failure_class: str) -> None:
@@ -86,10 +105,13 @@ def _failure(request: dict[str, Any], failure_class: str) -> None:
 def _validate_request(raw: bytes) -> dict[str, Any]:
     if len(raw) > MAX_FRAME_BYTES:
         raise ValueError("invalid request")
-    request = json.loads(raw)
-    if not isinstance(request, dict) or set(request) != {"version", "operation_id", "attempt", "source_url", "task"}:
+    def reject_constant(_value: str) -> Any:
         raise ValueError("invalid request")
-    if type(request["version"]) is not int or request["version"] != 1:
+    request = json.loads(raw, parse_constant=reject_constant, object_pairs_hook=_unique_object)
+    required = {"version", "operation_id", "attempt", "source_url", "task"}
+    if not isinstance(request, dict) or not required.issubset(request) or set(request) - required - {"options", "network"}:
+        raise ValueError("invalid request")
+    if type(request["version"]) is not int or request["version"] != 2:
         raise ValueError("invalid request")
     if not isinstance(request["operation_id"], str) or not _UUID_RE.fullmatch(request["operation_id"]) or request["operation_id"].lower() == "00000000-0000-0000-0000-000000000000":
         raise ValueError("invalid request")
@@ -98,186 +120,95 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     source_url = request["source_url"]
     if not isinstance(source_url, str):
         raise ValueError("invalid request")
-    parsed = urlsplit(source_url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None or parsed.password is not None:
-        raise ValueError("invalid request")
-    try:
-        parsed.port
-    except ValueError as exc:
-        raise ValueError("invalid request") from exc
+    from network_guard import _parse_http_url
+    _parse_http_url(source_url, "invalid request")
     task = request["task"]
     if not isinstance(task, dict) or task.get("kind") not in ("download", "extract_content"):
         raise ValueError("invalid request")
     if task["kind"] == "download":
-        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio"):
+        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio", "image"):
             raise ValueError("invalid request")
     elif set(task) != {"kind"}:
         raise ValueError("invalid request")
+    options = request.get("options", {})
+    option_keys = {"max_height", "video_codec", "audio_codec", "container", "engine", "playlist", "clips", "gallery_zip"}
+    if not isinstance(options, dict) or set(options) - option_keys:
+        raise ValueError("invalid request")
+    defaults = {"max_height": None, "video_codec": "h264", "audio_codec": "best", "container": "mp4", "engine": "auto", "playlist": None, "clips": [], "gallery_zip": False}
+    defaults.update(options)
+    if defaults["max_height"] is not None and (type(defaults["max_height"]) is not int or defaults["max_height"] <= 0 or defaults["max_height"] > 100000):
+        raise ValueError("invalid request")
+    if defaults["video_codec"] not in ("h264", "h265", "av1", "vp9", "any") or defaults["audio_codec"] not in ("best", "aac", "mp3", "opus") or defaults["container"] not in ("mp4", "mkv", "webm") or defaults["engine"] not in ("auto", "yt_dlp", "gallery") or type(defaults["gallery_zip"]) is not bool:
+        raise ValueError("invalid request")
+    playlist = defaults["playlist"]
+    if playlist is not None:
+        if not isinstance(playlist, dict) or set(playlist) != {"start", "end"} or type(playlist["start"]) is not int or (playlist["end"] is not None and type(playlist["end"]) is not int):
+            raise ValueError("invalid request")
+        start, end = playlist["start"], playlist["end"]
+        if not -0x7FFFFFFF <= start <= 0x7FFFFFFF or end is not None and not -0x7FFFFFFF <= end <= 0x7FFFFFFF or end is None and start < -100:
+            raise ValueError("invalid request")
+        if start == 0 or end == 0 or end is not None and (start * end < 0 or (start > 0 and end < start) or (start < 0 and end > start) or abs(end - start) + 1 > 100):
+            raise ValueError("invalid request")
+    clips = defaults["clips"]
+    if not isinstance(clips, list) or len(clips) > 20:
+        raise ValueError("invalid request")
+    for clip in clips:
+        if not isinstance(clip, dict) or set(clip) != {"start_seconds", "end_seconds"}:
+            raise ValueError("invalid request")
+        start, end = clip["start_seconds"], clip["end_seconds"]
+        if type(start) not in (float, int) or type(end) not in (float, int) or not (0 <= start < end < float("inf")):
+            raise ValueError("invalid request")
+    request["options"] = defaults
+    network = request.get("network")
+    if network is not None:
+        if not isinstance(network, dict) or set(network) - {"proxy_url", "cookie_jar"}:
+            raise ValueError("invalid request")
+        proxy, cookies = network.get("proxy_url"), network.get("cookie_jar")
+        if proxy is not None:
+            if not isinstance(proxy, str) or not proxy or len(proxy.encode()) > 4096 or any(ord(c) < 32 for c in proxy):
+                raise ValueError("invalid request")
+            proxy_parts = _parse_http_url(proxy, "invalid request", allow_credentials=True)
+            if proxy_parts.path not in ("", "/") or proxy_parts.query or proxy_parts.fragment:
+                raise ValueError("invalid request")
+        if cookies is not None:
+            if not isinstance(cookies, str) or not cookies or len(cookies.encode()) > 512 * 1024 or any(unicodedata.category(c) == "Cc" and c not in "\t\r\n" for c in cookies):
+                raise ValueError("invalid request")
+            for row in cookies.splitlines():
+                if not row or row.startswith("#") and not row.startswith("#HttpOnly_"):
+                    continue
+                fields = row.split("\t")
+                if len(fields) != 7 or not fields[0] or not fields[2] or fields[1] not in ("TRUE", "FALSE") or fields[3] not in ("TRUE", "FALSE") or not fields[4].isascii() or not fields[4].isdigit() or int(fields[4]) > 0xFFFFFFFFFFFFFFFF or not fields[5]:
+                    raise ValueError("invalid request")
+        request["network"] = {"proxy_url": proxy, "cookie_jar": cookies}
     return request
 
 
-def _check_budget(downloaded: int, total: int | None, max_bytes: int) -> None:
-    if downloaded > max_bytes or (total is not None and total > max_bytes):
-        raise _ResourceLimit("resource limit exceeded")
-
-
-def _classify_error(exc: BaseException) -> str:
-    chain: list[BaseException] = []
-    current: BaseException | None = exc
-    while current is not None and current not in chain:
-        chain.append(current)
-        current = current.__cause__ or current.__context__
-    messages = " ".join(str(item).lower() for item in chain)
-    if any("limit" in type(item).__name__.lower() for item in chain) or "budget" in messages or "too large" in messages or "resource limit" in messages:
-        return "resource_limit"
-    if "unsupported" in messages or "not a video" in messages or "no suitable" in messages:
-        return "unsupported_source"
-
-    statuses = {getattr(item, "code", None) for item in chain}
-    statuses.update(int(match) for match in re.findall(r"http error\s+(\d{3})\b", messages))
-    if 429 in statuses or "rate limit" in messages:
-        return "rate_limited"
-    if statuses.intersection({408, 500, 502, 503, 504}):
-        return "source_unavailable"
-    transient_words = ("timed out", "timeout", "connection reset", "connection aborted", "remote end closed connection")
-    if any(isinstance(item, (OSError, TimeoutError)) for item in chain) or any(word in messages for word in transient_words) or "network destination" in messages:
-        return "source_unavailable"
-    if "ffprobe" in messages or "processing" in messages:
-        return "processing_failed"
-    return "invalid_media"
-
-
-def _verify_video(path: Path, timeout: int, _ffprobe: str = "ffprobe") -> bool:
-    command = [
-        _ffprobe, "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries",
-        "stream=codec_type", "-of", "json", str(path),
-    ]
-    process: subprocess.Popen[bytes] | None = None
-    try:
-        deadline = time.monotonic() + timeout
-        process = subprocess.Popen(
-            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, shell=False,
-        )
-        assert process.stdout is not None
-        output = bytearray()
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                if not selector.select(remaining):
-                    return False
-                read_size = min(4096, 64 * 1024 + 1 - len(output))
-                chunk = os.read(process.stdout.fileno(), read_size)
-                if not chunk:
-                    break
-                output.extend(chunk)
-                if len(output) > 64 * 1024:
-                    return False
-        remaining = deadline - time.monotonic()
-        if remaining <= 0 or process.wait(timeout=remaining) != 0:
-            return False
-        try:
-            data = json.loads(output)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return False
-        return any(item.get("codec_type") == "video" for item in data.get("streams", []))
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return False
-    finally:
-        if process is not None:
-            if process.poll() is None:
-                process.kill()
-            process.wait()
-            if process.stdout is not None:
-                process.stdout.close()
-
-
 def _download(request: dict[str, Any], settings: Settings) -> None:
-    task = request["task"]
-    if task["kind"] != "download" or task["media_mode"] == "audio":
-        _failure(request, "unsupported_source")
-        return
-    try:
-        install_guard(settings.allowed_private_origins)
-        validate_source_url(request["source_url"], settings.allowed_private_origins)
-        import yt_dlp
-        warnings.filterwarnings("ignore")
-        class SilentLogger:
-            def debug(self, _message): pass
-            def info(self, _message): pass
-            def warning(self, _message): pass
-            def error(self, _message): pass
-        downloaded = 0
+    last = (-1, "")
 
-        def progress_hook(status: dict[str, Any]) -> None:
-            nonlocal downloaded
-            downloaded = max(downloaded, int(status.get("downloaded_bytes") or 0))
-            total = status.get("total_bytes") or status.get("total_bytes_estimate")
-            _check_budget(downloaded, int(total) if total is not None else None, settings.max_bytes)
-            if status.get("status") == "downloading":
-                percent = (downloaded * 100.0 / int(total)) if total else 0.0
-                _progress(request, percent)
-
-        options = {
-            "outtmpl": "media.%(ext)s",
-            "noplaylist": True,
-            "retries": 0,
-            "fragment_retries": 0,
-            "socket_timeout": settings.socket_timeout_secs,
-            "format": "best[protocol=https]/best[protocol=http]",
-            "logger": SilentLogger(),
-            "quiet": True,
-            "no_warnings": True,
-            "ignoreconfig": True,
-            "plugin_dirs": [],
-            "cookiefile": None,
-            "cookiesfrombrowser": None,
-            "proxy": "",
-            "external_downloader": None,
-            "impersonate": None,
-            "progress_hooks": [progress_hook],
-            "overwrites": True,
-            "continuedl": False,
-            "cachedir": False,
-            "extract_flat": False,
-        }
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([request["source_url"]])
-    except _ResourceLimit:
-        _failure(request, "resource_limit")
-        return
-    except BaseException as exc:
-        _failure(request, _classify_error(exc))
-        return
+    def progress(percent: float) -> None:
+        nonlocal last
+        if not math.isfinite(percent):
+            raise MediaFailure("invalid_media")
+        value = max(last[0], min(99, max(0, int(percent))))
+        stage = "fetching" if value < 75 else "processing" if value < 95 else "writing_artifact"
+        if (value, stage) != last:
+            _emit({**_event_prefix(request), "event": {"type": "progress", "percent": value, "stage": stage}})
+            last = (value, stage)
 
     try:
-        cwd = Path.cwd()
-        entries = list(cwd.iterdir())
-        files = [entry for entry in entries if entry.name.startswith("media.")]
-        if len(files) != 1 or len(entries) != 1:
-            raise ValueError("invalid output")
-        artifact = files[0]
-        info = artifact.lstat()
-        if not stat.S_ISREG(info.st_mode) or artifact.is_symlink():
-            raise ValueError("invalid output")
-        if artifact.suffix not in (".mp4", ".webm") or info.st_size > settings.max_bytes:
-            raise _ResourceLimit()
-        if info.st_size <= 0 or not _verify_video(artifact, settings.socket_timeout_secs):
-            raise ValueError("invalid video")
-        media_type = "video/mp4" if artifact.suffix == ".mp4" else "video/webm"
-        _progress(request, 100.0)
-        _emit({**_event_prefix(request), "event": {"type": "completed", "artifacts": [
-            {"path": artifact.name, "size_bytes": info.st_size, "media_type": media_type}
-        ]}})
+        if request["task"]["kind"] != "download":
+            raise MediaFailure("unsupported_source")
+        with guard_context(settings.allowed_private_origins, settings.allowed_proxy_origins):
+            network = request.get("network") or {}
+            configure_proxy(network.get("proxy_url"))
+            validate_source_url(request["source_url"], settings.allowed_private_origins)
+            with proxy_route(network.get("proxy_url"), settings.socket_timeout_secs) as proxy:
+                routed = {**request, "network": {**network, "proxy_url": proxy}}
+                artifacts = download_media(routed, settings, progress)
+        _emit({**_event_prefix(request), "event": {"type": "completed", "artifacts": artifacts}})
     except BaseException as exc:
         _failure(request, _classify_error(exc))
-
-
-class _ResourceLimit(Exception):
-    pass
 
 
 def main() -> int:

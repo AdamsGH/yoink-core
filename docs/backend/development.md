@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Use the Rust toolchain required by [backend/Cargo.toml](../../backend/Cargo.toml) (declared MSRV 1.88), Node.js 22+, `just`, Docker, and the required local images. The experimental media image is built with Rust 1.88 and Python 3.12, and pins yt-dlp 2026.8.19. Python commands run inside Docker only. Do not run host `uv`, `pip`, `python`, or `pytest`.
+Use the Rust toolchain required by [backend/Cargo.toml](../../backend/Cargo.toml) (declared MSRV 1.88), Node.js 22+, `just`, Docker, and the required local images. The experimental media image is built with Rust 1.88 and Python 3.12, and pins yt-dlp 2026.8.19 and gallery-dl 1.32.13. The media launcher requires Linux Landlock ABI 6 or newer. Python commands run inside Docker only. Do not run host `uv`, `pip`, `python`, or `pytest`.
 
 ## Commands
 
@@ -10,6 +10,7 @@ Run Rust workspace commands from the repository root:
 
 | Command | Purpose |
 | --- | --- |
+| `cd backend && just format` | Apply Rust formatting. |
 | `cd backend && just fmt` | Check Rust formatting. |
 | `cd backend && just lint` | Clippy all workspace targets with warnings denied. |
 | `cd backend && just test` | Workspace tests. |
@@ -17,9 +18,9 @@ Run Rust workspace commands from the repository root:
 | `cd backend && just test-db` | Disposable PostgreSQL/Alembic integration fixture and database process checks. |
 | `cd backend && just verify-db` | `verify` plus the database fixture. Uses disposable PostgreSQL and the legacy image for Alembic. |
 | `cd backend && just build-media` | Builds the opt-in experimental image; does not alter the existing Compose deployment. |
-| `cd backend && just verify-media` | Builds the image, runs the 14 Python worker unit tests in a network-disabled container, then runs the real Docker media fixture with disposable PostgreSQL and a mock Bot API. |
+| `cd backend && just verify-media` | Builds the image, runs the Python engine/security suites in a network-disabled container, checks the default launcher under deployment hardening, then runs the real media fixture with disposable PostgreSQL and a mock Bot API. |
 
-The media fixture verifies real worker download and byte-for-byte Telegram multipart upload, replay idempotency, actor isolation, cancellation and cleanup, three persisted HTTP 503 attempts with retry delay, definitive API rejection, API 500 and dropped-response ambiguity, crash recovery without resend, admission quotas, access revocation before execution and delivery, and secret redaction. Telegram is a local fixture API, not a live service or a platform-compatibility test.
+The media fixture verifies real worker download and native Telegram multipart upload under read-only/noexec and Landlock confinement. It checks bounded MP4 framing and unchanged media payload across remuxing, replay idempotency, actor isolation, cancellation and cleanup, three persisted HTTP 503 attempts with retry delay, terminal API rejection, a durable Telegram 429 retry respecting `retry_after`, API 500 and dropped-response ambiguity, crash recovery without resend, admission quotas, access revocation before execution and delivery, and secret redaction. Telegram is a local fixture API, not a live service or a platform-compatibility test.
 
 `just build yoink` builds the legacy `yoink/yoink:latest` image used for the Alembic fixture; it does not start services. All Python work remains inside containers.
 

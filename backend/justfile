@@ -8,6 +8,10 @@ default:
 fetch:
     cargo fetch
 
+# Reconcile workspace dependency lists without upgrading already locked dependencies.
+lock:
+    cargo update --workspace --offline
+
 format:
     cargo fmt --all
 
@@ -20,15 +24,31 @@ lint:
 test:
     cargo test --workspace --locked
 
+# Focused contracts or adapter verification while other crates are being integrated.
+test-crate crate:
+    cargo test --locked --message-format short -p {{quote(crate)}}
+
 build:
     cargo build --workspace --locked
 
 smoke: build
     node --test scripts/smoke.mjs
 
+# Independent worker target avoids requiring an integrated Rust build for Python checks.
+build-worker:
+    docker build --quiet --target worker-runtime -t yoink/rust-worker:experimental .
+
 # Python executes only in an isolated container. Its HTTP fixture uses loopback.
-test-worker:
-    docker run --rm --pull never --network none --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-backend:experimental -B -m unittest discover -s /worker -p 'test_*.py'
+test-worker pattern='test_*.py': build-worker
+    docker run --rm --pull never --network none --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-worker:experimental -B -m unittest discover -s /worker -p {{quote(pattern)}}
+
+# Inspect pinned worker dependency APIs without host Python or network access.
+inspect-worker-symbol module symbol='':
+    docker run --rm --pull never --network none --entrypoint python yoink/rust-worker:experimental -B -c 'import importlib, inspect, functools, sys; m = importlib.import_module(sys.argv[1]); print(inspect.getsource(functools.reduce(getattr, sys.argv[2].split("."), m)) if sys.argv[2] else "\n".join(sorted(k for k,v in vars(m).items() if inspect.isfunction(v) or inspect.isclass(v))))' {{quote(module)}} {{quote(symbol)}}
+
+# Run storage DB regressions independently while adapter integration is in flight.
+test-storage-db:
+    node scripts/test-db.mjs --storage-only
 
 # Requires local postgres:16-alpine and yoink/yoink:latest images. Owns its test DB.
 test-db: build
@@ -38,11 +58,15 @@ test-db: build
 build-media:
     docker build -t yoink/rust-backend:experimental .
 
+# Exact default launcher in the deployment's hardened, network-isolated profile.
+test-worker-launcher:
+    node scripts/test-worker-launcher.mjs
+
 # Disposable PostgreSQL, fixture Bot API and real container Python worker.
 test-media:
     node scripts/test-media.mjs
 
-verify-media: build-media test-worker test-media
+verify-media: build-media test-worker test-worker-launcher test-media
 
 check-docs:
     node scripts/check-docs.mjs
@@ -51,6 +75,7 @@ check-scripts:
     node --check scripts/smoke.mjs
     node --check scripts/test-db.mjs
     node --check scripts/test-media.mjs
+    node --check scripts/test-worker-launcher.mjs
     node --check scripts/check-docs.mjs
 
 verify: fmt lint test smoke check-scripts check-docs

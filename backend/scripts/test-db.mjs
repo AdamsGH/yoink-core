@@ -9,6 +9,8 @@ import assert from 'node:assert/strict';
 const exec = promisify(execFile);
 const workspace = fileURLToPath(new URL('../', import.meta.url));
 const migrations = fileURLToPath(new URL('../../src/db', import.meta.url));
+const storageOnly = process.argv[2] === '--storage-only';
+if (process.argv.length > (storageOnly ? 3 : 2)) throw new Error('unsupported database fixture arguments');
 const name = `yoink-rust-test-${randomUUID()}`;
 const password = randomUUID();
 let created = false;
@@ -71,9 +73,9 @@ try {
   console.log(`Alembic: ${[...migrationOutput.matchAll(/Running upgrade/g)].length} revisions applied to fresh fixture.`);
   if (interrupted) throw new Error('fixture interrupted');
   const env = { ...process.env, YOINK_TEST_DATABASE_URL: `postgresql://yoink_test:${password}@127.0.0.1:${port}/yoink_test` };
-  let rejected = false;
+  let rejected = storageOnly;
   try {
-    await command(binary, ['check-schema'], { env: { PATH: process.env.PATH, YOINK_RUST_DATABASE_URL: env.YOINK_TEST_DATABASE_URL } });
+    if (!storageOnly) await command(binary, ['check-schema'], { env: { PATH: process.env.PATH, YOINK_RUST_DATABASE_URL: env.YOINK_TEST_DATABASE_URL } });
   } catch (error) {
     assert.match(error.message, /schema/i);
     assert.ok(!error.message.includes(password));
@@ -87,16 +89,17 @@ try {
   // Serial execution also fences the deliberate schema-corruption fixtures.
   const suites = [
     ['yoink-storage', 'queue_persistence_contract'],
-    ['yoink-storage', 'media_delivery_and_bounded_admission_contract'],
-    ['yoink-identity', ''],
+    ['yoink-storage', ''],
+    ...(!storageOnly ? [['yoink-identity', '']] : []),
   ];
   for (const [crate, filter] of suites) {
-    const output = await command('cargo', ['test', '--locked', '-p', crate, filter, '--', '--ignored', '--test-threads=1'], { env });
+    const skip = crate === 'yoink-storage' && !filter ? ['--skip', 'queue_persistence_contract'] : [];
+    const output = await command('cargo', ['test', '--locked', '-p', crate, filter, '--', '--ignored', '--test-threads=1', ...skip], { env });
     assert.match(output, /test result: ok\. [1-9][0-9]* passed;/, `${crate} must execute its database suite`);
     const passed = [...output.matchAll(/test result: ok\. (\d+) passed;/g)].reduce((sum, match) => sum + Number(match[1]), 0);
     console.log(`${crate}: ${passed} database contract suite passed.`);
   }
-  await verifyProcess(env.YOINK_TEST_DATABASE_URL);
+  if (!storageOnly) await verifyProcess(env.YOINK_TEST_DATABASE_URL);
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

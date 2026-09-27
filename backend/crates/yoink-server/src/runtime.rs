@@ -1,7 +1,7 @@
-use std::{future::Future, io, sync::Arc, time::Duration};
+use std::{future::Future, io, process::Stdio, sync::Arc, time::Duration};
 
 use thiserror::Error;
-use tokio::{net::TcpListener, task::JoinSet, time::timeout};
+use tokio::{net::TcpListener, process::Command, task::JoinSet, time::timeout};
 use tokio_util::sync::CancellationToken;
 use yoink_application::SystemService;
 use yoink_telegram::TelegramAdapter;
@@ -44,20 +44,6 @@ pub async fn run(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
 ) -> Result<(), ServerError> {
-    if config.media.is_some() {
-        for path in [
-            "/.dockerenv",
-            "/usr/local/bin/python",
-            "/opt/yoink-worker/main.py",
-        ] {
-            if !tokio::fs::metadata(path)
-                .await
-                .is_ok_and(|metadata| metadata.is_file())
-            {
-                return Err(ServerError::MediaStartup);
-            }
-        }
-    }
     let system = SystemService::new(env!("CARGO_PKG_VERSION"));
     let cancel = CancellationToken::new();
     let listener = TcpListener::bind(config.http_bind)
@@ -117,8 +103,25 @@ pub async fn run(
                 owner_id.map(|id| id as i64),
                 false,
             ));
+            let worker_workspace = media.executor.workspace_root.clone();
             let executor = yoink_executor::Executor::new(media.executor)
                 .map_err(|_| ServerError::MediaStartup)?;
+            // The enclosing startup deadline also bounds this check. The configured
+            // workspace must already exist, as required by Executor::new.
+            let status = Command::new("/usr/local/bin/yoink-worker-launcher")
+                .arg("--check")
+                .current_dir(worker_workspace)
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .status()
+                .await
+                .map_err(|_| ServerError::MediaStartup)?;
+            if !status.success() {
+                return Err(ServerError::MediaStartup);
+            }
             let service = yoink_downloads::DownloadService::new(
                 store.clone(),
                 identities,

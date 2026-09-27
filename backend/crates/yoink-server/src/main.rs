@@ -9,7 +9,7 @@ async fn main() -> ExitCode {
     // Restrict logs to our own sanitized events. HTTP client diagnostics can
     // otherwise contain Telegram credentials embedded in request URLs.
     if tracing_subscriber::fmt()
-        .with_env_filter("off,yoink_server=info,yoink_telegram=info")
+        .with_env_filter("off,yoink_server=info,yoink_telegram=info,yoink_downloads=info")
         .with_target(false)
         .try_init()
         .is_err()

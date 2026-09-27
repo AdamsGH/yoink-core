@@ -5,21 +5,45 @@ use tokio::{sync::mpsc, task::JoinSet, time};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use uuid::Uuid;
 use yoink_access::{AccessPolicy, AccessScope, Role};
-use yoink_domain::{DownloadParams, DownloadRequest, MediaMode as DomainMediaMode};
+use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode};
 use yoink_executor::{Executor, ExecutorError, ValidatedArtifact};
 use yoink_identity::IdentityStore;
 use yoink_storage::{Admission, AdmissionPolicy, Claim, OperationRecord, Store, StoreError};
 use yoink_worker_protocol::{HttpSourceUrl, MediaMode, PROTOCOL_VERSION, TaskKind, WorkerRequest};
 
-pub type DeliveryFuture<'a> = Pin<Box<dyn Future<Output = Result<i32, DeliveryError>> + Send + 'a>>;
+pub type DeliveryFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<DeliveredMedia>, DeliveryError>> + Send + 'a>>;
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct DeliveredMedia {
+    pub message_id: i64,
+    pub file_id: Option<String>,
+}
+
+impl std::fmt::Debug for DeliveredMedia {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeliveredMedia")
+            .field("message_id", &self.message_id)
+            .field("file_id", &self.file_id.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
 
 pub trait Delivery: Send + Sync {
-    fn deliver(&self, actor_id: u64, artifact: ValidatedArtifact) -> DeliveryFuture<'_>;
+    fn bot_id(&self) -> i64;
+    fn deliver(
+        &self,
+        target: DeliveryTarget,
+        send_as_file: bool,
+        artifacts: Vec<ValidatedArtifact>,
+    ) -> DeliveryFuture<'_>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryError {
     Rejected,
+    RetryAfter(Duration),
     Unknown,
 }
 
@@ -27,6 +51,7 @@ impl std::fmt::Display for DeliveryError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Rejected => "delivery was rejected",
+            Self::RetryAfter(_) => "delivery was rate limited",
             Self::Unknown => "delivery outcome is unknown",
         })
     }
@@ -81,6 +106,9 @@ impl DownloadService {
         config: DownloadConfig,
     ) -> Result<Self, DownloadError> {
         validate_config(&config)?;
+        if delivery.bot_id() <= 0 {
+            return Err(DownloadError::InvalidConfig);
+        }
         Ok(Self {
             store,
             identities,
@@ -96,10 +124,13 @@ impl DownloadService {
         source_url: &str,
         idempotency_key: &str,
     ) -> Result<Admission, DownloadError> {
-        self.authorize(actor_id).await?;
-        if source_url.len() > 4096 {
-            return Err(DownloadError::InvalidInput);
-        }
+        let target = DeliveryTarget::new(
+            self.delivery.bot_id(),
+            i64::try_from(actor_id).map_err(|_| DownloadError::InvalidInput)?,
+            None,
+            None,
+        )
+        .map_err(|_| DownloadError::InvalidInput)?;
         let request = DownloadRequest::new(
             actor_id,
             source_url,
@@ -107,9 +138,27 @@ impl DownloadService {
             None,
             DownloadParams::default(),
         )
+        .map_err(|_| DownloadError::InvalidInput)?
+        .with_target(target)
         .map_err(|_| DownloadError::InvalidInput)?;
+        self.submit_request(&request, idempotency_key).await
+    }
+
+    pub async fn submit_request(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+    ) -> Result<Admission, DownloadError> {
+        if request.source_url().as_str().len() > 4096
+            || request
+                .target()
+                .is_none_or(|target| target.bot_id() != self.delivery.bot_id())
+        {
+            return Err(DownloadError::InvalidInput);
+        }
+        self.authorize_request(request).await?;
         self.store
-            .admit_bounded(&request, idempotency_key, self.config.admission)
+            .admit_bounded(request, idempotency_key, self.config.admission)
             .await
             .map_err(map_store)
     }
@@ -119,16 +168,82 @@ impl DownloadService {
         actor_id: u64,
         id: Uuid,
     ) -> Result<Option<OperationRecord>, DownloadError> {
-        self.authorize(actor_id).await?;
-        self.store.get(actor_id, id).await.map_err(map_store)
+        let record = self.store.get(actor_id, id).await.map_err(map_store)?;
+        if let Some(record) = &record {
+            self.authorize_target(actor_id, record.target).await?;
+        }
+        Ok(record)
     }
 
     pub async fn cancel(&self, actor_id: u64, id: Uuid) -> Result<bool, DownloadError> {
-        self.authorize(actor_id).await?;
+        let Some(record) = self.store.get(actor_id, id).await.map_err(map_store)? else {
+            return Ok(false);
+        };
+        self.authorize_target(actor_id, record.target).await?;
         self.store
             .request_cancel(actor_id, id)
             .await
             .map_err(map_store)
+    }
+
+    async fn authorize_request(&self, request: &DownloadRequest) -> Result<(), DownloadError> {
+        self.authorize_target(request.actor_id(), request.target().copied())
+            .await
+    }
+
+    async fn authorize_target(
+        &self,
+        actor_id: u64,
+        target: Option<DeliveryTarget>,
+    ) -> Result<(), DownloadError> {
+        if actor_id == 0 || actor_id > i64::MAX as u64 {
+            return Err(DownloadError::Denied);
+        }
+        if target.is_some_and(|target| target.bot_id() != self.delivery.bot_id()) {
+            return Err(DownloadError::Denied);
+        }
+        let group = target
+            .filter(|target| target.chat_id() < 0)
+            .map(|target| (target.chat_id(), target.thread_id()));
+        let snapshot = self
+            .identities
+            .snapshot(actor_id as i64, group)
+            .await
+            .map_err(|_| DownloadError::Database)?
+            .ok_or(DownloadError::Denied)?;
+        let scope = if group.is_some() {
+            AccessScope::Group
+        } else {
+            AccessScope::Private
+        };
+        let context = match snapshot.group.as_ref() {
+            Some(group) => yoink_access::AccessContext {
+                scope,
+                group_enabled: group.enabled,
+                thread_allowed: group.thread_allowed,
+                group_role_override: group.role_override,
+                group_auto_grant_role: Some(group.auto_grant_role),
+            },
+            None => yoink_access::AccessContext {
+                scope,
+                group_enabled: false,
+                thread_allowed: false,
+                group_role_override: None,
+                group_auto_grant_role: None,
+            },
+        };
+        let policy = AccessPolicy {
+            min_role: Role::User,
+            scopes: vec![AccessScope::Private, AccessScope::Group],
+            check_group_enabled: scope == AccessScope::Group,
+            check_thread_policy: scope == AccessScope::Group,
+        };
+        if yoink_access::check_access(&snapshot.principal, &policy, &context, snapshot.now).allowed
+        {
+            Ok(())
+        } else {
+            Err(DownloadError::Denied)
+        }
     }
 
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), DownloadError> {
@@ -143,29 +258,6 @@ impl DownloadService {
         supervise_workers(&mut workers, &shutdown).await
     }
 
-    async fn authorize(&self, actor_id: u64) -> Result<(), DownloadError> {
-        if actor_id == 0 || actor_id > i64::MAX as u64 {
-            return Err(DownloadError::Denied);
-        }
-        let snapshot = self
-            .identities
-            .snapshot(actor_id as i64, None)
-            .await
-            .map_err(|_| DownloadError::Database)?
-            .ok_or(DownloadError::Denied)?;
-        let policy = AccessPolicy {
-            min_role: Role::User,
-            scopes: vec![AccessScope::Private],
-            check_group_enabled: false,
-            check_thread_policy: false,
-        };
-        if snapshot.authorize(&policy, None).decision.allowed {
-            Ok(())
-        } else {
-            Err(DownloadError::Denied)
-        }
-    }
-
     async fn worker_loop(
         &self,
         worker_id: String,
@@ -177,7 +269,7 @@ impl DownloadService {
             }
             let claim = tokio::select! {
                 _ = shutdown.cancelled() => return Ok(()),
-                result = self.store.claim(&worker_id, self.config.lease) => result.map_err(map_store)?,
+                result = self.store.claim_for_bot(&worker_id, self.config.lease, self.delivery.bot_id()) => result.map_err(map_store)?,
             };
             match claim {
                 Some(claim) => {
@@ -205,7 +297,7 @@ impl DownloadService {
                 Err(error) => Err(map_store(error)),
             };
         }
-        if let Err(error) = self.authorize(claim.request.actor_id()).await {
+        if let Err(error) = self.authorize_request(&claim.request).await {
             if error == DownloadError::Denied {
                 self.store.fail(&claim, false).await.map_err(map_store)?;
                 return Ok(());
@@ -219,158 +311,271 @@ impl DownloadService {
                 return Ok(());
             }
         };
-
-        let (heartbeat_tx, mut heartbeat_rx) = mpsc::unbounded_channel();
+        let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel(2);
         let heartbeat = self.start_heartbeat(claim.clone(), heartbeat_tx);
         let child_cancel = shutdown.child_token();
-        let execution = self.executor.execute(&worker_request, child_cancel.clone());
+        let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(None);
+        let execution = self.executor.execute_with_progress(
+            &worker_request,
+            child_cancel.clone(),
+            Some(progress_tx),
+        );
         tokio::pin!(execution);
-        let artifact = tokio::select! {
-            result = &mut execution => match result {
-                Ok(artifact) => artifact,
-                Err(error) => {
+        let mut progress_open = true;
+        let artifacts = loop {
+            tokio::select! {
+                result = &mut execution => match result {
+                    Ok(artifacts) => break artifacts,
+                    Err(error) => {
+                        child_cancel.cancel();
+                        drop(heartbeat);
+                        return self.finish_executor_error(&claim, error, shutdown.is_cancelled()).await;
+                    }
+                },
+                event = heartbeat_rx.recv() => {
                     child_cancel.cancel();
+                    let _ = execution.await;
                     drop(heartbeat);
-                    return self.finish_executor_error(&claim, error, shutdown.is_cancelled()).await;
+                    return self.finish_heartbeat_event(&claim, event).await;
+                },
+                changed = progress_rx.changed(), if progress_open => {
+                    if changed.is_ok() {
+                        let progress = *progress_rx.borrow_and_update();
+                        if let Some(progress) = progress {
+                            let stage = match progress.stage {
+                                yoink_worker_protocol::ProgressStage::Fetching => yoink_storage::ProgressStage::Fetching,
+                                yoink_worker_protocol::ProgressStage::Processing => yoink_storage::ProgressStage::Processing,
+                                yoink_worker_protocol::ProgressStage::WritingArtifact => yoink_storage::ProgressStage::WritingArtifact,
+                            };
+                            let percent = progress.percent.round().clamp(0.0, 100.0) as u8;
+                            if let Err(error) = self.store.update_progress(&claim, percent, stage).await {
+                                child_cancel.cancel();
+                                let _ = execution.await;
+                                drop(heartbeat);
+                                return if is_stale(&error) { Ok(()) } else { Err(map_store(error)) };
+                            }
+                        }
+                        continue;
+                    }
+                    progress_open = false;
+                },
+                _ = shutdown.cancelled() => {
+                    child_cancel.cancel();
+                    let _ = execution.await;
+                    drop(heartbeat);
+                    return match self.store.fail(&claim, true).await {
+                        Ok(()) => Ok(()),
+                        Err(error) if is_stale(&error) => Ok(()),
+                        Err(error) => Err(map_store(error)),
+                    };
                 }
-            },
-            event = heartbeat_rx.recv() => {
-                child_cancel.cancel();
-                let _ = execution.await;
-                drop(heartbeat);
-                return self.finish_heartbeat_event(&claim, event).await;
-            },
-            _ = shutdown.cancelled() => {
-                child_cancel.cancel();
-                let _ = execution.await;
-                drop(heartbeat);
-                match self.store.fail(&claim, true).await {
-                    Ok(()) => {}
-                    Err(error) if is_stale(&error) => return Ok(()),
-                    Err(error) => return Err(map_store(error)),
-                }
-                return Ok(());
             }
         };
-
-        if shutdown.is_cancelled() {
+        if artifacts.is_empty() || artifacts.len() > 100 {
             drop(heartbeat);
-            match self.store.fail(&claim, true).await {
-                Ok(()) => {}
-                Err(error) if is_stale(&error) => return Ok(()),
-                Err(error) => return Err(map_store(error)),
-            }
+            self.store.fail(&claim, false).await.map_err(map_store)?;
             return Ok(());
         }
-        if let Err(error) = self.authorize(claim.request.actor_id()).await {
+        if shutdown.is_cancelled() {
+            drop(heartbeat);
+            return match self.store.fail(&claim, true).await {
+                Ok(()) => Ok(()),
+                Err(error) if is_stale(&error) => Ok(()),
+                Err(error) => Err(map_store(error)),
+            };
+        }
+        if let Err(error) = self.authorize_request(&claim.request).await {
+            drop(heartbeat);
             if error == DownloadError::Denied {
-                drop(heartbeat);
                 self.store.fail(&claim, false).await.map_err(map_store)?;
                 return Ok(());
             }
-            drop(heartbeat);
             return Err(error);
         }
-        if let Err(error) = self.store.begin_delivery(&claim).await {
+        let units = plan_units(&artifacts);
+        let mut artifacts: Vec<Option<ValidatedArtifact>> =
+            artifacts.into_iter().map(Some).collect();
+        if !self
+            .store
+            .begin_delivery_batch(&claim, artifacts.len() as u32)
+            .await
+            .map_err(map_store)?
+        {
             drop(heartbeat);
-            if is_stale(&error) {
-                return match self.store.acknowledge_cancel(&claim).await {
-                    Ok(()) => Ok(()),
-                    Err(error) if is_stale(&error) => Ok(()),
-                    Err(error) => Err(map_store(error)),
-                };
-            }
-            return Err(map_store(error));
+            return Ok(());
         }
-
-        let delivery = self.delivery.deliver(claim.request.actor_id(), artifact);
-        tokio::pin!(delivery);
-        let deadline = time::sleep(self.config.delivery_timeout);
-        tokio::pin!(deadline);
-        let mut heartbeat_failed = false;
-        let mut heartbeat_channel_closed = false;
-        let delivery_result = loop {
-            tokio::select! {
-                result = &mut delivery => {
-                    break match result {
-                        Ok(message_id) if message_id > 0 => DeliveryOutcome::Delivered(message_id),
-                        Err(DeliveryError::Rejected) => DeliveryOutcome::Rejected,
-                        _ => DeliveryOutcome::Unknown,
-                    };
+        let target = claim
+            .request
+            .target()
+            .copied()
+            .or_else(|| {
+                DeliveryTarget::new(
+                    self.delivery.bot_id(),
+                    claim.request.actor_id() as i64,
+                    None,
+                    None,
+                )
+                .ok()
+            })
+            .ok_or(DownloadError::InvalidInput)?;
+        let mut cancellation_seen = false;
+        for (ordinal, unit) in units.into_iter().enumerate() {
+            let ordinal = ordinal as u32;
+            if shutdown.is_cancelled() || cancellation_seen {
+                self.stop_delivery(
+                    &claim,
+                    if cancellation_seen {
+                        yoink_storage::StopDeliveryReason::Cancel
+                    } else {
+                        yoink_storage::StopDeliveryReason::Shutdown
+                    },
+                )
+                .await?;
+                break;
+            }
+            if let Err(error) = self
+                .authorize_target(claim.request.actor_id(), Some(target))
+                .await
+            {
+                if error == DownloadError::Denied {
+                    self.stop_delivery(&claim, yoink_storage::StopDeliveryReason::Denied)
+                        .await?;
+                    break;
                 }
-                _ = &mut deadline => break DeliveryOutcome::Unknown,
-                event = heartbeat_rx.recv(), if !heartbeat_channel_closed => {
-                    match event {
-                        Some(HeartbeatEvent::Database) => heartbeat_failed = true,
-                        Some(HeartbeatEvent::Cancelled | HeartbeatEvent::Stale) => {}
-                        None => heartbeat_channel_closed = true,
+                drop(heartbeat);
+                return Err(error);
+            }
+            if !self
+                .store
+                .begin_delivery_unit(&claim, ordinal, unit.len() as u32)
+                .await
+                .map_err(map_store)?
+            {
+                break;
+            }
+            let media = unit
+                .iter()
+                .filter_map(|index| artifacts[*index].take())
+                .collect();
+            let delivery =
+                self.delivery
+                    .deliver(target, claim.request.params().send_as_file(), media);
+            tokio::pin!(delivery);
+            let deadline = time::sleep(self.config.delivery_timeout);
+            tokio::pin!(deadline);
+            let mut heartbeat_closed = false;
+            let mut heartbeat_failed = false;
+            let outcome = loop {
+                tokio::select! {
+                    result = &mut delivery => {
+                        break match result {
+                            Ok(receipts) if receipts.len() == unit.len() && receipts.iter().all(|receipt| receipt.message_id > 0) && {
+                                let mut ids = std::collections::HashSet::with_capacity(receipts.len());
+                                receipts.iter().all(|receipt| ids.insert(receipt.message_id))
+                            } => DeliveryOutcome::Delivered(receipts.into_iter().map(|receipt| receipt.message_id).collect()),
+                            Err(DeliveryError::Rejected) => DeliveryOutcome::Rejected,
+                            Err(DeliveryError::RetryAfter(delay)) => DeliveryOutcome::RetryAfter(delay),
+                            _ => DeliveryOutcome::Unknown,
+                        };
                     }
+                    _ = &mut deadline => break DeliveryOutcome::Unknown,
+                    event = heartbeat_rx.recv(), if !heartbeat_closed => match event {
+                        Some(HeartbeatEvent::Database | HeartbeatEvent::Stale) => { heartbeat_failed = true; },
+                        Some(HeartbeatEvent::Cancelled) => { cancellation_seen = true; },
+                        None => heartbeat_closed = true,
+                    },
                 }
-            }
-        };
-        let delivery_result = if heartbeat_failed {
-            DeliveryOutcome::Unknown
-        } else {
-            delivery_result
-        };
-        match delivery_result {
-            DeliveryOutcome::Delivered(message_id) => {
-                if let Err(error) = self.store.complete_delivery(&claim, message_id).await {
+            };
+            let result = match outcome {
+                DeliveryOutcome::Delivered(ids) if !heartbeat_failed => self
+                    .store
+                    .complete_delivery_unit(&claim, ordinal, &ids)
+                    .await
+                    .map(|accepted| (accepted, false)),
+                DeliveryOutcome::Delivered(_) => self
+                    .store
+                    .unknown_delivery_unit(&claim, ordinal)
+                    .await
+                    .map(|accepted| (accepted, true)),
+                DeliveryOutcome::Rejected if !heartbeat_failed => self
+                    .store
+                    .reject_delivery_unit(&claim, ordinal, None)
+                    .await
+                    .map(|accepted| (accepted, true)),
+                DeliveryOutcome::RetryAfter(delay) if !heartbeat_failed => self
+                    .store
+                    .reject_delivery_unit(&claim, ordinal, Some(delay))
+                    .await
+                    .map(|accepted| (accepted, true)),
+                _ => self
+                    .store
+                    .unknown_delivery_unit(&claim, ordinal)
+                    .await
+                    .map(|accepted| (accepted, true)),
+            };
+            match result {
+                Err(error) if is_stale(&error) => break,
+                Err(error) => {
                     drop(heartbeat);
-                    return if is_stale(&error) {
-                        Ok(())
-                    } else {
-                        Err(map_store(error))
-                    };
+                    return Err(map_store(error));
                 }
+                Ok((false, _)) => break,
+                Ok((true, true)) => break,
+                Ok((true, false)) => {}
             }
-            DeliveryOutcome::Rejected => {
-                if let Err(error) = self.store.reject_delivery(&claim).await {
-                    drop(heartbeat);
-                    return if is_stale(&error) {
-                        Ok(())
+            if shutdown.is_cancelled() || cancellation_seen {
+                self.stop_delivery(
+                    &claim,
+                    if cancellation_seen {
+                        yoink_storage::StopDeliveryReason::Cancel
                     } else {
-                        Err(map_store(error))
-                    };
-                }
-            }
-            DeliveryOutcome::Unknown => {
-                if let Err(error) = self.store.delivery_unknown(&claim).await {
-                    drop(heartbeat);
-                    return if is_stale(&error) {
-                        Ok(())
-                    } else {
-                        Err(map_store(error))
-                    };
-                }
+                        yoink_storage::StopDeliveryReason::Shutdown
+                    },
+                )
+                .await?;
+                break;
             }
         }
         drop(heartbeat);
         Ok(())
     }
 
+    async fn stop_delivery(
+        &self,
+        claim: &Claim,
+        reason: yoink_storage::StopDeliveryReason,
+    ) -> Result<(), DownloadError> {
+        match self.store.stop_delivery_batch(claim, reason).await {
+            Ok(_) => Ok(()),
+            Err(error) if is_stale(&error) => Ok(()),
+            Err(error) => Err(map_store(error)),
+        }
+    }
+
     fn start_heartbeat(
         &self,
         claim: Claim,
-        sender: mpsc::UnboundedSender<HeartbeatEvent>,
+        sender: mpsc::Sender<HeartbeatEvent>,
     ) -> AbortOnDropHandle<()> {
         let store = self.store.clone();
         let interval = self.config.heartbeat_interval;
         let lease = self.config.lease;
         AbortOnDropHandle::new(tokio::spawn(async move {
+            let mut cancellation_reported = false;
             loop {
                 time::sleep(interval).await;
                 match store.heartbeat_state(&claim, lease).await {
-                    Ok(state) if state.cancel_requested => {
-                        let _ = sender.send(HeartbeatEvent::Cancelled);
+                    Ok(state) if state.cancel_requested && !cancellation_reported => {
+                        let _ = sender.try_send(HeartbeatEvent::Cancelled);
+                        cancellation_reported = true;
                     }
                     Ok(_) => {}
                     Err(error) if is_stale(&error) => {
-                        let _ = sender.send(HeartbeatEvent::Stale);
+                        let _ = sender.try_send(HeartbeatEvent::Stale);
                         return;
                     }
                     Err(_) => {
-                        let _ = sender.send(HeartbeatEvent::Database);
+                        let _ = sender.try_send(HeartbeatEvent::Database);
                         return;
                     }
                 }
@@ -419,6 +624,13 @@ impl DownloadService {
             };
         }
         let retryable = retryable_executor_error(error);
+        tracing::warn!(
+            operation_id = %claim.operation_id,
+            attempt = claim.attempt,
+            failure = ?error,
+            retryable,
+            "media attempt failed"
+        );
         match self.store.fail(claim, retryable).await {
             Ok(()) => Ok(()),
             Err(error) if is_stale(&error) => Ok(()),
@@ -434,9 +646,45 @@ enum HeartbeatEvent {
     Database,
 }
 enum DeliveryOutcome {
-    Delivered(i32),
+    Delivered(Vec<i64>),
     Rejected,
+    RetryAfter(Duration),
     Unknown,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum MediaCategory {
+    Visual,
+    Audio,
+    Document,
+}
+
+fn plan_units(artifacts: &[ValidatedArtifact]) -> Vec<Vec<usize>> {
+    let media_types = artifacts
+        .iter()
+        .map(|artifact| artifact.media_type.as_str())
+        .collect::<Vec<_>>();
+    plan_media_types(&media_types)
+}
+
+fn plan_media_types(media_types: &[&str]) -> Vec<Vec<usize>> {
+    let category = |media_type: &str| match media_type {
+        "image/jpeg" | "image/png" | "video/mp4" => MediaCategory::Visual,
+        "audio/mpeg" | "audio/mp4" => MediaCategory::Audio,
+        _ => MediaCategory::Document,
+    };
+    let mut result = Vec::new();
+    let mut start = 0;
+    while start < media_types.len() {
+        let kind = category(media_types[start]);
+        let mut end = start + 1;
+        while end < media_types.len() && end - start < 10 && category(media_types[end]) == kind {
+            end += 1;
+        }
+        result.push((start..end).collect());
+        start = end;
+    }
+    result
 }
 
 async fn supervise_workers(
@@ -460,26 +708,78 @@ async fn supervise_workers(
 
 fn worker_request(claim: &Claim) -> Result<WorkerRequest, ()> {
     let request = &claim.request;
-    if request.media_mode() != DomainMediaMode::Video
-        || request.clip_range().is_some()
-        || request.params().max_height().is_some()
-    {
-        return Err(());
-    }
+    let params = request.params();
+    let options = yoink_worker_protocol::DownloadOptions {
+        max_height: params.max_height(),
+        video_codec: match params.video_codec() {
+            yoink_domain::VideoCodec::H264 => yoink_worker_protocol::VideoCodec::H264,
+            yoink_domain::VideoCodec::H265 => yoink_worker_protocol::VideoCodec::H265,
+            yoink_domain::VideoCodec::Av1 => yoink_worker_protocol::VideoCodec::Av1,
+            yoink_domain::VideoCodec::Vp9 => yoink_worker_protocol::VideoCodec::Vp9,
+            yoink_domain::VideoCodec::Any => yoink_worker_protocol::VideoCodec::Any,
+        },
+        audio_codec: match params.audio_codec() {
+            yoink_domain::AudioCodec::Best => yoink_worker_protocol::AudioCodec::Best,
+            yoink_domain::AudioCodec::Aac => yoink_worker_protocol::AudioCodec::Aac,
+            yoink_domain::AudioCodec::Mp3 => yoink_worker_protocol::AudioCodec::Mp3,
+            yoink_domain::AudioCodec::Opus => yoink_worker_protocol::AudioCodec::Opus,
+        },
+        container: match params.container() {
+            yoink_domain::Container::Mp4 => yoink_worker_protocol::Container::Mp4,
+            yoink_domain::Container::Mkv => yoink_worker_protocol::Container::Mkv,
+            yoink_domain::Container::Webm => yoink_worker_protocol::Container::Webm,
+        },
+        engine: match params.engine() {
+            yoink_domain::Engine::Auto => yoink_worker_protocol::Engine::Auto,
+            yoink_domain::Engine::YtDlp => yoink_worker_protocol::Engine::YtDlp,
+            yoink_domain::Engine::Gallery => yoink_worker_protocol::Engine::Gallery,
+        },
+        playlist: params
+            .playlist()
+            .map(|range| yoink_worker_protocol::PlaylistRange {
+                start: range.start(),
+                end: range.end(),
+            }),
+        clips: params
+            .clips()
+            .iter()
+            .map(|range| yoink_worker_protocol::ClipRange {
+                start_seconds: range.start_seconds(),
+                end_seconds: range.end_seconds(),
+            })
+            .chain(
+                request
+                    .clip_range()
+                    .map(|range| yoink_worker_protocol::ClipRange {
+                        start_seconds: range.start_seconds(),
+                        end_seconds: range.end_seconds(),
+                    }),
+            )
+            .collect(),
+        gallery_zip: params.gallery_zip(),
+    };
+    let media_mode = match request.media_mode() {
+        DomainMediaMode::Video => MediaMode::Video,
+        DomainMediaMode::Audio => MediaMode::Audio,
+        DomainMediaMode::Image => MediaMode::Image,
+    };
     Ok(WorkerRequest {
         version: PROTOCOL_VERSION,
         operation_id: claim.operation_id,
         attempt: claim.attempt,
         source_url: HttpSourceUrl::parse(request.source_url().as_str()).map_err(|_| ())?,
-        task: TaskKind::Download {
-            media_mode: MediaMode::Video,
-        },
+        task: TaskKind::Download { media_mode },
+        options,
+        network: None,
     })
 }
 
 fn retryable_executor_error(error: ExecutorError) -> bool {
     match error {
-        ExecutorError::Timeout | ExecutorError::Spawn | ExecutorError::Io => true,
+        ExecutorError::Timeout
+        | ExecutorError::Spawn
+        | ExecutorError::Exited(_)
+        | ExecutorError::Io => true,
         ExecutorError::Worker(class) => matches!(
             class,
             yoink_worker_protocol::FailureClass::SourceUnavailable
@@ -677,5 +977,24 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(worker_stopped.load(Ordering::SeqCst));
         assert!(heartbeat_stopped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn planner_groups_only_compatible_contiguous_items_within_ten() {
+        assert_eq!(
+            plan_media_types(&[
+                "image/jpeg",
+                "video/mp4",
+                "audio/mpeg",
+                "audio/mp4",
+                "application/zip"
+            ]),
+            vec![vec![0, 1], vec![2, 3], vec![4]]
+        );
+        let ten_visuals = vec!["image/png"; 11];
+        assert_eq!(
+            plan_media_types(&ten_visuals),
+            vec![vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9], vec![10]]
+        );
     }
 }

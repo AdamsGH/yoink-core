@@ -41,10 +41,10 @@ const gatedResponses = new Set();
 let mediaGateOpen = false;
 let revokedQueuedFetches = 0;
 const mediaRequestTimes = [];
-let sendDocumentMode = 'success';
+let mediaSendMode = 'success';
 let releaseUpload;
-let sendDocumentGate;
-let sendDocumentCalls = 0;
+let mediaSendGate;
+let mediaSendCalls = 0;
 
 function bounded(value) {
   return String(value).slice(-maxLog);
@@ -122,13 +122,15 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     for (const child of children) child.kill('SIGKILL');
   });
 }
-function telegramMessage(actor, chat, text, id = nextMessageId++) {
+function telegramMessage(actor, chat, text, id = nextMessageId++, attachment, threadId) {
   const type = chat > 0 ? 'private' : 'group';
   return {
     message_id: id, date: 1700000000,
     from: { id: actor, is_bot: false, first_name: 'Fixture', language_code: 'en' },
     chat: type === 'private' ? { id: chat, type } : { id: chat, type, title: 'Fixture group' },
-    text,
+    ...(text === null ? {} : { text }),
+    ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+    ...(attachment ? { [attachment.kind]: attachment.value } : {}),
   };
 }
 function enqueue(actor, chat, text, id) {
@@ -154,11 +156,10 @@ async function handleTelegram(req, res) {
     const data = JSON.parse(body.toString('utf8'));
     telegramCalls.push({ method, data });
     res.end(JSON.stringify({ ok: true, result: telegramMessage(123456, Number(data.chat_id), data.text) }));
-  } else if (method === 'senddocument') {
-    sendDocumentCalls++;
-    const raw = body.toString('latin1');
+  } else if (method === 'sendvideo' || method === 'senddocument') {
+    mediaSendCalls++;
     const boundary = String(req.headers['content-type'] ?? '').match(/boundary=([^;]+)/)?.[1];
-    assert.ok(boundary, 'sendDocument must use multipart/form-data');
+    assert.ok(boundary, `${method} must use multipart/form-data`);
     const delimiter = Buffer.from(`--${boundary}`);
     const parts = [];
     let offset = 0;
@@ -174,36 +175,86 @@ async function handleTelegram(req, res) {
       offset = end + 2;
     }
     const filePart = parts.find(part => /filename="media\.mp4"/.test(part.headers));
-    assert.ok(filePart, 'sendDocument must upload the validated filename');
-    assert.deepEqual(filePart.value, mediaBytes, 'uploaded bytes must exactly match the validated source media');
+    assert.ok(filePart, `${method} must upload the validated bounded filename`);
+    assert(filePart.value.length > 100 && filePart.value.length <= 2 * 1024 * 1024, 'uploaded media must stay within fixture bounds');
+    const sourceMdat = isoBmffMdatPayloads(mediaBytes);
+    const uploadedMdat = isoBmffMdatPayloads(filePart.value);
+    assert(sourceMdat.length > 0 && uploadedMdat.length > 0, 'source and upload must contain mdat boxes');
+    assert.deepEqual(uploadedMdat, sourceMdat, 'remuxed media must preserve source mdat bytes');
     const chatPart = parts.find(part => /name="chat_id"/.test(part.headers));
     const chat = Number(chatPart?.value.toString('latin1'));
     assert(Number.isSafeInteger(chat), 'multipart payload must carry chat_id');
-    telegramCalls.push({ method, status: sendDocumentMode, uploadLength: filePart.value.length });
-    if (sendDocumentMode === 'hold') {
-      await sendDocumentGate;
+    const threadPart = parts.find(part => /name="message_thread_id"/.test(part.headers));
+    const threadId = threadPart ? Number(threadPart.value.toString('latin1')) : undefined;
+    telegramCalls.push({ method, status: mediaSendMode, uploadLength: filePart.value.length, receivedAt: performance.now() });
+    if (mediaSendMode === 'hold') {
+      await mediaSendGate;
       res.destroy();
       return;
     }
-    if (sendDocumentMode === 'socket-drop') {
+    if (mediaSendMode === 'socket-drop') {
       res.destroy();
       return;
     }
-    if (sendDocumentMode === 'api-ambiguous') {
+    if (mediaSendMode === 'api-ambiguous') {
       res.statusCode = 500;
       res.end(JSON.stringify({ ok: false, error_code: 500, description: 'Internal Server Error' }));
       return;
     }
-    if (sendDocumentMode === 'api-error') {
+    if (mediaSendMode === 'rate-limit-once') {
+      mediaSendMode = 'success';
+      res.statusCode = 429;
+      res.end(JSON.stringify({ ok: false, error_code: 429, description: 'Too Many Requests: retry after 2', parameters: { retry_after: 2 } }));
+      return;
+    }
+    if (mediaSendMode === 'api-error') {
       res.statusCode = 400;
       res.end(JSON.stringify({ ok: false, error_code: 400, description: 'Bad Request: chat not found' }));
       return;
     }
-    res.end(JSON.stringify({ ok: true, result: telegramMessage(123456, chat, '', 9000 + sendDocumentCalls) }));
+    const kind = method === 'sendvideo' ? 'video' : 'document';
+    const attachment = kind === 'video'
+      ? { kind, value: { file_id: `fixture-video-${mediaSendCalls}`, file_unique_id: `fixture-video-unique-${mediaSendCalls}`, width: 160, height: 120, duration: 1, mime_type: 'video/mp4', file_size: filePart.value.length } }
+      : { kind, value: { file_id: `fixture-document-${mediaSendCalls}`, file_unique_id: `fixture-document-unique-${mediaSendCalls}`, file_name: 'media.mp4', mime_type: 'video/mp4', file_size: filePart.value.length } };
+    res.end(JSON.stringify({ ok: true, result: telegramMessage(123456, chat, null, 9000 + mediaSendCalls, attachment, threadId) }));
   } else {
     res.writeHead(404);
     res.end(JSON.stringify({ ok: false, error_code: 404, description: 'unexpected fixture API method' }));
   }
+}
+function isoBmffMdatPayloads(bytes) {
+  assert(bytes.length <= 2 * 1024 * 1024, 'ISO-BMFF fixture exceeds parser bound');
+  const payloads = [];
+  let offset = 0;
+  let firstBox = true;
+  while (offset < bytes.length) {
+    assert(bytes.length - offset >= 8, 'truncated ISO-BMFF box header');
+    const size32 = bytes.readUInt32BE(offset);
+    const type = bytes.toString('ascii', offset + 4, offset + 8);
+    let headerSize = 8;
+    let boxSize;
+    if (size32 === 1) {
+      assert(bytes.length - offset >= 16, 'truncated extended ISO-BMFF box header');
+      const extended = bytes.readBigUInt64BE(offset + 8);
+      assert(extended <= BigInt(Number.MAX_SAFE_INTEGER), 'extended ISO-BMFF box size exceeds safe integer range');
+      boxSize = Number(extended);
+      headerSize = 16;
+    } else if (size32 === 0) {
+      boxSize = bytes.length - offset;
+    } else {
+      boxSize = size32;
+    }
+    assert(boxSize >= headerSize && boxSize <= bytes.length - offset, 'invalid or truncated ISO-BMFF box size');
+    if (firstBox) {
+      assert.equal(type, 'ftyp', 'ISO-BMFF media must begin with ftyp');
+      assert(boxSize >= headerSize + 8, 'truncated ftyp box payload');
+      firstBox = false;
+    }
+    if (type === 'mdat') payloads.push(bytes.subarray(offset + headerSize, offset + boxSize));
+    offset += boxSize;
+  }
+  assert.equal(offset, bytes.length, 'ISO-BMFF boxes must frame the complete media buffer');
+  return payloads;
 }
 async function freeLoopbackPort() {
   const listener = net.createServer();
@@ -292,7 +343,8 @@ function safeTelegramSummary() {
 async function fixtureDiagnostics() {
   const status = await docker(['inspect', '--format', '{{.State.Status}} exit={{.State.ExitCode}}', appName]).catch(error => `unavailable: ${error.message}`);
   const logs = await docker(['logs', '--tail', '80', appName]).catch(error => `unavailable: ${error.message}`);
-  return `app=${status}\nlogs (bounded, redacted):\n${redact(logs)}\ntelegram method counts=${JSON.stringify(telegramCalls.reduce((counts, call) => (counts[call.method] = (counts[call.method] ?? 0) + 1, counts), {}))}\ntelegram safe calls=${JSON.stringify(safeTelegramSummary())}`;
+  const jobs = await psql("SELECT id, status, attempt, request->'target'->>'bot_id' AS bot_id, progress_stage, progress_percent FROM yoink_runtime.operations ORDER BY created_at DESC LIMIT 10").catch(error => `unavailable: ${error.message}`);
+  return `app=${status}\njobs (safe fields):\n${redact(jobs)}\nlogs (bounded, redacted):\n${redact(logs)}\ntelegram method counts=${JSON.stringify(telegramCalls.reduce((counts, call) => (counts[call.method] = (counts[call.method] ?? 0) + 1, counts), {}))}\ntelegram safe calls=${JSON.stringify(safeTelegramSummary())}`;
 }
 function redact(value) {
   return bounded(String(value).split(token).join('[REDACTED_TOKEN]').split(password).join('[REDACTED_PASSWORD]').split(secretMarker).join('[REDACTED_SOURCE]'));
@@ -386,10 +438,11 @@ try {
   await helperContainer(['--network', 'none', '--entrypoint', 'ffmpeg',
     '--mount', `type=bind,source=${fixtureDir},target=/fixture`, image,
     '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=160x120:d=1',
-    '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '/fixture/sample.mp4'], 20000);
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=1', '-map', '0:v:0', '-map', '1:a:0',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', '/fixture/sample.mp4'], 20000);
   mediaBytes = await readFile(path.join(fixtureDir, 'sample.mp4'));
   assert(mediaBytes.length > 100, 'ffmpeg must produce nonempty media');
-  assert.equal(mediaBytes.subarray(4, 8).toString(), 'ftyp', 'ffmpeg fixture must be MP4');
+  assert(isoBmffMdatPayloads(mediaBytes).length > 0, 'ffmpeg fixture must contain framed MP4 media data');
 
   apiPort = await startTelegramApi();
   sourcePort = await startMediaServer();
@@ -411,13 +464,13 @@ try {
     return row.startsWith('succeeded|') ? row : false;
   }, 'successful media delivery');
   assert.match(succeeded, /^succeeded\|[1-9]\d*\|1$/);
-  assert.equal(telegramCalls.filter(call => call.method === 'senddocument').length, 1, 'successful work must send exactly one Telegram document');
+  assert.equal(telegramCalls.filter(call => call.method === 'sendvideo' || call.method === 'senddocument').length, 1, 'successful work must send exactly one Telegram media attachment');
   assert(mediaRequests >= 1, 'worker must fetch the source fixture');
   const initialSourceRequests = mediaRequests;
   assert.equal((await docker(['exec', appName, 'sh', '-c', 'test -z "$(ls -A /tmp/yoink-work)" && echo clean'])).trim(), 'clean',
     'workspace must be empty after the acknowledged delivery');
 
-  const originalDocumentCount = telegramCalls.filter(call => call.method === 'senddocument').length;
+  const originalMediaSendCount = telegramCalls.filter(call => call.method === 'sendvideo' || call.method === 'senddocument').length;
   enqueue(42, 42, `/download ${sourceUrl}`, replayMessageId);
   enqueue(42, 42, `/job ${operationId}`);
   enqueue(43, 43, `/job ${operationId}`);
@@ -425,7 +478,7 @@ try {
   enqueue(42, 42, `/cancel ${operationId}`);
   await waitFor(() => telegramCalls.filter(call => call.method === 'sendmessage').length >= 3, 'job and denial replies');
   await sleep(350);
-  assert.equal(telegramCalls.filter(call => call.method === 'senddocument').length, originalDocumentCount,
+  assert.equal(telegramCalls.filter(call => call.method === 'sendvideo' || call.method === 'senddocument').length, originalMediaSendCount,
     'replayed admission and status/cancel/group commands must not redeliver media');
   assert.equal(mediaRequests, initialSourceRequests, 'replayed update must not execute another download');
   const replies = telegramCalls.filter(call => call.method === 'sendmessage').map(call => call.data.text);
@@ -439,7 +492,7 @@ try {
   const logs = await docker(['logs', appName]);
   assertNoSecret(logs, 'application logs');
 
-  const beforeCancelDocs = sendDocumentCalls;
+  const beforeCancelMediaSends = mediaSendCalls;
   const cancelMessage = 510;
   enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/slow?cancel=${cancelMessage}`, cancelMessage);
   const cancelId = await operationForReply(telegramCalls.length);
@@ -449,7 +502,7 @@ try {
   enqueue(42, 42, `/cancel ${cancelId}`);
   await waitFor(async () => (await queryJob(cancelId)).startsWith('cancelled|'), 'cancelled active operation');
   await assertWorkspaceClean();
-  assert.equal(sendDocumentCalls, beforeCancelDocs, 'cancelled download must not upload');
+  assert.equal(mediaSendCalls, beforeCancelMediaSends, 'cancelled download must not upload');
   for (const response of slowResponses) response.destroy();
   await waitFor(() => telegramCalls.slice(cancelReplyStart).some(call => call.method === 'sendmessage'), 'cancel response');
 
@@ -465,10 +518,10 @@ try {
   const transientTimes = mediaRequestTimes.slice(requestStart);
   assert(transientTimes.length >= 3, '503 must be retried to persisted attempt three');
   assert(transientTimes.at(-1) - transientTimes[0] >= 1000, 'retry interval must be observable at the source');
-  assert.equal(sendDocumentCalls, beforeCancelDocs, 'transient source failures must not upload');
+  assert.equal(mediaSendCalls, beforeCancelMediaSends, 'transient source failures must not upload');
 
-  sendDocumentMode = 'api-error';
-  const apiErrorDocs = sendDocumentCalls;
+  mediaSendMode = 'api-error';
+  const apiErrorMediaSends = mediaSendCalls;
   const apiErrorMessage = 530;
   enqueue(42, 42, `/download ${sourceUrl}&case=${apiErrorMessage}`, apiErrorMessage);
   const apiErrorId = await operationForReply(telegramCalls.length);
@@ -477,16 +530,32 @@ try {
     return row.startsWith('failed|') ? row : false;
   }, 'explicit Telegram API failure');
   assert.match(apiErrorResult, /^failed\|\|1$/);
-  assert.equal(sendDocumentCalls - apiErrorDocs, 1, 'explicit Telegram API failure must be attempted exactly once');
+  assert.equal(mediaSendCalls - apiErrorMediaSends, 1, 'explicit Telegram API failure must be attempted exactly once');
 
-  sendDocumentMode = 'api-ambiguous';
+  mediaSendMode = 'rate-limit-once';
+  const rateLimitedStart = telegramCalls.length;
+  const rateLimitedSends = mediaSendCalls;
+  enqueue(42, 42, `/download ${sourceUrl}&case=rate-limited`, 532);
+  const rateLimitedId = await operationForReply(rateLimitedStart);
+  const rateLimitedResult = await waitFor(async () => {
+    const row = await queryJob(rateLimitedId);
+    return row.startsWith('succeeded|') ? row : false;
+  }, 'durable retry after a definitively unsent Telegram rate limit', 20000);
+  assert.match(rateLimitedResult, /^succeeded\|\d+\|2$/);
+  assert.equal(mediaSendCalls - rateLimitedSends, 2, 'rate-limited unit must be retried once through a new durable attempt');
+  const rateLimitedCalls = telegramCalls.slice(rateLimitedStart).filter(call => call.method === 'sendvideo' || call.method === 'senddocument');
+  assert.equal(rateLimitedCalls[0].status, 'rate-limit-once');
+  assert.equal(rateLimitedCalls[1].status, 'success');
+  assert(rateLimitedCalls[1].receivedAt - rateLimitedCalls[0].receivedAt >= 2000, 'Telegram retry_after must not be shortened to the configured one-second retry delay');
+
+  mediaSendMode = 'api-ambiguous';
   enqueue(42, 42, `/download ${sourceUrl}&case=api-500`, 535);
   const apiUnknownId = await operationForReply(telegramCalls.length);
   await waitFor(async () => (await queryJob(apiUnknownId)).startsWith('delivery_unknown|'), 'API 500 delivery uncertainty');
-  assert.equal(telegramCalls.filter(call => call.method === 'senddocument' && call.status === 'api-ambiguous').length, 1);
-  sendDocumentMode = 'socket-drop';
+  assert.equal(telegramCalls.filter(call => (call.method === 'sendvideo' || call.method === 'senddocument') && call.status === 'api-ambiguous').length, 1);
+  mediaSendMode = 'socket-drop';
 
-  const unknownDocs = sendDocumentCalls;
+  const unknownMediaSends = mediaSendCalls;
   const unknownMessage = 540;
   enqueue(42, 42, `/download ${sourceUrl}&case=${unknownMessage}`, unknownMessage);
   const deliveryUnknownId = await operationForReply(telegramCalls.length);
@@ -498,24 +567,24 @@ try {
   await sleep(6500);
   assert((await queryJob(deliveryUnknownId)).startsWith('delivery_unknown|'), 'restart must preserve ambiguous delivery state');
   assert((await queryJob(apiUnknownId)).startsWith('delivery_unknown|'), 'restart must preserve API 500 delivery uncertainty');
-  assert.equal(telegramCalls.filter(call => call.method === 'senddocument' && call.status === 'api-ambiguous').length, 1);
-  assert.equal(sendDocumentCalls - unknownDocs, 1, 'ambiguous delivery must never be resent after restart');
+  assert.equal(telegramCalls.filter(call => (call.method === 'sendvideo' || call.method === 'senddocument') && call.status === 'api-ambiguous').length, 1);
+  assert.equal(mediaSendCalls - unknownMediaSends, 1, 'ambiguous delivery must never be resent after restart');
 
-  sendDocumentMode = 'hold';
-  sendDocumentGate = new Promise(resolve => { releaseUpload = resolve; });
-  const crashDocs = sendDocumentCalls;
+  mediaSendMode = 'hold';
+  mediaSendGate = new Promise(resolve => { releaseUpload = resolve; });
+  const crashMediaSends = mediaSendCalls;
   const crashMessage = 550;
   enqueue(42, 42, `/download ${sourceUrl}&case=${crashMessage}`, crashMessage);
   const crashId = await operationForReply(telegramCalls.length);
   await waitFor(async () => (await queryJob(crashId)).startsWith('delivering|'), 'durable delivering state before crash');
-  await waitFor(() => sendDocumentCalls > crashDocs, 'blocked sendDocument request');
+  await waitFor(() => mediaSendCalls > crashMediaSends, 'blocked media send request');
   await stopApp();
   releaseUpload?.();
   releaseUpload = undefined;
-  sendDocumentMode = 'socket-drop';
+  mediaSendMode = 'socket-drop';
   await launchApp();
   await waitFor(async () => (await queryJob(crashId)).startsWith('delivery_unknown|'), 'expired delivering lease recovery', 15000);
-  assert.equal(sendDocumentCalls - crashDocs, 1, 'expired in-flight delivery must not be sent again');
+  assert.equal(mediaSendCalls - crashMediaSends, 1, 'expired in-flight delivery must not be sent again');
 
   const operationsBeforeBan = Number((await psql('SELECT count(*) FROM yoink_runtime.operations')).trim());
   await psql("UPDATE public.users SET ban_until = now() + interval '10 minutes' WHERE id = 42");
@@ -525,7 +594,7 @@ try {
   assert.equal(Number((await psql('SELECT count(*) FROM yoink_runtime.operations')).trim()), operationsBeforeBan, 'banned actor must not create a durable operation');
   await psql("UPDATE public.users SET ban_until = NULL WHERE id = 42");
 
-  const docsBeforeQuota = sendDocumentCalls;
+  const mediaSendsBeforeQuota = mediaSendCalls;
   const slowA = 570;
   const quotaRequestBase = mediaRequests;
   enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/slow?quota=${slowA}`, slowA);
@@ -545,10 +614,10 @@ try {
   await waitFor(async () => (await queryJob(quotaA)).startsWith('cancelled|') && (await queryJob(quotaB)).startsWith('cancelled|'), 'both quota operations cancelled');
   for (const response of slowResponses) response.destroy();
   await assertWorkspaceClean();
-  assert.equal(sendDocumentCalls, docsBeforeQuota, 'quota rejection and cancellation must not upload');
+  assert.equal(mediaSendCalls, mediaSendsBeforeQuota, 'quota rejection and cancellation must not upload');
 
-  sendDocumentMode = 'success';
-  const uploadsBeforeRevocation = sendDocumentCalls;
+  mediaSendMode = 'success';
+  const mediaSendsBeforeRevocation = mediaSendCalls;
   enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/gated?key=${secretMarker}`, 580);
   const runningRevoked = await operationForReply(telegramCalls.length);
   await waitFor(() => gatedResponses.size > 0, 'worker blocked on gated source');
@@ -563,7 +632,7 @@ try {
   }
   await waitFor(async () => (await queryJob(runningRevoked)).startsWith('failed|') && (await queryJob(queuedRevoked)).startsWith('failed|'), 'revoked access checked before delivery and before execution');
   assert.equal(revokedQueuedFetches, 0, 'revoked queued request must not execute its worker');
-  assert.equal(sendDocumentCalls, uploadsBeforeRevocation, 'revocation before delivery must prevent upload');
+  assert.equal(mediaSendCalls, mediaSendsBeforeRevocation, 'revocation before delivery must prevent upload');
   await psql('UPDATE public.users SET ban_until = NULL WHERE id = 42');
   await assertWorkspaceClean();
 

@@ -1,35 +1,52 @@
-"""DNS-level SSRF guard for yt-dlp's Python HTTP networking."""
+"""DNS-level SSRF guard for urllib, requests, and downloader networking."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import ipaddress
 import socket
+import unicodedata
 from urllib.parse import urlsplit
+from urllib.request import OpenerDirector, ProxyHandler
 
 
 _ORIGINAL_GETADDRINFO = socket.getaddrinfo
+_ORIGINAL_OPENER_OPEN = OpenerDirector.open
+_ORIGINAL_PROXY_OPEN = ProxyHandler.proxy_open
 _ALLOWED_ORIGINS: frozenset[tuple[str, int]] = frozenset()
+_ALLOWED_PROXY_ORIGINS: frozenset[tuple[str, int]] = frozenset()
+_CONFIGURED_PROXY: tuple[str, int] | None = None
+_ACTIVE_RELAY_ORIGIN: tuple[str, int] | None = None
+_REQUESTS_SESSION = None
+_ORIGINAL_REQUESTS_SEND = None
 
 
 def _origin_host_port(origin: str) -> tuple[str, int]:
-    parsed = urlsplit(origin)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError("invalid allowed origin")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("invalid allowed origin")
+    parsed = _parse_http_url(origin, "invalid allowed origin")
     if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
         raise ValueError("invalid allowed origin")
+    return _host_port(parsed)
+
+
+def _parse_http_url(url: str, error: str, *, allow_credentials: bool = False):
+    if not isinstance(url, str) or any(unicodedata.category(char) == "Cc" for char in url):
+        raise ValueError(error)
     try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("invalid allowed origin") from exc
+        parsed = urlsplit(url)
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+            raise ValueError(error)
+        if not allow_credentials and (parsed.username is not None or parsed.password is not None):
+            raise ValueError(error)
+        parsed.port
+        return parsed
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError(error) from exc
+
+
+def _host_port(parsed) -> tuple[str, int]:
+    port = parsed.port
     if port is None:
-        port = 443 if parsed.scheme == "https" else 80
+        port = 443 if parsed.scheme.lower() == "https" else 80
     return parsed.hostname.rstrip(".").lower(), port
-
-
-def _is_allowed_private(host: str, port: int) -> bool:
-    normalized_host = host.rstrip(".").lower()
-    return (normalized_host, port) in _ALLOWED_ORIGINS
 
 
 def _address_is_public(address: str) -> bool:
@@ -49,47 +66,132 @@ def _address_is_public(address: str) -> bool:
 
 def guarded_getaddrinfo(host, port, *args, **kwargs):
     results = _ORIGINAL_GETADDRINFO(host, port, *args, **kwargs)
-    if isinstance(host, bytes):
-        normalized_host = host.decode("ascii", "ignore").rstrip(".").lower()
-    else:
-        normalized_host = str(host).rstrip(".").lower()
+    normalized_host = (
+        host.decode("ascii", "ignore").rstrip(".").lower()
+        if isinstance(host, bytes)
+        else str(host).rstrip(".").lower()
+    )
     try:
         numeric_port = int(port)
     except (TypeError, ValueError):
         numeric_port = socket.getservbyname(str(port))
-    permitted_private_origin = _is_allowed_private(normalized_host, numeric_port)
+    source_allowlisted = (normalized_host, numeric_port) in _ALLOWED_ORIGINS
+    proxy_allowlisted = (
+        (normalized_host, numeric_port) in _ALLOWED_PROXY_ORIGINS
+        and (normalized_host, numeric_port) == _CONFIGURED_PROXY
+    )
+    relay_allowlisted = (normalized_host, numeric_port) == _ACTIVE_RELAY_ORIGIN
     for result in results:
-        address = result[4][0]
-        if not _address_is_public(address) and not permitted_private_origin:
+        try:
+            public = _address_is_public(result[4][0])
+        except ValueError:
+            public = False
+        if not public and not source_allowlisted and not proxy_allowlisted and not relay_allowlisted:
             raise OSError("network destination is not permitted")
     return results
 
 
-def install_guard(allowed_origins: tuple[str, ...]) -> None:
-    global _ALLOWED_ORIGINS
+def _ensure_guarded():
+    global _REQUESTS_SESSION, _ORIGINAL_REQUESTS_SEND
+    if socket.getaddrinfo is not guarded_getaddrinfo:
+        socket.getaddrinfo = guarded_getaddrinfo
+    if OpenerDirector.open is not _guarded_opener_open:
+        OpenerDirector.open = _guarded_opener_open
+    if ProxyHandler.proxy_open is not _guarded_proxy_open:
+        ProxyHandler.proxy_open = _guarded_proxy_open
+    try:
+        import requests
+    except ImportError:
+        return
+    session_type = requests.Session
+    if _REQUESTS_SESSION is not session_type:
+        _REQUESTS_SESSION = session_type
+        _ORIGINAL_REQUESTS_SEND = session_type.send
+    if session_type.send is not _guarded_requests_send:
+        session_type.send = _guarded_requests_send
+
+
+def install_guard(
+    allowed_origins: tuple[str, ...],
+    allowed_proxy_origins: tuple[str, ...] = (),
+) -> None:
+    """Install (or update) the process-wide guard; proxy origins never authorize sources."""
+    global _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS
     _ALLOWED_ORIGINS = frozenset(_origin_host_port(item) for item in allowed_origins)
-    socket.getaddrinfo = guarded_getaddrinfo
+    _ALLOWED_PROXY_ORIGINS = frozenset(_origin_host_port(item) for item in allowed_proxy_origins)
+    _ensure_guarded()
+
+
+def configure_proxy(proxy_url: str | None) -> None:
+    """Set the one explicit proxy URL permitted for requests/urllib, or disable proxying."""
+    global _CONFIGURED_PROXY
+    if proxy_url is None:
+        _CONFIGURED_PROXY = None
+        return
+    parsed = _parse_http_url(proxy_url, "invalid proxy", allow_credentials=True)
+    origin = _host_port(parsed)
+    if _is_ip_address(origin[0]) and not _address_is_public(origin[0]) and origin not in _ALLOWED_PROXY_ORIGINS:
+        raise ValueError("invalid proxy")
+    _CONFIGURED_PROXY = origin
+
+
+def _validate_source_request(url: str) -> None:
+    validate_source_url(url, tuple(_format_origin(item) for item in _ALLOWED_ORIGINS))
+
+
+def _validate_proxy_request(url: str) -> None:
+    parsed = _parse_http_url(url, "invalid proxy", allow_credentials=True)
+    origin = _host_port(parsed)
+    if origin == _ACTIVE_RELAY_ORIGIN:
+        return
+    if _ACTIVE_RELAY_ORIGIN is not None or _CONFIGURED_PROXY is None or origin != _CONFIGURED_PROXY:
+        raise OSError("network destination is not permitted")
+
+
+def _guarded_opener_open(self, fullurl, data=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+    url = fullurl.full_url if hasattr(fullurl, "full_url") else fullurl
+    _validate_source_request(url)
+    return _ORIGINAL_OPENER_OPEN(self, fullurl, data, timeout)
+
+
+def _guarded_proxy_open(self, req, proxy, type):
+    _validate_proxy_request(proxy)
+    return _ORIGINAL_PROXY_OPEN(self, req, proxy, type)
+
+
+def _guarded_requests_send(self, request, **kwargs):
+    _validate_source_request(request.url)
+    proxies = kwargs.get("proxies") or {}
+    for scheme, proxy_url in proxies.items():
+        if proxy_url:
+            _validate_proxy_request(proxy_url)
+    return _ORIGINAL_REQUESTS_SEND(self, request, **kwargs)
+
+
+def _format_origin(host_port: tuple[str, int]) -> str:
+    host, port = host_port
+    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
 
 
 def validate_source_url(source_url: str, allowed_origins: tuple[str, ...]) -> None:
-    parsed = urlsplit(source_url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError("invalid source")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("invalid source")
-    try:
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    except ValueError as exc:
-        raise ValueError("invalid source") from exc
-    host = parsed.hostname.rstrip(".").lower()
-    permitted = {_origin_host_port(origin) for origin in allowed_origins}
-    # Resolve now so unsafe numeric literals fail before yt-dlp starts. Every later
-    # connection and redirect is independently filtered by guarded_getaddrinfo.
+    parsed = _parse_http_url(source_url, "invalid source")
+    host, port = _host_port(parsed)
+    permitted = frozenset(_origin_host_port(origin) for origin in allowed_origins)
     if _is_ip_address(host):
         if not _address_is_public(host) and (host, port) not in permitted:
             raise OSError("network destination is not permitted")
     else:
-        guarded_getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        results = _ORIGINAL_GETADDRINFO(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        if not results:
+            raise OSError("network destination is not permitted")
+        source_allowed = (host, port) in permitted or (host, port) in _ALLOWED_ORIGINS
+        for result in results:
+            try:
+                public = _address_is_public(result[4][0])
+            except (IndexError, TypeError, ValueError):
+                public = False
+            if not public and not source_allowed:
+                raise OSError("network destination is not permitted")
 
 
 def _is_ip_address(host: str) -> bool:
@@ -98,3 +200,40 @@ def _is_ip_address(host: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def restore_guard() -> None:
+    """Restore original networking methods and clear all guard configuration."""
+    global _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _ACTIVE_RELAY_ORIGIN
+    global _REQUESTS_SESSION, _ORIGINAL_REQUESTS_SEND
+    socket.getaddrinfo = _ORIGINAL_GETADDRINFO
+    OpenerDirector.open = _ORIGINAL_OPENER_OPEN
+    ProxyHandler.proxy_open = _ORIGINAL_PROXY_OPEN
+    if _REQUESTS_SESSION is not None and _ORIGINAL_REQUESTS_SEND is not None:
+        _REQUESTS_SESSION.send = _ORIGINAL_REQUESTS_SEND
+    _REQUESTS_SESSION = None
+    _ORIGINAL_REQUESTS_SEND = None
+    _ALLOWED_ORIGINS = frozenset()
+    _ALLOWED_PROXY_ORIGINS = frozenset()
+    _CONFIGURED_PROXY = None
+    _ACTIVE_RELAY_ORIGIN = None
+
+
+@contextmanager
+def guard_context(
+    allowed_origins: tuple[str, ...],
+    allowed_proxy_origins: tuple[str, ...] = (),
+):
+    """Install guard configuration temporarily, restoring any enclosing configuration on exit."""
+    global _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY
+    previous = (_ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY)
+    was_installed = socket.getaddrinfo is guarded_getaddrinfo
+    install_guard(allowed_origins, allowed_proxy_origins)
+    try:
+        yield
+    finally:
+        if was_installed:
+            _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY = previous
+            _ensure_guarded()
+        else:
+            restore_guard()

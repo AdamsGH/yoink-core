@@ -10,13 +10,31 @@ for await (const chunk of process.stdin) input += chunk;
 const request = JSON.parse(input.trim());
 const emit = (event, overrides = {}) =>
   process.stdout.write(JSON.stringify({
-    version: 1,
+    version: 2,
     operation_id: request.operation_id,
     attempt: request.attempt,
     event,
     ...overrides,
   }) + "\n");
 const payload = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftyp"), Buffer.from("isom0000")]);
+if (mode === "environment") {
+  if (((await fs.stat(process.cwd())).mode & 0o7777) !== 0o700) throw new Error("workspace must be owner-only");
+  const expected = {
+    YOINK_WORKER_MAX_BYTES: "1048576",
+    YOINK_WORKER_MAX_ITEMS: "100",
+    YOINK_WORKER_TOTAL_MAX_BYTES: "2097152",
+    YOINK_WORKER_ALLOWED_PROXY_ORIGINS: "[\"https://proxy.example:8443\"]",
+    YOINK_WORKER_ALLOWED_PRIVATE_ORIGINS: "[\"http://127.0.0.1:8080\"]",
+    YOINK_WORKER_SOCKET_TIMEOUT_SECS: "2",
+    YOINK_WORKER_PROCESSING_TIMEOUT_SECS: "3",
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (process.env[key] !== value) throw new Error(`unexpected ${key}`);
+  }
+  for (const key of ["MAX_ITEMS", "TOTAL_MAX_BYTES", "ALLOWED_PROXY_ORIGINS"]) {
+    if (Object.hasOwn(process.env, key)) throw new Error(`legacy key ${key}`);
+  }
+}
 const writeArtifact = async (path = "media.mp4", bytes = payload) => {
   await fs.mkdir(dirname(path), { recursive: true });
   await fs.writeFile(path, bytes);
@@ -73,7 +91,7 @@ if (mode === "hang" || mode === "stdout-partial-hang" || mode === "stdin-hang" |
   await fs.writeFile("media.mp4", bytes);
   emit(completed([{ path: "media.mp4", size_bytes: mode === "size-mismatch" ? payload.length + 1 : bytes.length, media_type: "video/mp4" }]));
 } else if (mode === "workspace-filecount") {
-  for (let i = 0; i < 40; i++) await fs.writeFile(`file-${i}`, "x");
+  for (let i = 0; i < 513; i++) await fs.writeFile(`file-${i}`, "x");
   emit(await artifactEvent("media.mp4"));
 } else if (mode === "workspace-bytecap") {
   await fs.writeFile("large", Buffer.alloc(2 * 1024 * 1024));
@@ -98,6 +116,34 @@ if (mode === "hang" || mode === "stdout-partial-hang" || mode === "stdin-hang" |
 } else if (mode === "progress") {
   emit({ type: "progress", percent: 50, stage: "processing" });
   emit(await artifactEvent("media.mp4"));
+} else if (mode === "identity-progress") {
+  emit({ type: "progress", percent: 25, stage: "fetching" }, { operation_id: "not-the-request" });
+  emit(await artifactEvent("media.mp4"));
+} else if (["many", "duplicate", "aggregate-overlimit", "mixed-types"].includes(mode)) {
+  const descriptors = [];
+  if (mode === "many") {
+    for (let i = 0; i < 101; i++) descriptors.push(await writeArtifact(`item-${i}.mp4`));
+  } else if (mode === "duplicate") {
+    const descriptor = await writeArtifact("media.mp4");
+    descriptors.push(descriptor, descriptor);
+  } else if (mode === "aggregate-overlimit") {
+    for (let i = 0; i < 3; i++) {
+      const path = `part-${i}.mp4`;
+      await fs.writeFile(path, Buffer.concat([payload, Buffer.alloc(900 * 1024)]));
+      descriptors.push({ path, size_bytes: 900 * 1024 + payload.length, media_type: "video/mp4" });
+    }
+  } else {
+    const items = [
+      ["sound.mp3", Buffer.from("ID3\x04\x00\x00"), "audio/mpeg"],
+      ["picture.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), "image/png"],
+      ["archive.zip", Buffer.from("PK\x03\x04"), "application/zip"],
+    ];
+    for (const [path, bytes, media_type] of items) {
+      await fs.writeFile(path, bytes);
+      descriptors.push({ path, size_bytes: bytes.length, media_type });
+    }
+  }
+  emit(completed(descriptors));
 } else if (mode === "descendant") {
   const descendant = spawnMarkerWriter(process.argv[3]);
   const deadline = Date.now() + 2000;

@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 import main
+import media_engine
 import network_guard
 
 
@@ -91,7 +92,8 @@ class ProtocolAndSettingsTests(unittest.TestCase):
                 executable.write_text("#!/bin/sh\n" + body + "\n")
                 executable.chmod(0o755)
                 with mock.patch.dict(os.environ, {"PID_FILE": str(pid_file)}):
-                    self.assertFalse(main._verify_video(root / "fixture.mp4", timeout, str(executable)))
+                    with self.assertRaises(media_engine.MediaFailure):
+                        media_engine._probe(root / "fixture.mp4", str(executable), timeout)
                 pid = int(pid_file.read_text())
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
@@ -104,17 +106,20 @@ class ProtocolAndSettingsTests(unittest.TestCase):
                 "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                 "color=c=black:s=64x64:d=0.25", "-c:v", "mpeg4", str(video),
             ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.assertTrue(main._verify_video(video, 10))
+            info, _ = media_engine._probe(video, "ffprobe", 10)
+            self.assertTrue(any(item.get("codec_type") == "video" for item in info["streams"]))
 
     def test_request_validation_and_oversize(self):
         good = {
-            "version": 1, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce",
+            "version": 2, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce",
             "attempt": 1, "source_url": "https://example.test/video",
             "task": {"kind": "download", "media_mode": "video"},
         }
-        self.assertEqual(main._validate_request(json.dumps(good).encode()), good)
+        validated = main._validate_request(json.dumps(good).encode())
+        self.assertEqual({key: validated[key] for key in good}, good)
+        self.assertEqual(validated["options"]["video_codec"], "h264")
         invalids = []
-        invalids.append({**good, "version": 2})
+        invalids.append({**good, "version": 1})
         invalids.append({**good, "unexpected": True})
         invalids.append({**good, "source_url": "https://user:pw@example.test/video"})
         invalids.append({**good, "task": {"kind": "download", "media_mode": "audio", "unknown": 1}})
@@ -129,21 +134,24 @@ class ProtocolAndSettingsTests(unittest.TestCase):
     def test_task_audio_and_extract_content_are_classified_not_corrupt(self):
         for task in ({"kind": "download", "media_mode": "audio"}, {"kind": "extract_content"}):
             request = {
-                "version": 1, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce",
+                "version": 2, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce",
                 "attempt": 1, "source_url": "https://example.test/video", "task": task,
             }
-            self.assertEqual(main._validate_request(json.dumps(request).encode()), request)
+            validated = main._validate_request(json.dumps(request).encode())
+            self.assertEqual({key: validated[key] for key in request}, request)
 
-    def test_progress_budget_checks_downloaded_and_known_size(self):
-        for downloaded, total in ((11, None), (1, 11)):
-            with self.subTest(downloaded=downloaded, total=total), self.assertRaises(main._ResourceLimit):
-                main._check_budget(downloaded, total, 10)
-        main._check_budget(10, 10, 10)
+    def test_engine_resource_failure_preserves_class_without_diagnostics(self):
+        request = {"version": 2, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce", "attempt": 1, "source_url": "https://8.8.8.8/private-token", "task": {"kind": "download", "media_mode": "audio"}}
+        events = []
+        with mock.patch.object(main, "download_media", side_effect=media_engine.MediaFailure("resource_limit")), mock.patch.object(main, "_emit", side_effect=events.append):
+            main._download(request, main.Settings.from_env({}))
+        self.assertEqual([item["event"] for item in events], [{"type": "failure", "class": "resource_limit"}])
+        self.assertNotIn("private-token", json.dumps(events))
 
     def test_settings_ranges_and_origin_shape(self):
         self.assertEqual(main.Settings.from_env({}).max_bytes, 50 * 1024 * 1024)
         for key, value in (
-            ("YOINK_WORKER_MAX_BYTES", "0"), ("YOINK_WORKER_MAX_BYTES", "52428801"),
+            ("YOINK_WORKER_MAX_BYTES", "0"), ("YOINK_WORKER_MAX_BYTES", str(2 * 1024 ** 3 + 1)),
             ("YOINK_WORKER_SOCKET_TIMEOUT_SECS", "301"),
             ("YOINK_WORKER_ALLOWED_PRIVATE_ORIGINS", '["http://host/path"]'),
             ("YOINK_WORKER_ALLOWED_PRIVATE_ORIGINS", '"not-array"'),
@@ -200,7 +208,7 @@ class IntegrationTests(unittest.TestCase):
 
     def invoke(self, allowed: bool, max_bytes: int = 50 * 1024 * 1024, path: str = "/tiny.mp4"):
         request = {
-            "version": 1, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce",
+            "version": 2, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce",
             "attempt": 2, "source_url": self.origin + path,
             "task": {"kind": "download", "media_mode": "video"},
         }
@@ -214,7 +222,7 @@ class IntegrationTests(unittest.TestCase):
         })
         with tempfile.TemporaryDirectory() as cwd:
             result = subprocess.run(
-                [sys.executable, str(WORKER_DIR / "main.py")],
+                [sys.executable, "-I", "-B", str(WORKER_DIR / "main.py")],
                 input=json.dumps(request).encode() + b"\n", cwd=cwd, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
             )
@@ -233,10 +241,10 @@ class IntegrationTests(unittest.TestCase):
         complete = terminal[0]["event"]
         self.assertEqual(complete["type"], "completed")
         artifact = complete["artifacts"][0]
-        self.assertEqual(artifact["path"], "media.mp4")
+        self.assertEqual(artifact["path"], "media-001.mp4")
         self.assertGreater(artifact["size_bytes"], 0)
         self.assertEqual(artifact["media_type"], "video/mp4")
-        self.assertEqual(output_names, {"media.mp4"})
+        self.assertEqual(output_names, {"media-001.mp4"})
         self.assertNotIn(self.origin, result.stdout.decode())
 
     def test_real_ytdlp_http_503_is_source_unavailable_and_redacted(self):

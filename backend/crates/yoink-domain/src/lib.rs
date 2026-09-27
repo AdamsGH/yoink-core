@@ -42,6 +42,108 @@ impl fmt::Debug for OperationId {
 pub enum MediaMode {
     Video,
     Audio,
+    Image,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoCodec {
+    H264,
+    H265,
+    Av1,
+    Vp9,
+    Any,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AudioCodec {
+    Best,
+    Aac,
+    Mp3,
+    Opus,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Container {
+    Mp4,
+    Mkv,
+    Webm,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Engine {
+    Auto,
+    YtDlp,
+    Gallery,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlaylistRange {
+    start: i32,
+    end: Option<i32>,
+}
+
+impl PlaylistRange {
+    pub fn new(start: i32, end: Option<i32>) -> Result<Self, RequestValidationError> {
+        if start == 0 || end == Some(0) || (end.is_none() && start < -100) {
+            return Err(RequestValidationError::InvalidParameters);
+        }
+        if let Some(end) = end {
+            let count = (i64::from(end) - i64::from(start)).unsigned_abs() + 1;
+            if (start.is_positive() != end.is_positive()) || count > 100 {
+                return Err(RequestValidationError::InvalidParameters);
+            }
+        }
+        Ok(Self { start, end })
+    }
+
+    pub const fn start(&self) -> i32 {
+        self.start
+    }
+    pub const fn end(&self) -> Option<i32> {
+        self.end
+    }
+}
+
+/// A validated delivery destination. Credentials and transport state do not belong here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeliveryTarget {
+    bot_id: i64,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    reply_to_message_id: Option<i32>,
+}
+
+impl DeliveryTarget {
+    pub fn new(
+        bot_id: i64,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        reply_to_message_id: Option<i32>,
+    ) -> Result<Self, RequestValidationError> {
+        if bot_id <= 0
+            || chat_id == 0
+            || thread_id.is_some_and(|id| id <= 0)
+            || reply_to_message_id.is_some_and(|id| id <= 0)
+        {
+            return Err(RequestValidationError::InvalidDeliveryTarget);
+        }
+        Ok(Self {
+            bot_id,
+            chat_id,
+            thread_id,
+            reply_to_message_id,
+        })
+    }
+
+    pub const fn bot_id(&self) -> i64 {
+        self.bot_id
+    }
+    pub const fn chat_id(&self) -> i64 {
+        self.chat_id
+    }
+    pub const fn thread_id(&self) -> Option<i64> {
+        self.thread_id
+    }
+    pub const fn reply_to_message_id(&self) -> Option<i32> {
+        self.reply_to_message_id
+    }
 }
 
 /// A validated time range in seconds, with an exclusive end.
@@ -78,9 +180,33 @@ impl ClipRange {
 }
 
 /// Per-operation download options. These values are never stored as shared user state.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DownloadParams {
     max_height: Option<u32>,
+    video_codec: VideoCodec,
+    audio_codec: AudioCodec,
+    container: Container,
+    engine: Engine,
+    playlist: Option<PlaylistRange>,
+    clips: Vec<ClipRange>,
+    send_as_file: bool,
+    gallery_zip: bool,
+}
+
+impl Default for DownloadParams {
+    fn default() -> Self {
+        Self {
+            max_height: None,
+            video_codec: VideoCodec::H264,
+            audio_codec: AudioCodec::Best,
+            container: Container::Mp4,
+            engine: Engine::Auto,
+            playlist: None,
+            clips: Vec::new(),
+            send_as_file: false,
+            gallery_zip: false,
+        }
+    }
 }
 
 impl DownloadParams {
@@ -89,11 +215,81 @@ impl DownloadParams {
         if max_height == Some(0) {
             return Err(RequestValidationError::InvalidParameters);
         }
-        Ok(Self { max_height })
+        Ok(Self {
+            max_height,
+            ..Self::default()
+        })
     }
 
     pub const fn max_height(&self) -> Option<u32> {
         self.max_height
+    }
+    pub const fn video_codec(&self) -> VideoCodec {
+        self.video_codec
+    }
+    pub const fn audio_codec(&self) -> AudioCodec {
+        self.audio_codec
+    }
+    pub const fn container(&self) -> Container {
+        self.container
+    }
+    pub const fn engine(&self) -> Engine {
+        self.engine
+    }
+    pub const fn playlist(&self) -> Option<PlaylistRange> {
+        self.playlist
+    }
+    pub fn clips(&self) -> &[ClipRange] {
+        &self.clips
+    }
+    pub const fn send_as_file(&self) -> bool {
+        self.send_as_file
+    }
+    pub const fn gallery_zip(&self) -> bool {
+        self.gallery_zip
+    }
+
+    pub fn with_max_height(mut self, value: Option<u32>) -> Result<Self, RequestValidationError> {
+        if value == Some(0) {
+            return Err(RequestValidationError::InvalidParameters);
+        }
+        self.max_height = value;
+        Ok(self)
+    }
+    pub fn with_video_codec(mut self, value: VideoCodec) -> Self {
+        self.video_codec = value;
+        self
+    }
+    pub fn with_audio_codec(mut self, value: AudioCodec) -> Self {
+        self.audio_codec = value;
+        self
+    }
+    pub fn with_container(mut self, value: Container) -> Self {
+        self.container = value;
+        self
+    }
+    pub fn with_engine(mut self, value: Engine) -> Self {
+        self.engine = value;
+        self
+    }
+    pub fn with_playlist(mut self, value: Option<PlaylistRange>) -> Self {
+        self.playlist = value;
+        self
+    }
+    pub fn with_clips(mut self, value: Vec<ClipRange>) -> Result<Self, RequestValidationError> {
+        if value.len() > 20 {
+            return Err(RequestValidationError::InvalidParameters);
+        }
+        self.clips = value;
+        Ok(self)
+    }
+    pub fn with_send_as_file(mut self, value: bool) -> Self {
+        self.send_as_file = value;
+        self
+    }
+    pub fn with_gallery_zip(mut self, value: bool) -> Self {
+        self.gallery_zip = value;
+        self
     }
 }
 
@@ -109,6 +305,7 @@ pub struct DownloadRequest {
     media_mode: MediaMode,
     clip_range: Option<ClipRange>,
     params: DownloadParams,
+    target: Option<DeliveryTarget>,
 }
 
 impl DownloadRequest {
@@ -133,12 +330,17 @@ impl DownloadRequest {
             return Err(RequestValidationError::InvalidSourceUrl);
         }
 
+        if clip_range.is_some() && !params.clips().is_empty() {
+            return Err(RequestValidationError::InvalidParameters);
+        }
+
         Ok(Self {
             actor_id,
             source_url,
             media_mode,
             clip_range,
             params,
+            target: None,
         })
     }
 
@@ -162,6 +364,18 @@ impl DownloadRequest {
     pub const fn params(&self) -> &DownloadParams {
         &self.params
     }
+
+    pub const fn target(&self) -> Option<&DeliveryTarget> {
+        self.target.as_ref()
+    }
+
+    pub fn with_target(mut self, target: DeliveryTarget) -> Result<Self, RequestValidationError> {
+        if target.chat_id() > 0 && target.chat_id() as u64 != self.actor_id {
+            return Err(RequestValidationError::InvalidDeliveryTarget);
+        }
+        self.target = Some(target);
+        Ok(self)
+    }
 }
 
 impl fmt::Debug for DownloadRequest {
@@ -172,6 +386,7 @@ impl fmt::Debug for DownloadRequest {
             .field("media_mode", &self.media_mode)
             .field("clip_range", &self.clip_range)
             .field("params", &self.params)
+            .field("target", &self.target)
             .finish()
     }
 }
@@ -187,6 +402,8 @@ pub enum RequestValidationError {
     InvalidClipRange,
     #[error("download parameters are invalid")]
     InvalidParameters,
+    #[error("delivery target is invalid")]
+    InvalidDeliveryTarget,
 }
 
 /// Broad, stable failure categories suitable for domain decisions and persistence.
@@ -601,6 +818,93 @@ mod tests {
         assert_eq!(second.actor_id(), 22);
         assert_eq!(second.params().max_height(), None);
         assert_eq!(second.clip_range().unwrap().start_seconds(), 3.0);
+    }
+
+    #[test]
+    fn typed_options_playlist_and_delivery_target_are_validated() {
+        assert!(PlaylistRange::new(1, Some(100)).is_ok());
+        assert_eq!(
+            PlaylistRange::new(1, Some(101)),
+            Err(RequestValidationError::InvalidParameters)
+        );
+        assert!(PlaylistRange::new(-2, Some(-1)).is_ok());
+        assert!(PlaylistRange::new(5, Some(1)).is_ok());
+        assert!(PlaylistRange::new(-100, None).is_ok());
+        assert!(PlaylistRange::new(-101, None).is_err());
+        assert!(PlaylistRange::new(i32::MIN, None).is_err());
+        assert!(PlaylistRange::new(-2, Some(-3)).is_ok());
+        assert_eq!(
+            DeliveryTarget::new(0, 42, None, None),
+            Err(RequestValidationError::InvalidDeliveryTarget)
+        );
+        assert_eq!(
+            DeliveryTarget::new(1, 0, None, None),
+            Err(RequestValidationError::InvalidDeliveryTarget)
+        );
+        assert_eq!(
+            DeliveryTarget::new(1, 42, Some(0), None),
+            Err(RequestValidationError::InvalidDeliveryTarget)
+        );
+        assert_eq!(
+            DeliveryTarget::new(1, 42, None, Some(0)),
+            Err(RequestValidationError::InvalidDeliveryTarget)
+        );
+
+        let defaults = DownloadParams::default();
+        assert_eq!(defaults.video_codec(), VideoCodec::H264);
+        assert_eq!(defaults.audio_codec(), AudioCodec::Best);
+        assert_eq!(defaults.container(), Container::Mp4);
+        assert_eq!(defaults.engine(), Engine::Auto);
+        assert_eq!(defaults.max_height(), None);
+        assert!(!defaults.send_as_file());
+        assert!(!defaults.gallery_zip());
+
+        let params = DownloadParams::default()
+            .with_video_codec(VideoCodec::Vp9)
+            .with_audio_codec(AudioCodec::Opus)
+            .with_container(Container::Webm)
+            .with_engine(Engine::Gallery)
+            .with_playlist(Some(PlaylistRange::new(2, Some(3)).unwrap()))
+            .with_send_as_file(true)
+            .with_gallery_zip(true);
+        assert_eq!(params.video_codec(), VideoCodec::Vp9);
+        assert_eq!(params.audio_codec(), AudioCodec::Opus);
+        assert_eq!(params.container(), Container::Webm);
+        assert_eq!(params.engine(), Engine::Gallery);
+        assert_eq!(params.max_height(), None);
+        let targeted = request()
+            .with_target(DeliveryTarget::new(1, 42, Some(3), Some(9)).unwrap())
+            .unwrap();
+        assert_eq!(targeted.target().unwrap().bot_id(), 1);
+        assert_eq!(targeted.target().unwrap().chat_id(), 42);
+        assert_eq!(targeted.target().unwrap().thread_id(), Some(3));
+        assert_eq!(targeted.target().unwrap().reply_to_message_id(), Some(9));
+        assert!(request().target().is_none());
+        assert_eq!(
+            request().with_target(DeliveryTarget::new(1, 99, None, None).unwrap()),
+            Err(RequestValidationError::InvalidDeliveryTarget)
+        );
+    }
+
+    #[test]
+    fn rejects_too_many_clips_and_legacy_additional_clip_conflict() {
+        let range = ClipRange::new(0.0, 1.0).unwrap();
+        assert_eq!(
+            DownloadParams::default().with_clips(vec![range; 21]),
+            Err(RequestValidationError::InvalidParameters)
+        );
+        let params = DownloadParams::default().with_clips(vec![range]).unwrap();
+        assert_eq!(
+            DownloadRequest::new(
+                42,
+                "https://example.com",
+                MediaMode::Video,
+                Some(range),
+                params
+            )
+            .unwrap_err(),
+            RequestValidationError::InvalidParameters
+        );
     }
 
     #[test]

@@ -1,5 +1,8 @@
 //! Owner-only experimental Telegram adapter with opt-in video download commands.
 
+use sender::TelegramDelivery;
+#[cfg(test)]
+use sender::classify_delivery_error;
 use std::{
     convert::Infallible,
     sync::{
@@ -11,16 +14,18 @@ use std::{
 use teloxide::{
     Bot,
     prelude::*,
-    types::{InputFile, Message},
+    types::Message,
     update_listeners::{Polling, UpdateListener},
 };
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
 use yoink_application::{ModuleStatus, SystemService};
-use yoink_downloads::{DeliveryError, DeliveryFuture, DownloadError, DownloadService};
-use yoink_executor::ValidatedArtifact;
+use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode};
+use yoink_downloads::{DownloadError, DownloadService};
 use yoink_storage::{Admission, OperationStatus};
+
+mod sender;
 
 /// Safe, fixed error categories. Underlying Telegram errors are deliberately discarded.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,48 +61,6 @@ impl std::error::Error for TelegramError {}
 struct TelegramIdentity {
     owner_id: u64,
     bot_id: u64,
-}
-
-#[derive(Clone)]
-struct TelegramDelivery {
-    bot: Bot,
-}
-
-impl yoink_downloads::Delivery for TelegramDelivery {
-    fn deliver(&self, actor_id: u64, artifact: ValidatedArtifact) -> DeliveryFuture<'_> {
-        let bot = self.bot.clone();
-        Box::pin(async move {
-            let chat_id = i64::try_from(actor_id).map_err(|_| DeliveryError::Unknown)?;
-            match bot
-                .send_document(
-                    ChatId(chat_id),
-                    InputFile::memory(artifact.bytes).file_name(artifact.filename),
-                )
-                .await
-            {
-                Ok(message) if message.id.0 > 0 => Ok(message.id.0),
-                Ok(_) => Err(DeliveryError::Unknown),
-                Err(error) => Err(classify_delivery_error(&error)),
-            }
-        })
-    }
-}
-
-fn classify_delivery_error(error: &teloxide::RequestError) -> DeliveryError {
-    use teloxide::{ApiError, RequestError};
-    // The API wrapper does not preserve HTTP status here. An unrecognized API
-    // response may follow a processed upload, so do not infer non-delivery.
-    match error {
-        RequestError::Api(
-            ApiError::BotBlocked
-            | ApiError::ChatNotFound
-            | ApiError::UserDeactivated
-            | ApiError::RequestEntityTooLarge
-            | ApiError::InvalidToken,
-        )
-        | RequestError::RetryAfter(_) => DeliveryError::Rejected,
-        _ => DeliveryError::Unknown,
-    }
 }
 
 /// Owner-only diagnostics and opt-in media delivery over Telegram long polling.
@@ -164,6 +127,7 @@ impl TelegramAdapter {
     pub fn delivery(&self) -> Arc<dyn yoink_downloads::Delivery> {
         Arc::new(TelegramDelivery {
             bot: self.bot.clone(),
+            bot_id: i64::try_from(self.bot_id).unwrap_or_default(),
         })
     }
 
@@ -445,6 +409,8 @@ fn operation_status(status: OperationStatus, language: Language) -> &'static str
         (Language::Russian, OperationStatus::Delivering) => "отправляется",
         (Language::English, OperationStatus::DeliveryUnknown) => "delivery could not be confirmed",
         (Language::Russian, OperationStatus::DeliveryUnknown) => "не удалось подтвердить доставку",
+        (Language::English, OperationStatus::DeliveryPartial) => "partially delivered",
+        (Language::Russian, OperationStatus::DeliveryPartial) => "доставлено частично",
         (Language::English, OperationStatus::Succeeded) => "succeeded",
         (Language::Russian, OperationStatus::Succeeded) => "завершено",
         (Language::English, OperationStatus::Failed) => "failed",
@@ -543,8 +509,26 @@ async fn handle_message(
                 return Ok(());
             };
             let key = format!("tg:{bot_id}:{}:{}", message.chat.id.0, message.id.0);
-            match service.submit(owner_id, &url, &key).await {
-                Ok(admission) => admitted_response(admission, language),
+            let target =
+                DeliveryTarget::new(bot_id as i64, message.chat.id.0, None, Some(message.id.0))
+                    .map_err(|_| DownloadError::InvalidInput);
+            let request = target.and_then(|target| {
+                DownloadRequest::new(
+                    owner_id,
+                    &url,
+                    DomainMediaMode::Video,
+                    None,
+                    DownloadParams::default(),
+                )
+                .map_err(|_| DownloadError::InvalidInput)?
+                .with_target(target)
+                .map_err(|_| DownloadError::InvalidInput)
+            });
+            match request {
+                Ok(request) => match service.submit_request(&request, &key).await {
+                    Ok(admission) => admitted_response(admission, language),
+                    Err(error) => download_error_response(error, language).to_owned(),
+                },
                 Err(error) => download_error_response(error, language).to_owned(),
             }
         }
@@ -596,6 +580,7 @@ fn unknown_operation(language: Language) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yoink_downloads::DeliveryError;
 
     #[test]
     fn parses_supported_commands_with_strict_arguments_and_bot_suffix() {

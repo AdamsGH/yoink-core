@@ -39,7 +39,7 @@ The adapter's outer command gate remains restricted to the configured owner in a
 
 ## Optional media downloads
 
-Downloads are disabled unless explicitly enabled. Enabling them requires both explicit Telegram configuration and a PostgreSQL URL. Runtime also requires the experimental container marker and fixed Python worker files, so enabling media from an ordinary host process fails startup. The worker command is fixed to `/usr/local/bin/python -B /opt/yoink-worker/main.py`; it does not invoke host Python. Defaults and accepted values are:
+Downloads are disabled unless explicitly enabled. Enabling them requires both explicit Telegram configuration and a PostgreSQL URL. Runtime also requires the experimental container marker and fixed Python worker files, so enabling media from an ordinary host process fails startup. The worker command is fixed to `/usr/local/bin/yoink-worker-launcher`, which enforces Landlock isolation before executing `/usr/local/bin/python -I -B /opt/yoink-worker/main.py`. Startup checks launcher confinement support. Attempt directories are owner-only (`0700`). It does not invoke host Python. Defaults and accepted values are:
 
 | Variable | Default | Supported value | Behavior |
 | --- | --- | --- | --- |
@@ -53,15 +53,18 @@ Downloads are disabled unless explicitly enabled. Enabling them requires both ex
 | `YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES` | `104857600` | At least artifact limit, at most 209715200 bytes | Maximum workspace bytes per attempt. |
 | `YOINK_RUST_DOWNLOAD_WORKSPACE` | `/tmp/yoink-work` | Absolute dedicated directory, not filesystem root | Per-attempt workspace root. |
 | `YOINK_RUST_DOWNLOAD_TIMEOUT_SECS` | `120` | 1 through 3600 seconds | Worker process deadline. |
-| `YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS` | `15` | 1 through 300 seconds | Worker network socket timeout and ffprobe deadline. |
+| `YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS` | `15` | 1 through 300 seconds | Worker network socket timeout. |
+| `YOINK_RUST_WORKER_PROCESSING_TIMEOUT_SECS` | `min(DOWNLOAD_TIMEOUT_SECS, 300)` | 1 through 3600 seconds, at most the worker deadline | Per-processing-subprocess deadline, including ffprobe. |
+| `YOINK_RUST_DOWNLOAD_MAX_ITEMS` | `20` | 1 through 100 | Maximum returned artifacts per attempt. |
 | `YOINK_RUST_WORKER_MAX_OUTPUT_BYTES` | `1048576` | 65536 through 4194304 bytes | Maximum worker stdout event bytes. |
 | `YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS` | `[]` | JSON array of at most 16 HTTP(S) origins | Narrow exception to worker private-address blocking, for trusted isolated test fixtures only. Entries may contain scheme, host, and optional port, but no credentials, path, query, fragment, or whitespace. Do not use this for production destinations. |
+| `YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS` | `[]` | JSON array of at most 16 HTTP(S) origins | Allowed proxy endpoints without credentials. Does not select a proxy or grant access to cookies. Request credentials travel separately in the stdin protocol. |
 | `YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS` | `3` | 1 through 10 | Maximum queue attempts. |
 | `YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS` | `5` | 0 through 300 seconds | Delay before retryable failures. |
 | `YOINK_RUST_DOWNLOAD_MAX_PENDING` | `100` | 1 through 10000 | Maximum pending operations globally. |
 | `YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER` | `3` | 1 through 1000 | Maximum pending operations for one actor. |
 
-Cross-field checks also require `SHUTDOWN_TIMEOUT_SECS > DELIVERY_TIMEOUT_SECS + DOWNLOAD_HEARTBEAT_SECS` while media is enabled. A workspace path must be absolute and not `/`. Numeric values are bounded unsigned integers. The private-origin exception is not a general SSRF bypass: the worker still checks resolved destinations and redirect destinations.
+Cross-field checks also require `SHUTDOWN_TIMEOUT_SECS > DELIVERY_TIMEOUT_SECS + DOWNLOAD_HEARTBEAT_SECS` and `WORKER_PROCESSING_TIMEOUT_SECS <= DOWNLOAD_TIMEOUT_SECS` while media is enabled. A workspace path must be absolute and not `/`. Numeric values are bounded unsigned integers. The private-origin exception is not a general SSRF bypass: the worker still checks resolved destinations and redirect destinations.
 
 ## Diagnostics and secrets
 

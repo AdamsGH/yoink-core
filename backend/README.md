@@ -1,6 +1,6 @@
 # Rust backend
 
-Experimental parallel backend on `rewrite/rust-backend`. It is not a production replacement. The workspace implements diagnostics, shared access policy, read-only legacy identity snapshots, and a durable PostgreSQL queue. Opt-in owner-private Telegram commands now download a progressive MP4/WebM through a container-only Python worker and deliver it as a document. Audio, playlists, HLS, other product modules, and production cutover remain outside this slice.
+Experimental parallel backend on `rewrite/rust-backend`. It is not a production replacement. The workspace implements diagnostics, shared access policy, read-only legacy identity snapshots, and a durable PostgreSQL queue. Opt-in owner-private Telegram commands use a container-only, Landlock-confined Python media worker. Protocol v2 supports bounded artifact batches, while Rust journals native Telegram delivery units and partial outcomes. Worker engines implement video/audio processing, playlists, clips and galleries. User settings, credential selection, cache and group/topic command parity remain in progress. Other product modules and production cutover are not implemented.
 
 ## Start here
 

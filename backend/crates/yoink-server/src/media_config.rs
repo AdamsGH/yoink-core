@@ -15,7 +15,7 @@ impl fmt::Debug for MediaConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MediaConfig")
             .field("downloads", &self.downloads)
-            .field("executor", &"container Python worker")
+            .field("executor", &"confined worker launcher")
             .finish()
     }
 }
@@ -65,45 +65,29 @@ impl MediaConfig {
                 "expected an absolute dedicated directory, not filesystem root",
             ));
         }
-        let allowed_private_origins: Vec<String> = serde_json::from_str(
-            &read("WORKER_ALLOWED_PRIVATE_ORIGINS")?.unwrap_or_else(|| "[]".into()),
-        )
-        .map_err(|_| {
-            invalid(
-                "WORKER_ALLOWED_PRIVATE_ORIGINS",
-                "expected a JSON array of HTTP(S) origins",
-            )
-        })?;
-        if allowed_private_origins.len() > 16 {
+        let allowed_private_origins = origins(read, "WORKER_ALLOWED_PRIVATE_ORIGINS")?;
+        let allowed_proxy_origins = origins(read, "WORKER_ALLOWED_PROXY_ORIGINS")?;
+        let timeout = Duration::from_secs(number(read, "DOWNLOAD_TIMEOUT_SECS", 120, 1, 3600)?);
+        let processing_timeout = Duration::from_secs(number(
+            read,
+            "WORKER_PROCESSING_TIMEOUT_SECS",
+            timeout.as_secs().min(300),
+            1,
+            3600,
+        )?);
+        if processing_timeout > timeout {
             return Err(invalid(
-                "WORKER_ALLOWED_PRIVATE_ORIGINS",
-                "at most sixteen origins are allowed",
+                "WORKER_PROCESSING_TIMEOUT_SECS",
+                "must not exceed DOWNLOAD_TIMEOUT_SECS",
             ));
-        }
-        for origin in &allowed_private_origins {
-            let parsed = url::Url::parse(origin)
-                .map_err(|_| invalid("WORKER_ALLOWED_PRIVATE_ORIGINS", "invalid origin"))?;
-            if !matches!(parsed.scheme(), "http" | "https")
-                || parsed.host_str().is_none()
-                || !parsed.username().is_empty()
-                || parsed.password().is_some()
-                || !matches!(parsed.path(), "" | "/")
-                || parsed.query().is_some()
-                || parsed.fragment().is_some()
-                || origin.chars().any(char::is_whitespace)
-            {
-                return Err(invalid(
-                    "WORKER_ALLOWED_PRIVATE_ORIGINS",
-                    "origins must not contain credentials, paths, queries or fragments",
-                ));
-            }
         }
         Ok(Self {
             executor: ExecutorConfig {
-                program: "/usr/local/bin/python".into(),
-                args: vec!["-B".into(), "/opt/yoink-worker/main.py".into()],
+                program: "/usr/local/bin/yoink-worker-launcher".into(),
+                args: vec![],
                 workspace_root,
-                timeout: Duration::from_secs(number(read, "DOWNLOAD_TIMEOUT_SECS", 120, 1, 3600)?),
+                timeout,
+                processing_timeout,
                 socket_timeout: Duration::from_secs(number(
                     read,
                     "WORKER_SOCKET_TIMEOUT_SECS",
@@ -120,6 +104,8 @@ impl MediaConfig {
                     65536,
                     4 * 1024 * 1024,
                 )? as usize,
+                max_artifacts: number(read, "DOWNLOAD_MAX_ITEMS", 20, 1, 100)? as usize,
+                allowed_proxy_origins,
                 allowed_private_origins,
             },
             downloads: DownloadConfig {
@@ -150,6 +136,39 @@ impl MediaConfig {
             },
         })
     }
+}
+
+fn origins(
+    read: &mut impl FnMut(&str) -> Result<Option<String>, ConfigError>,
+    key: &str,
+) -> Result<Vec<String>, ConfigError> {
+    let values: Vec<String> = serde_json::from_str(&read(key)?.unwrap_or_else(|| "[]".into()))
+        .map_err(|_| invalid(key, "expected a JSON array of HTTP(S) origins"))?;
+    if values.len() > 16 {
+        return Err(invalid(key, "at most sixteen origins are allowed"));
+    }
+    for origin in &values {
+        let parsed = url::Url::parse(origin).map_err(|_| invalid(key, "invalid origin"))?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || origin.contains("@")
+            || parsed.password().is_some()
+            || parsed.port() == Some(0)
+            || !matches!(parsed.path(), "" | "/")
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || origin
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err(invalid(
+                key,
+                "origins must not contain credentials, paths, queries or fragments and must use a nonzero port",
+            ));
+        }
+    }
+    Ok(values)
 }
 
 fn number(
@@ -192,10 +211,14 @@ mod tests {
         assert_eq!(config.downloads.concurrency, 2);
         assert_eq!(
             config.executor.program,
-            PathBuf::from("/usr/local/bin/python")
+            PathBuf::from("/usr/local/bin/yoink-worker-launcher")
         );
         assert!(config.executor.allowed_private_origins.is_empty());
-        assert_eq!(config.executor.args, ["-B", "/opt/yoink-worker/main.py"]);
+        assert!(config.executor.allowed_proxy_origins.is_empty());
+        assert_eq!(config.executor.args, Vec::<String>::new());
+        assert_eq!(config.executor.max_artifacts, 20);
+        assert_eq!(config.executor.timeout, Duration::from_secs(120));
+        assert_eq!(config.executor.processing_timeout, Duration::from_secs(120));
     }
 
     #[test]
@@ -207,6 +230,12 @@ mod tests {
             vec![("DOWNLOAD_WORKSPACE", "relative")],
             vec![("DOWNLOAD_LEASE_SECS", "10")],
             vec![("DOWNLOAD_HEARTBEAT_SECS", "21")],
+            vec![("WORKER_PROCESSING_TIMEOUT_SECS", "121")],
+            vec![("WORKER_PROCESSING_TIMEOUT_SECS", "0")],
+            vec![("DOWNLOAD_MAX_ITEMS", "101")],
+            vec![("WORKER_ALLOWED_PROXY_ORIGINS", "[\"http://host:0\"]")],
+            vec![("WORKER_ALLOWED_PRIVATE_ORIGINS", "[\"http://@host\"]")],
+            vec![("WORKER_ALLOWED_PROXY_ORIGINS", "[\"http://host\\n.evil\"]")],
             vec![(
                 "WORKER_ALLOWED_PRIVATE_ORIGINS",
                 "[\"http://user:secret@host\"]",
@@ -232,5 +261,27 @@ mod tests {
         .unwrap();
         assert_eq!(config.executor.allowed_private_origins.len(), 1);
         assert!(!format!("{config:?}").contains("19876"));
+        let config = parse(&[
+            (
+                "WORKER_ALLOWED_PRIVATE_ORIGINS",
+                "[\"http://private.example:8080\"]",
+            ),
+            (
+                "WORKER_ALLOWED_PROXY_ORIGINS",
+                "[\"https://proxy.example:9443\"]",
+            ),
+            ("DOWNLOAD_TIMEOUT_SECS", "600"),
+        ])
+        .unwrap();
+        assert_eq!(
+            config.executor.allowed_private_origins,
+            ["http://private.example:8080"]
+        );
+        assert_eq!(
+            config.executor.allowed_proxy_origins,
+            ["https://proxy.example:9443"]
+        );
+        assert_eq!(config.executor.processing_timeout, Duration::from_secs(300));
+        assert_eq!(config.executor.max_artifacts, 20);
     }
 }

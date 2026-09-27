@@ -16,8 +16,10 @@ use url::Url;
 use uuid::Uuid;
 
 /// Maximum encoded size accepted for one JSON message.
-pub const MAX_FRAME_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const PROTOCOL_VERSION: u16 = 2;
+pub const MAX_PROXY_URL_BYTES: usize = 4096;
+pub const MAX_COOKIE_JAR_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct HttpSourceUrl(Url);
@@ -71,6 +73,7 @@ pub enum MediaMode {
     Best,
     Video,
     Audio,
+    Image,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,7 +83,188 @@ pub enum TaskKind {
     ExtractContent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoCodec {
+    H264,
+    H265,
+    Av1,
+    Vp9,
+    Any,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioCodec {
+    Best,
+    Aac,
+    Mp3,
+    Opus,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Container {
+    Mp4,
+    Mkv,
+    Webm,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Engine {
+    Auto,
+    YtDlp,
+    Gallery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaylistRange {
+    pub start: i32,
+    pub end: Option<i32>,
+}
+impl PlaylistRange {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.start == 0 || self.end == Some(0) || (self.end.is_none() && self.start < -100) {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        if let Some(end) = self.end {
+            let count = (i64::from(end) - i64::from(self.start)).unsigned_abs() + 1;
+            if self.start.is_positive() != end.is_positive() || count > 100 {
+                return Err(ProtocolError::InvalidRequest);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipRange {
+    pub start_seconds: f64,
+    pub end_seconds: f64,
+}
+impl ClipRange {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        if !self.start_seconds.is_finite()
+            || !self.end_seconds.is_finite()
+            || self.start_seconds < 0.0
+            || self.end_seconds <= self.start_seconds
+        {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DownloadOptions {
+    pub max_height: Option<u32>,
+    pub video_codec: VideoCodec,
+    pub audio_codec: AudioCodec,
+    pub container: Container,
+    pub engine: Engine,
+    pub playlist: Option<PlaylistRange>,
+    pub clips: Vec<ClipRange>,
+    pub gallery_zip: bool,
+}
+impl Default for DownloadOptions {
+    fn default() -> Self {
+        Self {
+            max_height: None,
+            video_codec: VideoCodec::H264,
+            audio_codec: AudioCodec::Best,
+            container: Container::Mp4,
+            engine: Engine::Auto,
+            playlist: None,
+            clips: Vec::new(),
+            gallery_zip: false,
+        }
+    }
+}
+impl DownloadOptions {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        if self.max_height == Some(0) || self.clips.len() > 20 {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        if let Some(playlist) = self.playlist {
+            playlist.validate()?;
+        }
+        for clip in &self.clips {
+            clip.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkCredentials {
+    pub proxy_url: Option<String>,
+    pub cookie_jar: Option<String>,
+}
+impl fmt::Debug for NetworkCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NetworkCredentials")
+            .field("proxy_url", &self.proxy_url.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "cookie_jar",
+                &self.cookie_jar.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
+impl NetworkCredentials {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        if let Some(proxy) = &self.proxy_url {
+            if proxy.is_empty()
+                || proxy.len() > MAX_PROXY_URL_BYTES
+                || proxy.chars().any(char::is_control)
+            {
+                return Err(ProtocolError::InvalidRequest);
+            }
+            let url = Url::parse(proxy).map_err(|_| ProtocolError::InvalidRequest)?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none_or(|host| host.is_empty())
+                || proxy
+                    .split_once("://")
+                    .is_none_or(|(_, authority)| authority.starts_with('/'))
+                || !matches!(url.path(), "" | "/")
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(ProtocolError::InvalidRequest);
+            }
+        }
+        if let Some(cookies) = &self.cookie_jar {
+            if cookies.len() > MAX_COOKIE_JAR_BYTES
+                || cookies.is_empty()
+                || cookies
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\t' | '\r' | '\n'))
+            {
+                return Err(ProtocolError::InvalidRequest);
+            }
+            for line in cookies.lines().filter(|line| {
+                !line.is_empty() && (!line.starts_with('#') || line.starts_with("#HttpOnly_"))
+            }) {
+                let fields: Vec<_> = line.split('\t').collect();
+                if fields.len() != 7
+                    || fields[0].is_empty()
+                    || fields[2].is_empty()
+                    || fields[4].parse::<u64>().is_err()
+                    || fields[5].is_empty()
+                    || !matches!(fields[1], "TRUE" | "FALSE")
+                    || !matches!(fields[3], "TRUE" | "FALSE")
+                {
+                    return Err(ProtocolError::InvalidRequest);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerRequest {
     pub version: u16,
@@ -88,12 +272,20 @@ pub struct WorkerRequest {
     pub attempt: u32,
     pub source_url: HttpSourceUrl,
     pub task: TaskKind,
+    #[serde(default)]
+    pub options: DownloadOptions,
+    #[serde(default)]
+    pub network: Option<NetworkCredentials>,
 }
 
 impl WorkerRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         if self.version != PROTOCOL_VERSION || self.operation_id.is_nil() || self.attempt == 0 {
             return Err(ProtocolError::InvalidRequest);
+        }
+        self.options.validate()?;
+        if let Some(network) = &self.network {
+            network.validate()?;
         }
         Ok(())
     }
@@ -311,6 +503,8 @@ mod tests {
             task: TaskKind::Download {
                 media_mode: MediaMode::Audio,
             },
+            options: DownloadOptions::default(),
+            network: None,
         }
     }
 
@@ -343,7 +537,7 @@ mod tests {
     #[test]
     fn rejects_version_nil_id_zero_attempt_and_bad_url() {
         let mut request = request();
-        request.version = 2;
+        request.version = 1;
         assert_eq!(request.validate(), Err(ProtocolError::InvalidRequest));
         request.version = PROTOCOL_VERSION;
         request.operation_id = Uuid::nil();
@@ -372,13 +566,13 @@ mod tests {
             decode_event_frame(unknown),
             Err(ProtocolError::InvalidMessage)
         );
-        let bad_progress = br#"{"version":1,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":101.0,"stage":"fetching"}}"#;
+        let bad_progress = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":101.0,"stage":"fetching"}}"#;
         assert_eq!(
             decode_event_frame(bad_progress),
             Err(ProtocolError::InvalidEvent)
         );
 
-        let valid_progress = br#"{"version":1,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":25.0,"stage":"fetching"}}"#;
+        let valid_progress = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":25.0,"stage":"fetching"}}"#;
         assert_eq!(
             decode_event_frame(valid_progress).unwrap().event,
             WorkerEventKind::Progress {
@@ -387,28 +581,170 @@ mod tests {
             }
         );
 
-        let unsupported_version = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":25.0,"stage":"fetching"}}"#;
+        let unsupported_version = br#"{"version":3,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":25.0,"stage":"fetching"}}"#;
         assert_eq!(
             decode_event_frame(unsupported_version),
             Err(ProtocolError::InvalidEvent)
         );
-        let supported_request = br#"{"version":1,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"source_url":"https://example.test/video","task":{"kind":"download","media_mode":"audio"}}"#;
+        let supported_request = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"source_url":"https://example.test/video","task":{"kind":"download","media_mode":"audio"}}"#;
         assert!(decode_request_frame(supported_request).is_ok());
-        let unsupported_request = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"source_url":"https://example.test/video","task":{"kind":"download","media_mode":"audio"}}"#;
+        let unsupported_request = br#"{"version":3,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"source_url":"https://example.test/video","task":{"kind":"download","media_mode":"audio"}}"#;
         assert_eq!(
             decode_request_frame(unsupported_request),
             Err(ProtocolError::InvalidRequest)
         );
 
-        let nan_progress = br#"{"version":1,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":NaN,"stage":"fetching"}}"#;
+        let nan_progress = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":NaN,"stage":"fetching"}}"#;
         assert_eq!(
             decode_event_frame(nan_progress),
             Err(ProtocolError::InvalidMessage)
         );
-        let wrong_payload = br#"{"version":1,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":"25","stage":"fetching"}}"#;
+        let wrong_payload = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"progress","percent":"25","stage":"fetching"}}"#;
         assert_eq!(
             decode_event_frame(wrong_payload),
             Err(ProtocolError::InvalidMessage)
+        );
+    }
+
+    #[test]
+    fn download_options_and_network_credentials_are_bounded_and_redacted() {
+        let mut req = request();
+        req.options = DownloadOptions {
+            max_height: Some(1080),
+            video_codec: VideoCodec::H265,
+            audio_codec: AudioCodec::Opus,
+            container: Container::Webm,
+            engine: Engine::YtDlp,
+            playlist: Some(PlaylistRange {
+                start: -1,
+                end: Some(-2),
+            }),
+            clips: vec![ClipRange {
+                start_seconds: 0.5,
+                end_seconds: 2.0,
+            }],
+            gallery_zip: true,
+        };
+        req.network = Some(NetworkCredentials {
+            proxy_url: Some("https://proxy.example:8443".into()),
+            cookie_jar: Some(
+                "# Netscape\n.example.test\tTRUE\t/\tFALSE\t2000000000\tname\tsecret-cookie".into(),
+            ),
+        });
+        req.validate().unwrap();
+        let json = serde_json::to_vec(&req).unwrap();
+        let decoded: WorkerRequest = serde_json::from_slice(&json).unwrap();
+        assert_eq!(decoded, req);
+        let debug = format!("{:?}", req.network);
+        assert!(!debug.contains("proxy.example"));
+        assert!(!debug.contains("secret-cookie"));
+        assert!(String::from_utf8(json).unwrap().contains("secret-cookie"));
+
+        for proxy in [
+            "",
+            "ftp://proxy.test",
+            "https:///missing-host",
+            "https://proxy.test\n",
+        ] {
+            let mut bad = request();
+            bad.network = Some(NetworkCredentials {
+                proxy_url: Some(proxy.into()),
+                cookie_jar: None,
+            });
+            assert_eq!(bad.validate(), Err(ProtocolError::InvalidRequest));
+        }
+        let mut too_long_proxy = request();
+        too_long_proxy.network = Some(NetworkCredentials {
+            proxy_url: Some(format!("http://x/{}", "a".repeat(MAX_PROXY_URL_BYTES))),
+            cookie_jar: None,
+        });
+        assert_eq!(
+            too_long_proxy.validate(),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut malformed_cookie = request();
+        malformed_cookie.network = Some(NetworkCredentials {
+            proxy_url: None,
+            cookie_jar: Some("not-a-netscape-row".into()),
+        });
+        assert_eq!(
+            malformed_cookie.validate(),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut control_cookie = request();
+        control_cookie.network = Some(NetworkCredentials {
+            proxy_url: None,
+            cookie_jar: Some("name\u{0001}".into()),
+        });
+        assert_eq!(
+            control_cookie.validate(),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut huge_cookie = request();
+        huge_cookie.network = Some(NetworkCredentials {
+            proxy_url: None,
+            cookie_jar: Some("x".repeat(MAX_COOKIE_JAR_BYTES + 1)),
+        });
+        assert_eq!(huge_cookie.validate(), Err(ProtocolError::InvalidRequest));
+    }
+
+    #[test]
+    fn validates_option_bounds_and_defaults_for_omitted_fields() {
+        assert_eq!(DownloadOptions::default().video_codec, VideoCodec::H264);
+        assert_eq!(DownloadOptions::default().audio_codec, AudioCodec::Best);
+        assert_eq!(DownloadOptions::default().container, Container::Mp4);
+        assert_eq!(DownloadOptions::default().engine, Engine::Auto);
+        assert!(!DownloadOptions::default().gallery_zip);
+
+        for options in [
+            DownloadOptions {
+                max_height: Some(0),
+                ..DownloadOptions::default()
+            },
+            DownloadOptions {
+                playlist: Some(PlaylistRange {
+                    start: 1,
+                    end: Some(101),
+                }),
+                ..DownloadOptions::default()
+            },
+            DownloadOptions {
+                playlist: Some(PlaylistRange {
+                    start: 1,
+                    end: Some(-1),
+                }),
+                ..DownloadOptions::default()
+            },
+            DownloadOptions {
+                clips: vec![ClipRange {
+                    start_seconds: 1.0,
+                    end_seconds: 1.0,
+                }],
+                ..DownloadOptions::default()
+            },
+            DownloadOptions {
+                clips: vec![
+                    ClipRange {
+                        start_seconds: 0.0,
+                        end_seconds: 1.0
+                    };
+                    21
+                ],
+                ..DownloadOptions::default()
+            },
+        ] {
+            let mut req = request();
+            req.options = options;
+            assert_eq!(req.validate(), Err(ProtocolError::InvalidRequest));
+        }
+        let minimal = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"source_url":"https://example.test/video","task":{"kind":"download","media_mode":"image"}}"#;
+        let req = decode_request_frame(minimal).unwrap();
+        assert_eq!(req.options, DownloadOptions::default());
+        assert_eq!(
+            req.task,
+            TaskKind::Download {
+                media_mode: MediaMode::Image
+            }
         );
     }
 
@@ -480,7 +816,7 @@ mod tests {
     fn rejects_completed_events_without_artifacts() {
         let complete = event(WorkerEventKind::Completed { artifacts: vec![] });
         assert_eq!(complete.validate(), Err(ProtocolError::InvalidEvent));
-        let frame = br#"{"version":1,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"completed","artifacts":[]}}"#;
+        let frame = br#"{"version":2,"operation_id":"4f15ab1d-8f81-4886-999d-44c26db8b9ce","attempt":1,"event":{"type":"completed","artifacts":[]}}"#;
         assert_eq!(decode_event_frame(frame), Err(ProtocolError::InvalidEvent));
     }
 

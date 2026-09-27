@@ -4,6 +4,22 @@ use std::time::Duration;
 use uuid::Uuid;
 use yoink_domain::DownloadRequest;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProgressStage {
+    Fetching,
+    Processing,
+    WritingArtifact,
+}
+impl ProgressStage {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fetching => "fetching",
+            Self::Processing => "processing",
+            Self::WritingArtifact => "writing_artifact",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationStatus {
@@ -12,6 +28,7 @@ pub enum OperationStatus {
     Delivering,
     #[serde(rename = "delivery_unknown")]
     DeliveryUnknown,
+    DeliveryPartial,
     Succeeded,
     Failed,
     Cancelled,
@@ -61,13 +78,18 @@ pub struct LeaseHeartbeat {
 pub struct OperationRecord {
     pub operation_id: Uuid,
     pub actor_id: u64,
+    pub target: Option<yoink_domain::DeliveryTarget>,
     pub status: OperationStatus,
     pub attempt: u32,
     pub max_attempts: u32,
     pub cancel_requested: bool,
     pub available_at: DateTime<Utc>,
     pub delivered_message_id: Option<i64>,
+    pub planned_artifact_count: Option<u32>,
+    pub delivered_artifact_count: u32,
     pub delivery_started_at: Option<DateTime<Utc>>,
+    pub progress_percent: Option<u8>,
+    pub progress_stage: Option<ProgressStage>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
