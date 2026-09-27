@@ -1,0 +1,1 @@
+VACUUM INTO '__BACKUP_PATH__';

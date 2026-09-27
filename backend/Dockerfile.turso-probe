@@ -1,0 +1,13 @@
+# Isolated compatibility check using the server's current Rust toolchain.
+# Never copies deployment config or opens an existing Yoink database.
+FROM rust:1.88-bookworm
+WORKDIR /probe
+ENV CARGO_BUILD_JOBS=4
+COPY experiments/turso/ ./
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo fetch --locked
+RUN --network=none \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/probe/target \
+    cargo test --offline --locked --no-run \
+    && timeout --kill-after=5s 90s cargo test --offline --locked -- --nocapture --test-threads=1

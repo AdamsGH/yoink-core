@@ -8,6 +8,24 @@ default:
 fetch:
     cargo fetch
 
+# Resolve the isolated Turso experiment, without changing server dependencies.
+fetch-turso:
+    cargo fetch --manifest-path experiments/turso/Cargo.toml
+
+format-turso:
+    cargo fmt --manifest-path experiments/turso/Cargo.toml
+
+# Check the isolated experiment against the server's pinned compiler in Docker.
+verify-turso-container:
+    docker build --progress=plain -f Dockerfile.turso-probe -t yoink/turso-probe:experimental .
+
+# Native embedded-engine contracts. Only disposable test databases are opened.
+verify-turso:
+    cargo fmt --manifest-path experiments/turso/Cargo.toml -- --check
+    cargo clippy --manifest-path experiments/turso/Cargo.toml --target-dir target/turso-probe --locked --all-targets -- -D warnings
+    cargo test --manifest-path experiments/turso/Cargo.toml --target-dir target/turso-probe --locked --no-run
+    timeout --kill-after=5s 90s cargo test --manifest-path experiments/turso/Cargo.toml --target-dir target/turso-probe --locked -- --nocapture
+
 # Reconcile workspace dependency lists without upgrading already locked dependencies.
 lock:
     cargo update --workspace --offline

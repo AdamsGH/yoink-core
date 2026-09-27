@@ -15,6 +15,8 @@ Run Rust workspace commands from the repository root:
 | `cd backend && just lint` | Clippy all workspace targets with warnings denied. |
 | `cd backend && just test` | Workspace tests. |
 | `cd backend && just verify` | Formatting, lint, unit tests, non-database smoke checks, script syntax checks, and documentation link checks. It does not require Docker. |
+| `cd backend && just verify-turso` | Format, Clippy and transactional fixtures for the standalone native Turso experiment. It is not linked into the server. |
+| `cd backend && just verify-turso-container` | Run the Turso fixtures with the server's pinned Rust 1.88 compiler. Execution has no network access. |
 | `cd backend && just test-profile-db` | Disposable Alembic-migrated PostgreSQL profile and credential contracts without rebuilding transport adapters. |
 | `cd backend && just test-db` | Disposable PostgreSQL/Alembic integration fixture and database process checks. |
 | `cd backend && just verify-db` | `verify` plus the database fixture. Uses disposable PostgreSQL and the legacy image for Alembic. |
@@ -26,6 +28,10 @@ The media fixture includes a cookie-protected origin reached through an authenti
 The media fixture verifies real worker download and native Telegram multipart upload under read-only/noexec and Landlock confinement. It checks bounded MP4 framing and unchanged media payload across remuxing, replay idempotency, actor isolation, cancellation and cleanup, three persisted HTTP 503 attempts with retry delay, terminal API rejection, a durable Telegram 429 retry respecting `retry_after`, API 500 and dropped-response ambiguity, crash recovery without resend, admission quotas, access revocation before execution and delivery, and secret redaction. Telegram is a local fixture API, not a live service or a platform-compatibility test.
 
 `just build yoink` builds the legacy `yoink/yoink:latest` image used for the Alembic fixture; it does not start services. All Python work remains inside containers.
+
+## Isolated Turso evaluation
+
+See [decision 0002](../decisions/0002-turso-evaluation.md) and the [experiment report](../../backend/experiments/turso/README.md). This is not a database switch: the existing PostgreSQL repositories, environment contract, migrations and deployment remain unchanged. Tests create temporary files with synthetic data only. `just fetch-turso` resolves the separate experiment lockfile, while `just format-turso` formats only its Rust sources. Normal server verification does not silently add the experimental engine to its dependencies.
 
 ## What the database fixture does
 

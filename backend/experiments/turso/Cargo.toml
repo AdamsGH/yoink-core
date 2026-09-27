@@ -1,0 +1,17 @@
+[package]
+name = "yoink-turso-probe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+# Deliberately separate from the production workspace and its lockfile.
+[workspace]
+
+[dependencies]
+turso = { version = "=0.7.2", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "process", "io-util", "fs"] }
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
