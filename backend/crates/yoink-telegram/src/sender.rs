@@ -12,9 +12,8 @@ use teloxide::{
         InputMediaVideo, Message, MessageId, ReplyParameters, ThreadId,
     },
 };
-use yoink_domain::DeliveryTarget;
-use yoink_downloads::{DeliveredMedia, DeliveryError, DeliveryFuture};
-use yoink_executor::ValidatedArtifact;
+use yoink_domain::{CachedMediaKind, DeliveryTarget};
+use yoink_downloads::{DeliveredMedia, DeliveryArtifact, DeliveryError, DeliveryFuture};
 
 #[derive(Clone)]
 pub(super) struct TelegramDelivery {
@@ -83,9 +82,59 @@ fn thread_id(target: DeliveryTarget) -> Result<Option<ThreadId>, DeliveryError> 
         .transpose()
 }
 
-fn input_media(kind: MediaKind, artifact: ValidatedArtifact) -> InputMedia {
-    let filename = artifact.filename.clone();
-    let file = InputFile::read(tokio::fs::File::from_std(artifact.into_file())).file_name(filename);
+fn cached_kind(kind: CachedMediaKind) -> MediaKind {
+    match kind {
+        CachedMediaKind::Photo => MediaKind::Photo,
+        CachedMediaKind::Video => MediaKind::Video,
+        CachedMediaKind::Audio => MediaKind::Audio,
+        CachedMediaKind::Document => MediaKind::Document,
+    }
+}
+
+fn preflight_cached(
+    artifacts: &[DeliveryArtifact],
+    send_as_file: bool,
+) -> Result<Vec<MediaKind>, DeliveryError> {
+    if artifacts.is_empty()
+        || artifacts.len() > 10
+        || artifacts
+            .iter()
+            .any(|artifact| !matches!(artifact, DeliveryArtifact::Cached(_)))
+    {
+        return Err(DeliveryError::Rejected);
+    }
+    let kinds = artifacts
+        .iter()
+        .map(|artifact| match artifact {
+            DeliveryArtifact::Cached(cached) => cached_kind(cached.kind()),
+            DeliveryArtifact::Upload(_) => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+    if (send_as_file && kinds.iter().any(|kind| *kind != MediaKind::Document))
+        || kinds
+            .iter()
+            .skip(1)
+            .any(|kind| !compatible(kinds[0], *kind))
+    {
+        return Err(DeliveryError::Rejected);
+    }
+    Ok(kinds)
+}
+
+fn input_file(artifact: DeliveryArtifact) -> InputFile {
+    match artifact {
+        DeliveryArtifact::Upload(artifact) => {
+            let filename = artifact.filename.clone();
+            InputFile::read(tokio::fs::File::from_std(artifact.into_file())).file_name(filename)
+        }
+        DeliveryArtifact::Cached(cached) => {
+            InputFile::file_id(teloxide::types::FileId(cached.file_id().to_owned()))
+        }
+    }
+}
+
+fn input_media(kind: MediaKind, artifact: DeliveryArtifact) -> InputMedia {
+    let file = input_file(artifact);
     match kind {
         MediaKind::Photo => InputMedia::Photo(InputMediaPhoto::new(file)),
         MediaKind::Video => InputMedia::Video(InputMediaVideo::new(file)),
@@ -145,12 +194,11 @@ async fn send_single(
     bot: &Bot,
     target: DeliveryTarget,
     kind: MediaKind,
-    artifact: ValidatedArtifact,
+    artifact: DeliveryArtifact,
     thread: Option<ThreadId>,
 ) -> Result<Message, RequestError> {
     let chat = ChatId(target.chat_id());
-    let filename = artifact.filename.clone();
-    let file = InputFile::read(tokio::fs::File::from_std(artifact.into_file())).file_name(filename);
+    let file = input_file(artifact);
     let reply = target
         .reply_to_message_id()
         .map(|id| ReplyParameters::new(MessageId(id)));
@@ -178,7 +226,7 @@ async fn send_group(
     bot: &Bot,
     target: DeliveryTarget,
     kinds: &[MediaKind],
-    artifacts: Vec<ValidatedArtifact>,
+    artifacts: Vec<DeliveryArtifact>,
     thread: Option<ThreadId>,
 ) -> Result<Vec<Message>, RequestError> {
     let media: Vec<InputMedia> = kinds
@@ -209,16 +257,33 @@ impl yoink_downloads::Delivery for TelegramDelivery {
         &self,
         target: DeliveryTarget,
         send_as_file: bool,
-        artifacts: Vec<ValidatedArtifact>,
+        artifacts: Vec<DeliveryArtifact>,
     ) -> DeliveryFuture<'_> {
         let bot = self.bot.clone();
         Box::pin(async move {
-            // Validate the complete journal unit before moving any file handle or making an API call.
-            let media_types = artifacts
+            // Validate the complete unit before moving any file handle or making an API call.
+            if artifacts.is_empty() || artifacts.len() > 10 {
+                return Err(DeliveryError::Rejected);
+            }
+            let is_cached = matches!(artifacts.first(), Some(DeliveryArtifact::Cached(_)));
+            if artifacts
                 .iter()
-                .map(|artifact| artifact.media_type.as_str())
-                .collect::<Vec<_>>();
-            let kinds = preflight(&media_types, send_as_file)?;
+                .any(|artifact| matches!(artifact, DeliveryArtifact::Cached(_)) != is_cached)
+            {
+                return Err(DeliveryError::Rejected);
+            }
+            let kinds = if is_cached {
+                preflight_cached(&artifacts, send_as_file)?
+            } else {
+                let media_types = artifacts
+                    .iter()
+                    .map(|artifact| match artifact {
+                        DeliveryArtifact::Upload(upload) => upload.media_type.as_str(),
+                        DeliveryArtifact::Cached(_) => unreachable!(),
+                    })
+                    .collect::<Vec<_>>();
+                preflight(&media_types, send_as_file)?
+            };
             let thread = thread_id(target)?;
             if artifacts.len() == 1 {
                 let message = send_single(
@@ -232,22 +297,30 @@ impl yoink_downloads::Delivery for TelegramDelivery {
                     thread,
                 )
                 .await
-                .map_err(|error| classify_delivery_error(&error))?;
+                .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
                 validate_messages(vec![message], &kinds, target.chat_id(), thread)
             } else {
                 let messages = send_group(&bot, target, &kinds, artifacts, thread)
                     .await
-                    .map_err(|error| classify_delivery_error(&error))?;
+                    .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
                 validate_messages(messages, &kinds, target.chat_id(), thread)
             }
         })
     }
 }
 
+#[cfg(test)]
 pub(super) fn classify_delivery_error(error: &RequestError) -> DeliveryError {
+    classify_delivery_error_for_origin(error, false)
+}
+
+fn classify_delivery_error_for_origin(error: &RequestError, cached: bool) -> DeliveryError {
     // The API wrapper does not preserve HTTP status here. An unrecognized API
     // response may follow a processed upload, so do not infer non-delivery.
     match error {
+        RequestError::Api(
+            ApiError::WrongFileId | ApiError::WrongFileIdOrUrl | ApiError::FileIdInvalid,
+        ) if cached => DeliveryError::InvalidFileId,
         RequestError::Api(
             ApiError::BotBlocked
             | ApiError::ChatNotFound
@@ -263,6 +336,77 @@ pub(super) fn classify_delivery_error(error: &RequestError) -> DeliveryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cached(kind: CachedMediaKind, id: &str, size: u64) -> DeliveryArtifact {
+        DeliveryArtifact::Cached(yoink_domain::CachedMedia::new(kind, id.to_owned(), size).unwrap())
+    }
+
+    #[test]
+    fn cached_files_select_file_id_input_and_keep_the_id_out_of_debug() {
+        let artifact = cached(CachedMediaKind::Video, "cached-test-id", 321);
+        assert!(!format!("{artifact:?}").contains("cached-test-id"));
+        let input = input_file(artifact);
+        let serialized = serde_json::to_string(&input).unwrap();
+        assert!(serialized.contains("cached-test-id"));
+    }
+
+    #[test]
+    fn cached_kinds_grouping_limits_and_send_as_file_validation() {
+        let visual = [
+            cached(CachedMediaKind::Photo, "photo-id", 1),
+            cached(CachedMediaKind::Video, "video-id", 2),
+        ];
+        assert_eq!(
+            preflight_cached(&visual, false).unwrap(),
+            [MediaKind::Photo, MediaKind::Video]
+        );
+        for (kind, expected) in [
+            (CachedMediaKind::Audio, MediaKind::Audio),
+            (CachedMediaKind::Document, MediaKind::Document),
+        ] {
+            assert_eq!(
+                preflight_cached(&[cached(kind, "same-kind-id", 3)], false).unwrap(),
+                [expected]
+            );
+            assert_eq!(
+                preflight_cached(
+                    &[
+                        cached(kind, "first-same-kind-id", 3),
+                        cached(kind, "second-same-kind-id", 4)
+                    ],
+                    false,
+                )
+                .unwrap(),
+                [expected, expected]
+            );
+        }
+        assert!(preflight_cached(&visual, true).is_err());
+        assert_eq!(
+            preflight_cached(&[cached(CachedMediaKind::Document, "document-id", 4)], true).unwrap(),
+            [MediaKind::Document]
+        );
+        assert!(
+            preflight_cached(
+                &[
+                    cached(CachedMediaKind::Audio, "audio-id", 1),
+                    cached(CachedMediaKind::Document, "doc-id", 1),
+                ],
+                false
+            )
+            .is_err()
+        );
+        let ten = (0..10)
+            .map(|index| cached(CachedMediaKind::Photo, &format!("photo-{index}"), 1))
+            .collect::<Vec<_>>();
+        assert_eq!(preflight_cached(&ten, false).unwrap().len(), 10);
+        let eleven = (0..11)
+            .map(|index| cached(CachedMediaKind::Photo, &format!("photo-{index}"), 1))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            preflight_cached(&eleven, false),
+            Err(DeliveryError::Rejected)
+        );
+    }
 
     #[test]
     fn preflight_rejects_empty_over_limit_and_incompatible_groups() {
@@ -358,12 +502,29 @@ mod tests {
                 DeliveryError::Rejected
             );
         }
+        for api in [
+            ApiError::WrongFileId,
+            ApiError::WrongFileIdOrUrl,
+            ApiError::FileIdInvalid,
+        ] {
+            let error = RequestError::Api(api);
+            assert_eq!(
+                classify_delivery_error_for_origin(&error, true),
+                DeliveryError::InvalidFileId
+            );
+            assert_eq!(
+                classify_delivery_error_for_origin(&error, false),
+                DeliveryError::Unknown
+            );
+        }
         for text in [
             "Internal Server Error",
             "Bad Request: unrecognized fixture failure",
         ] {
+            let error = RequestError::Api(ApiError::Unknown(text.into()));
+            assert_eq!(classify_delivery_error(&error), DeliveryError::Unknown);
             assert_eq!(
-                classify_delivery_error(&RequestError::Api(ApiError::Unknown(text.into()))),
+                classify_delivery_error_for_origin(&error, true),
                 DeliveryError::Unknown
             );
         }

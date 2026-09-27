@@ -9,6 +9,9 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
+pub mod cache;
+pub use cache::{CachedMedia, CachedMediaError, CachedMediaKind};
+
 pub mod network;
 pub use network::{
     CookieReference, CredentialVersion, NetworkReferenceError, NetworkSelection, ProxyReference,

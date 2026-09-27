@@ -53,6 +53,7 @@ pub struct Claim {
     pub worker_id: String,
     pub request: DownloadRequest,
     pub cancel_requested: bool,
+    pub cache_bypassed: bool,
     pub lease_expires_at: DateTime<Utc>,
 }
 impl std::fmt::Debug for Claim {
@@ -64,6 +65,7 @@ impl std::fmt::Debug for Claim {
             .field("worker_id", &self.worker_id)
             .field("request", &self.request)
             .field("cancel_requested", &self.cancel_requested)
+            .field("cache_bypassed", &self.cache_bypassed)
             .field("lease_expires_at", &self.lease_expires_at)
             .finish()
     }
@@ -83,6 +85,7 @@ pub struct OperationRecord {
     pub attempt: u32,
     pub max_attempts: u32,
     pub cancel_requested: bool,
+    pub cache_bypassed: bool,
     pub available_at: DateTime<Utc>,
     pub delivered_message_id: Option<i64>,
     pub planned_artifact_count: Option<u32>,

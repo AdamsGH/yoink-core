@@ -35,6 +35,13 @@ pub struct Executor {
     config: ExecutorConfig,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArtifactLimits {
+    pub max_artifact_bytes: u64,
+    pub max_workspace_bytes: u64,
+    pub max_artifacts: usize,
+}
+
 #[derive(Clone)]
 pub struct ExecutorConfig {
     pub program: PathBuf,
@@ -114,6 +121,15 @@ pub enum ExecutorError {
 }
 
 impl Executor {
+    /// Returns the immutable limits enforced by this executor instance.
+    pub fn artifact_limits(&self) -> ArtifactLimits {
+        ArtifactLimits {
+            max_artifact_bytes: self.config.max_artifact_bytes,
+            max_workspace_bytes: self.config.max_workspace_bytes,
+            max_artifacts: self.config.max_artifacts,
+        }
+    }
+
     /// Creates an executor. The configured workspace_root must already exist and
     /// be accessible; execute creates only per-request directories beneath it.
     pub fn new(config: ExecutorConfig) -> Result<Self, ExecutorError> {

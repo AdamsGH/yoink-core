@@ -198,6 +198,7 @@ async fn queue_persistence_contract() {
         .bind(serde_json::json!({"probe": true}))
         .bind(1_i32)
         .bind(0_i32)
+        .bind(None::<&str>)
         .execute(&mut *rollback_tx)
         .await
         .unwrap();

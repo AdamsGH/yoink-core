@@ -1,9 +1,11 @@
 //! PostgreSQL-backed operation admission and fenced execution leases.
+mod cache;
 mod cache_key;
 mod codec;
 mod error;
 mod model;
 mod store;
+pub use cache::CachedBatch;
 pub use cache_key::{MediaCacheKey, media_cache_key};
 pub use error::StoreError;
 pub use model::{

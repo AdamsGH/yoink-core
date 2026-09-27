@@ -1,0 +1,456 @@
+use std::time::Duration;
+
+use sqlx::Row;
+use uuid::Uuid;
+use yoink_domain::{
+    CachedMedia, CachedMediaKind, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode,
+};
+use yoink_storage::{Store, StoreError};
+
+fn database_url() -> String {
+    std::env::var("YOINK_TEST_DATABASE_URL")
+        .expect("YOINK_TEST_DATABASE_URL must point to a disposable PostgreSQL database")
+}
+
+async fn store() -> Store {
+    let store = Store::connect(&database_url(), 8, Duration::from_secs(5))
+        .await
+        .expect("connect to disposable test database");
+    store.migrate().await.unwrap();
+    sqlx::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store
+}
+
+fn request(actor: u64, bot: i64, url: &str) -> DownloadRequest {
+    DownloadRequest::new(
+        actor,
+        url,
+        MediaMode::Video,
+        None,
+        DownloadParams::default(),
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(bot, actor as i64, None, None).unwrap())
+    .unwrap()
+}
+
+async fn delivered_claim(store: &Store, request: &DownloadRequest) -> yoink_storage::Claim {
+    let admitted = store
+        .admit(request, "media-cache-operation", 1)
+        .await
+        .unwrap();
+    let claim = store
+        .claim_for_bot(
+            "media-cache-worker",
+            Duration::from_secs(30),
+            request.target().unwrap().bot_id(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.operation_id, admitted.operation_id);
+    assert!(!claim.cache_bypassed);
+    assert!(store.begin_delivery_batch(&claim, 1).await.unwrap());
+    assert!(store.begin_delivery_unit(&claim, 0, 1).await.unwrap());
+    assert!(
+        store
+            .complete_delivery_unit(&claim, 0, &[70001])
+            .await
+            .unwrap()
+    );
+    claim
+}
+
+#[tokio::test]
+#[ignore = "requires a fresh disposable PostgreSQL database"]
+async fn cache_cleanup_and_revision_invalidation_contract() {
+    let store = store().await;
+    let request = request(73_010, 821, "https://example.com/cache-cleanup");
+    let claim = delivered_claim(&store, &request).await;
+    let media = CachedMedia::new(CachedMediaKind::Video, "fresh-upload-id".into(), 1024).unwrap();
+    let expired_revision = Uuid::new_v4();
+    sqlx::query(include_str!("fixtures/seed_expired_media_cache.sql"))
+        .bind(expired_revision)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .publish_media_cache(
+                &claim,
+                std::slice::from_ref(&media),
+                Duration::from_secs(120)
+            )
+            .await
+            .unwrap()
+    );
+    let remaining: i64 = sqlx::query(include_str!("fixtures/count_media_cache_revision.sql"))
+        .bind(expired_revision)
+        .fetch_one(store.pool())
+        .await
+        .unwrap()
+        .try_get("count")
+        .unwrap();
+    assert_eq!(remaining, 8, "publication prunes at most 32 expired rows");
+    let first = store.lookup_media_cache(&request).await.unwrap().unwrap();
+    assert!(
+        !store
+            .invalidate_media_cache(&request, Uuid::new_v4())
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .publish_media_cache(
+                &claim,
+                std::slice::from_ref(&media),
+                Duration::from_secs(120)
+            )
+            .await
+            .unwrap()
+    );
+    let replacement = store.lookup_media_cache(&request).await.unwrap().unwrap();
+    assert_ne!(first.revision, replacement.revision);
+    assert!(
+        !store
+            .invalidate_media_cache(&request, first.revision)
+            .await
+            .unwrap()
+    );
+    let foreign = request
+        .clone()
+        .with_target(DeliveryTarget::new(822, 73_010, None, None).unwrap())
+        .unwrap();
+    assert!(
+        !store
+            .invalidate_media_cache(&foreign, replacement.revision)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .invalidate_media_cache(&request, replacement.revision)
+            .await
+            .unwrap()
+    );
+    assert!(store.lookup_media_cache(&request).await.unwrap().is_none());
+    store.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a fresh disposable PostgreSQL database"]
+async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
+    let store = store().await;
+    let base_request = request(73_001, 811, "https://example.com/cache-a");
+    let media =
+        CachedMedia::new(CachedMediaKind::Video, "opaque-cache-file-id".into(), 88).unwrap();
+    assert!(
+        !store
+            .publish_media_cache(
+                &yoink_storage::Claim {
+                    operation_id: Uuid::nil(),
+                    attempt: 1,
+                    lease_token: Uuid::nil(),
+                    worker_id: "worker".into(),
+                    request: base_request.clone(),
+                    cancel_requested: false,
+                    cache_bypassed: false,
+                    lease_expires_at: chrono::Utc::now(),
+                },
+                std::slice::from_ref(&media),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap()
+    );
+
+    let claim = delivered_claim(&store, &base_request).await;
+    let stored_key: String = sqlx::query(include_str!("fixtures/operation_cache_key.sql"))
+        .bind(claim.operation_id)
+        .fetch_one(store.pool())
+        .await
+        .unwrap()
+        .try_get("cache_key")
+        .unwrap();
+    assert_eq!(
+        stored_key,
+        yoink_storage::media_cache_key(&base_request)
+            .unwrap()
+            .as_str()
+    );
+    assert!(
+        store
+            .publish_media_cache(
+                &claim,
+                std::slice::from_ref(&media),
+                Duration::from_secs(120)
+            )
+            .await
+            .unwrap()
+    );
+    let cached = store
+        .lookup_media_cache(&base_request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cached.media, vec![media]);
+    assert!(!format!("{cached:?}").contains("opaque-cache-file-id"));
+
+    let other_actor = request(73_002, 811, "https://example.com/cache-a");
+    let other_bot = request(73_001, 812, "https://example.com/cache-a");
+    assert!(
+        store
+            .lookup_media_cache(&other_actor)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .lookup_media_cache(&other_bot)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query(include_str!("fixtures/expire_media_cache.sql"))
+        .bind(cached.revision)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .lookup_media_cache(&base_request)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let recovery_request = request(73_003, 813, "https://example.com/recover-cache");
+    let admission = store
+        .admit(&recovery_request, "recover-cache", 1)
+        .await
+        .unwrap();
+    let recovery_claim = store
+        .claim_for_bot("recovery-worker", Duration::from_secs(30), 813)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovery_claim.operation_id, admission.operation_id);
+    assert!(
+        store
+            .begin_delivery_batch(&recovery_claim, 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .begin_delivery_unit(&recovery_claim, 0, 1)
+            .await
+            .unwrap()
+    );
+    let recovery_key = yoink_storage::media_cache_key(&recovery_request).unwrap();
+    sqlx::query(include_str!("fixtures/insert_media_cache.sql"))
+        .bind(73_003_i64)
+        .bind(813_i64)
+        .bind(recovery_key.as_str())
+        .bind(cached.revision)
+        .bind(serde_json::json!([{"kind":"video","file_id":"seed-cache-id","size_bytes":88}]))
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let mut foreign = recovery_claim.clone();
+    foreign.request = request(73_004, 814, "https://example.com/foreign-claim");
+    assert!(
+        !store
+            .requeue_invalid_cache(&foreign, 0, cached.revision)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .requeue_invalid_cache(&recovery_claim, 1, cached.revision)
+            .await
+            .unwrap()
+    );
+    let mut stale = recovery_claim.clone();
+    stale.lease_token = Uuid::new_v4();
+    assert!(
+        !store
+            .requeue_invalid_cache(&stale, 0, cached.revision)
+            .await
+            .unwrap()
+    );
+    let replacement = Uuid::new_v4();
+    sqlx::query(include_str!("fixtures/replace_media_cache_revision.sql"))
+        .bind(73_003_i64)
+        .bind(813_i64)
+        .bind(replacement)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .requeue_invalid_cache(&recovery_claim, 0, cached.revision)
+            .await
+            .unwrap()
+    );
+    let record = store
+        .get(73_003, admission.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.max_attempts, 2);
+    assert!(record.cache_bypassed);
+    assert_eq!(
+        sqlx::query(include_str!("fixtures/count_media_cache_revision.sql"))
+            .bind(replacement)
+            .fetch_one(store.pool())
+            .await
+            .unwrap()
+            .try_get::<i64, _>("count")
+            .unwrap(),
+        1
+    );
+    let retried = store
+        .claim_for_bot("retry-worker", Duration::from_secs(30), 813)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retried.attempt, 2);
+    assert!(retried.cache_bypassed);
+    assert!(store.begin_delivery_batch(&retried, 1).await.unwrap());
+    assert!(store.begin_delivery_unit(&retried, 0, 1).await.unwrap());
+    assert!(
+        !store
+            .requeue_invalid_cache(&retried, 0, replacement)
+            .await
+            .unwrap(),
+        "a cache-bypassed sending attempt cannot gain another attempt"
+    );
+    assert!(
+        store
+            .complete_delivery_unit(&retried, 0, &[70002])
+            .await
+            .unwrap()
+    );
+    let fresh = CachedMedia::new(CachedMediaKind::Video, "fresh-upload-id".into(), 1024).unwrap();
+    assert!(
+        store
+            .publish_media_cache(
+                &retried,
+                std::slice::from_ref(&fresh),
+                Duration::from_secs(120)
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .lookup_media_cache(&recovery_request)
+            .await
+            .unwrap()
+            .unwrap()
+            .media,
+        vec![fresh]
+    );
+    assert!(
+        !store
+            .requeue_invalid_cache(&retried, 0, replacement)
+            .await
+            .unwrap()
+    );
+
+    store.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a fresh disposable PostgreSQL database"]
+async fn cache_refuses_confirmed_prefix_and_cancelled_recovery() {
+    let store = store().await;
+    let no_recovery_request = request(73_101, 821, "https://example.com/no-recovery");
+    let admission = store
+        .admit(&no_recovery_request, "no-recovery", 1)
+        .await
+        .unwrap();
+    let claim = store
+        .claim_for_bot("worker", Duration::from_secs(30), 821)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.operation_id, admission.operation_id);
+    assert!(store.begin_delivery_batch(&claim, 2).await.unwrap());
+    assert!(store.begin_delivery_unit(&claim, 0, 1).await.unwrap());
+    assert!(
+        store
+            .complete_delivery_unit(&claim, 0, &[70011])
+            .await
+            .unwrap()
+    );
+    assert!(store.begin_delivery_unit(&claim, 1, 1).await.unwrap());
+    assert!(
+        !store
+            .requeue_invalid_cache(&claim, 0, Uuid::new_v4())
+            .await
+            .unwrap()
+    );
+
+    let cancelled = request(73_102, 822, "https://example.com/cancel-recovery");
+    let admission = store.admit(&cancelled, "cancel-recovery", 1).await.unwrap();
+    let cancel_claim = store
+        .claim_for_bot("cancel-worker", Duration::from_secs(30), 822)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cancel_claim.operation_id, admission.operation_id);
+    assert!(store.begin_delivery_batch(&cancel_claim, 1).await.unwrap());
+    assert!(
+        store
+            .begin_delivery_unit(&cancel_claim, 0, 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .request_cancel(73_102, admission.operation_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .requeue_invalid_cache(&cancel_claim, 0, Uuid::new_v4())
+            .await
+            .unwrap()
+    );
+    store.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a fresh disposable PostgreSQL database"]
+async fn cache_lookup_rejects_corrupt_bounded_payload_as_a_whole() {
+    let store = store().await;
+    let request = request(73_201, 831, "https://example.com/corruption");
+    let claim = delivered_claim(&store, &request).await;
+    let media = CachedMedia::new(CachedMediaKind::Photo, "known-good-id".into(), 1).unwrap();
+    assert!(
+        store
+            .publish_media_cache(&claim, &[media], Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+    let key = yoink_storage::media_cache_key(&request).unwrap();
+    sqlx::query(include_str!("fixtures/corrupt_media_cache.sql"))
+        .bind(request.actor_id() as i64)
+        .bind(831_i64)
+        .bind(key.as_str())
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        store.lookup_media_cache(&request).await.unwrap_err(),
+        StoreError::InvalidStoredData
+    );
+    store.close().await;
+}

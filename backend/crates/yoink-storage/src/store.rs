@@ -80,11 +80,15 @@ impl Store {
         let has_delivery_batch_state: bool = relations
             .try_get("has_delivery_batch_state")
             .map_err(|_| StoreError::Schema)?;
+        let has_media_cache: bool = relations
+            .try_get("has_media_cache")
+            .map_err(|_| StoreError::Schema)?;
         if !has_migrations
             || !has_operations
             || !has_bot_progress
             || !has_delivery_units
             || !has_delivery_batch_state
+            || !has_media_cache
         {
             return Err(StoreError::Schema);
         }
@@ -200,6 +204,10 @@ impl Store {
         validate_key(idempotency_key)?;
         validate_policy(policy)?;
         let request_json = codec::encode(request)?;
+        let cache_key = request
+            .target()
+            .map(|_| crate::cache_key::media_cache_key(request))
+            .transpose()?;
         let mut tx = self.pool.begin().await.map_err(|_| StoreError::Database)?;
         sqlx::query(include_str!("../sql/admit_lock.sql"))
             .execute(&mut *tx)
@@ -250,6 +258,7 @@ impl Store {
             .bind(&request_json)
             .bind(policy.max_attempts as i32)
             .bind(policy.retry_delay.as_secs() as i32)
+            .bind(cache_key.as_ref().map(|key| key.as_str()))
             .fetch_one(&mut *tx)
             .await
             .map_err(|_| StoreError::Database)?
@@ -325,6 +334,9 @@ impl Store {
                 request: codec::decode(request)?,
                 cancel_requested: row
                     .try_get("cancel_requested")
+                    .map_err(|_| StoreError::Database)?,
+                cache_bypassed: row
+                    .try_get("cache_bypassed")
                     .map_err(|_| StoreError::Database)?,
                 lease_expires_at: row
                     .try_get::<DateTime<Utc>, _>("lease_expires_at")
@@ -504,6 +516,9 @@ impl Store {
                     .map_err(|_| StoreError::Database)? as u32,
                 cancel_requested: row
                     .try_get("cancel_requested")
+                    .map_err(|_| StoreError::Database)?,
+                cache_bypassed: row
+                    .try_get("cache_bypassed")
                     .map_err(|_| StoreError::Database)?,
                 available_at: row
                     .try_get("available_at")

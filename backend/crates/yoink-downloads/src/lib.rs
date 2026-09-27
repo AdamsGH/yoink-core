@@ -1,3 +1,4 @@
+mod cache;
 pub mod profile;
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
@@ -9,6 +10,7 @@ use tokio::{sync::mpsc, task::JoinSet, time};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use uuid::Uuid;
 use yoink_access::{AccessPolicy, AccessScope, Role};
+use yoink_domain::CachedMedia;
 use yoink_domain::{
     DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode, NetworkSelection,
 };
@@ -46,13 +48,14 @@ pub trait Delivery: Send + Sync {
         &self,
         target: DeliveryTarget,
         send_as_file: bool,
-        artifacts: Vec<ValidatedArtifact>,
+        artifacts: Vec<DeliveryArtifact>,
     ) -> DeliveryFuture<'_>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryError {
     Rejected,
+    InvalidFileId,
     RetryAfter(Duration),
     Unknown,
 }
@@ -61,12 +64,19 @@ impl std::fmt::Display for DeliveryError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Rejected => "delivery was rejected",
+            Self::InvalidFileId => "cached media identifier was rejected",
             Self::RetryAfter(_) => "delivery was rate limited",
             Self::Unknown => "delivery outcome is unknown",
         })
     }
 }
 impl std::error::Error for DeliveryError {}
+
+#[derive(Debug)]
+pub enum DeliveryArtifact {
+    Upload(ValidatedArtifact),
+    Cached(CachedMedia),
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DownloadConfig {
@@ -76,6 +86,26 @@ pub struct DownloadConfig {
     pub heartbeat_interval: Duration,
     pub poll_interval: Duration,
     pub delivery_timeout: Duration,
+    pub cache_ttl: Duration,
+}
+
+impl Default for DownloadConfig {
+    fn default() -> Self {
+        Self {
+            admission: AdmissionPolicy {
+                max_attempts: 3,
+                retry_delay: Duration::from_secs(2),
+                max_pending_global: 50,
+                max_pending_actor: 5,
+            },
+            concurrency: 2,
+            lease: Duration::from_secs(30),
+            heartbeat_interval: Duration::from_secs(5),
+            poll_interval: Duration::from_millis(100),
+            delivery_timeout: Duration::from_secs(20),
+            cache_ttl: Duration::from_secs(2_592_000),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -482,70 +512,104 @@ impl DownloadService {
                 return Ok(());
             }
         };
-        let worker_request = match worker_request(&claim, credentials) {
-            Ok(request) => request,
-            Err(()) => {
-                self.store.fail(&claim, false).await.map_err(map_store)?;
-                return Ok(());
-            }
-        };
-        let child_cancel = shutdown.child_token();
-        let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(None);
-        let execution = self.executor.execute_with_progress(
-            &worker_request,
-            child_cancel.clone(),
-            Some(progress_tx),
-        );
-        tokio::pin!(execution);
-        let mut progress_open = true;
-        let artifacts = loop {
-            tokio::select! {
-                result = &mut execution => match result {
-                    Ok(artifacts) => break artifacts,
-                    Err(error) => {
-                        child_cancel.cancel();
-                        drop(heartbeat);
-                        return self.finish_executor_error(&claim, error, shutdown.is_cancelled()).await;
-                    }
-                },
-                event = heartbeat_rx.recv() => {
-                    child_cancel.cancel();
-                    let _ = execution.await;
-                    drop(heartbeat);
-                    return self.finish_heartbeat_event(&claim, event).await;
-                },
-                changed = progress_rx.changed(), if progress_open => {
-                    if changed.is_ok() {
-                        let progress = *progress_rx.borrow_and_update();
-                        if let Some(progress) = progress {
-                            let stage = match progress.stage {
-                                yoink_worker_protocol::ProgressStage::Fetching => yoink_storage::ProgressStage::Fetching,
-                                yoink_worker_protocol::ProgressStage::Processing => yoink_storage::ProgressStage::Processing,
-                                yoink_worker_protocol::ProgressStage::WritingArtifact => yoink_storage::ProgressStage::WritingArtifact,
-                            };
-                            let percent = progress.percent.round().clamp(0.0, 100.0) as u8;
-                            if let Err(error) = self.store.update_progress(&claim, percent, stage).await {
-                                child_cancel.cancel();
-                                let _ = execution.await;
-                                drop(heartbeat);
-                                return if is_stale(&error) { Ok(()) } else { Err(map_store(error)) };
-                            }
-                        }
-                        continue;
-                    }
-                    progress_open = false;
-                },
-                _ = shutdown.cancelled() => {
-                    child_cancel.cancel();
-                    let _ = execution.await;
-                    drop(heartbeat);
-                    return match self.store.fail(&claim, true).await {
-                        Ok(()) => Ok(()),
-                        Err(error) if is_stale(&error) => Ok(()),
-                        Err(error) => Err(map_store(error)),
-                    };
+        let send_as_file = claim.request.params().send_as_file();
+        let mut cached_revision = None;
+        let cache_hit = if cache::cache_read_enabled(self.config.cache_ttl, claim.cache_bypassed) {
+            match self.store.lookup_media_cache(&claim.request).await {
+                Ok(Some(batch))
+                    if cache::valid_cached_media(
+                        &batch.media,
+                        self.executor.artifact_limits(),
+                        send_as_file,
+                    ) =>
+                {
+                    cached_revision = Some(batch.revision);
+                    Some(batch.media)
+                }
+                Ok(_) => None,
+                Err(_) => {
+                    tracing::warn!(
+                        operation_id = %claim.operation_id,
+                        "media cache lookup failed; falling back to download"
+                    );
+                    None
                 }
             }
+        } else {
+            None
+        };
+        let artifacts: Vec<DeliveryArtifact> = if let Some(media) = cache_hit {
+            media.into_iter().map(DeliveryArtifact::Cached).collect()
+        } else {
+            let worker_request = match worker_request(&claim, credentials) {
+                Ok(request) => request,
+                Err(()) => {
+                    self.store.fail(&claim, false).await.map_err(map_store)?;
+                    return Ok(());
+                }
+            };
+            let child_cancel = shutdown.child_token();
+            let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(None);
+            let execution = self.executor.execute_with_progress(
+                &worker_request,
+                child_cancel.clone(),
+                Some(progress_tx),
+            );
+            tokio::pin!(execution);
+            let mut progress_open = true;
+            let artifacts = loop {
+                tokio::select! {
+                    result = &mut execution => match result {
+                        Ok(artifacts) => break artifacts,
+                        Err(error) => {
+                            child_cancel.cancel();
+                            drop(heartbeat);
+                            return self.finish_executor_error(&claim, error, shutdown.is_cancelled()).await;
+                        }
+                    },
+                    event = heartbeat_rx.recv() => {
+                        child_cancel.cancel();
+                        let _ = execution.await;
+                        drop(heartbeat);
+                        return self.finish_heartbeat_event(&claim, event).await;
+                    },
+                    changed = progress_rx.changed(), if progress_open => {
+                        if changed.is_ok() {
+                            let progress = *progress_rx.borrow_and_update();
+                            if let Some(progress) = progress {
+                                let stage = match progress.stage {
+                                    yoink_worker_protocol::ProgressStage::Fetching => yoink_storage::ProgressStage::Fetching,
+                                    yoink_worker_protocol::ProgressStage::Processing => yoink_storage::ProgressStage::Processing,
+                                    yoink_worker_protocol::ProgressStage::WritingArtifact => yoink_storage::ProgressStage::WritingArtifact,
+                                };
+                                let percent = progress.percent.round().clamp(0.0, 100.0) as u8;
+                                if let Err(error) = self.store.update_progress(&claim, percent, stage).await {
+                                    child_cancel.cancel();
+                                    let _ = execution.await;
+                                    drop(heartbeat);
+                                    return if is_stale(&error) { Ok(()) } else { Err(map_store(error)) };
+                                }
+                            }
+                            continue;
+                        }
+                        progress_open = false;
+                    },
+                    _ = shutdown.cancelled() => {
+                        child_cancel.cancel();
+                        let _ = execution.await;
+                        drop(heartbeat);
+                        return match self.store.fail(&claim, true).await {
+                            Ok(()) => Ok(()),
+                            Err(error) if is_stale(&error) => Ok(()),
+                            Err(error) => Err(map_store(error)),
+                        };
+                    }
+                }
+            };
+            artifacts
+                .into_iter()
+                .map(DeliveryArtifact::Upload)
+                .collect()
         };
         if artifacts.is_empty() || artifacts.len() > 100 {
             drop(heartbeat);
@@ -568,9 +632,32 @@ impl DownloadService {
             }
             return Err(error);
         }
-        let units = plan_units(&artifacts);
-        let mut artifacts: Vec<Option<ValidatedArtifact>> =
+        let source_metadata = artifacts
+            .iter()
+            .map(|artifact| cache_metadata(artifact, send_as_file))
+            .collect::<Vec<_>>();
+        let units = plan_delivery_units(&artifacts, send_as_file);
+        let mut artifacts: Vec<Option<DeliveryArtifact>> =
             artifacts.into_iter().map(Some).collect();
+        match heartbeat_rx.try_recv() {
+            Ok(event) => {
+                drop(heartbeat);
+                return self.finish_heartbeat_event(&claim, Some(event)).await;
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                drop(heartbeat);
+                return self.finish_heartbeat_event(&claim, None).await;
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+        }
+        if shutdown.is_cancelled() {
+            drop(heartbeat);
+            return match self.store.fail(&claim, true).await {
+                Ok(()) => Ok(()),
+                Err(error) if is_stale(&error) => Ok(()),
+                Err(error) => Err(map_store(error)),
+            };
+        }
         if !self
             .store
             .begin_delivery_batch(&claim, artifacts.len() as u32)
@@ -595,6 +682,7 @@ impl DownloadService {
             })
             .ok_or(DownloadError::InvalidInput)?;
         let mut cancellation_seen = false;
+        let mut confirmed_file_ids = Vec::new();
         for (ordinal, unit) in units.into_iter().enumerate() {
             let ordinal = ordinal as u32;
             if shutdown.is_cancelled() || cancellation_seen {
@@ -671,8 +759,9 @@ impl DownloadService {
                             Ok(receipts) if receipts.len() == unit.len() && receipts.iter().all(|receipt| receipt.message_id > 0) && {
                                 let mut ids = std::collections::HashSet::with_capacity(receipts.len());
                                 receipts.iter().all(|receipt| ids.insert(receipt.message_id))
-                            } => DeliveryOutcome::Delivered(receipts.into_iter().map(|receipt| receipt.message_id).collect()),
+                            } => DeliveryOutcome::Delivered(receipts),
                             Err(DeliveryError::Rejected) => DeliveryOutcome::Rejected,
+                            Err(DeliveryError::InvalidFileId) => DeliveryOutcome::InvalidFileId,
                             Err(DeliveryError::RetryAfter(delay)) => DeliveryOutcome::RetryAfter(delay),
                             _ => DeliveryOutcome::Unknown,
                         };
@@ -685,32 +774,92 @@ impl DownloadService {
                     },
                 }
             };
-            let result = match outcome {
-                DeliveryOutcome::Delivered(ids) if !heartbeat_failed => self
+            let result = match (outcome, cached_revision) {
+                (DeliveryOutcome::InvalidFileId, Some(revision))
+                    if !heartbeat_failed && ordinal == 0 =>
+                {
+                    match self
+                        .store
+                        .requeue_invalid_cache(&claim, ordinal, revision)
+                        .await
+                    {
+                        Ok(true) => {
+                            drop(heartbeat);
+                            return Ok(());
+                        }
+                        Ok(false) => {
+                            if self
+                                .store
+                                .invalidate_media_cache(&claim.request, revision)
+                                .await
+                                .is_err()
+                            {
+                                tracing::warn!(
+                                    operation_id = %claim.operation_id,
+                                    "media cache invalidation failed"
+                                );
+                            }
+                            self.store
+                                .reject_delivery_unit(&claim, ordinal, None)
+                                .await
+                                .map(|accepted| (accepted, true, None))
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+                (DeliveryOutcome::Delivered(receipts), _) if !heartbeat_failed => self
                     .store
-                    .complete_delivery_unit(&claim, ordinal, &ids)
+                    .complete_delivery_unit(
+                        &claim,
+                        ordinal,
+                        &receipts
+                            .iter()
+                            .map(|receipt| receipt.message_id)
+                            .collect::<Vec<_>>(),
+                    )
                     .await
-                    .map(|accepted| (accepted, false)),
-                DeliveryOutcome::Delivered(_) => self
+                    .map(|accepted| (accepted, false, Some(receipts))),
+                (DeliveryOutcome::Delivered(_), _) => self
                     .store
                     .unknown_delivery_unit(&claim, ordinal)
                     .await
-                    .map(|accepted| (accepted, true)),
-                DeliveryOutcome::Rejected if !heartbeat_failed => self
-                    .store
-                    .reject_delivery_unit(&claim, ordinal, None)
-                    .await
-                    .map(|accepted| (accepted, true)),
-                DeliveryOutcome::RetryAfter(delay) if !heartbeat_failed => self
+                    .map(|accepted| (accepted, true, None)),
+                (DeliveryOutcome::InvalidFileId, Some(revision)) if !heartbeat_failed => {
+                    if ordinal > 0
+                        && self
+                            .store
+                            .invalidate_media_cache(&claim.request, revision)
+                            .await
+                            .is_err()
+                    {
+                        tracing::warn!(
+                            operation_id = %claim.operation_id,
+                            "media cache invalidation failed"
+                        );
+                    }
+                    self.store
+                        .reject_delivery_unit(&claim, ordinal, None)
+                        .await
+                        .map(|accepted| (accepted, true, None))
+                }
+                (DeliveryOutcome::Rejected | DeliveryOutcome::InvalidFileId, _)
+                    if !heartbeat_failed =>
+                {
+                    self.store
+                        .reject_delivery_unit(&claim, ordinal, None)
+                        .await
+                        .map(|accepted| (accepted, true, None))
+                }
+                (DeliveryOutcome::RetryAfter(delay), _) if !heartbeat_failed => self
                     .store
                     .reject_delivery_unit(&claim, ordinal, Some(delay))
                     .await
-                    .map(|accepted| (accepted, true)),
+                    .map(|accepted| (accepted, true, None)),
                 _ => self
                     .store
                     .unknown_delivery_unit(&claim, ordinal)
                     .await
-                    .map(|accepted| (accepted, true)),
+                    .map(|accepted| (accepted, true, None)),
             };
             match result {
                 Err(error) if is_stale(&error) => break,
@@ -718,9 +867,12 @@ impl DownloadService {
                     drop(heartbeat);
                     return Err(map_store(error));
                 }
-                Ok((false, _)) => break,
-                Ok((true, true)) => break,
-                Ok((true, false)) => {}
+                Ok((false, _, _)) => break,
+                Ok((true, true, _)) => break,
+                Ok((true, false, Some(receipts))) => {
+                    confirmed_file_ids.extend(receipts.into_iter().map(|receipt| receipt.file_id));
+                }
+                Ok((true, false, None)) => break,
             }
             if shutdown.is_cancelled() || cancellation_seen {
                 self.stop_delivery(
@@ -734,6 +886,30 @@ impl DownloadService {
                 .await?;
                 break;
             }
+        }
+        match heartbeat_rx.try_recv() {
+            Ok(HeartbeatEvent::Cancelled) => cancellation_seen = true,
+            Ok(HeartbeatEvent::Stale | HeartbeatEvent::Database)
+            | Err(mpsc::error::TryRecvError::Disconnected) => confirmed_file_ids.clear(),
+            Err(mpsc::error::TryRecvError::Empty) => {}
+        }
+        if cached_revision.is_none()
+            && !self.config.cache_ttl.is_zero()
+            && !shutdown.is_cancelled()
+            && !cancellation_seen
+            && confirmed_file_ids.len() == source_metadata.len()
+            && confirmed_file_ids.len() == artifacts.len()
+            && let Some(media) = cache::build_cached_media(&source_metadata, confirmed_file_ids)
+            && self
+                .store
+                .publish_media_cache(&claim, &media, self.config.cache_ttl)
+                .await
+                .is_err()
+        {
+            tracing::warn!(
+                operation_id = %claim.operation_id,
+                "media cache publication failed"
+            );
         }
         drop(heartbeat);
         Ok(())
@@ -845,39 +1021,47 @@ enum HeartbeatEvent {
     Database,
 }
 enum DeliveryOutcome {
-    Delivered(Vec<i64>),
+    Delivered(Vec<DeliveredMedia>),
+    InvalidFileId,
     Rejected,
     RetryAfter(Duration),
     Unknown,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum MediaCategory {
-    Visual,
-    Audio,
-    Document,
+fn cache_metadata(
+    artifact: &DeliveryArtifact,
+    send_as_file: bool,
+) -> Option<(yoink_domain::CachedMediaKind, u64)> {
+    match artifact {
+        DeliveryArtifact::Upload(upload) => Some(cache::upload_metadata(
+            upload.media_type.as_str(),
+            upload.size_bytes,
+            send_as_file,
+        )),
+        DeliveryArtifact::Cached(_) => None,
+    }
 }
 
-fn plan_units(artifacts: &[ValidatedArtifact]) -> Vec<Vec<usize>> {
-    let media_types = artifacts
+fn plan_delivery_units(artifacts: &[DeliveryArtifact], send_as_file: bool) -> Vec<Vec<usize>> {
+    let categories = artifacts
         .iter()
-        .map(|artifact| artifact.media_type.as_str())
+        .map(|artifact| match artifact {
+            DeliveryArtifact::Upload(upload) => {
+                cache::category(cache::upload_kind(upload.media_type.as_str(), send_as_file))
+            }
+            DeliveryArtifact::Cached(media) => cache::category(media.kind()),
+        })
         .collect::<Vec<_>>();
-    plan_media_types(&media_types)
+    plan_categories(&categories)
 }
 
-fn plan_media_types(media_types: &[&str]) -> Vec<Vec<usize>> {
-    let category = |media_type: &str| match media_type {
-        "image/jpeg" | "image/png" | "video/mp4" => MediaCategory::Visual,
-        "audio/mpeg" | "audio/mp4" => MediaCategory::Audio,
-        _ => MediaCategory::Document,
-    };
+fn plan_categories(categories: &[cache::MediaCategory]) -> Vec<Vec<usize>> {
     let mut result = Vec::new();
     let mut start = 0;
-    while start < media_types.len() {
-        let kind = category(media_types[start]);
+    while start < categories.len() {
+        let kind = categories[start];
         let mut end = start + 1;
-        while end < media_types.len() && end - start < 10 && category(media_types[end]) == kind {
+        while end < categories.len() && end - start < 10 && categories[end] == kind {
             end += 1;
         }
         result.push((start..end).collect());
@@ -1006,6 +1190,8 @@ fn validate_config(config: &DownloadConfig) -> Result<(), DownloadError> {
         || config.poll_interval < Duration::from_millis(10)
         || config.delivery_timeout.is_zero()
         || config.delivery_timeout > config.lease
+        || config.cache_ttl > Duration::from_secs(31_536_000)
+        || config.cache_ttl.subsec_nanos() != 0
         || config
             .heartbeat_interval
             .checked_mul(3)
@@ -1064,19 +1250,7 @@ mod tests {
     use super::*;
 
     fn valid_config() -> DownloadConfig {
-        DownloadConfig {
-            admission: AdmissionPolicy {
-                max_attempts: 3,
-                retry_delay: Duration::from_secs(2),
-                max_pending_global: 50,
-                max_pending_actor: 5,
-            },
-            concurrency: 2,
-            lease: Duration::from_secs(30),
-            heartbeat_interval: Duration::from_secs(5),
-            poll_interval: Duration::from_millis(100),
-            delivery_timeout: Duration::from_secs(20),
-        }
+        DownloadConfig::default()
     }
 
     #[test]
@@ -1122,6 +1296,20 @@ mod tests {
     #[test]
     fn accepts_valid_bounded_service_policy() {
         assert_eq!(validate_config(&valid_config()), Ok(()));
+        assert_eq!(validate_config(&DownloadConfig::default()), Ok(()));
+    }
+
+    #[test]
+    fn cache_ttl_accepts_zero_and_one_year_but_rejects_out_of_range_or_fractional() {
+        let mut config = valid_config();
+        config.cache_ttl = Duration::ZERO;
+        assert_eq!(validate_config(&config), Ok(()));
+        config.cache_ttl = Duration::from_secs(31_536_000);
+        assert_eq!(validate_config(&config), Ok(()));
+        config.cache_ttl = Duration::from_secs(31_536_001);
+        assert_eq!(validate_config(&config), Err(DownloadError::InvalidConfig));
+        config.cache_ttl = Duration::from_millis(1500);
+        assert_eq!(validate_config(&config), Err(DownloadError::InvalidConfig));
     }
 
     #[test]
@@ -1249,19 +1437,13 @@ mod tests {
 
     #[test]
     fn planner_groups_only_compatible_contiguous_items_within_ten() {
+        use cache::MediaCategory::{Audio, Document, Visual};
         assert_eq!(
-            plan_media_types(&[
-                "image/jpeg",
-                "video/mp4",
-                "audio/mpeg",
-                "audio/mp4",
-                "application/zip"
-            ]),
+            plan_categories(&[Visual, Visual, Audio, Audio, Document]),
             vec![vec![0, 1], vec![2, 3], vec![4]]
         );
-        let ten_visuals = vec!["image/png"; 11];
         assert_eq!(
-            plan_media_types(&ten_visuals),
+            plan_categories(&[Visual; 11]),
             vec![vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9], vec![10]]
         );
     }

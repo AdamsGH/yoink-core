@@ -61,8 +61,9 @@ Downloads are disabled unless explicitly enabled. Enabling them requires both ex
 | `YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS` | `[]` | JSON array of at most 16 HTTP(S) origins | Allowed proxy endpoints without credentials. Does not select a proxy or grant access to cookies. Request credentials travel separately in the stdin protocol. |
 | `YOINK_RUST_DOWNLOAD_PROXY_URL` | unset | HTTP(S) proxy URL, optionally with credentials | System fallback only when the user's stored proxy setting is enabled and no personal proxy is set. Treat as a secret. Its origin must also be explicitly allowed by `WORKER_ALLOWED_PROXY_ORIGINS`. Missing or invalid enabled proxy fails closed, never switches to direct access. |
 | `YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON` | `[]` | JSON array of at most 64 hostnames or IP addresses | Suppresses cookie selection for normalized domains and their subdomains. Entries cannot contain URL paths, credentials, ports, or whitespace. Does not bypass unsupported YouTube OAuth checks. |
-| `YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS` | `3` | 1 through 10 | Maximum queue attempts. |
+| `YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS` | `3` | 1 through 10 | Queue retry budget. A definitive invalid cached file ID before any confirmed delivery grants at most one compensating attempt and permanently bypasses cache for that operation. |
 | `YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS` | `5` | 0 through 300 seconds | Delay before retryable failures. |
+| `YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS` | `2592000` | 0 through 31536000 seconds | Lifetime of complete confirmed Telegram file-ID batches, partitioned by actor, bot, request parameters and credential versions. Zero disables reads and publication. Hits do not refresh expiry. Live authorization and current artifact limits still apply. |
 | `YOINK_RUST_DOWNLOAD_MAX_PENDING` | `100` | 1 through 10000 | Maximum pending operations globally. |
 | `YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER` | `3` | 1 through 1000 | Maximum pending operations for one actor. |
 

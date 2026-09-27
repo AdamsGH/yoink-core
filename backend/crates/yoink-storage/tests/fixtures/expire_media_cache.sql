@@ -1,0 +1,1 @@
+UPDATE yoink_runtime.media_cache SET expires_at = clock_timestamp() - INTERVAL '1 second' WHERE revision = $1;

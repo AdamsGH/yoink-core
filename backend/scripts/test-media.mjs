@@ -55,6 +55,9 @@ let mediaSendMode = 'success';
 let releaseUpload;
 let mediaSendGate;
 let mediaSendCalls = 0;
+let mediaUploadCalls = 0;
+let cachedMediaCalls = 0;
+const fixtureFileIds = new Set();
 
 function bounded(value) {
   return String(value).slice(-maxLog);
@@ -170,34 +173,59 @@ async function handleTelegram(req, res) {
   } else if (method === 'sendvideo' || method === 'senddocument') {
     mediaSendCalls++;
     const boundary = String(req.headers['content-type'] ?? '').match(/boundary=([^;]+)/)?.[1];
-    assert.ok(boundary, `${method} must use multipart/form-data`);
-    const delimiter = Buffer.from(`--${boundary}`);
-    const parts = [];
-    let offset = 0;
-    while ((offset = body.indexOf(delimiter, offset)) >= 0) {
-      const start = offset + delimiter.length;
-      if (body.subarray(start, start + 2).toString() === '--') break;
-      const headersEnd = body.indexOf(Buffer.from('\r\n\r\n'), start);
-      assert(headersEnd >= 0, 'multipart part must have headers');
-      let end = body.indexOf(delimiter, headersEnd + 4);
-      assert(end >= 0, 'multipart part must terminate at a boundary');
-      if (body.subarray(end - 2, end).toString() === '\r\n') end -= 2;
-      parts.push({ headers: body.subarray(start, headersEnd).toString('latin1'), value: body.subarray(headersEnd + 4, end) });
-      offset = end + 2;
+    let data;
+    let filePart;
+    if (boundary) {
+      const delimiter = Buffer.from(`--${boundary}`);
+      const parts = [];
+      let offset = 0;
+      while ((offset = body.indexOf(delimiter, offset)) >= 0) {
+        const start = offset + delimiter.length;
+        if (body.subarray(start, start + 2).toString() === '--') break;
+        const headersEnd = body.indexOf(Buffer.from('\r\n\r\n'), start);
+        assert(headersEnd >= 0, 'multipart part must have headers');
+        let end = body.indexOf(delimiter, headersEnd + 4);
+        assert(end >= 0, 'multipart part must terminate at a boundary');
+        if (body.subarray(end - 2, end).toString() === '\r\n') end -= 2;
+        parts.push({ headers: body.subarray(start, headersEnd).toString('latin1'), value: body.subarray(headersEnd + 4, end) });
+        offset = end + 2;
+      }
+      filePart = parts.find(part => /filename="media\.mp4"/.test(part.headers));
+      assert(parts.every(part => !/filename=/.test(part.headers) || part === filePart), 'unexpected upload filename');
+      data = Object.fromEntries(parts.filter(part => !/filename=/.test(part.headers)).map(part => {
+        const name = part.headers.match(/name="([^"]+)"/)?.[1];
+        assert(name, 'multipart field must have a name');
+        const text = part.value.toString('utf8');
+        return [name, text.startsWith('"') ? JSON.parse(text) : text];
+      }));
+    } else {
+      assert.match(String(req.headers['content-type']), /application\/json/);
+      data = JSON.parse(body.toString('utf8'));
     }
-    const filePart = parts.find(part => /filename="media\.mp4"/.test(part.headers));
-    assert.ok(filePart, `${method} must upload the validated bounded filename`);
-    assert(filePart.value.length > 100 && filePart.value.length <= 2 * 1024 * 1024, 'uploaded media must stay within fixture bounds');
-    const sourceMdat = isoBmffMdatPayloads(mediaBytes);
-    const uploadedMdat = isoBmffMdatPayloads(filePart.value);
-    assert(sourceMdat.length > 0 && uploadedMdat.length > 0, 'source and upload must contain mdat boxes');
-    assert.deepEqual(uploadedMdat, sourceMdat, 'remuxed media must preserve source mdat bytes');
-    const chatPart = parts.find(part => /name="chat_id"/.test(part.headers));
-    const chat = Number(chatPart?.value.toString('latin1'));
-    assert(Number.isSafeInteger(chat), 'multipart payload must carry chat_id');
-    const threadPart = parts.find(part => /name="message_thread_id"/.test(part.headers));
-    const threadId = threadPart ? Number(threadPart.value.toString('latin1')) : undefined;
-    telegramCalls.push({ method, status: mediaSendMode, uploadLength: filePart.value.length, receivedAt: performance.now() });
+    let cachedFileId;
+    if (filePart) {
+      mediaUploadCalls++;
+      assert(filePart.value.length > 100 && filePart.value.length <= 2 * 1024 * 1024, 'uploaded media must stay within fixture bounds');
+      const sourceMdat = isoBmffMdatPayloads(mediaBytes);
+      const uploadedMdat = isoBmffMdatPayloads(filePart.value);
+      assert(sourceMdat.length > 0 && uploadedMdat.length > 0, 'source and upload must contain mdat boxes');
+      assert.deepEqual(uploadedMdat, sourceMdat, 'remuxed media must preserve source mdat bytes');
+    } else {
+      cachedFileId = data[method === 'sendvideo' ? 'video' : 'document'];
+      assert(typeof cachedFileId === 'string' && fixtureFileIds.has(cachedFileId), 'cache must reuse a previously confirmed file ID');
+      cachedMediaCalls++;
+    }
+    const chat = Number(data.chat_id);
+    assert(Number.isSafeInteger(chat), 'media payload must carry chat_id');
+    const threadId = data.message_thread_id === undefined ? undefined : Number(data.message_thread_id);
+    telegramCalls.push({ method, status: mediaSendMode, cached: !!cachedFileId, uploadLength: filePart?.value.length ?? 0, receivedAt: performance.now() });
+    if (mediaSendMode === 'invalid-file-id-once') {
+      assert(cachedFileId, 'invalid-ID fixture must target a cached send');
+      mediaSendMode = 'success';
+      res.statusCode = 400;
+      res.end(JSON.stringify({ ok: false, error_code: 400, description: 'Bad Request: wrong file identifier/HTTP URL specified' }));
+      return;
+    }
     if (mediaSendMode === 'hold') {
       await mediaSendGate;
       res.destroy();
@@ -224,9 +252,12 @@ async function handleTelegram(req, res) {
       return;
     }
     const kind = method === 'sendvideo' ? 'video' : 'document';
+    const fileId = cachedFileId ?? `fixture-${kind}-${mediaSendCalls}`;
+    fixtureFileIds.add(fileId);
+    const fileSize = filePart?.value.length ?? mediaBytes.length;
     const attachment = kind === 'video'
-      ? { kind, value: { file_id: `fixture-video-${mediaSendCalls}`, file_unique_id: `fixture-video-unique-${mediaSendCalls}`, width: 160, height: 120, duration: 1, mime_type: 'video/mp4', file_size: filePart.value.length } }
-      : { kind, value: { file_id: `fixture-document-${mediaSendCalls}`, file_unique_id: `fixture-document-unique-${mediaSendCalls}`, file_name: 'media.mp4', mime_type: 'video/mp4', file_size: filePart.value.length } };
+      ? { kind, value: { file_id: fileId, file_unique_id: `fixture-video-unique-${mediaSendCalls}`, width: 160, height: 120, duration: 1, mime_type: 'video/mp4', file_size: fileSize } }
+      : { kind, value: { file_id: fileId, file_unique_id: `fixture-document-unique-${mediaSendCalls}`, file_name: 'media.mp4', mime_type: 'video/mp4', file_size: fileSize } };
     res.end(JSON.stringify({ ok: true, result: telegramMessage(123456, chat, null, 9000 + mediaSendCalls, attachment, threadId) }));
   } else {
     res.writeHead(404);
@@ -412,7 +443,7 @@ async function assertWorkspaceClean() {
   assert.equal((await docker(['exec', appName, 'sh', '-c', 'test -z "$(ls -A /tmp/yoink-work)" && echo clean'])).trim(), 'clean', 'worker workspace must be empty');
 }
 function safeTelegramSummary() {
-  return telegramCalls.map(({ method, data, status, uploadLength }) => ({ method, status, uploadLength, chat_id: data?.chat_id, text: data?.text }));
+  return telegramCalls.map(({ method, data, status, uploadLength, cached }) => ({ method, status, uploadLength, cached, chat_id: data?.chat_id, text: data?.text }));
 }
 async function fixtureDiagnostics() {
   const status = await docker(['inspect', '--format', '{{.State.Status}} exit={{.State.ExitCode}}', appName]).catch(error => `unavailable: ${error.message}`);
@@ -431,6 +462,7 @@ function assertNoSecret(output, where) {
   assert(!output.includes(proxyPassword), `${where} leaked the fake proxy password`);
   assert(!output.includes(proxyUser), `${where} leaked the fake proxy username`);
   assert(!output.includes(proxyAuth), `${where} leaked the encoded proxy credentials`);
+  assert(!/fixture-(video|document)-\d+/.test(output), `${where} leaked a Telegram file ID`);
 }
 async function waitUntilReady() {
   for (let i = 0; i < 100; i++) {
@@ -464,6 +496,8 @@ let apiPort;
 let sourcePort;
 let proxyPort;
 let databaseUrl;
+let downloadMaxAttempts;
+let cacheTtlSeconds;
 async function launchApp() {
   appContainerId = await startContainer(['--name', appName, '--label', 'yoink.fixture=media-app', '--network', 'host',
     '--read-only', '--tmpfs', '/tmp/yoink-work:rw,noexec,nosuid,size=256m,uid=10001,gid=10001,mode=0700',
@@ -479,7 +513,9 @@ async function launchApp() {
     '--env', 'YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=3', '--env', 'YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=1',
     '--env', 'YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1', '--env', 'YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env', 'YOINK_RUST_DOWNLOAD_CONCURRENCY=1', '--env', 'YOINK_RUST_DOWNLOAD_MAX_PENDING=3',
-    '--env', 'YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2', image]);
+    '--env', 'YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
+    ...(downloadMaxAttempts === undefined ? [] : ['--env', `YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
+    ...(cacheTtlSeconds === undefined ? [] : ['--env', `YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]), image]);
 }
 async function stopApp() {
   if (!appContainerId) return;
@@ -824,9 +860,95 @@ try {
     await psql('DELETE FROM public.dl_user_settings WHERE user_id = 42');
   }
 
+  // Cache entries survive process restart, but never replace live authorization.
+  const cacheUrl = `http://127.0.0.1:${sourcePort}/media?case=cache-reuse&key=${secretMarker}`;
+  async function cacheRequest(messageId, terminal = 'succeeded') {
+    const start = telegramCalls.length;
+    enqueue(42, 42, `/download ${cacheUrl}`, messageId);
+    const id = await operationForReply(start);
+    await waitFor(async () => (await queryJob(id)).startsWith(`${terminal}|`), `cache request ${terminal}`);
+    return id;
+  }
+  async function cacheRevision(id) {
+    return (await psql(`SELECT revision FROM yoink_runtime.media_cache WHERE cache_key = (SELECT cache_key FROM yoink_runtime.operations WHERE id = '${id}') AND expires_at > clock_timestamp()`)).trim();
+  }
+  const seededCache = await cacheRequest(800);
+  await waitFor(() => cacheRevision(seededCache), 'confirmed upload published as a complete cache entry');
+  downloadMaxAttempts = 1;
+  await restartApp();
+  let cacheSourcesBefore = mediaRequests;
+  let cacheUploadsBefore = mediaUploadCalls;
+  let cacheSendsBefore = cachedMediaCalls;
+  const reusedCache = await cacheRequest(801);
+  assert.equal(mediaRequests, cacheSourcesBefore, 'cache hit must not access the source');
+  assert.equal(mediaUploadCalls, cacheUploadsBefore, 'cache hit must not upload bytes');
+  assert.equal(cachedMediaCalls, cacheSendsBefore + 1, 'cache hit must send a confirmed Telegram file ID');
+  assert.equal(await psql(`SELECT attempt, cache_bypassed FROM yoink_runtime.operations WHERE id = '${reusedCache}'`), '1|f');
+
+  mediaSendMode = 'invalid-file-id-once';
+  const recoveredCache = await cacheRequest(802);
+  assert.equal(cachedMediaCalls, cacheSendsBefore + 2, 'invalid cached ID must be attempted only once');
+  assert.equal(mediaUploadCalls, cacheUploadsBefore + 1, 'definite invalid ID must fall back to a real upload');
+  assert(mediaRequests > cacheSourcesBefore, 'invalid ID fallback must run the worker');
+  assert.equal(await psql(`SELECT attempt, max_attempts, cache_bypassed FROM yoink_runtime.operations WHERE id = '${recoveredCache}'`), '2|2|t', 'single-attempt policy gets exactly one compensating cache attempt');
+  assert.equal(await psql(`SELECT string_agg(attempt::text || ':' || status, ',' ORDER BY attempt, ordinal) FROM yoink_runtime.delivery_units WHERE operation_id = '${recoveredCache}'`), '1:rejected,2:sent', 'cache fallback preserves rejected and confirmed journals');
+  await waitFor(() => cacheRevision(recoveredCache), 'fallback upload replaces the invalid cache revision');
+
+  cacheSourcesBefore = mediaRequests;
+  cacheUploadsBefore = mediaUploadCalls;
+  cacheSendsBefore = cachedMediaCalls;
+  mediaSendMode = 'api-ambiguous';
+  const unknownCache = await cacheRequest(803, 'delivery_unknown');
+  mediaSendMode = 'success';
+  await restartApp();
+  assert.equal(await queryJob(unknownCache), 'delivery_unknown||1', 'ambiguous cached send survives restart without requeue');
+  assert.equal(mediaRequests, cacheSourcesBefore, 'ambiguous cached send must not fall back to a worker');
+  assert.equal(mediaUploadCalls, cacheUploadsBefore, 'ambiguous cached send must not upload again');
+  assert.equal(cachedMediaCalls, cacheSendsBefore + 1, 'ambiguous cached send must not repeat');
+
+  mediaGateOpen = false;
+  const cachedBanSends = mediaSendCalls;
+  const cacheBlockerStart = telegramCalls.length;
+  enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/gated?case=cached-ban-blocker`, 804);
+  const cacheBlocker = await operationForReply(cacheBlockerStart);
+  await waitFor(() => gatedResponses.size > 0, 'blocker ahead of cache hit');
+  const bannedCacheStart = telegramCalls.length;
+  enqueue(42, 42, `/download ${cacheUrl}`, 805);
+  const bannedCache = await operationForReply(bannedCacheStart);
+  assert((await queryJob(bannedCache)).startsWith('queued|'));
+  await psql("UPDATE public.users SET ban_until = clock_timestamp() + INTERVAL '1 hour' WHERE id = 42");
+  mediaGateOpen = true;
+  for (const response of gatedResponses) {
+    response.writeHead(200, { 'content-type': 'video/mp4', 'content-length': mediaBytes.length });
+    response.end(mediaBytes);
+  }
+  await waitFor(async () => (await queryJob(cacheBlocker)).startsWith('failed|') && (await queryJob(bannedCache)).startsWith('failed|'), 'revoked actor cannot reuse cached media');
+  assert.equal(mediaSendCalls, cachedBanSends, 'cache hit must not bypass revoked authorization');
+  await psql('UPDATE public.users SET ban_until = NULL WHERE id = 42');
+
+  await psql(`UPDATE yoink_runtime.media_cache SET expires_at = clock_timestamp() - INTERVAL '1 second' WHERE cache_key = (SELECT cache_key FROM yoink_runtime.operations WHERE id = '${seededCache}')`);
+  cacheSourcesBefore = mediaRequests;
+  cacheUploadsBefore = mediaUploadCalls;
+  cacheSendsBefore = cachedMediaCalls;
+  const refreshedCache = await cacheRequest(806);
+  assert(mediaRequests > cacheSourcesBefore, 'expired cache must fetch fresh source media');
+  assert.equal(mediaUploadCalls, cacheUploadsBefore + 1);
+  assert.equal(cachedMediaCalls, cacheSendsBefore);
+  const beforeDisabled = await waitFor(() => cacheRevision(refreshedCache), 'fresh upload republishes expired cache');
+  cacheTtlSeconds = 0;
+  await restartApp();
+  cacheSourcesBefore = mediaRequests;
+  cacheUploadsBefore = mediaUploadCalls;
+  await cacheRequest(807);
+  assert(mediaRequests > cacheSourcesBefore, 'disabled cache must not reuse stored IDs');
+  assert.equal(mediaUploadCalls, cacheUploadsBefore + 1);
+  assert.equal(cachedMediaCalls, cacheSendsBefore);
+  assert.equal(await cacheRevision(refreshedCache), beforeDisabled, 'disabled cache must not publish or refresh entries');
+  await assertWorkspaceClean();
+
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(telegramCalls), 'Telegram output after failure scenarios');
-  console.log('Media slice acceptance passed all required real-worker, durable-delivery, access, retry, cancellation, quota, restart and redaction scenarios.');
+  console.log('Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios.');
 } catch (error) {
   console.error(`${redact(error.stack ?? error.message)}\n${await fixtureDiagnostics().catch(diagnosticError => `diagnostics unavailable: ${diagnosticError.message}`)}`);
   process.exitCode = 1;

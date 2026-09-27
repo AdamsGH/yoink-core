@@ -27,12 +27,12 @@ Admission loads supported stored user preferences and freezes opaque credential 
 
 The queue stores identifiers, ownership metadata and credential versions, not cookie content or proxy passwords. Idempotent replays retain the first admitted snapshot. Resolution rereads current credentials and access before execution and delivery. Changed, deleted or revoked references fail rather than selecting replacement credentials. Actual credentials enter the worker through its bounded stdin protocol.
 
-Cache identity includes actor, bot, media parameters and selected credential versions. This separates credential-dependent results, but persisted cache keys alone do not implement Telegram file-ID cache reuse.
+Cache identity includes actor, bot, media parameters and selected credential versions. Complete confirmed batches retain bounded Telegram file IDs in `yoink_runtime.media_cache`. A valid hit skips the worker but still checks current access, credentials and artifact limits, then uses the same fenced delivery journal as an upload. Hits do not extend TTL. A definitive invalid ID before any confirmed unit permits one cache-bypassing worker attempt. A failure after a confirmed prefix invalidates that cache revision without replaying the prefix. Ambiguous outcomes never trigger fallback.
 
 ## Ownership boundaries and limitations
 
 - Alembic owns existing `public` tables. Rust reads identity, settings and credentials without modifying them.
 - SQLx migrations own only `yoink_runtime`, including operations, attempts, leases and delivery outcomes. Startup checks compatibility and never migrates.
 - The fixed Python worker runs under container read-only/noexec controls and Landlock, with process-group termination, network policy and resource budgets. See the [media slice guide](media-slice.md).
-- Worker engines support video/audio processing, playlists, clips and galleries. Transport options and settings are not yet at full Python parity. Interactive menus, group/topic routing, cache reuse, unsupported provider authentication and other product modules remain unfinished.
+- Worker engines support video/audio processing, playlists, clips and galleries. Transport options and settings are not yet at full Python parity. Interactive menus, group/topic routing, unsupported provider authentication and other product modules remain unfinished.
 - This is neither a production cutover nor a performance claim. See [database ownership](../decisions/0001-database-ownership.md).

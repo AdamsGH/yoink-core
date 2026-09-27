@@ -33,6 +33,13 @@ impl MediaConfig {
             Duration::from_secs(number(read, "DOWNLOAD_HEARTBEAT_SECS", 5, 1, 100)?);
         let delivery_timeout =
             Duration::from_secs(number(read, "DELIVERY_TIMEOUT_SECS", 30, 1, 300)?);
+        let cache_ttl = Duration::from_secs(number(
+            read,
+            "DOWNLOAD_CACHE_TTL_SECS",
+            2_592_000,
+            0,
+            31_536_000,
+        )?);
         if lease < heartbeat_interval * 3 || delivery_timeout > lease {
             return Err(invalid(
                 "DOWNLOAD_LEASE_SECS",
@@ -159,6 +166,7 @@ impl MediaConfig {
                     10000,
                 )?),
                 delivery_timeout,
+                cache_ttl,
             },
         })
     }
@@ -235,6 +243,7 @@ mod tests {
     fn bounded_defaults_and_fixed_worker_program() {
         let config = parse(&[]).unwrap();
         assert_eq!(config.downloads.concurrency, 2);
+        assert_eq!(config.downloads.cache_ttl, Duration::from_secs(2_592_000));
         assert_eq!(
             config.executor.program,
             PathBuf::from("/usr/local/bin/yoink-worker-launcher")
@@ -259,6 +268,8 @@ mod tests {
             vec![("WORKER_PROCESSING_TIMEOUT_SECS", "121")],
             vec![("WORKER_PROCESSING_TIMEOUT_SECS", "0")],
             vec![("DOWNLOAD_MAX_ITEMS", "101")],
+            vec![("DOWNLOAD_CACHE_TTL_SECS", "-1")],
+            vec![("DOWNLOAD_CACHE_TTL_SECS", "31536001")],
             vec![("WORKER_ALLOWED_PROXY_ORIGINS", "[\"http://host:0\"]")],
             vec![("WORKER_ALLOWED_PRIVATE_ORIGINS", "[\"http://@host\"]")],
             vec![("WORKER_ALLOWED_PROXY_ORIGINS", "[\"http://host\\n.evil\"]")],
@@ -276,6 +287,24 @@ mod tests {
             assert!(!format!("{error:?} {error}").contains("secret"));
         }
         assert!(MediaConfig::from_lookup(&mut |_| Ok(None), Duration::from_secs(30)).is_err());
+    }
+
+    #[test]
+    fn cache_ttl_accepts_disabled_and_maximum_values() {
+        assert_eq!(
+            parse(&[("DOWNLOAD_CACHE_TTL_SECS", "0")])
+                .unwrap()
+                .downloads
+                .cache_ttl,
+            Duration::ZERO
+        );
+        assert_eq!(
+            parse(&[("DOWNLOAD_CACHE_TTL_SECS", "31536000")])
+                .unwrap()
+                .downloads
+                .cache_ttl,
+            Duration::from_secs(31_536_000)
+        );
     }
 
     #[test]

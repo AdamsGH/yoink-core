@@ -1,0 +1,1 @@
+SELECT cache_key FROM yoink_runtime.operations WHERE id = $1;
