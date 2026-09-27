@@ -1,0 +1,20 @@
+[package]
+name = "yoink-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+yoink-application.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "yoink-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+yoink-application.workspace = true
+yoink-http.workspace = true
+yoink-telegram.workspace = true
+
+[lints]
+workspace = true

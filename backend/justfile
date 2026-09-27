@@ -1,0 +1,25 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# All commands run from this experimental workspace, never the Python backend.
+default:
+    @just --list
+
+fmt:
+    cargo fmt --all -- --check
+
+lint:
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+
+test:
+    cargo test --workspace --locked
+
+build:
+    cargo build --workspace --locked
+
+smoke: build
+    node --test scripts/smoke.mjs
+
+verify: fmt lint test smoke
+
+run:
+    cargo run --locked -p yoink-server
