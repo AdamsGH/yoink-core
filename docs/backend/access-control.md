@@ -1,6 +1,6 @@
 # Access control and identity
 
-Policy rules are implemented as typed, I/O-free values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds a read-only snapshot from selected legacy tables. This is not finished authentication: no authenticated business endpoints currently consume these decisions.
+Policy rules are implemented as typed values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds read-only snapshots from selected legacy tables. The first media slice consumes these decisions, but this remains a narrow experimental workflow, not general authenticated business endpoints.
 
 ## Global roles and blocks
 
@@ -13,16 +13,16 @@ Feature grants are considered in this order:
 3. Registered feature's minimum role.
 4. Matching provider grant.
 
-Blocked principals and unknown/unregistered features do not gain access through these sources. The registered catalog is code-defined in `registered_features()`; a feature being registered does not imply it is wired to an authenticated endpoint.
+Blocked principals and unknown/unregistered features do not gain access through these sources. The media check uses the combined snapshot authorization API with the required `user` role and private scope, so blocked/restricted users do not qualify merely because the bot command parses.
 
-Use `IdentitySnapshot::authorize(policy, feature)` for the combined decision. It checks scope, blocks, and role before resolving a registered feature, and uses the context-local role for the feature threshold. `effective_grant` is a lower-level primitive whose `FeatureSpec` must come from the trusted catalog, not request input. Identity snapshots are request-local, not a cache of permanent access rights.
+## Media command authorization
 
-## Contextual access
+The Telegram adapter has a separate outer gate that silently ignores messages unless they are from the configured owner in a private chat. Enabling downloads does not change that gate or open commands to all users.
 
-An `AccessPolicy` states required role, allowed private/group scopes, and whether to enforce group-enabled and thread restrictions. A group-specific role override takes priority over auto-grant. Auto-grant applies only to a restricted principal in an enabled group, and only when the configured role is higher. Contextual elevation affects that one decision; it does not mutate the global principal or persist the legacy side effect of changing a user's role.
+The download service then performs fresh read-only identity checks at admission, immediately before a claimed operation starts, and again before artifact delivery. Each check applies the private-scope policy, minimum `user` role, role/block precedence, and database-time expiry semantics. A changed or unavailable identity cannot inherit a prior authorization decision. If the role becomes disallowed before execution or delivery, the operation is failed without starting that stage.
 
-Group thread policy permits a thread when its explicit matching rule is enabled, or, if no matching rule exists, when the group has no enabled thread restrictions. Group checks still obey global block precedence and policy scope restrictions.
+`/job <UUID>` and `/cancel <UUID>` are also actor-scoped in the service and storage layer. They cannot inspect or cancel another actor's operation. The current Telegram owner-only outer gate remains an additional restriction.
 
 ## Read-only snapshot boundary
 
-Identity lookup returns no snapshot for a missing user and fails on invalid IDs, unknown stored roles, or database read errors. Reads run in a read-only transaction and use database time for expiry decisions. The optional Insight provider requires a truthy legacy BYOK setting (`1`, `true`, `yes`, or `on`, case-insensitive), a non-null `tested_at`, and a null `test_error`. Merely saving a credential is insufficient. It exposes only a readiness boolean, never selects or returns credential contents. A ready BYOK setting is not proof that a feature endpoint or authenticated workflow exists.
+Identity lookup returns no snapshot for a missing user and fails on invalid IDs, unknown stored roles, or database read errors. Reads run in a read-only transaction and use database time for expiry decisions. The optional Insight provider requires a truthy legacy BYOK setting (`1`, `true`, `yes`, or `on`, case-insensitive), a non-null `tested_at`, and a null `test_error`. It exposes only a readiness boolean, never credential contents.

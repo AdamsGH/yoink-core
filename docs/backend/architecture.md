@@ -1,29 +1,31 @@
 # Architecture
 
-The Rust workspace in [backend/Cargo.toml](../../backend/Cargo.toml) is a parallel implementation stage, not a replacement backend. Current code provides typed access policy, read-only legacy identity snapshots, a PostgreSQL operation queue, and diagnostics adapters. It does not provide authenticated business endpoints or execute media jobs.
+The Rust workspace in [backend/Cargo.toml](../../backend/Cargo.toml) is a parallel implementation stage, not a replacement backend. The first opt-in media slice connects Telegram commands to identity authorization, PostgreSQL queueing, a container Python worker, and Telegram delivery. It remains experimental. Existing public/legacy tables are read-only, and there has been no production cutover.
 
 ## Runtime path
 
-The server binds HTTP diagnostics first and reports readiness only after configured dependencies initialize. Database and Telegram adapters are optional. When configured, database startup verifies the existing Rust schema without modifying it; Telegram initialization prepares the polling adapter. Readiness means these diagnostics dependencies initialized, not that business operations are available.
+The server binds HTTP diagnostics first and reports readiness only after configured dependencies initialize. Database and Telegram adapters are optional. If downloads are enabled, both are required; startup verifies the existing Rust schema without modifying it, checks for the expected container marker and fixed worker paths, prepares Telegram, then wires the download service into the Telegram adapter and starts queue workers.
 
 ```text
 yoink-server
   -> yoink-http            diagnostics
-  -> yoink-telegram        optional polling adapter
-  -> yoink-storage         optional SQLx PostgreSQL queue and schema check
-
-Library path, not yet connected to diagnostic adapters:
-yoink-identity -> yoink-access
-       |
-       +-> public identity tables (read only)
+  -> yoink-telegram        optional polling and owner-private commands
+  -> yoink-downloads       identity rechecks, PostgreSQL queue, worker lifecycle, delivery state
+       -> yoink-identity  read-only public identity snapshot
+       -> yoink-executor  fixed container Python process and artifact validation
+       -> yoink-storage   SQLx PostgreSQL queue and schema check
+       -> Telegram Bot API sendDocument
+  -> Python worker         progressive HTTP(S) video only
 ```
 
-Domain and application crates provide typed operation and service contracts used by these adapters; the queue does not execute a media worker. See [yoink-access](../../backend/crates/yoink-access/src/lib.rs), [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs), [yoink-storage](../../backend/crates/yoink-storage/src/lib.rs), and [server lifecycle](../../backend/crates/yoink-server/src/runtime.rs).
+The available media commands are `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The Telegram outer gate still admits commands only from the configured owner in private chat. Separately, the media service checks the requested owner's stored role and blocking status at admission, immediately before execution, and again before delivery.
 
-## Ownership boundaries
+## Ownership boundaries and limitations
 
-- Existing tables in `public` remain owned by the Python service's Alembic chain. Rust reads selected identity/configuration rows, without writing them.
-- Rust SQLx migrations own only `yoink_runtime`, including operation admission and lease state. Normal server startup checks schema compatibility and never migrates.
-- [Database ownership decision](../decisions/0001-database-ownership.md) is the contract for these boundaries.
+- Existing tables in `public` remain owned by the Python service's Alembic chain. Rust reads selected identity rows and does not write them.
+- Rust SQLx migrations own only `yoink_runtime`, including queue, attempts, leases, cancellation, quotas, and delivery outcomes. Normal server startup checks schema compatibility and never migrates.
+- The Python process runs at the fixed image path with explicit time, socket, output, artifact, and workspace budgets. Worker process-group termination and reaping are lifecycle controls, not a security sandbox. Use container isolation and resource limits; see the [media slice guide](media-slice.md).
+- The slice only handles one progressive HTTP(S) MP4 or WebM video artifact. It does not provide audio, playlists, HLS/DASH, multi-artifact jobs, clipping, subtitles, cookies, proxies, tdlight, or other plugins.
+- The implementation is experimental and is not a production cutover or a performance claim.
 
-This is not authenticated request processing, production cutover, or an end-to-end downloader. No achieved performance improvement is claimed.
+See [database ownership](../decisions/0001-database-ownership.md) for the boundary between Alembic and SQLx.

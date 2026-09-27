@@ -12,7 +12,11 @@ tokio-util.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 url.workspace = true
+uuid.workspace = true
 yoink-application.workspace = true
+yoink-downloads = { path = "../yoink-downloads" }
+yoink-executor = { path = "../yoink-executor" }
+yoink-storage.workspace = true
 
 [lints]
 workspace = true

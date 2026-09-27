@@ -1,4 +1,4 @@
-use std::{future::Future, io, time::Duration};
+use std::{future::Future, io, sync::Arc, time::Duration};
 
 use thiserror::Error;
 use tokio::{net::TcpListener, task::JoinSet, time::timeout};
@@ -32,12 +32,32 @@ pub enum ServerError {
     Task,
     #[error("shutdown deadline exceeded; remaining adapter tasks were aborted")]
     ShutdownTimeout,
+    #[error(
+        "media execution requires the experimental container image and valid bounded configuration"
+    )]
+    MediaStartup,
+    #[error("media execution service failed")]
+    Media,
 }
 
 pub async fn run(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
 ) -> Result<(), ServerError> {
+    if config.media.is_some() {
+        for path in [
+            "/.dockerenv",
+            "/usr/local/bin/python",
+            "/opt/yoink-worker/main.py",
+        ] {
+            if !tokio::fs::metadata(path)
+                .await
+                .is_ok_and(|metadata| metadata.is_file())
+            {
+                return Err(ServerError::MediaStartup);
+            }
+        }
+    }
     let system = SystemService::new(env!("CARGO_PKG_VERSION"));
     let cancel = CancellationToken::new();
     let listener = TcpListener::bind(config.http_bind)
@@ -45,9 +65,6 @@ pub async fn run(
         .map_err(|_| ServerError::Bind)?;
     let address = listener.local_addr().map_err(|_| ServerError::Bind)?;
     tokio::pin!(shutdown_signal);
-
-    // Serve diagnostics immediately with readiness false, including while an
-    // external dependency is slow. The same drain path owns startup failures.
     let mut tasks = JoinSet::new();
     let http_system = system.clone();
     let http_cancel = cancel.clone();
@@ -57,85 +74,121 @@ pub async fn run(
             .map_err(|_| ServerError::Http)
     });
     tracing::info!(%address, "HTTP diagnostics listening");
+    let owner_id = config.telegram.as_ref().map(|telegram| telegram.owner_id);
     let database_timings = config
         .database
         .as_ref()
         .map(|db| (db.health_interval, db.acquire_timeout));
-    let mut database = None;
+    let mut database: Option<Arc<yoink_storage::Store>> = None;
+    let mut downloads = None;
     let prepare = async {
         if let Some(database_config) = &config.database {
-            database = Some(
+            let store = Arc::new(
                 database_config
                     .connect()
                     .await
                     .map_err(|_| ServerError::DatabaseStartup)?,
             );
-            database
-                .as_ref()
-                .expect("database initialized")
+            database = Some(store.clone());
+            store
                 .verify_schema()
                 .await
                 .map_err(|_| ServerError::DatabaseStartup)?;
         }
-        match config.telegram {
-            Some(telegram) => TelegramAdapter::prepare(
-                telegram.token.into_inner(),
-                telegram.api_url,
-                telegram.owner_id,
-                system.clone(),
-                telegram.poll_timeout,
+        let mut telegram = match config.telegram {
+            Some(telegram) => Some(
+                TelegramAdapter::prepare(
+                    telegram.token.into_inner(),
+                    telegram.api_url,
+                    telegram.owner_id,
+                    system.clone(),
+                    telegram.poll_timeout,
+                )
+                .await
+                .map_err(|_| ServerError::TelegramStartup)?,
+            ),
+            None => None,
+        };
+        if let Some(media) = config.media {
+            let store = database.as_ref().ok_or(ServerError::MediaStartup)?;
+            let adapter = telegram.take().ok_or(ServerError::MediaStartup)?;
+            let identities = Arc::new(yoink_identity::IdentityStore::new(
+                store.pool().clone(),
+                owner_id.map(|id| id as i64),
+                false,
+            ));
+            let executor = yoink_executor::Executor::new(media.executor)
+                .map_err(|_| ServerError::MediaStartup)?;
+            let service = yoink_downloads::DownloadService::new(
+                store.clone(),
+                identities,
+                executor,
+                adapter.delivery(),
+                media.downloads,
             )
-            .await
-            .map(Some)
-            .map_err(|_| ServerError::TelegramStartup),
-            None => Ok(None),
+            .map_err(|_| ServerError::MediaStartup)?;
+            telegram = Some(adapter.with_downloads(service.clone()));
+            downloads = Some(service);
         }
+        Ok(telegram)
     };
     enum Startup {
-        Prepared(Result<Option<TelegramAdapter>, ServerError>),
+        Prepared(Result<Option<Box<TelegramAdapter>>, ServerError>),
         Stopped(Result<(), ServerError>),
     }
     let startup = tokio::select! {
-        result = timeout(config.startup_timeout, prepare) => Startup::Prepared(result.unwrap_or(Err(ServerError::StartupTimeout))),
+        result = timeout(config.startup_timeout, prepare) => Startup::Prepared(result.unwrap_or(Err(ServerError::StartupTimeout)).map(|adapter| adapter.map(Box::new))),
         signal = &mut shutdown_signal => Startup::Stopped(signal.map_err(|_| ServerError::Signal)),
         completed = tasks.join_next() => Startup::Stopped(Err(adapter_exit(completed))),
     };
-    if let Some(database) = database {
+    if let Some(database) = database.clone() {
         let database_cancel = cancel.clone();
         let (health_interval, health_timeout) =
             database_timings.expect("configured database timings");
         tasks.spawn(async move {
-            let result = loop {
+            loop {
                 tokio::select! {
                     biased;
-                    _ = database_cancel.cancelled() => break Ok(()),
+                    _ = database_cancel.cancelled() => return Ok(()),
                     _ = tokio::time::sleep(health_interval) => {
                         let check = tokio::select! {
                             biased;
-                            _ = database_cancel.cancelled() => break Ok(()),
+                            _ = database_cancel.cancelled() => return Ok(()),
                             check = timeout(health_timeout, database.verify_schema()) => check,
                         };
                         if !matches!(check, Ok(Ok(()))) {
-                            break Err(ServerError::DatabaseUnavailable);
+                            return Err(ServerError::DatabaseUnavailable);
                         }
                     }
                 }
-            };
-            database.close().await;
-            result
+            }
         });
     }
     let telegram = match startup {
         Startup::Prepared(Ok(telegram)) => telegram,
         Startup::Prepared(Err(error)) => {
-            return stop_and_drain(tasks, system, cancel, config.shutdown_timeout, Err(error))
-                .await;
+            let result =
+                stop_and_drain(tasks, system, cancel, config.shutdown_timeout, Err(error)).await;
+            return finish_database(result, database, config.shutdown_timeout).await;
         }
         Startup::Stopped(result) => {
-            return stop_and_drain(tasks, system, cancel, config.shutdown_timeout, result).await;
+            let result =
+                stop_and_drain(tasks, system, cancel, config.shutdown_timeout, result).await;
+            return finish_database(result, database, config.shutdown_timeout).await;
         }
     };
     let telegram_enabled = telegram.is_some();
+    let media_enabled = downloads.is_some();
+    if let Some(downloads) = downloads {
+        let media_cancel = cancel.clone();
+        tasks.spawn(async move {
+            downloads
+                .run(media_cancel)
+                .await
+                .map_err(|_| ServerError::Media)
+        });
+        system.set_downloads_enabled(true);
+    }
     if let Some(telegram) = telegram {
         let telegram_cancel = cancel.clone();
         tasks.spawn(async move {
@@ -146,15 +199,16 @@ pub async fn run(
         });
     }
     system.set_ready(true);
-    tracing::info!(%address, telegram_enabled, "diagnostic adapters ready; business modules remain planned");
-    supervise(
+    tracing::info!(%address, telegram_enabled, media_enabled, "diagnostic adapters ready");
+    let result = supervise(
         tasks,
         system,
         cancel,
         config.shutdown_timeout,
         shutdown_signal,
     )
-    .await
+    .await;
+    finish_database(result, database, config.shutdown_timeout).await
 }
 
 async fn supervise(
@@ -215,6 +269,21 @@ async fn stop_and_drain(
         }
     };
     initial.and(drained)
+}
+
+async fn finish_database(
+    result: Result<(), ServerError>,
+    database: Option<Arc<yoink_storage::Store>>,
+    deadline: Duration,
+) -> Result<(), ServerError> {
+    let closed = if let Some(database) = database {
+        timeout(deadline, database.close())
+            .await
+            .map_err(|_| ServerError::ShutdownTimeout)
+    } else {
+        Ok(())
+    };
+    result.and(closed)
 }
 
 #[cfg(test)]

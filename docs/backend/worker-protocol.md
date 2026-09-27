@@ -1,23 +1,23 @@
 # Worker protocol boundary
 
-[yoink-worker-protocol](../../backend/crates/yoink-worker-protocol/src/lib.rs) defines versioned JSON messages for isolated media and content executors. It does not launch processes or implement a worker transport yet.
+[yoink-worker-protocol](../../backend/crates/yoink-worker-protocol/src/lib.rs) defines versioned JSON request/event messages for media and content executors. The media executor is now connected to a fixed Python worker process, but the protocol crate itself does not launch workers.
 
-An operation is a validated request, not mutable Telegram conversation state. Worker messages carry a protocol version, operation UUID, and positive attempt number. Retries preserve operation identity and change the attempt fence. Consumers must reject results from an obsolete attempt rather than attaching them to whichever operation is currently active.
+An operation is a validated request, not mutable Telegram conversation state. Worker messages carry a protocol version, operation UUID, and positive attempt number. Retries preserve operation identity and change the attempt fence. The executor rejects results from an obsolete attempt.
 
 ## Decode and logging rules
 
 Use the crate's bounded frame encoder and decoder instead of deserializing envelopes directly with Serde. Frames are limited to 64 KiB, and envelope validation is part of the wire contract. A valid JSON object is not necessarily a valid worker message.
 
-Source URLs can contain private query parameters. They are redacted in Rust `Debug` output but necessarily remain in persisted requests and worker payloads. Do not log raw frames, serialized requests, or unfiltered worker stderr. Protocol validation does not make payloads safe to expose in telemetry.
+Source URLs can contain private query parameters. They are redacted in Rust `Debug` output but necessarily remain in persisted requests and worker payloads. Do not log raw frames, serialized requests, or unfiltered worker stderr. The worker suppresses stderr to protect source URLs and library diagnostics.
 
-## Artifact trust boundary
+## Implemented media contract
 
-Artifact paths are relative and lexically validated. That alone does not make them safe to open. The eventual consumer must enforce canonical workspace containment, reject symlink escapes, enforce byte limits, and clean up only files owned by that operation. A remote worker cannot authorize arbitrary host filesystem access by returning a path.
+The fixed worker accepts progressive HTTP(S) video and produces one validated MP4 or WebM artifact. Audio-only, content extraction, HLS/DASH, and adaptive streams are unsupported. The worker disables yt-dlp plugins and configuration, cookies, proxies, and external downloaders, and uses Python networking. It resolves and checks destination addresses including redirects to limit SSRF. Private, loopback, link-local, multicast, reserved, and IPv4-mapped private destinations are rejected by default. An exact HTTP(S) origin allowlist exception is intended only for trusted isolated operator fixtures. This destination guard is not a container sandbox and does not establish safety for future protocols.
 
-Network destination validation, DNS rebinding protection, redirect checks, subprocess deadlines, and cancellation are executor responsibilities. A syntactically valid HTTP URL is not an SSRF policy. The current contract does not promise those protections before the executor exists.
+The executor launches the fixed image worker, caps process runtime, socket timeout, stdout, artifact size, and total workspace bytes, validates protocol identity and terminal event, verifies workspace contents and artifact path without following symlinks, and accepts only MP4/WebM magic bytes. ffprobe validation has a deadline, bounded streamed stdout, and discarded stderr. Process-group termination and reaping provide lifecycle cleanup, not a security boundary. Container hardening is still required; see the [media slice guide](media-slice.md).
 
-## Persistence boundary
+## Artifact and persistence boundaries
 
-The [operation queue](persistence.md) fences database transitions using the operation, attempt, worker ID, random lease token, and live expiry. The wire operation/attempt identity is not a replacement for that lease. The Rust process owning the lease must validate messages before recording success or failure.
+Artifact paths are relative and validated beneath the per-attempt workspace. The consumer enforces canonical workspace containment, rejects symlink escapes, enforces byte limits, and cleans only its operation-owned files. A remote worker cannot authorize arbitrary host filesystem access by returning a path.
 
-Cancellation intent is not executor acknowledgement. Likewise, a worker result does not prove a downstream upload was recorded atomically. Recovery needs explicit handling of external effects and must not claim exactly-once delivery from PostgreSQL fencing alone.
+Network policy, subprocess deadlines, cancellation, and artifact checks are executor responsibilities. A syntactically valid HTTP URL is not sufficient by itself. The operation queue fences database transitions using operation, attempt, worker ID, random lease token, and live expiry. That fencing does not make external upload effects exactly once. See [persistence](persistence.md).

@@ -1,4 +1,5 @@
 mod config;
+mod media_config;
 mod runtime;
 
 use std::{future::Future, io, process::ExitCode};

@@ -1,0 +1,19 @@
+[package]
+name = "yoink-executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["process", "io-util", "fs"] }
+tokio-util.workspace = true
+yoink-worker-protocol.workspace = true
+thiserror.workspace = true
+tempfile = "3"
+rustix = { version = "1", features = ["fs", "process"] }
+serde_json.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

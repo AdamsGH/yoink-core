@@ -1,24 +1,33 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use uuid::Uuid;
 use yoink_domain::DownloadRequest;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum OperationStatus {
     Queued,
     Running,
+    Delivering,
+    #[serde(rename = "delivery_unknown")]
+    DeliveryUnknown,
     Succeeded,
     Failed,
     Cancelled,
 }
-
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmissionPolicy {
+    pub max_attempts: u32,
+    pub retry_delay: Duration,
+    pub max_pending_global: u32,
+    pub max_pending_actor: u32,
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Admission {
     pub operation_id: Uuid,
     pub created: bool,
 }
-
 #[derive(Clone)]
 pub struct Claim {
     pub operation_id: Uuid,
@@ -29,7 +38,6 @@ pub struct Claim {
     pub cancel_requested: bool,
     pub lease_expires_at: DateTime<Utc>,
 }
-
 impl std::fmt::Debug for Claim {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Claim")
@@ -43,6 +51,11 @@ impl std::fmt::Debug for Claim {
             .finish()
     }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LeaseHeartbeat {
+    pub lease_expires_at: DateTime<Utc>,
+    pub cancel_requested: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct OperationRecord {
@@ -52,6 +65,9 @@ pub struct OperationRecord {
     pub attempt: u32,
     pub max_attempts: u32,
     pub cancel_requested: bool,
+    pub available_at: DateTime<Utc>,
+    pub delivered_message_id: Option<i64>,
+    pub delivery_started_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

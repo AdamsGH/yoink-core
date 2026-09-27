@@ -63,6 +63,12 @@ async fn queue_persistence_contract() {
         history[0].try_get("version").unwrap(),
         history[0].try_get("checksum").unwrap(),
     );
+    let unknown_version: i64 = history
+        .last()
+        .unwrap()
+        .try_get::<i64, _>("version")
+        .unwrap()
+        + 1;
     sqlx::query(include_str!("fixtures/migration_corrupt_checksum.sql"))
         .bind(version)
         .execute(store.pool())
@@ -87,14 +93,14 @@ async fn queue_persistence_contract() {
         .await
         .unwrap();
     sqlx::query(include_str!("fixtures/migration_insert_unknown.sql"))
-        .bind(version + 1)
+        .bind(unknown_version)
         .bind(&checksum)
         .execute(store.pool())
         .await
         .unwrap();
     assert_eq!(store.verify_schema().await.unwrap_err(), StoreError::Schema);
     sqlx::query(include_str!("fixtures/migration_delete_unknown.sql"))
-        .bind(version + 1)
+        .bind(unknown_version)
         .execute(store.pool())
         .await
         .unwrap();
@@ -168,6 +174,7 @@ async fn queue_persistence_contract() {
         .bind("rolled-back")
         .bind(serde_json::json!({"probe": true}))
         .bind(1_i32)
+        .bind(0_i32)
         .execute(&mut *rollback_tx)
         .await
         .unwrap();
@@ -624,5 +631,431 @@ async fn queue_persistence_contract() {
         StoreError::InvalidStoredData
     );
 
+    store.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a fresh disposable PostgreSQL database"]
+async fn media_delivery_and_bounded_admission_contract() {
+    use yoink_storage::{AdmissionPolicy, OperationStatus};
+    let store = store().await;
+    store.migrate().await.unwrap();
+    sqlx::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let policy = AdmissionPolicy {
+        max_attempts: 2,
+        retry_delay: Duration::from_secs(2),
+        max_pending_global: 1,
+        max_pending_actor: 1,
+    };
+    let first = request(22001, "https://example.com/media-first");
+    let admitted = store
+        .admit_bounded(&first, "media-first", policy)
+        .await
+        .unwrap();
+    let replay = store
+        .admit_bounded(&first, "media-first", policy)
+        .await
+        .unwrap();
+    assert_eq!(replay.operation_id, admitted.operation_id);
+    assert!(!replay.created);
+    assert_eq!(
+        store
+            .admit_bounded(
+                &request(22001, "https://example.com/conflict"),
+                "media-first",
+                policy
+            )
+            .await
+            .unwrap_err(),
+        StoreError::Conflict
+    );
+    assert_eq!(
+        store
+            .admit_bounded(
+                &request(22002, "https://example.com/full"),
+                "full-global",
+                policy
+            )
+            .await
+            .unwrap_err(),
+        StoreError::Capacity
+    );
+    let race_one = request(22002, "https://example.com/race-one");
+    let race_two = request(22003, "https://example.com/race-two");
+    let (one, two) = tokio::join!(
+        store.admit_bounded(&race_one, "race-one", policy),
+        store.admit_bounded(&race_two, "race-two", policy)
+    );
+    assert_eq!(one.is_ok() as usize + two.is_ok() as usize, 0);
+
+    let claim = store
+        .claim("media-worker", Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.operation_id, admitted.operation_id);
+    store.begin_delivery(&claim).await.unwrap();
+    assert!(
+        store
+            .request_cancel(22001, admitted.operation_id)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .get(22001, admitted.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        OperationStatus::Delivering
+    );
+    store
+        .heartbeat(&claim, Duration::from_secs(10))
+        .await
+        .unwrap();
+    store.complete_delivery(&claim, 987654).await.unwrap();
+    let record = store
+        .get(22001, admitted.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.status, OperationStatus::Succeeded);
+    assert_eq!(record.delivered_message_id, Some(987654));
+    assert!(record.delivery_started_at.is_some());
+    assert_eq!(
+        store.complete_delivery(&claim, 987655).await.unwrap_err(),
+        StoreError::NotFoundOrStale
+    );
+    assert_eq!(
+        store.complete_delivery(&claim, 0).await.unwrap_err(),
+        StoreError::InvalidInput
+    );
+
+    let concurrent_policy = AdmissionPolicy {
+        max_attempts: 1,
+        retry_delay: Duration::ZERO,
+        max_pending_global: 1,
+        max_pending_actor: 1,
+    };
+    let concurrent_request_a = request(22009, "https://example.com/concurrent-a");
+    let concurrent_request_b = request(22010, "https://example.com/concurrent-b");
+    let (concurrent_a, concurrent_b) = tokio::join!(
+        store.admit_bounded(&concurrent_request_a, "concurrent-a", concurrent_policy),
+        store.admit_bounded(&concurrent_request_b, "concurrent-b", concurrent_policy)
+    );
+    assert_eq!(
+        concurrent_a.is_ok() as usize + concurrent_b.is_ok() as usize,
+        1
+    );
+    assert_eq!(
+        (concurrent_a.as_ref().err() == Some(&StoreError::Capacity)) as usize
+            + (concurrent_b.as_ref().err() == Some(&StoreError::Capacity)) as usize,
+        1
+    );
+    let queued_id = concurrent_a
+        .ok()
+        .or_else(|| concurrent_b.ok())
+        .unwrap()
+        .operation_id;
+    let queued_claim = store
+        .claim("concurrent-worker", Duration::from_secs(5))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(queued_claim.operation_id, queued_id);
+    store.fail(&queued_claim, false).await.unwrap();
+
+    let unbounded = AdmissionPolicy {
+        max_attempts: 1,
+        retry_delay: Duration::ZERO,
+        max_pending_global: 10,
+        max_pending_actor: 10,
+    };
+    let unknown = store
+        .admit_bounded(
+            &request(22004, "https://example.com/unknown"),
+            "unknown",
+            unbounded,
+        )
+        .await
+        .unwrap();
+    let unknown_claim = store
+        .claim("unknown-worker", Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unknown_claim.operation_id, unknown.operation_id);
+    store.begin_delivery(&unknown_claim).await.unwrap();
+    let mut stale = unknown_claim.clone();
+    stale.lease_token = uuid::Uuid::new_v4();
+    assert_eq!(
+        store.delivery_unknown(&stale).await.unwrap_err(),
+        StoreError::NotFoundOrStale
+    );
+    store.delivery_unknown(&unknown_claim).await.unwrap();
+    assert_eq!(
+        store
+            .get(22004, unknown.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        OperationStatus::DeliveryUnknown
+    );
+    assert!(
+        store
+            .claim("no-replay-worker", Duration::from_secs(5))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let rejected = store
+        .admit_bounded(
+            &request(22011, "https://example.com/rejected"),
+            "rejected",
+            unbounded,
+        )
+        .await
+        .unwrap();
+    let rejected_claim = store
+        .claim("rejected-worker", Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rejected_claim.operation_id, rejected.operation_id);
+    store.begin_delivery(&rejected_claim).await.unwrap();
+    store.reject_delivery(&rejected_claim).await.unwrap();
+    assert_eq!(
+        store
+            .get(22011, rejected.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        OperationStatus::Failed
+    );
+    assert_eq!(
+        store.reject_delivery(&rejected_claim).await.unwrap_err(),
+        StoreError::NotFoundOrStale
+    );
+    assert!(
+        store
+            .claim("rejected-recovery-worker", Duration::from_secs(5))
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let interrupted = store
+        .admit_bounded(
+            &request(22012, "https://example.com/cancel-failure"),
+            "cancel-failure",
+            unbounded,
+        )
+        .await
+        .unwrap();
+    let interrupted_claim = store
+        .claim("cancel-failure-worker", Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(interrupted_claim.operation_id, interrupted.operation_id);
+    assert!(
+        !store
+            .heartbeat_state(&interrupted_claim, Duration::from_secs(10))
+            .await
+            .unwrap()
+            .cancel_requested
+    );
+    assert!(
+        store
+            .request_cancel(22012, interrupted.operation_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .heartbeat_state(&interrupted_claim, Duration::from_secs(10))
+            .await
+            .unwrap()
+            .cancel_requested
+    );
+    store.fail(&interrupted_claim, true).await.unwrap();
+    assert_eq!(
+        store
+            .get(22012, interrupted.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        OperationStatus::Cancelled
+    );
+
+    let expiry = store
+        .admit_bounded(
+            &request(22005, "https://example.com/expiry-unknown"),
+            "expiry-unknown",
+            unbounded,
+        )
+        .await
+        .unwrap();
+    let expiry_claim = store
+        .claim("expiry-worker", Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(expiry_claim.operation_id, expiry.operation_id);
+    store.begin_delivery(&expiry_claim).await.unwrap();
+    assert!(
+        store
+            .request_cancel(22005, expiry.operation_id)
+            .await
+            .unwrap()
+    );
+    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+        .bind(expiry.operation_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim("expiry-recovery-worker", Duration::from_secs(5))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .get(22005, expiry.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        OperationStatus::DeliveryUnknown
+    );
+
+    let retry_policy = AdmissionPolicy {
+        max_attempts: 2,
+        retry_delay: Duration::from_secs(2),
+        max_pending_global: 10,
+        max_pending_actor: 10,
+    };
+    let retry = store
+        .admit_bounded(
+            &request(22006, "https://example.com/backoff"),
+            "backoff",
+            retry_policy,
+        )
+        .await
+        .unwrap();
+    let retry_claim = store
+        .claim("backoff-worker", Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retry_claim.operation_id, retry.operation_id);
+    store.fail(&retry_claim, true).await.unwrap();
+    assert!(
+        store
+            .claim("backoff-worker", Duration::from_secs(5))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let second = store
+        .claim("backoff-worker", Duration::from_secs(5))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.operation_id, retry.operation_id);
+    store.fail(&second, false).await.unwrap();
+
+    let expiry_retry_policy = AdmissionPolicy {
+        max_attempts: 2,
+        retry_delay: Duration::from_secs(1),
+        max_pending_global: 10,
+        max_pending_actor: 10,
+    };
+    let expiry_retry = store
+        .admit_bounded(
+            &request(22012, "https://example.com/expiry-retry"),
+            "expiry-retry",
+            expiry_retry_policy,
+        )
+        .await
+        .unwrap();
+    let first_expiring_claim = store
+        .claim("expiry-retry-worker", Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_expiring_claim.operation_id, expiry_retry.operation_id);
+    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+        .bind(expiry_retry.operation_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim("expiry-retry-worker", Duration::from_secs(5))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let second_expiring_claim = store
+        .claim("expiry-retry-worker", Duration::from_secs(5))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        second_expiring_claim.operation_id,
+        expiry_retry.operation_id
+    );
+    assert_eq!(second_expiring_claim.attempt, 2);
+    store.fail(&second_expiring_claim, false).await.unwrap();
+
+    let actor_policy = AdmissionPolicy {
+        max_attempts: 1,
+        retry_delay: Duration::ZERO,
+        max_pending_global: 10,
+        max_pending_actor: 1,
+    };
+    store
+        .admit_bounded(
+            &request(22007, "https://example.com/actor-one"),
+            "actor-one",
+            actor_policy,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .admit_bounded(
+                &request(22007, "https://example.com/actor-two"),
+                "actor-two",
+                actor_policy
+            )
+            .await
+            .unwrap_err(),
+        StoreError::Capacity
+    );
+    assert!(
+        store
+            .admit_bounded(
+                &request(22008, "https://example.com/actor-isolated"),
+                "actor-isolated",
+                actor_policy
+            )
+            .await
+            .unwrap()
+            .created
+    );
     store.close().await;
 }

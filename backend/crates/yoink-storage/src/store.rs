@@ -11,7 +11,7 @@ use yoink_domain::DownloadRequest;
 use crate::{
     codec,
     error::StoreError,
-    model::{Admission, Claim, OperationRecord, OperationStatus},
+    model::{Admission, AdmissionPolicy, Claim, LeaseHeartbeat, OperationRecord, OperationStatus},
 };
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -72,7 +72,7 @@ impl Store {
             return Err(StoreError::Schema);
         }
 
-        let applied = sqlx::query("SELECT version, checksum, success FROM yoink_runtime._sqlx_migrations ORDER BY version")
+        let applied = sqlx::query(include_str!("../sql/verify_migration_history.sql"))
             .fetch_all(&self.pool)
             .await
             .map_err(|_| StoreError::Schema)?;
@@ -108,40 +108,81 @@ impl Store {
         idempotency_key: &str,
         max_attempts: u32,
     ) -> Result<Admission, StoreError> {
+        self.admit_bounded(
+            request,
+            idempotency_key,
+            AdmissionPolicy {
+                max_attempts,
+                retry_delay: Duration::ZERO,
+                max_pending_global: 1000,
+                max_pending_actor: 100,
+            },
+        )
+        .await
+    }
+
+    pub async fn admit_bounded(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+        policy: AdmissionPolicy,
+    ) -> Result<Admission, StoreError> {
         validate_key(idempotency_key)?;
-        if max_attempts == 0 || max_attempts > 100 {
-            return Err(StoreError::InvalidInput);
-        }
+        validate_policy(policy)?;
         let request_json = codec::encode(request)?;
         let mut tx = self.pool.begin().await.map_err(|_| StoreError::Database)?;
-        let inserted = sqlx::query(include_str!("../sql/admit_insert.sql"))
+        sqlx::query(include_str!("../sql/admit_lock.sql"))
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let existing = sqlx::query(include_str!("../sql/admit_existing.sql"))
             .bind(request.actor_id() as i64)
             .bind(idempotency_key)
-            .bind(&request_json)
-            .bind(max_attempts as i32)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|_| StoreError::Database)?;
-        let (id, created) = if let Some(row) = inserted {
-            (row.try_get("id").map_err(|_| StoreError::Database)?, true)
-        } else {
-            let row = sqlx::query(include_str!("../sql/admit_existing.sql"))
-                .bind(request.actor_id() as i64)
-                .bind(idempotency_key)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|_| StoreError::Database)?;
-            let existing: serde_json::Value =
+        if let Some(row) = existing {
+            let current: serde_json::Value =
                 row.try_get("request").map_err(|_| StoreError::Database)?;
-            if existing != request_json {
+            if current != request_json {
                 return Err(StoreError::Conflict);
             }
-            (row.try_get("id").map_err(|_| StoreError::Database)?, false)
-        };
+            let admission = Admission {
+                operation_id: row.try_get("id").map_err(|_| StoreError::Database)?,
+                created: false,
+            };
+            tx.commit().await.map_err(|_| StoreError::Database)?;
+            return Ok(admission);
+        }
+        let counts = sqlx::query(include_str!("../sql/admit_counts.sql"))
+            .bind(request.actor_id() as i64)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let global: i64 = counts
+            .try_get("global_count")
+            .map_err(|_| StoreError::Database)?;
+        let actor: i64 = counts
+            .try_get("actor_count")
+            .map_err(|_| StoreError::Database)?;
+        if global >= policy.max_pending_global as i64 || actor >= policy.max_pending_actor as i64 {
+            return Err(StoreError::Capacity);
+        }
+        let id = sqlx::query(include_str!("../sql/admit_insert.sql"))
+            .bind(request.actor_id() as i64)
+            .bind(idempotency_key)
+            .bind(&request_json)
+            .bind(policy.max_attempts as i32)
+            .bind(policy.retry_delay.as_secs() as i32)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| StoreError::Database)?
+            .try_get("id")
+            .map_err(|_| StoreError::Database)?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(Admission {
             operation_id: id,
-            created,
+            created: true,
         })
     }
 
@@ -191,6 +232,14 @@ impl Store {
         claim: &Claim,
         lease: Duration,
     ) -> Result<DateTime<Utc>, StoreError> {
+        Ok(self.heartbeat_state(claim, lease).await?.lease_expires_at)
+    }
+
+    pub async fn heartbeat_state(
+        &self,
+        claim: &Claim,
+        lease: Duration,
+    ) -> Result<LeaseHeartbeat, StoreError> {
         validate_claim(claim)?;
         validate_lease(lease)?;
         let row = sqlx::query(include_str!("../sql/heartbeat.sql"))
@@ -203,8 +252,14 @@ impl Store {
             .await
             .map_err(|_| StoreError::Database)?
             .ok_or(StoreError::NotFoundOrStale)?;
-        row.try_get("lease_expires_at")
-            .map_err(|_| StoreError::Database)
+        Ok(LeaseHeartbeat {
+            lease_expires_at: row
+                .try_get("lease_expires_at")
+                .map_err(|_| StoreError::Database)?,
+            cancel_requested: row
+                .try_get("cancel_requested")
+                .map_err(|_| StoreError::Database)?,
+        })
     }
 
     pub async fn complete(&self, claim: &Claim) -> Result<(), StoreError> {
@@ -292,6 +347,8 @@ impl Store {
             let status = match status.as_str() {
                 "queued" => OperationStatus::Queued,
                 "running" => OperationStatus::Running,
+                "delivering" => OperationStatus::Delivering,
+                "delivery_unknown" => OperationStatus::DeliveryUnknown,
                 "succeeded" => OperationStatus::Succeeded,
                 "failed" => OperationStatus::Failed,
                 "cancelled" => OperationStatus::Cancelled,
@@ -312,6 +369,15 @@ impl Store {
                 cancel_requested: row
                     .try_get("cancel_requested")
                     .map_err(|_| StoreError::Database)?,
+                available_at: row
+                    .try_get("available_at")
+                    .map_err(|_| StoreError::Database)?,
+                delivered_message_id: row
+                    .try_get("delivered_message_id")
+                    .map_err(|_| StoreError::Database)?,
+                delivery_started_at: row
+                    .try_get("delivery_started_at")
+                    .map_err(|_| StoreError::Database)?,
                 created_at: row
                     .try_get("created_at")
                     .map_err(|_| StoreError::Database)?,
@@ -321,6 +387,78 @@ impl Store {
             })
         })
         .transpose()
+    }
+
+    pub async fn begin_delivery(&self, claim: &Claim) -> Result<(), StoreError> {
+        validate_claim(claim)?;
+        let result = sqlx::query(include_str!("../sql/begin_delivery.sql"))
+            .bind(claim.operation_id)
+            .bind(claim.attempt as i32)
+            .bind(claim.lease_token)
+            .bind(&claim.worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFoundOrStale);
+        }
+        Ok(())
+    }
+
+    pub async fn complete_delivery(
+        &self,
+        claim: &Claim,
+        message_id: i32,
+    ) -> Result<(), StoreError> {
+        validate_claim(claim)?;
+        if message_id <= 0 {
+            return Err(StoreError::InvalidInput);
+        }
+        let result = sqlx::query(include_str!("../sql/complete_delivery.sql"))
+            .bind(claim.operation_id)
+            .bind(claim.attempt as i32)
+            .bind(claim.lease_token)
+            .bind(&claim.worker_id)
+            .bind(message_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFoundOrStale);
+        }
+        Ok(())
+    }
+
+    pub async fn delivery_unknown(&self, claim: &Claim) -> Result<(), StoreError> {
+        validate_claim(claim)?;
+        let result = sqlx::query(include_str!("../sql/delivery_unknown.sql"))
+            .bind(claim.operation_id)
+            .bind(claim.attempt as i32)
+            .bind(claim.lease_token)
+            .bind(&claim.worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFoundOrStale);
+        }
+        Ok(())
+    }
+
+    pub async fn reject_delivery(&self, claim: &Claim) -> Result<(), StoreError> {
+        validate_claim(claim)?;
+        let result = sqlx::query(include_str!("../sql/reject_delivery.sql"))
+            .bind(claim.operation_id)
+            .bind(claim.attempt as i32)
+            .bind(claim.lease_token)
+            .bind(&claim.worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::NotFoundOrStale);
+        }
+        Ok(())
     }
 }
 
@@ -363,4 +501,16 @@ fn validate_claim(claim: &Claim) -> Result<(), StoreError> {
     } else {
         Ok(())
     }
+}
+
+fn validate_policy(policy: AdmissionPolicy) -> Result<(), StoreError> {
+    if !(1..=100).contains(&policy.max_attempts)
+        || policy.retry_delay.subsec_nanos() != 0
+        || policy.retry_delay > Duration::from_secs(300)
+        || !(1..=10_000).contains(&policy.max_pending_global)
+        || !(1..=10_000).contains(&policy.max_pending_actor)
+    {
+        return Err(StoreError::InvalidInput);
+    }
+    Ok(())
 }

@@ -82,9 +82,16 @@ try {
   assert.ok(rejected, 'schema check must reject an unmigrated database');
   const absent = await command('docker', ['exec', name, 'psql', '-U', 'yoink_test', '-d', 'yoink_test', '-Atc', "SELECT to_regnamespace('yoink_runtime') IS NULL"]);
   assert.equal(absent.trim(), 't', 'schema check must not create schema');
-  // Keep DB suites serial so migrations and schema-corruption fixtures cannot overlap.
-  for (const crate of ['yoink-storage', 'yoink-identity']) {
-    const output = await command('cargo', ['test', '--locked', '-p', crate, '--', '--ignored', '--test-threads=1'], { env });
+  // The queue suite owns bootstrap from an absent runtime schema. Run it
+  // explicitly before media cases, then legacy identity and process checks.
+  // Serial execution also fences the deliberate schema-corruption fixtures.
+  const suites = [
+    ['yoink-storage', 'queue_persistence_contract'],
+    ['yoink-storage', 'media_delivery_and_bounded_admission_contract'],
+    ['yoink-identity', ''],
+  ];
+  for (const [crate, filter] of suites) {
+    const output = await command('cargo', ['test', '--locked', '-p', crate, filter, '--', '--ignored', '--test-threads=1'], { env });
     assert.match(output, /test result: ok\. [1-9][0-9]* passed;/, `${crate} must execute its database suite`);
     const passed = [...output.matchAll(/test result: ok\. (\d+) passed;/g)].reduce((sum, match) => sum + Number(match[1]), 0);
     console.log(`${crate}: ${passed} database contract suite passed.`);

@@ -57,6 +57,7 @@ pub struct Config {
     pub startup_timeout: Duration,
     pub shutdown_timeout: Duration,
     pub database: Option<DatabaseConfig>,
+    pub media: Option<crate::media_config::MediaConfig>,
 }
 
 #[derive(Debug, Error)]
@@ -66,7 +67,7 @@ pub struct ConfigError {
     reason: &'static str,
 }
 
-fn invalid(key: &str, reason: &'static str) -> ConfigError {
+pub(crate) fn invalid(key: &str, reason: &'static str) -> ConfigError {
     ConfigError {
         key: format!("{PREFIX}{key}"),
         reason,
@@ -95,8 +96,16 @@ impl Config {
             .parse()
             .map_err(|_| invalid("HTTP_BIND", "expected an IP address and port"))?;
         let startup_timeout = timeout(read("STARTUP_TIMEOUT_SECS")?, "STARTUP_TIMEOUT_SECS", 15)?;
-        let shutdown_timeout =
-            timeout(read("SHUTDOWN_TIMEOUT_SECS")?, "SHUTDOWN_TIMEOUT_SECS", 10)?;
+        let media_enabled = match read("DOWNLOADS_ENABLED")?.as_deref().unwrap_or("false") {
+            "true" => true,
+            "false" => false,
+            _ => return Err(invalid("DOWNLOADS_ENABLED", "expected true or false")),
+        };
+        let shutdown_timeout = timeout(
+            read("SHUTDOWN_TIMEOUT_SECS")?,
+            "SHUTDOWN_TIMEOUT_SECS",
+            if media_enabled { 60 } else { 10 },
+        )?;
         let enabled = match read("TELEGRAM_ENABLED")?.as_deref().unwrap_or("false") {
             "true" => true,
             "false" => false,
@@ -194,12 +203,27 @@ impl Config {
         } else {
             None
         };
+        let media = if media_enabled {
+            if telegram.is_none() || database.is_none() {
+                return Err(invalid(
+                    "DOWNLOADS_ENABLED",
+                    "requires explicit Telegram and database configuration",
+                ));
+            }
+            Some(crate::media_config::MediaConfig::from_lookup(
+                &mut read,
+                shutdown_timeout,
+            )?)
+        } else {
+            None
+        };
         Ok(Self {
             http_bind,
             telegram,
             startup_timeout,
             shutdown_timeout,
             database,
+            media,
         })
     }
 }

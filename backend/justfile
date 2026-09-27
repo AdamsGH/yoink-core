@@ -26,9 +26,23 @@ build:
 smoke: build
     node --test scripts/smoke.mjs
 
+# Python executes only in an isolated container. Its HTTP fixture uses loopback.
+test-worker:
+    docker run --rm --pull never --network none --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-backend:experimental -B -m unittest discover -s /worker -p 'test_*.py'
+
 # Requires local postgres:16-alpine and yoink/yoink:latest images. Owns its test DB.
 test-db: build
     node scripts/test-db.mjs
+
+# Opt-in image only, never changes the existing Compose deployment.
+build-media:
+    docker build -t yoink/rust-backend:experimental .
+
+# Disposable PostgreSQL, fixture Bot API and real container Python worker.
+test-media:
+    node scripts/test-media.mjs
+
+verify-media: build-media test-worker test-media
 
 check-docs:
     node scripts/check-docs.mjs
@@ -36,6 +50,7 @@ check-docs:
 check-scripts:
     node --check scripts/smoke.mjs
     node --check scripts/test-db.mjs
+    node --check scripts/test-media.mjs
     node --check scripts/check-docs.mjs
 
 verify: fmt lint test smoke check-scripts check-docs

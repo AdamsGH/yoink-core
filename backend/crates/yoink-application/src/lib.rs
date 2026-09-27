@@ -11,6 +11,7 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum ModuleStatus {
     Planned,
+    Experimental,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -32,6 +33,7 @@ pub struct SystemSnapshot {
 pub struct SystemService {
     version: Arc<str>,
     ready: Arc<AtomicBool>,
+    downloads_enabled: Arc<AtomicBool>,
 }
 
 impl SystemService {
@@ -39,11 +41,17 @@ impl SystemService {
         Self {
             version: Arc::from(version.into()),
             ready: Arc::new(AtomicBool::new(false)),
+            downloads_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn set_ready(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
+    }
+
+    /// Advertises only the implemented progressive-video slice, not download parity.
+    pub fn set_downloads_enabled(&self, enabled: bool) {
+        self.downloads_enabled.store(enabled, Ordering::Release);
     }
 
     pub fn snapshot(&self) -> SystemSnapshot {
@@ -54,7 +62,11 @@ impl SystemService {
                 .into_iter()
                 .map(|id| ModuleDescriptor {
                     id,
-                    status: ModuleStatus::Planned,
+                    status: if id == "downloads" && self.downloads_enabled.load(Ordering::Acquire) {
+                        ModuleStatus::Experimental
+                    } else {
+                        ModuleStatus::Planned
+                    },
                 })
                 .collect(),
         }

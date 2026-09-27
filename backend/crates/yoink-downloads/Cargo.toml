@@ -1,0 +1,21 @@
+[package]
+name = "yoink-downloads"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+yoink-access.workspace = true
+yoink-identity.workspace = true
+yoink-storage.workspace = true
+yoink-domain.workspace = true
+yoink-worker-protocol.workspace = true
+yoink-executor = { path = "../yoink-executor" }
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

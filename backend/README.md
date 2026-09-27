@@ -1,6 +1,6 @@
 # Rust backend
 
-Experimental parallel backend on `rewrite/rust-backend`. It is not a production replacement. The current workspace implements diagnostics, shared access policy, read-only legacy identity snapshots, and durable PostgreSQL operation admission and leases. Business adapters and media execution are not connected yet.
+Experimental parallel backend on `rewrite/rust-backend`. It is not a production replacement. The workspace implements diagnostics, shared access policy, read-only legacy identity snapshots, and a durable PostgreSQL queue. Opt-in owner-private Telegram commands now download a progressive MP4/WebM through a container-only Python worker and deliver it as a document. Audio, playlists, HLS, other product modules, and production cutover remain outside this slice.
 
 ## Start here
 
@@ -19,6 +19,8 @@ curl http://127.0.0.1:8088/health/live
 curl http://127.0.0.1:8088/health/ready
 curl http://127.0.0.1:8088/api/v1/system
 ```
+
+For the real media path and its delivery-uncertainty rules, see [the media slice guide](../docs/backend/media-slice.md). `just verify-media` builds the experimental image and tests the Python worker and full download-to-upload path against disposable PostgreSQL and a fixture Bot API.
 
 For the isolated PostgreSQL suite, see [development prerequisites and verification](../docs/backend/development.md). It uses disposable Docker fixtures, not the running application database. All Python work remains inside containers.
 
