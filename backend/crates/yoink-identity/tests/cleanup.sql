@@ -1,0 +1,7 @@
+-- Delete only rows owned by the yoink-identity integration fixture.
+DELETE FROM public.user_permissions WHERE user_id BETWEEN 8000000000011 AND 8000000000017;
+DELETE FROM public.insight_user_byok WHERE user_id BETWEEN 8000000000011 AND 8000000000017;
+DELETE FROM public.user_group_policies WHERE user_id BETWEEN 8000000000011 AND 8000000000017;
+DELETE FROM public.thread_policies WHERE group_id IN (-8000000000011, -8000000000012);
+DELETE FROM public.groups WHERE id IN (-8000000000011, -8000000000012);
+DELETE FROM public.users WHERE id BETWEEN 8000000000011 AND 8000000000017;

@@ -26,7 +26,42 @@ async fn main() -> ExitCode {
 }
 
 async fn execute() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let command = match args.as_slice() {
+        [] => "serve",
+        [arg] if matches!(arg.as_str(), "serve" | "migrate" | "check-schema") => arg.as_str(),
+        [arg] if matches!(arg.as_str(), "--help" | "-h") => {
+            println!(
+                "Usage: yoink-server [serve|migrate|check-schema]\nDatabase commands require YOINK_RUST_DATABASE_URL. Normal startup never migrates."
+            );
+            return Ok(());
+        }
+        _ => return Err("expected serve, migrate, check-schema or --help".into()),
+    };
     let config = config::Config::from_env()?;
+    if command != "serve" {
+        let database = config
+            .database
+            .as_ref()
+            .ok_or("YOINK_RUST_DATABASE_URL is required for database commands")?;
+        let store = tokio::time::timeout(config.startup_timeout, database.connect())
+            .await
+            .map_err(|_| "database connection deadline exceeded")??;
+        let result = tokio::time::timeout(config.startup_timeout, async {
+            if command == "migrate" {
+                store.migrate().await
+            } else {
+                store.verify_schema().await
+            }
+        })
+        .await;
+        tokio::time::timeout(config.shutdown_timeout, store.close())
+            .await
+            .map_err(|_| "database shutdown deadline exceeded")?;
+        result.map_err(|_| "database command deadline exceeded")??;
+        println!("database schema ready");
+        return Ok(());
+    }
     let shutdown = termination_signal()?;
     runtime::run(config, shutdown).await?;
     Ok(())

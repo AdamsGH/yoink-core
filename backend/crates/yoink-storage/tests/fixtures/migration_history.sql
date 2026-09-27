@@ -1,0 +1,1 @@
+SELECT version, checksum, success FROM yoink_runtime._sqlx_migrations ORDER BY version;

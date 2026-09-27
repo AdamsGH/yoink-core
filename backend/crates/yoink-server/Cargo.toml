@@ -14,6 +14,7 @@ tracing-subscriber.workspace = true
 url.workspace = true
 yoink-application.workspace = true
 yoink-http.workspace = true
+yoink-storage.workspace = true
 yoink-telegram.workspace = true
 
 [lints]

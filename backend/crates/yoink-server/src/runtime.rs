@@ -16,7 +16,11 @@ pub enum ServerError {
     Signal,
     #[error("Telegram initialization failed; verify the test token and Bot API endpoint")]
     TelegramStartup,
-    #[error("Telegram initialization exceeded the configured deadline")]
+    #[error("database initialization failed; verify connectivity and run explicit migrations")]
+    DatabaseStartup,
+    #[error("database health check failed; adapters have been stopped")]
+    DatabaseUnavailable,
+    #[error("dependency initialization exceeded the configured deadline")]
     StartupTimeout,
     #[error("HTTP adapter failed")]
     Http,
@@ -53,20 +57,35 @@ pub async fn run(
             .map_err(|_| ServerError::Http)
     });
     tracing::info!(%address, "HTTP diagnostics listening");
+    let database_timings = config
+        .database
+        .as_ref()
+        .map(|db| (db.health_interval, db.acquire_timeout));
+    let mut database = None;
     let prepare = async {
+        if let Some(database_config) = &config.database {
+            database = Some(
+                database_config
+                    .connect()
+                    .await
+                    .map_err(|_| ServerError::DatabaseStartup)?,
+            );
+            database
+                .as_ref()
+                .expect("database initialized")
+                .verify_schema()
+                .await
+                .map_err(|_| ServerError::DatabaseStartup)?;
+        }
         match config.telegram {
-            Some(telegram) => timeout(
-                config.startup_timeout,
-                TelegramAdapter::prepare(
-                    telegram.token.into_inner(),
-                    telegram.api_url,
-                    telegram.owner_id,
-                    system.clone(),
-                    telegram.poll_timeout,
-                ),
+            Some(telegram) => TelegramAdapter::prepare(
+                telegram.token.into_inner(),
+                telegram.api_url,
+                telegram.owner_id,
+                system.clone(),
+                telegram.poll_timeout,
             )
             .await
-            .map_err(|_| ServerError::StartupTimeout)?
             .map(Some)
             .map_err(|_| ServerError::TelegramStartup),
             None => Ok(None),
@@ -77,10 +96,35 @@ pub async fn run(
         Stopped(Result<(), ServerError>),
     }
     let startup = tokio::select! {
-        result = prepare => Startup::Prepared(result),
+        result = timeout(config.startup_timeout, prepare) => Startup::Prepared(result.unwrap_or(Err(ServerError::StartupTimeout))),
         signal = &mut shutdown_signal => Startup::Stopped(signal.map_err(|_| ServerError::Signal)),
         completed = tasks.join_next() => Startup::Stopped(Err(adapter_exit(completed))),
     };
+    if let Some(database) = database {
+        let database_cancel = cancel.clone();
+        let (health_interval, health_timeout) =
+            database_timings.expect("configured database timings");
+        tasks.spawn(async move {
+            let result = loop {
+                tokio::select! {
+                    biased;
+                    _ = database_cancel.cancelled() => break Ok(()),
+                    _ = tokio::time::sleep(health_interval) => {
+                        let check = tokio::select! {
+                            biased;
+                            _ = database_cancel.cancelled() => break Ok(()),
+                            check = timeout(health_timeout, database.verify_schema()) => check,
+                        };
+                        if !matches!(check, Ok(Ok(()))) {
+                            break Err(ServerError::DatabaseUnavailable);
+                        }
+                    }
+                }
+            };
+            database.close().await;
+            result
+        });
+    }
     let telegram = match startup {
         Startup::Prepared(Ok(telegram)) => telegram,
         Startup::Prepared(Err(error)) => {

@@ -12,11 +12,33 @@ impl SecretToken {
     pub fn into_inner(self) -> String {
         self.0
     }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Debug for SecretToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("[redacted]")
+    }
+}
+
+#[derive(Debug)]
+pub struct DatabaseConfig {
+    pub url: SecretToken,
+    pub max_connections: u32,
+    pub acquire_timeout: Duration,
+    pub health_interval: Duration,
+}
+
+impl DatabaseConfig {
+    pub async fn connect(&self) -> Result<yoink_storage::Store, yoink_storage::StoreError> {
+        yoink_storage::Store::connect(
+            self.url.as_str(),
+            self.max_connections,
+            self.acquire_timeout,
+        )
+        .await
     }
 }
 
@@ -34,6 +56,7 @@ pub struct Config {
     pub telegram: Option<TelegramConfig>,
     pub startup_timeout: Duration,
     pub shutdown_timeout: Duration,
+    pub database: Option<DatabaseConfig>,
 }
 
 #[derive(Debug, Error)]
@@ -121,11 +144,62 @@ impl Config {
         } else {
             None
         };
+        let database = if let Some(value) = read("DATABASE_URL")? {
+            let url = Url::parse(&value).map_err(|_| {
+                invalid(
+                    "DATABASE_URL",
+                    "expected a PostgreSQL URL with host and database",
+                )
+            })?;
+            if !matches!(url.scheme(), "postgres" | "postgresql")
+                || url.host_str().is_none()
+                || url.path().trim_matches('/').is_empty()
+                || url.fragment().is_some()
+                || value.chars().any(char::is_whitespace)
+            {
+                return Err(invalid(
+                    "DATABASE_URL",
+                    "expected a PostgreSQL URL with host and database",
+                ));
+            }
+            let max_connections = read("DATABASE_MAX_CONNECTIONS")?
+                .unwrap_or_else(|| "5".into())
+                .parse::<u32>()
+                .map_err(|_| {
+                    invalid(
+                        "DATABASE_MAX_CONNECTIONS",
+                        "expected an integer in range 1..=32",
+                    )
+                })?;
+            if !(1..=32).contains(&max_connections) {
+                return Err(invalid(
+                    "DATABASE_MAX_CONNECTIONS",
+                    "expected an integer in range 1..=32",
+                ));
+            }
+            Some(DatabaseConfig {
+                url: SecretToken(value),
+                max_connections,
+                acquire_timeout: timeout(
+                    read("DATABASE_ACQUIRE_TIMEOUT_SECS")?,
+                    "DATABASE_ACQUIRE_TIMEOUT_SECS",
+                    5,
+                )?,
+                health_interval: timeout(
+                    read("DATABASE_HEALTH_INTERVAL_SECS")?,
+                    "DATABASE_HEALTH_INTERVAL_SECS",
+                    5,
+                )?,
+            })
+        } else {
+            None
+        };
         Ok(Self {
             http_bind,
             telegram,
             startup_timeout,
             shutdown_timeout,
+            database,
         })
     }
 }
@@ -241,5 +315,46 @@ mod tests {
             assert!(validate_api_url(value).is_err());
         }
         assert!(validate_api_url("http://127.0.0.1:8082").is_ok());
+    }
+
+    #[test]
+    fn database_is_opt_in_and_redacted() {
+        assert!(
+            config(&[("database_url", "postgresql://legacy:secret@localhost/live")])
+                .unwrap()
+                .database
+                .is_none()
+        );
+        let parsed = config(&[(
+            "YOINK_RUST_DATABASE_URL",
+            "postgresql://user:db-sensitive@localhost/isolated",
+        )])
+        .unwrap();
+        assert!(!format!("{parsed:?}").contains("db-sensitive"));
+        let db = parsed.database.unwrap();
+        assert_eq!(db.max_connections, 5);
+        assert_eq!(db.acquire_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn invalid_database_configuration_is_rejected() {
+        for value in [
+            "",
+            "sqlite://localhost/test",
+            "postgresql://localhost/",
+            "postgresql://localhost/db#secret",
+            "postgresql://localhost/db name",
+        ] {
+            assert!(config(&[("YOINK_RUST_DATABASE_URL", value)]).is_err());
+        }
+        for value in ["0", "33", "invalid"] {
+            assert!(
+                config(&[
+                    ("YOINK_RUST_DATABASE_URL", "postgresql://localhost/test"),
+                    ("YOINK_RUST_DATABASE_MAX_CONNECTIONS", value)
+                ])
+                .is_err()
+            );
+        }
     }
 }

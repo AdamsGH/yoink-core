@@ -4,6 +4,13 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
+# Resolve new dependencies when intentionally updating Cargo.lock.
+fetch:
+    cargo fetch
+
+format:
+    cargo fmt --all
+
 fmt:
     cargo fmt --all -- --check
 
@@ -19,7 +26,28 @@ build:
 smoke: build
     node --test scripts/smoke.mjs
 
-verify: fmt lint test smoke
+# Requires local postgres:16-alpine and yoink/yoink:latest images. Owns its test DB.
+test-db: build
+    node scripts/test-db.mjs
+
+check-docs:
+    node scripts/check-docs.mjs
+
+check-scripts:
+    node --check scripts/smoke.mjs
+    node --check scripts/test-db.mjs
+    node --check scripts/check-docs.mjs
+
+verify: fmt lint test smoke check-scripts check-docs
+
+verify-db: verify test-db
 
 run:
     cargo run --locked -p yoink-server
+
+# Explicitly mutating. Requires a deliberately supplied isolated database URL.
+migrate:
+    cargo run --locked -p yoink-server -- migrate
+
+check-schema:
+    cargo run --locked -p yoink-server -- check-schema

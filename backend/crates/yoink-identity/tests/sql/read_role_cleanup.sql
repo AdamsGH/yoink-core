@@ -1,0 +1,10 @@
+REVOKE __ROLE__ FROM CURRENT_USER;
+REVOKE USAGE ON SCHEMA public FROM __ROLE__;
+REVOKE SELECT (id, role, language, ban_until) ON public.users FROM __ROLE__;
+REVOKE SELECT (user_id, plugin, feature, expires_at) ON public.user_permissions FROM __ROLE__;
+REVOKE SELECT (id, enabled, auto_grant_role) ON public.groups FROM __ROLE__;
+REVOKE SELECT (user_id, group_id, role_override) ON public.user_group_policies FROM __ROLE__;
+REVOKE SELECT (group_id, thread_id, enabled) ON public.thread_policies FROM __ROLE__;
+REVOKE SELECT (key, value) ON public.bot_settings FROM __ROLE__;
+REVOKE SELECT (user_id, tested_at, test_error) ON public.insight_user_byok FROM __ROLE__;
+DROP ROLE __ROLE__;
