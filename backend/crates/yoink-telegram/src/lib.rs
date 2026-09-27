@@ -23,6 +23,7 @@ use uuid::Uuid;
 use yoink_application::{ModuleStatus, SystemService};
 use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode};
 use yoink_downloads::{DownloadError, DownloadService};
+use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for};
 use yoink_storage::{Admission, OperationStatus};
 
 mod sender;
@@ -91,6 +92,7 @@ impl TelegramAdapter {
             return Err(TelegramError::BotInitializationFailed);
         }
 
+        catalog().map_err(|_| TelegramError::BotInitializationFailed)?;
         let mut bot = Bot::new(token);
         if let Some(api_url) = api_url {
             bot = bot.set_api_url(api_url);
@@ -293,61 +295,54 @@ fn has_owner_private_access(owner_id: u64, chat_is_private: bool, sender_id: Opt
     chat_is_private && sender_id == Some(owner_id)
 }
 
-#[derive(Clone, Copy)]
-enum Language {
-    English,
-    Russian,
-}
-
-fn language_for(code: Option<&str>) -> Language {
-    if code.is_some_and(|code| code.to_ascii_lowercase().starts_with("ru")) {
-        Language::Russian
-    } else {
-        Language::English
+fn translate(language: Language, key: Key, parameters: &[(&str, &str)]) -> String {
+    match catalog()
+        .map_err(CatalogError::clone)
+        .and_then(|catalog| catalog.render(language, key, parameters))
+    {
+        Ok(text) => text,
+        Err(error) => {
+            let category = match error {
+                CatalogError::Parse { .. } => "parse",
+                CatalogError::InvalidShape { .. } => "shape",
+                CatalogError::NonString { .. } => "non_string",
+                CatalogError::EmptyTranslation { .. } => "empty_translation",
+                CatalogError::MissingKey { .. } => "missing_key",
+                CatalogError::ExtraKey { .. } => "extra_key",
+                CatalogError::MalformedTemplate { .. } => "malformed_template",
+                CatalogError::PlaceholderMismatch { .. } => "placeholder_mismatch",
+                CatalogError::MissingParameter { .. } => "missing_parameter",
+                CatalogError::ExtraParameter { .. } => "extra_parameter",
+                CatalogError::DuplicateParameter { .. } => "duplicate_parameter",
+            };
+            tracing::warn!(key = key.as_str(), category, "Telegram translation failed");
+            format!("[{}]", key.as_str())
+        }
     }
 }
 
 fn response(command: Command, language: Language, system: &SystemService, enabled: bool) -> String {
-    match (language, command) {
-        (Language::English, Command::Start | Command::Help) if enabled => {
-            "Available diagnostics: /start, /help, /status. Experimental video only: /download <http(s) URL>, /job <id>, /cancel <id>.".to_owned()
-        }
-        (Language::Russian, Command::Start | Command::Help) if enabled => {
-            "Доступна диагностика: /start, /help, /status. Экспериментально, только видео: /download <http(s) URL>, /job <id>, /cancel <id>.".to_owned()
-        }
-        (Language::English, Command::Start | Command::Help) => {
-            "Available diagnostics: /start, /help, /status.".to_owned()
-        }
-        (Language::Russian, Command::Start | Command::Help) => {
-            "Доступна диагностика: /start, /help, /status.".to_owned()
-        }
-        (Language::English, Command::Status) => format_status(system, Language::English),
-        (Language::Russian, Command::Status) => format_status(system, Language::Russian),
-        (Language::English, Command::Invalid) if enabled => {
-            "Usage: /download <http(s) URL>, /job <id>, /cancel <id>.".to_owned()
-        }
-        (Language::Russian, Command::Invalid) if enabled => {
-            "Формат: /download <http(s) URL>, /job <id>, /cancel <id>.".to_owned()
-        }
-        (Language::English, Command::Invalid) => "Experimental downloads are unavailable.".to_owned(),
-        (Language::Russian, Command::Invalid) => "Экспериментальные загрузки недоступны.".to_owned(),
+    match command {
+        Command::Start | Command::Help if enabled => translate(language, Key::HelpEnabled, &[]),
+        Command::Start | Command::Help => translate(language, Key::HelpBasic, &[]),
+        Command::Status => format_status(system, language),
+        Command::Invalid if enabled => translate(language, Key::UsageDownload, &[]),
+        Command::Invalid => translate(language, Key::DownloadsUnavailable, &[]),
         _ => String::new(),
     }
 }
 
 fn format_status(system: &SystemService, language: Language) -> String {
     let snapshot = system.snapshot();
-    let readiness = if snapshot.ready {
-        match language {
-            Language::English => "ready",
-            Language::Russian => "готов",
-        }
-    } else {
-        match language {
-            Language::English => "not ready",
-            Language::Russian => "не готов",
-        }
-    };
+    let readiness = translate(
+        language,
+        if snapshot.ready {
+            Key::ReadinessReady
+        } else {
+            Key::ReadinessNotReady
+        },
+        &[],
+    );
     let planned = snapshot
         .modules
         .iter()
@@ -355,68 +350,46 @@ fn format_status(system: &SystemService, language: Language) -> String {
         .map(|module| module.id)
         .collect::<Vec<_>>()
         .join(", ");
-
-    match language {
-        Language::English => format!(
-            "Yoink {}: {}. Business modules are planned, not available: {}.",
-            snapshot.version, readiness, planned
-        ),
-        Language::Russian => format!(
-            "Yoink {}: {}. Бизнес-модули запланированы и пока недоступны: {}.",
-            snapshot.version, readiness, planned
-        ),
-    }
+    translate(
+        language,
+        Key::Status,
+        &[
+            ("version", &snapshot.version),
+            ("readiness", &readiness),
+            ("modules", &planned),
+        ],
+    )
 }
 
-fn download_error_response(error: DownloadError, language: Language) -> &'static str {
-    match (language, error) {
-        (Language::English, DownloadError::Denied) => "This operation is not allowed.",
-        (Language::Russian, DownloadError::Denied) => "Эта операция запрещена.",
-        (Language::English, DownloadError::Capacity) => {
-            "The download queue is full. Try again later."
+fn download_error_response(error: DownloadError, language: Language) -> String {
+    let key = match error {
+        DownloadError::Denied => Key::ErrorDenied,
+        DownloadError::Capacity => Key::ErrorCapacity,
+        DownloadError::Conflict => Key::ErrorConflict,
+        DownloadError::InvalidInput => Key::ErrorInvalidInput,
+        DownloadError::InvalidPreferences => Key::ErrorInvalidPreferences,
+        DownloadError::InvalidCredentials => Key::ErrorInvalidCredentials,
+        DownloadError::ProxyUnavailable => Key::ErrorProxyUnavailable,
+        DownloadError::UnsupportedAuthentication => Key::ErrorUnsupportedAuthentication,
+        DownloadError::ChangedCredentials => Key::ErrorChangedCredentials,
+        DownloadError::InvalidConfig => Key::ErrorInvalidConfig,
+        DownloadError::Database | DownloadError::Executor | DownloadError::Task => {
+            Key::ErrorOperation
         }
-        (Language::Russian, DownloadError::Capacity) => {
-            "Очередь загрузок заполнена. Попробуйте позже."
-        }
-        (Language::English, DownloadError::Conflict) => {
-            "This request conflicts with an existing operation."
-        }
-        (Language::Russian, DownloadError::Conflict) => {
-            "Этот запрос конфликтует с существующей операцией."
-        }
-        (Language::English, DownloadError::InvalidInput) => "The request is invalid.",
-        (Language::Russian, DownloadError::InvalidInput) => "Некорректный запрос.",
-        (Language::English, DownloadError::InvalidConfig) => {
-            "Downloads are temporarily unavailable."
-        }
-        (Language::Russian, DownloadError::InvalidConfig) => "Загрузки временно недоступны.",
-        (Language::English, DownloadError::Database) => "The operation could not be completed.",
-        (Language::Russian, DownloadError::Database) => "Не удалось выполнить операцию.",
-        (Language::English, DownloadError::Executor) => "The operation could not be completed.",
-        (Language::Russian, DownloadError::Executor) => "Не удалось выполнить операцию.",
-        (Language::English, DownloadError::Task) => "The operation could not be completed.",
-        (Language::Russian, DownloadError::Task) => "Не удалось выполнить операцию.",
-    }
+    };
+    translate(language, key, &[])
 }
 
-fn operation_status(status: OperationStatus, language: Language) -> &'static str {
-    match (language, status) {
-        (Language::English, OperationStatus::Queued) => "queued",
-        (Language::Russian, OperationStatus::Queued) => "в очереди",
-        (Language::English, OperationStatus::Running) => "running",
-        (Language::Russian, OperationStatus::Running) => "выполняется",
-        (Language::English, OperationStatus::Delivering) => "delivering",
-        (Language::Russian, OperationStatus::Delivering) => "отправляется",
-        (Language::English, OperationStatus::DeliveryUnknown) => "delivery could not be confirmed",
-        (Language::Russian, OperationStatus::DeliveryUnknown) => "не удалось подтвердить доставку",
-        (Language::English, OperationStatus::DeliveryPartial) => "partially delivered",
-        (Language::Russian, OperationStatus::DeliveryPartial) => "доставлено частично",
-        (Language::English, OperationStatus::Succeeded) => "succeeded",
-        (Language::Russian, OperationStatus::Succeeded) => "завершено",
-        (Language::English, OperationStatus::Failed) => "failed",
-        (Language::Russian, OperationStatus::Failed) => "ошибка",
-        (Language::English, OperationStatus::Cancelled) => "cancelled",
-        (Language::Russian, OperationStatus::Cancelled) => "отменено",
+fn operation_status(status: OperationStatus) -> Key {
+    match status {
+        OperationStatus::Queued => Key::StatusQueued,
+        OperationStatus::Running => Key::StatusRunning,
+        OperationStatus::Delivering => Key::StatusDelivering,
+        OperationStatus::DeliveryUnknown => Key::StatusDeliveryUnknown,
+        OperationStatus::DeliveryPartial => Key::StatusDeliveryPartial,
+        OperationStatus::Succeeded => Key::StatusSucceeded,
+        OperationStatus::Failed => Key::StatusFailed,
+        OperationStatus::Cancelled => Key::StatusCancelled,
     }
 }
 
@@ -427,43 +400,41 @@ fn operation_response(
     delivered_message_id: Option<i64>,
     language: Language,
 ) -> String {
-    let mut reply = match language {
-        Language::English => format!(
-            "Operation {id}: {} (attempt {attempt}).",
-            operation_status(status, language)
-        ),
-        Language::Russian => format!(
-            "Операция {id}: {} (попытка {attempt}).",
-            operation_status(status, language)
-        ),
-    };
+    let id = id.to_string();
+    let status_text = translate(language, operation_status(status), &[]);
+    let mut reply = translate(
+        language,
+        Key::Operation,
+        &[
+            ("id", &id),
+            ("status", &status_text),
+            ("attempt", &attempt.to_string()),
+        ],
+    );
     if status == OperationStatus::DeliveryUnknown {
-        reply.push_str(match language {
-            Language::English => {
-                " Delivery could not be confirmed. Check the chat before submitting again."
-            }
-            Language::Russian => {
-                " Не удалось подтвердить доставку. Проверьте чат перед повторной отправкой."
-            }
-        });
+        reply.push_str(&translate(language, Key::DeliveryUnconfirmed, &[]));
     }
     if let Some(message_id) = delivered_message_id {
-        reply.push_str(&match language {
-            Language::English => format!(" Delivered message: {message_id}."),
-            Language::Russian => format!(" Сообщение доставлено: {message_id}."),
-        });
+        reply.push_str(&translate(
+            language,
+            Key::DeliveredMessage,
+            &[("id", &message_id.to_string())],
+        ));
     }
     reply
 }
 
 fn admitted_response(admission: Admission, language: Language) -> String {
-    let replay = match (language, !admission.created) {
-        (Language::English, true) => " Existing operation",
-        (Language::Russian, true) => " Существующая операция",
-        (Language::English, false) => " Operation created",
-        (Language::Russian, false) => " Операция создана",
+    let key = if admission.created {
+        Key::OperationCreated
+    } else {
+        Key::ExistingOperation
     };
-    format!("{replay}: {}.", admission.operation_id)
+    translate(
+        language,
+        key,
+        &[("id", &admission.operation_id.to_string())],
+    )
 }
 
 async fn handle_message(
@@ -498,11 +469,7 @@ async fn handle_message(
             response(command, language, &system, downloads.is_some())
         }
         Command::Download(_) | Command::Job(_) | Command::Cancel(_) if downloads.is_none() => {
-            match language {
-                Language::English => "Experimental downloads are unavailable.",
-                Language::Russian => "Экспериментальные загрузки недоступны.",
-            }
-            .to_owned()
+            translate(language, Key::DownloadsUnavailable, &[])
         }
         Command::Download(url) => {
             let Some(service) = downloads.as_ref() else {
@@ -553,10 +520,11 @@ async fn handle_message(
                 return Ok(());
             };
             match service.cancel(owner_id, id).await {
-                Ok(true) => match language {
-                    Language::English => format!("Cancellation requested for operation {id}."),
-                    Language::Russian => format!("Запрошена отмена операции {id}."),
-                },
+                Ok(true) => translate(
+                    language,
+                    Key::CancellationRequested,
+                    &[("id", &id.to_string())],
+                ),
                 Ok(false) => unknown_operation(language),
                 Err(error) => download_error_response(error, language).to_owned(),
             }
@@ -570,11 +538,7 @@ async fn handle_message(
 }
 
 fn unknown_operation(language: Language) -> String {
-    match language {
-        Language::English => "Operation not found.",
-        Language::Russian => "Операция не найдена.",
-    }
-    .to_owned()
+    translate(language, Key::OperationNotFound, &[])
 }
 
 #[cfg(test)]
@@ -651,6 +615,8 @@ mod tests {
     fn maps_russian_language_codes_and_defaults_to_english() {
         assert!(matches!(language_for(Some("ru")), Language::Russian));
         assert!(matches!(language_for(Some("RU-ru")), Language::Russian));
+        assert!(matches!(language_for(Some("ru-RU")), Language::Russian));
+        assert!(matches!(language_for(Some("en-US")), Language::English));
         assert!(matches!(language_for(Some("en")), Language::English));
         assert!(matches!(language_for(None), Language::English));
     }
@@ -726,6 +692,36 @@ mod tests {
         assert_eq!(
             download_error_response(DownloadError::Task, Language::Russian),
             "Не удалось выполнить операцию."
+        );
+    }
+
+    #[test]
+    fn every_download_error_has_english_and_russian_user_text() {
+        let errors = [
+            DownloadError::Denied,
+            DownloadError::Capacity,
+            DownloadError::Conflict,
+            DownloadError::InvalidInput,
+            DownloadError::InvalidPreferences,
+            DownloadError::InvalidCredentials,
+            DownloadError::ProxyUnavailable,
+            DownloadError::UnsupportedAuthentication,
+            DownloadError::ChangedCredentials,
+            DownloadError::InvalidConfig,
+            DownloadError::Database,
+            DownloadError::Executor,
+            DownloadError::Task,
+        ];
+        for error in errors {
+            let en = download_error_response(error, Language::English);
+            let ru = download_error_response(error, Language::Russian);
+            assert!(!en.is_empty(), "English response missing for {error:?}");
+            assert!(!ru.is_empty(), "Russian response missing for {error:?}");
+            assert_ne!(en, ru, "locales unexpectedly match for {error:?}");
+        }
+        assert_eq!(
+            download_error_response(DownloadError::ProxyUnavailable, Language::English),
+            "Proxy is enabled, but no proxy is configured. Configure one or disable proxy use."
         );
     }
 

@@ -50,6 +50,10 @@ inspect-worker-symbol module symbol='':
 test-storage-db:
     node scripts/test-db.mjs --storage-only
 
+# Read-only legacy profile/credential contracts without rebuilding transport adapters.
+test-profile-db:
+    node scripts/test-db.mjs --profiles-only
+
 # Requires local postgres:16-alpine and yoink/yoink:latest images. Owns its test DB.
 test-db: build
     node scripts/test-db.mjs

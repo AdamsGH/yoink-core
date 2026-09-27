@@ -129,7 +129,12 @@ pub async fn run(
                 adapter.delivery(),
                 media.downloads,
             )
-            .map_err(|_| ServerError::MediaStartup)?;
+            .map_err(|_| ServerError::MediaStartup)?
+            .with_network_config(media.network);
+            service
+                .check_profile_schema()
+                .await
+                .map_err(|_| ServerError::MediaStartup)?;
             telegram = Some(adapter.with_downloads(service.clone()));
             downloads = Some(service);
         }

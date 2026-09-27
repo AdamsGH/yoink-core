@@ -1,0 +1,1 @@
+SELECT user_id, quality, codec, container, proxy_enabled, proxy_url, keyboard, subs_enabled, subs_auto, subs_always_ask, subs_lang, split_size, nsfw_blur, mediainfo, send_as_file, audio_codec, gallery_zip, use_pool_cookies, youtube_auth_mode, dm_topic_thread_id, args_json, updated_at FROM public.dl_user_settings LIMIT 0;

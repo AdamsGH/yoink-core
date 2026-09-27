@@ -6,7 +6,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 use uuid::Uuid;
-use yoink_domain::DownloadRequest;
+use yoink_domain::{DownloadRequest, NetworkSelection};
 
 use crate::{
     codec,
@@ -138,11 +138,64 @@ impl Store {
         .await
     }
 
+    /// Replay the caller's unchanged request without resolving current credentials.
+    /// Network selection belongs to the first admitted snapshot, not caller intent.
+    pub async fn replay_network_admission(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+    ) -> Result<Option<Admission>, StoreError> {
+        validate_key(idempotency_key)?;
+        if request.network() != &NetworkSelection::NONE {
+            return Err(StoreError::InvalidInput);
+        }
+        let row = sqlx::query(include_str!("../sql/admit_existing.sql"))
+            .bind(request.actor_id() as i64)
+            .bind(idempotency_key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let current = codec::decode(row.try_get("request").map_err(|_| StoreError::Database)?)?;
+        if without_network(&current)? != *request {
+            return Err(StoreError::Conflict);
+        }
+        Ok(Some(Admission {
+            operation_id: row.try_get("id").map_err(|_| StoreError::Database)?,
+            created: false,
+        }))
+    }
+
+    /// Atomically keep the first network snapshot when identical raw admissions race.
+    /// All non-network fields remain part of the idempotency contract.
+    pub async fn admit_network_snapshot(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+        policy: AdmissionPolicy,
+    ) -> Result<Admission, StoreError> {
+        self.admit_inner(request, idempotency_key, policy, true)
+            .await
+    }
+
     pub async fn admit_bounded(
         &self,
         request: &DownloadRequest,
         idempotency_key: &str,
         policy: AdmissionPolicy,
+    ) -> Result<Admission, StoreError> {
+        self.admit_inner(request, idempotency_key, policy, false)
+            .await
+    }
+
+    async fn admit_inner(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+        policy: AdmissionPolicy,
+        preserve_first_network: bool,
     ) -> Result<Admission, StoreError> {
         validate_key(idempotency_key)?;
         validate_policy(policy)?;
@@ -161,7 +214,13 @@ impl Store {
         if let Some(row) = existing {
             let current: serde_json::Value =
                 row.try_get("request").map_err(|_| StoreError::Database)?;
-            if codec::decode(current)? != *request {
+            let current = codec::decode(current)?;
+            let same_intent = if preserve_first_network {
+                without_network(&current)? == without_network(request)?
+            } else {
+                current == *request
+            };
+            if !same_intent {
                 return Err(StoreError::Conflict);
             }
             let admission = Admission {
@@ -777,6 +836,13 @@ fn validate_policy(policy: AdmissionPolicy) -> Result<(), StoreError> {
         return Err(StoreError::InvalidInput);
     }
     Ok(())
+}
+
+fn without_network(request: &DownloadRequest) -> Result<DownloadRequest, StoreError> {
+    request
+        .clone()
+        .with_network(NetworkSelection::NONE)
+        .map_err(|_| StoreError::InvalidInput)
 }
 
 #[cfg(test)]

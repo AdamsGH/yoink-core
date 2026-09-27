@@ -21,6 +21,10 @@ const appName = `yoink-media-app-${runId}`;
 const password = randomUUID();
 const token = '123456:fixture-only-token';
 const secretMarker = 'source-secret-marker-' + randomUUID();
+const cookieSecret = 'fixture-cookie-value-never-log';
+const proxyUser = 'fixture-proxy-user';
+const proxyPassword = 'fixture-proxy-password-never-log';
+const proxyAuth = `Basic ${Buffer.from(`${proxyUser}:${proxyPassword}`).toString('base64')}`;
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'yoink-media-'));
 const fixtureDir = path.join(tempRoot, 'fixture');
 const containers = new Set();
@@ -35,11 +39,17 @@ let mediaRequests = 0;
 let mediaBytes;
 let server;
 let mediaServer;
+let proxyServer;
+const proxySockets = new Set();
+let proxyHits = 0;
+let proxyAuthHits = 0;
+let protectedOriginRequests = 0;
 let fixtureError;
 const slowResponses = new Set();
 const gatedResponses = new Set();
 let mediaGateOpen = false;
 let revokedQueuedFetches = 0;
+let lateProxyQueuedFetches = 0;
 const mediaRequestTimes = [];
 let mediaSendMode = 'success';
 let releaseUpload;
@@ -104,7 +114,8 @@ async function cleanup() {
     catch (error) { failures.push(error); }
   }
   containers.clear();
-  for (const item of [server, mediaServer]) {
+  for (const socket of proxySockets) socket.destroy();
+  for (const item of [server, mediaServer, proxyServer]) {
     if (!item) continue;
     try {
       item.closeAllConnections?.();
@@ -275,11 +286,65 @@ function startTelegramApi() {
     server.listen(0, '127.0.0.1', () => resolve(server.address().port));
   });
 }
+function startAuthenticatedProxy(originPort) {
+  proxyServer = net.createServer(client => {
+    proxySockets.add(client);
+    client.once('close', () => proxySockets.delete(client));
+    let head = Buffer.alloc(0);
+    let upstream;
+    const closePair = () => {
+      client.destroy();
+      upstream?.destroy();
+    };
+    client.once('error', closePair);
+    client.once('close', () => upstream?.destroy());
+    const onData = chunk => {
+      const bufferedLength = Math.min(chunk.length, 16 * 1024 - head.length);
+      head = Buffer.concat([head, chunk.subarray(0, bufferedLength)]);
+      const end = head.indexOf('\r\n\r\n');
+      if (end < 0 || end + 4 > 16 * 1024) {
+        client.removeListener('data', onData);
+        client.end('HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\n\r\n');
+        return;
+      }
+      client.removeListener('data', onData);
+      const header = head.subarray(0, end + 4).toString('latin1');
+      const [requestLine, ...headers] = header.split('\r\n');
+      const match = requestLine.match(/^CONNECT ([^ ]+) HTTP\/1\.[01]$/);
+      const authorization = headers.find(line => /^proxy-authorization:/i.test(line))?.split(':', 2)[1]?.trim();
+      const permittedTarget = `127.0.0.1:${originPort}`;
+      if (!match || match[1] !== permittedTarget) { client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
+      if (authorization !== proxyAuth) { client.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="fixture"\r\nContent-Length: 0\r\n\r\n'); return; }
+      proxyHits++;
+      proxyAuthHits++;
+      upstream = net.connect(originPort, '127.0.0.1');
+      proxySockets.add(upstream);
+      upstream.once('close', () => proxySockets.delete(upstream));
+      upstream.once('connect', () => {
+        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        const bufferedRemainder = head.subarray(end + 4);
+        const chunkRemainder = chunk.subarray(bufferedLength);
+        if (bufferedRemainder.length) upstream.write(bufferedRemainder);
+        if (chunkRemainder.length) upstream.write(chunkRemainder);
+        client.pipe(upstream);
+        upstream.pipe(client);
+      });
+      upstream.once('error', closePair);
+      upstream.once('close', () => client.destroy());
+    };
+    client.on('data', onData);
+  });
+  return new Promise((resolve, reject) => {
+    proxyServer.once('error', reject);
+    proxyServer.listen(0, '127.0.0.1', () => resolve(proxyServer.address().port));
+  });
+}
 function startMediaServer() {
   mediaServer = http.createServer((req, res) => {
     mediaRequests++;
     mediaRequestTimes.push(Date.now());
     if (req.url.includes('case=revoked-queued')) revokedQueuedFetches++;
+    if (req.url.includes('case=late-proxy-queued')) lateProxyQueuedFetches++;
     if (req.url.startsWith('/gated')) {
       if (!mediaGateOpen) {
         gatedResponses.add(res);
@@ -300,7 +365,16 @@ function startMediaServer() {
       res.end('temporary source unavailable');
       return;
     }
-    if (req.url.startsWith('/media')) {
+    if (req.url.startsWith('/cookie-media')) {
+      protectedOriginRequests++;
+      if (req.headers.cookie !== `fixture_auth=${cookieSecret}` || req.headers['proxy-authorization'] !== undefined) {
+        fixtureError ??= new Error('protected origin did not receive only the selected cookie');
+        res.destroy(fixtureError);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': mediaBytes.length });
+      res.end(mediaBytes);
+    } else if (req.url.startsWith('/media')) {
       res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': mediaBytes.length });
       res.end(mediaBytes);
     } else {
@@ -325,7 +399,7 @@ async function waitFor(predicate, label, milliseconds = 12000) {
   throw new Error(`timeout waiting for ${label}`);
 }
 async function psql(sql) {
-  return docker(['exec', pgName, 'psql', '-U', 'yoink_test', '-d', 'yoink_test', '-v', 'ON_ERROR_STOP=1', '-Atc', sql]);
+  return docker(['exec', pgName, 'psql', '-U', 'yoink_test', '-d', 'yoink_test', '-v', 'ON_ERROR_STOP=1', '-qAtc', sql]);
 }
 async function queryJob(id) {
   assert.match(id, /^[0-9a-f-]{36}$/i, 'operation id must be a UUID');
@@ -347,12 +421,16 @@ async function fixtureDiagnostics() {
   return `app=${status}\njobs (safe fields):\n${redact(jobs)}\nlogs (bounded, redacted):\n${redact(logs)}\ntelegram method counts=${JSON.stringify(telegramCalls.reduce((counts, call) => (counts[call.method] = (counts[call.method] ?? 0) + 1, counts), {}))}\ntelegram safe calls=${JSON.stringify(safeTelegramSummary())}`;
 }
 function redact(value) {
-  return bounded(String(value).split(token).join('[REDACTED_TOKEN]').split(password).join('[REDACTED_PASSWORD]').split(secretMarker).join('[REDACTED_SOURCE]'));
+  return bounded(String(value).split(token).join('[REDACTED_TOKEN]').split(password).join('[REDACTED_PASSWORD]').split(secretMarker).join('[REDACTED_SOURCE]').split(cookieSecret).join('[REDACTED_COOKIE]').split(proxyPassword).join('[REDACTED_PROXY_PASSWORD]').split(proxyUser).join('[REDACTED_PROXY_USER]').split(proxyAuth).join('[REDACTED_PROXY_AUTH]'));
 }
 function assertNoSecret(output, where) {
   assert(!output.includes(secretMarker), `${where} leaked the source URL marker`);
   assert(!output.includes(token), `${where} leaked the Telegram fixture token`);
   assert(!output.includes(password), `${where} leaked the fixture database password`);
+  assert(!output.includes(cookieSecret), `${where} leaked the fake cookie`);
+  assert(!output.includes(proxyPassword), `${where} leaked the fake proxy password`);
+  assert(!output.includes(proxyUser), `${where} leaked the fake proxy username`);
+  assert(!output.includes(proxyAuth), `${where} leaked the encoded proxy credentials`);
 }
 async function waitUntilReady() {
   for (let i = 0; i < 100; i++) {
@@ -384,6 +462,7 @@ let appContainerId;
 let appHttpPort;
 let apiPort;
 let sourcePort;
+let proxyPort;
 let databaseUrl;
 async function launchApp() {
   appContainerId = await startContainer(['--name', appName, '--label', 'yoink.fixture=media-app', '--network', 'host',
@@ -394,6 +473,7 @@ async function launchApp() {
     '--env', `YOINK_RUST_DATABASE_URL=${databaseUrl}`, '--env', 'YOINK_RUST_DOWNLOADS_ENABLED=true',
     '--env', `YOINK_RUST_HTTP_BIND=127.0.0.1:${appHttpPort}`,
     '--env', `YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=["http://127.0.0.1:${sourcePort}"]`,
+    '--env', `YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=["http://127.0.0.1:${proxyPort}"]`,
     '--env', 'YOINK_RUST_DOWNLOAD_LEASE_SECS=6', '--env', 'YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1',
     '--env', 'YOINK_RUST_DELIVERY_TIMEOUT_SECS=2', '--env', 'YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10',
     '--env', 'YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=3', '--env', 'YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=1',
@@ -446,6 +526,7 @@ try {
 
   apiPort = await startTelegramApi();
   sourcePort = await startMediaServer();
+  proxyPort = await startAuthenticatedProxy(sourcePort);
   appHttpPort = await freeLoopbackPort();
   databaseUrl = `postgresql://yoink_test:${password}@127.0.0.1:${pgPort}/yoink_test`;
   await launchApp();
@@ -636,11 +717,118 @@ try {
   await psql('UPDATE public.users SET ban_until = NULL WHERE id = 42');
   await assertWorkspaceClean();
 
-  assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure scenarios');
+  // Credential selection scenarios run after legacy tests so their counters cannot change legacy baselines.
+  const previousNetworkSettingsText = (await psql("SELECT json_build_object('proxy_enabled', proxy_enabled, 'proxy_url', proxy_url)::text FROM public.dl_user_settings WHERE user_id = 42")).trim();
+  const previousNetworkSettings = previousNetworkSettingsText ? JSON.parse(previousNetworkSettingsText) : null;
+  await psql(`INSERT INTO public.dl_user_settings (user_id, quality, codec, container, proxy_enabled, proxy_url, keyboard, subs_enabled, subs_auto, subs_always_ask, subs_lang, split_size, nsfw_blur, mediainfo, send_as_file, audio_codec, gallery_zip, use_pool_cookies, youtube_auth_mode, dm_topic_thread_id, args_json, created_at, updated_at) VALUES (42, 'best', 'avc1', 'mp4', true, 'http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}', '2x3', false, false, false, 'en', 2043000000, true, false, false, 'best', false, true, 'cookies', NULL, '{}'::jsonb, now(), now()) ON CONFLICT (user_id) DO UPDATE SET proxy_enabled = EXCLUDED.proxy_enabled, proxy_url = EXCLUDED.proxy_url`);
+  const expiration = Math.floor(Date.now() / 1000) + 86400;
+  const cookieJar = `# Netscape HTTP Cookie File\n127.0.0.1\tFALSE\t/\tFALSE\t${expiration}\tfixture_auth\t${cookieSecret}\n`;
+  let fixtureCookieId = await psql(`INSERT INTO public.cookies (user_id, domain, content, is_valid, is_pool, created_at, updated_at) VALUES (42, '127.0.0.1', '${cookieJar.replaceAll("'", "''")}', true, false, now(), now()) RETURNING id`);
+  const protectedUrl = `http://127.0.0.1:${sourcePort}/cookie-media?case=network-selection`;
+  const sendsBeforeProtected = mediaSendCalls;
+  const protectedStart = telegramCalls.length;
+  enqueue(42, 42, `/download ${protectedUrl}`, 490);
+  const protectedId = await operationForReply(protectedStart);
+  const protectedResult = await waitFor(async () => {
+    const row = await queryJob(protectedId);
+    return row.startsWith('succeeded|') ? row : false;
+  }, 'cookie and authenticated proxy media delivery');
+  assert.match(protectedResult, /^succeeded\|[1-9]\d*\|1$/);
+  assert(proxyHits > 0 && proxyAuthHits > 0, 'worker must use the credential-authenticated constrained proxy');
+  assert.equal(mediaSendCalls - sendsBeforeProtected, 1, 'cookie-protected media must complete one native Telegram upload');
+  const protectedOperation = JSON.parse(await psql(`SELECT request::text FROM yoink_runtime.operations WHERE id = '${protectedId}'`));
+  assert.ok(protectedOperation.network?.cookie, 'persisted operation must contain the actual opaque cookie reference');
+  assert.ok(protectedOperation.network?.proxy, 'persisted operation must contain the actual opaque proxy reference');
+  const protectedOperationText = JSON.stringify(protectedOperation);
+  assert(!protectedOperationText.includes(cookieSecret) && !protectedOperationText.includes(proxyPassword) && !protectedOperationText.includes(proxyUser),
+    'persisted operation must not contain credential content');
+  assertNoSecret(await docker(['logs', appName]), 'application logs after credential-backed delivery');
+
+  // The blocker freezes no cookie and the same proxy; later insertion must not alter its selection.
+  mediaGateOpen = false;
+  const sendsBeforeCookieQueue = mediaSendCalls;
+  await psql(`DELETE FROM public.cookies WHERE id = ${Number(fixtureCookieId)}`);
+  const gatedStart = telegramCalls.length;
+  enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/gated?case=cookie-reference-blocker`, 492);
+  const cookieBlockerId = await operationForReply(gatedStart);
+  const blockerOperation = JSON.parse(await psql(`SELECT request::text FROM yoink_runtime.operations WHERE id = '${cookieBlockerId}'`));
+  assert.equal(blockerOperation.network?.cookie, null, 'blocker must freeze a no-cookie selection');
+  assert.ok(blockerOperation.network?.proxy, 'blocker must retain the selected proxy reference');
+  assert.deepEqual(blockerOperation.network.proxy, protectedOperation.network.proxy, 'blocker must freeze the same proxy reference');
+  await waitFor(() => gatedResponses.size > 0, 'no-cookie proxy blocker worker');
+  const protectedFetchesBeforeQueued = protectedOriginRequests;
+  fixtureCookieId = await psql(`INSERT INTO public.cookies (user_id, domain, content, is_valid, is_pool, created_at, updated_at) VALUES (42, '127.0.0.1', '${cookieJar.replaceAll("'", "''")}', true, false, now(), now()) RETURNING id`);
+  const queuedCookieStart = telegramCalls.length;
+  enqueue(42, 42, `/download ${protectedUrl}&case=stale-cookie-reference`, 493);
+  const staleCookieId = await operationForReply(queuedCookieStart);
+  const queuedCookieOperation = JSON.parse(await psql(`SELECT request::text FROM yoink_runtime.operations WHERE id = '${staleCookieId}'`));
+  assert.equal(queuedCookieOperation.network?.cookie?.id, Number(fixtureCookieId), 'queued operation must retain the newly inserted cookie reference');
+  assert.deepEqual(queuedCookieOperation.network.proxy, protectedOperation.network.proxy, 'queued operation must retain the selected proxy reference');
+  assert((await queryJob(staleCookieId)).startsWith('queued|'), 'selected-cookie operation must be queued before invalidation');
+  await psql(`UPDATE public.cookies SET is_valid = false WHERE id = ${Number(fixtureCookieId)}`);
+  mediaGateOpen = true;
+  for (const response of gatedResponses) {
+    response.writeHead(200, { 'content-type': 'video/mp4', 'content-length': mediaBytes.length });
+    response.end(mediaBytes);
+  }
+  await waitFor(async () => (await queryJob(cookieBlockerId)).startsWith('succeeded|') && (await queryJob(staleCookieId)).startsWith('failed|'), 'queued cookie reference invalidation');
+  assert.equal(protectedOriginRequests, protectedFetchesBeforeQueued, 'stale queued cookie reference must fail without reselection or source fetch');
+  assert.equal(mediaSendCalls - sendsBeforeCookieQueue, 1, 'only the no-cookie blocker may upload; invalidated queued cookie work must not upload');
+  mediaGateOpen = false;
+
+  // Missing proxy must reject with its actionable configuration error, without direct access or upload.
+  await psql("UPDATE public.dl_user_settings SET proxy_enabled = true, proxy_url = NULL WHERE user_id = 42");
+  const missingProxyBefore = Number((await psql('SELECT count(*) FROM yoink_runtime.operations')).trim());
+  const missingProxyFetches = mediaRequests;
+  const missingProxyReplies = telegramCalls.length;
+  const missingProxySends = mediaSendCalls;
+  enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/media?case=missing-proxy`, 491);
+  await waitFor(() => telegramCalls.slice(missingProxyReplies).some(call => call.method === 'sendmessage'
+    && call.data.text === 'Proxy is enabled, but no proxy is configured. Configure one or disable proxy use.'), 'missing proxy rejection');
+  assert.equal(Number((await psql('SELECT count(*) FROM yoink_runtime.operations')).trim()), missingProxyBefore, 'missing proxy must reject before durable operation creation');
+  assert.equal(mediaRequests, missingProxyFetches, 'missing proxy must not fall back to direct origin access');
+  assert.equal(mediaSendCalls - missingProxySends, 0, 'missing proxy must not upload');
+
+  // Enabling a proxy invalidates frozen direct routes before execution and delivery.
+  await psql('UPDATE public.dl_user_settings SET proxy_enabled = false WHERE user_id = 42');
+  mediaGateOpen = false;
+  const lateProxySends = mediaSendCalls;
+  const lateProxyBlockerStart = telegramCalls.length;
+  enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/gated?case=late-proxy-blocker`, 494);
+  const lateProxyBlocker = await operationForReply(lateProxyBlockerStart);
+  await waitFor(() => gatedResponses.size > 0, 'direct worker before proxy enablement');
+  const lateProxyHits = proxyHits;
+  const lateProxyQueuedStart = telegramCalls.length;
+  enqueue(42, 42, `/download http://127.0.0.1:${sourcePort}/media?case=late-proxy-queued`, 495);
+  const lateProxyQueued = await operationForReply(lateProxyQueuedStart);
+  assert((await queryJob(lateProxyQueued)).startsWith('queued|'), 'direct route must be queued before the policy change');
+  const directOperation = JSON.parse(await psql(`SELECT request::text FROM yoink_runtime.operations WHERE id = '${lateProxyQueued}'`));
+  assert.equal(directOperation.network.proxy, null, 'queued route must freeze no proxy');
+  await psql(`UPDATE public.dl_user_settings SET proxy_enabled = true, proxy_url = 'http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}' WHERE user_id = 42`);
+  mediaGateOpen = true;
+  for (const response of gatedResponses) {
+    response.writeHead(200, { 'content-type': 'video/mp4', 'content-length': mediaBytes.length });
+    response.end(mediaBytes);
+  }
+  await waitFor(async () => (await queryJob(lateProxyBlocker)).startsWith('failed|') && (await queryJob(lateProxyQueued)).startsWith('failed|'), 'changed proxy policy rejects frozen direct work');
+  assert.equal(lateProxyQueuedFetches, 0, 'new proxy policy must prevent queued direct source access');
+  assert.equal(proxyHits, lateProxyHits, 'frozen direct work must not silently select the new proxy');
+  assert.equal(mediaSendCalls, lateProxySends, 'changed proxy policy must prevent delivery of direct results');
+  await assertWorkspaceClean();
+
+  await psql(`DELETE FROM public.cookies WHERE id = ${Number(fixtureCookieId)}`);
+  if (previousNetworkSettings) {
+    const previousUrl = previousNetworkSettings.proxy_url === null ? 'NULL' : `'${previousNetworkSettings.proxy_url.replaceAll("'", "''")}'`;
+    await psql(`UPDATE public.dl_user_settings SET proxy_enabled = ${previousNetworkSettings.proxy_enabled}, proxy_url = ${previousUrl} WHERE user_id = 42`);
+  } else {
+    await psql('DELETE FROM public.dl_user_settings WHERE user_id = 42');
+  }
+
+  assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(telegramCalls), 'Telegram output after failure scenarios');
   console.log('Media slice acceptance passed all required real-worker, durable-delivery, access, retry, cancellation, quota, restart and redaction scenarios.');
 } catch (error) {
-  console.error(`${redact(error.stack ?? error.message)}\\n${await fixtureDiagnostics().catch(diagnosticError => `diagnostics unavailable: ${diagnosticError.message}`)}`);
+  console.error(`${redact(error.stack ?? error.message)}\n${await fixtureDiagnostics().catch(diagnosticError => `diagnostics unavailable: ${diagnosticError.message}`)}`);
   process.exitCode = 1;
 } finally {
   try {

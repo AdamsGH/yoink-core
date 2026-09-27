@@ -1,6 +1,6 @@
 use std::{fmt, path::PathBuf, time::Duration};
 
-use yoink_downloads::DownloadConfig;
+use yoink_downloads::{DownloadConfig, DownloadNetworkConfig};
 use yoink_executor::ExecutorConfig;
 use yoink_storage::AdmissionPolicy;
 
@@ -9,6 +9,7 @@ use crate::config::{ConfigError, invalid};
 pub struct MediaConfig {
     pub executor: ExecutorConfig,
     pub downloads: DownloadConfig,
+    pub network: DownloadNetworkConfig,
 }
 
 impl fmt::Debug for MediaConfig {
@@ -16,6 +17,7 @@ impl fmt::Debug for MediaConfig {
         f.debug_struct("MediaConfig")
             .field("downloads", &self.downloads)
             .field("executor", &"confined worker launcher")
+            .field("network", &self.network)
             .finish()
     }
 }
@@ -81,7 +83,31 @@ impl MediaConfig {
                 "must not exceed DOWNLOAD_TIMEOUT_SECS",
             ));
         }
+        let system_proxy = read("YOINK_RUST_DOWNLOAD_PROXY_URL")?;
+        let no_cookie_domains: Vec<String> = serde_json::from_str(
+            &read("YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON")?.unwrap_or_else(|| "[]".into()),
+        )
+        .map_err(|_| {
+            invalid(
+                "YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON",
+                "expected a bounded JSON array of hostnames",
+            )
+        })?;
+        if no_cookie_domains.len() > 64 {
+            return Err(invalid(
+                "YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON",
+                "at most sixty-four domains are allowed",
+            ));
+        }
+        let network =
+            DownloadNetworkConfig::new(system_proxy, no_cookie_domains).map_err(|_| {
+                invalid(
+                    "YOINK_RUST_DOWNLOAD_PROXY_URL",
+                    "proxy or no-cookie domain configuration is invalid",
+                )
+            })?;
         Ok(Self {
+            network,
             executor: ExecutorConfig {
                 program: "/usr/local/bin/yoink-worker-launcher".into(),
                 args: vec![],

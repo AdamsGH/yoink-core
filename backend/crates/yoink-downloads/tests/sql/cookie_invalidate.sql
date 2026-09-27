@@ -1,0 +1,1 @@
+UPDATE public.cookies SET is_valid = false WHERE id = $1;

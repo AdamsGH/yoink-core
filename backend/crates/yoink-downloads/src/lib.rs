@@ -1,15 +1,25 @@
+pub mod profile;
+
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+
+use sha2::{Digest, Sha256};
 
 use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use uuid::Uuid;
 use yoink_access::{AccessPolicy, AccessScope, Role};
-use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode};
+use yoink_domain::{
+    DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode, NetworkSelection,
+};
 use yoink_executor::{Executor, ExecutorError, ValidatedArtifact};
 use yoink_identity::IdentityStore;
 use yoink_storage::{Admission, AdmissionPolicy, Claim, OperationRecord, Store, StoreError};
-use yoink_worker_protocol::{HttpSourceUrl, MediaMode, PROTOCOL_VERSION, TaskKind, WorkerRequest};
+use yoink_worker_protocol::{
+    HttpSourceUrl, MediaMode, NetworkCredentials, PROTOCOL_VERSION, TaskKind, WorkerRequest,
+};
+
+use profile::{NetworkContext, ProfileError, ProfileStore, normalize_domain};
 
 pub type DeliveryFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<DeliveredMedia>, DeliveryError>> + Send + 'a>>;
@@ -75,12 +85,80 @@ pub struct DownloadService {
     executor: Executor,
     delivery: Arc<dyn Delivery>,
     config: DownloadConfig,
+    profile: ProfileStore,
+    network_config: DownloadNetworkConfig,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct DownloadNetworkConfig {
+    system_proxy: Option<String>,
+    no_cookie_domains: Vec<String>,
+}
+
+impl std::fmt::Debug for DownloadNetworkConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DownloadNetworkConfig")
+            .field(
+                "system_proxy",
+                &self.system_proxy.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("no_cookie_domains", &self.no_cookie_domains)
+            .finish()
+    }
+}
+
+impl DownloadNetworkConfig {
+    pub fn new(
+        system_proxy: Option<String>,
+        no_cookie_domains: Vec<String>,
+    ) -> Result<Self, DownloadError> {
+        if no_cookie_domains.len() > 64 {
+            return Err(DownloadError::InvalidConfig);
+        }
+        let mut normalized = Vec::with_capacity(no_cookie_domains.len());
+        for domain in no_cookie_domains {
+            if domain.is_empty()
+                || domain
+                    .chars()
+                    .any(|c| c.is_whitespace() || "/?#@".contains(c))
+                || domain.contains("://")
+                || (domain.parse::<std::net::IpAddr>().is_err() && domain.contains(':'))
+            {
+                return Err(DownloadError::InvalidConfig);
+            }
+            normalized.push(normalize_domain(&domain).map_err(|_| DownloadError::InvalidConfig)?);
+        }
+        normalized.sort();
+        normalized.dedup();
+        if let Some(proxy) = &system_proxy {
+            NetworkCredentials {
+                proxy_url: Some(proxy.clone()),
+                cookie_jar: None,
+            }
+            .validate()
+            .map_err(|_| DownloadError::InvalidConfig)?;
+        }
+        Ok(Self {
+            system_proxy,
+            no_cookie_domains: normalized,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum DownloadError {
     #[error("download input is invalid")]
     InvalidInput,
+    #[error("download preferences contain invalid values")]
+    InvalidPreferences,
+    #[error("download credentials are invalid")]
+    InvalidCredentials,
+    #[error("proxy is enabled but no proxy is configured")]
+    ProxyUnavailable,
+    #[error("the selected authentication method is unsupported")]
+    UnsupportedAuthentication,
+    #[error("selected network credentials have changed or are no longer authorized")]
+    ChangedCredentials,
     #[error("download service configuration is invalid")]
     InvalidConfig,
     #[error("actor is not authorized")]
@@ -105,17 +183,47 @@ impl DownloadService {
         delivery: Arc<dyn Delivery>,
         config: DownloadConfig,
     ) -> Result<Self, DownloadError> {
+        Self::new_with_network_config(
+            store,
+            identities,
+            executor,
+            delivery,
+            config,
+            DownloadNetworkConfig::new(None, vec![])?,
+        )
+    }
+
+    pub fn new_with_network_config(
+        store: Arc<Store>,
+        identities: Arc<IdentityStore>,
+        executor: Executor,
+        delivery: Arc<dyn Delivery>,
+        config: DownloadConfig,
+        network_config: DownloadNetworkConfig,
+    ) -> Result<Self, DownloadError> {
         validate_config(&config)?;
         if delivery.bot_id() <= 0 {
             return Err(DownloadError::InvalidConfig);
         }
+        let profile = ProfileStore::new(store.pool().clone());
         Ok(Self {
             store,
             identities,
             executor,
             delivery,
             config,
+            profile,
+            network_config,
         })
+    }
+
+    pub fn with_network_config(mut self, config: DownloadNetworkConfig) -> Self {
+        self.network_config = config;
+        self
+    }
+
+    pub async fn check_profile_schema(&self) -> Result<(), DownloadError> {
+        self.profile.check_schema().await.map_err(map_profile)
     }
 
     pub async fn submit(
@@ -156,9 +264,37 @@ impl DownloadService {
         {
             return Err(DownloadError::InvalidInput);
         }
-        self.authorize_request(request).await?;
+        if request.network() != &NetworkSelection::NONE {
+            return Err(DownloadError::InvalidInput);
+        }
+        let identity = self.authorize_request(request).await?;
+        if let Some(admission) = self
+            .store
+            .replay_network_admission(request, idempotency_key)
+            .await
+            .map_err(map_store)?
+        {
+            return Ok(admission);
+        }
+        let domain = request
+            .source_url()
+            .host_str()
+            .ok_or(DownloadError::InvalidInput)?;
+        let seed = selection_seed(request.actor_id(), self.delivery.bot_id(), idempotency_key);
+        let selection = self
+            .profile
+            .prepare_network(
+                self.network_context(request.actor_id(), domain, &identity),
+                seed,
+            )
+            .await
+            .map_err(map_profile)?;
+        let prepared = request
+            .clone()
+            .with_network(selection)
+            .map_err(|_| DownloadError::InvalidInput)?;
         self.store
-            .admit_bounded(request, idempotency_key, self.config.admission)
+            .admit_network_snapshot(&prepared, idempotency_key, self.config.admission)
             .await
             .map_err(map_store)
     }
@@ -186,16 +322,34 @@ impl DownloadService {
             .map_err(map_store)
     }
 
-    async fn authorize_request(&self, request: &DownloadRequest) -> Result<(), DownloadError> {
+    async fn authorize_request(
+        &self,
+        request: &DownloadRequest,
+    ) -> Result<yoink_identity::IdentitySnapshot, DownloadError> {
         self.authorize_target(request.actor_id(), request.target().copied())
             .await
+    }
+
+    fn network_context<'a>(
+        &'a self,
+        actor_id: u64,
+        domain: &'a str,
+        identity: &'a yoink_identity::IdentitySnapshot,
+    ) -> NetworkContext<'a> {
+        NetworkContext {
+            actor_id,
+            domain,
+            no_cookie_domains: &self.network_config.no_cookie_domains,
+            identity,
+            system_proxy: self.network_config.system_proxy.as_deref(),
+        }
     }
 
     async fn authorize_target(
         &self,
         actor_id: u64,
         target: Option<DeliveryTarget>,
-    ) -> Result<(), DownloadError> {
+    ) -> Result<yoink_identity::IdentitySnapshot, DownloadError> {
         if actor_id == 0 || actor_id > i64::MAX as u64 {
             return Err(DownloadError::Denied);
         }
@@ -240,7 +394,7 @@ impl DownloadService {
         };
         if yoink_access::check_access(&snapshot.principal, &policy, &context, snapshot.now).allowed
         {
-            Ok(())
+            Ok(snapshot)
         } else {
             Err(DownloadError::Denied)
         }
@@ -297,22 +451,44 @@ impl DownloadService {
                 Err(error) => Err(map_store(error)),
             };
         }
-        if let Err(error) = self.authorize_request(&claim.request).await {
-            if error == DownloadError::Denied {
+        let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel(2);
+        let heartbeat = self.start_heartbeat(claim.clone(), heartbeat_tx);
+        let host = claim
+            .request
+            .source_url()
+            .host_str()
+            .unwrap_or_default()
+            .to_owned();
+        let identity = match self.authorize_request(&claim.request).await {
+            Ok(identity) => identity,
+            Err(DownloadError::Denied) => {
                 self.store.fail(&claim, false).await.map_err(map_store)?;
                 return Ok(());
             }
-            return Err(error);
-        }
-        let worker_request = match worker_request(&claim) {
+            Err(error) => return Err(error),
+        };
+        let credentials = match self
+            .profile
+            .resolve(
+                self.network_context(claim.request.actor_id(), &host, &identity),
+                claim.request.network(),
+            )
+            .await
+        {
+            Ok(credentials) => credentials,
+            Err(ProfileError::Database) => return Err(DownloadError::Database),
+            Err(_) => {
+                self.store.fail(&claim, false).await.map_err(map_store)?;
+                return Ok(());
+            }
+        };
+        let worker_request = match worker_request(&claim, credentials) {
             Ok(request) => request,
             Err(()) => {
                 self.store.fail(&claim, false).await.map_err(map_store)?;
                 return Ok(());
             }
         };
-        let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel(2);
-        let heartbeat = self.start_heartbeat(claim.clone(), heartbeat_tx);
         let child_cancel = shutdown.child_token();
         let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(None);
         let execution = self.executor.execute_with_progress(
@@ -433,17 +609,40 @@ impl DownloadService {
                 .await?;
                 break;
             }
-            if let Err(error) = self
+            let identity = match self
                 .authorize_target(claim.request.actor_id(), Some(target))
                 .await
             {
-                if error == DownloadError::Denied {
+                Ok(identity) => identity,
+                Err(DownloadError::Denied) => {
                     self.stop_delivery(&claim, yoink_storage::StopDeliveryReason::Denied)
                         .await?;
                     break;
                 }
-                drop(heartbeat);
-                return Err(error);
+                Err(error) => {
+                    drop(heartbeat);
+                    return Err(error);
+                }
+            };
+            let domain = claim.request.source_url().host_str().unwrap_or_default();
+            match self
+                .profile
+                .resolve(
+                    self.network_context(claim.request.actor_id(), domain, &identity),
+                    claim.request.network(),
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(ProfileError::Database) => {
+                    drop(heartbeat);
+                    return Err(DownloadError::Database);
+                }
+                Err(_) => {
+                    self.stop_delivery(&claim, yoink_storage::StopDeliveryReason::Denied)
+                        .await?;
+                    break;
+                }
             }
             if !self
                 .store
@@ -706,7 +905,7 @@ async fn supervise_workers(
     failure.map_or(Ok(()), Err)
 }
 
-fn worker_request(claim: &Claim) -> Result<WorkerRequest, ()> {
+fn worker_request(claim: &Claim, credentials: NetworkCredentials) -> Result<WorkerRequest, ()> {
     let request = &claim.request;
     let params = request.params();
     let options = yoink_worker_protocol::DownloadOptions {
@@ -770,7 +969,11 @@ fn worker_request(claim: &Claim) -> Result<WorkerRequest, ()> {
         source_url: HttpSourceUrl::parse(request.source_url().as_str()).map_err(|_| ())?,
         task: TaskKind::Download { media_mode },
         options,
-        network: None,
+        network: if credentials.proxy_url.is_some() || credentials.cookie_jar.is_some() {
+            Some(credentials)
+        } else {
+            None
+        },
     })
 }
 
@@ -818,6 +1021,31 @@ fn validate_config(config: &DownloadConfig) -> Result<(), DownloadError> {
     Ok(())
 }
 
+fn selection_seed(actor_id: u64, bot_id: i64, idempotency_key: impl std::fmt::Display) -> u64 {
+    let mut hash = Sha256::new();
+    hash.update(b"yoink-download-network-selection-v1\0");
+    hash.update(actor_id.to_be_bytes());
+    hash.update(bot_id.to_be_bytes());
+    hash.update(idempotency_key.to_string().as_bytes());
+    u64::from_be_bytes(hash.finalize()[..8].try_into().expect("SHA-256 prefix"))
+}
+
+fn map_profile(error: ProfileError) -> DownloadError {
+    match error {
+        ProfileError::Database => DownloadError::Database,
+        ProfileError::ProxyUnavailable => DownloadError::ProxyUnavailable,
+        ProfileError::UnsupportedAuthentication => DownloadError::UnsupportedAuthentication,
+        ProfileError::InvalidPreferences => DownloadError::InvalidPreferences,
+        ProfileError::InvalidProxy | ProfileError::InvalidCookie => {
+            DownloadError::InvalidCredentials
+        }
+        ProfileError::Unavailable
+        | ProfileError::StaleReference
+        | ProfileError::SharedAccessDenied
+        | ProfileError::CandidateCapacityExceeded => DownloadError::ChangedCredentials,
+    }
+}
+
 fn map_store(error: StoreError) -> DownloadError {
     match error {
         StoreError::InvalidInput | StoreError::InvalidStoredData => DownloadError::InvalidInput,
@@ -849,6 +1077,46 @@ mod tests {
             poll_interval: Duration::from_millis(100),
             delivery_timeout: Duration::from_secs(20),
         }
+    }
+
+    #[test]
+    fn network_config_is_bounded_canonical_and_redacted() {
+        let config = DownloadNetworkConfig::new(
+            Some("http://user:secret@proxy.example:8080".into()),
+            vec!["WWW.Example.com".into(), "example.com".into()],
+        )
+        .unwrap();
+        assert_eq!(config.no_cookie_domains, ["example.com"]);
+        assert!(!format!("{config:?}").contains("secret"));
+        assert!(DownloadNetworkConfig::new(None, vec!["https://example.com/path".into()]).is_err());
+        assert!(DownloadNetworkConfig::new(None, vec!["not a host".into()]).is_err());
+        assert!(DownloadNetworkConfig::new(None, vec!["example.com".into(); 65]).is_err());
+    }
+
+    #[test]
+    fn selection_seed_is_stable_and_scoped_to_actor_bot_and_key() {
+        assert_eq!(selection_seed(42, 7, "key"), selection_seed(42, 7, "key"));
+        assert_ne!(selection_seed(42, 7, "key"), selection_seed(43, 7, "key"));
+        assert_ne!(selection_seed(42, 7, "key"), selection_seed(42, 8, "key"));
+        assert_ne!(selection_seed(42, 7, "key"), selection_seed(42, 7, "other"));
+    }
+
+    #[test]
+    fn profile_errors_are_static_and_execution_stop_mapping_is_safe() {
+        assert_eq!(map_profile(ProfileError::Database), DownloadError::Database);
+        assert_eq!(
+            map_profile(ProfileError::InvalidPreferences),
+            DownloadError::InvalidPreferences
+        );
+        assert_eq!(
+            map_profile(ProfileError::StaleReference),
+            DownloadError::ChangedCredentials
+        );
+        assert!(
+            !DownloadError::InvalidCredentials
+                .to_string()
+                .contains("cookie")
+        );
     }
 
     #[test]

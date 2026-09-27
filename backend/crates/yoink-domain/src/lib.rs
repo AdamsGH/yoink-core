@@ -9,6 +9,12 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
+pub mod network;
+pub use network::{
+    CookieReference, CredentialVersion, NetworkReferenceError, NetworkSelection, ProxyReference,
+    ProxySource,
+};
+
 /// Stable, opaque identifier shared by every attempt of one operation.
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct OperationId(Uuid);
@@ -306,6 +312,7 @@ pub struct DownloadRequest {
     clip_range: Option<ClipRange>,
     params: DownloadParams,
     target: Option<DeliveryTarget>,
+    network: NetworkSelection,
 }
 
 impl DownloadRequest {
@@ -341,6 +348,7 @@ impl DownloadRequest {
             clip_range,
             params,
             target: None,
+            network: NetworkSelection::NONE,
         })
     }
 
@@ -369,6 +377,21 @@ impl DownloadRequest {
         self.target.as_ref()
     }
 
+    pub const fn network(&self) -> &NetworkSelection {
+        &self.network
+    }
+
+    pub fn with_network(
+        mut self,
+        network: NetworkSelection,
+    ) -> Result<Self, RequestValidationError> {
+        network
+            .validate_actor(self.actor_id)
+            .map_err(|_| RequestValidationError::NetworkActorMismatch)?;
+        self.network = network;
+        Ok(self)
+    }
+
     pub fn with_target(mut self, target: DeliveryTarget) -> Result<Self, RequestValidationError> {
         if target.chat_id() > 0 && target.chat_id() as u64 != self.actor_id {
             return Err(RequestValidationError::InvalidDeliveryTarget);
@@ -387,6 +410,7 @@ impl fmt::Debug for DownloadRequest {
             .field("clip_range", &self.clip_range)
             .field("params", &self.params)
             .field("target", &self.target)
+            .field("network", &self.network)
             .finish()
     }
 }
@@ -404,6 +428,8 @@ pub enum RequestValidationError {
     InvalidParameters,
     #[error("delivery target is invalid")]
     InvalidDeliveryTarget,
+    #[error("personal network reference belongs to a different actor")]
+    NetworkActorMismatch,
 }
 
 /// Broad, stable failure categories suitable for domain decisions and persistence.
@@ -818,6 +844,8 @@ mod tests {
         assert_eq!(second.actor_id(), 22);
         assert_eq!(second.params().max_height(), None);
         assert_eq!(second.clip_range().unwrap().start_seconds(), 3.0);
+        assert_eq!(first.network(), &NetworkSelection::NONE);
+        assert_eq!(second.network(), &NetworkSelection::NONE);
     }
 
     #[test]

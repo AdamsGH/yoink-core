@@ -59,12 +59,18 @@ Downloads are disabled unless explicitly enabled. Enabling them requires both ex
 | `YOINK_RUST_WORKER_MAX_OUTPUT_BYTES` | `1048576` | 65536 through 4194304 bytes | Maximum worker stdout event bytes. |
 | `YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS` | `[]` | JSON array of at most 16 HTTP(S) origins | Narrow exception to worker private-address blocking, for trusted isolated test fixtures only. Entries may contain scheme, host, and optional port, but no credentials, path, query, fragment, or whitespace. Do not use this for production destinations. |
 | `YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS` | `[]` | JSON array of at most 16 HTTP(S) origins | Allowed proxy endpoints without credentials. Does not select a proxy or grant access to cookies. Request credentials travel separately in the stdin protocol. |
+| `YOINK_RUST_DOWNLOAD_PROXY_URL` | unset | HTTP(S) proxy URL, optionally with credentials | System fallback only when the user's stored proxy setting is enabled and no personal proxy is set. Treat as a secret. Its origin must also be explicitly allowed by `WORKER_ALLOWED_PROXY_ORIGINS`. Missing or invalid enabled proxy fails closed, never switches to direct access. |
+| `YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON` | `[]` | JSON array of at most 64 hostnames or IP addresses | Suppresses cookie selection for normalized domains and their subdomains. Entries cannot contain URL paths, credentials, ports, or whitespace. Does not bypass unsupported YouTube OAuth checks. |
 | `YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS` | `3` | 1 through 10 | Maximum queue attempts. |
 | `YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS` | `5` | 0 through 300 seconds | Delay before retryable failures. |
 | `YOINK_RUST_DOWNLOAD_MAX_PENDING` | `100` | 1 through 10000 | Maximum pending operations globally. |
 | `YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER` | `3` | 1 through 1000 | Maximum pending operations for one actor. |
 
 Cross-field checks also require `SHUTDOWN_TIMEOUT_SECS > DELIVERY_TIMEOUT_SECS + DOWNLOAD_HEARTBEAT_SECS` and `WORKER_PROCESSING_TIMEOUT_SECS <= DOWNLOAD_TIMEOUT_SECS` while media is enabled. A workspace path must be absolute and not `/`. Numeric values are bounded unsigned integers. The private-origin exception is not a general SSRF bypass: the worker still checks resolved destinations and redirect destinations.
+
+## Localization
+
+Telegram replies use embedded [English](../../backend/crates/yoink-i18n/locales/en.toml) and [Russian](../../backend/crates/yoink-i18n/locales/ru.toml) TOML catalogs. Update both catalogs together. Keys and named `{parameter}` sets must match the typed manifest in `yoink-i18n`; invalid catalogs prevent Telegram startup. Templates are compiled once and inserted values are never interpreted as templates. Telegram language tags select Russian for `ru` and supported regional forms, with English as the fallback. Resource changes require a rebuild.
 
 ## Diagnostics and secrets
 

@@ -15,10 +15,13 @@ Run Rust workspace commands from the repository root:
 | `cd backend && just lint` | Clippy all workspace targets with warnings denied. |
 | `cd backend && just test` | Workspace tests. |
 | `cd backend && just verify` | Formatting, lint, unit tests, non-database smoke checks, script syntax checks, and documentation link checks. It does not require Docker. |
+| `cd backend && just test-profile-db` | Disposable Alembic-migrated PostgreSQL profile and credential contracts without rebuilding transport adapters. |
 | `cd backend && just test-db` | Disposable PostgreSQL/Alembic integration fixture and database process checks. |
 | `cd backend && just verify-db` | `verify` plus the database fixture. Uses disposable PostgreSQL and the legacy image for Alembic. |
 | `cd backend && just build-media` | Builds the opt-in experimental image; does not alter the existing Compose deployment. |
 | `cd backend && just verify-media` | Builds the image, runs the Python engine/security suites in a network-disabled container, checks the default launcher under deployment hardening, then runs the real media fixture with disposable PostgreSQL and a mock Bot API. |
+
+The media fixture includes a cookie-protected origin reached through an authenticated, origin-constrained proxy, verifies frozen-reference invalidation while queued, and rejects an enabled-but-missing proxy without direct fallback. Enabling proxy after direct-route admission blocks both queued source access and delivery of an already running direct result. Credentials must be absent from stored operation JSON and application logs.
 
 The media fixture verifies real worker download and native Telegram multipart upload under read-only/noexec and Landlock confinement. It checks bounded MP4 framing and unchanged media payload across remuxing, replay idempotency, actor isolation, cancellation and cleanup, three persisted HTTP 503 attempts with retry delay, terminal API rejection, a durable Telegram 429 retry respecting `retry_after`, API 500 and dropped-response ambiguity, crash recovery without resend, admission quotas, access revocation before execution and delivery, and secret redaction. Telegram is a local fixture API, not a live service or a platform-compatibility test.
 
@@ -28,7 +31,7 @@ The media fixture verifies real worker download and native Telegram multipart up
 
 `backend/scripts/test-db.mjs` uses only already-present images (`--pull never`). It creates a randomly named PostgreSQL container with a generated password, PostgreSQL data on tmpfs, and a random host port bound only to loopback. It does not read `.env` or accept a caller database URL. It applies the real Alembic chain from a read-only bind mount using `yoink/yoink:latest`, then checks that schema inspection rejects a database before explicit Rust migration.
 
-It serially runs the ignored SQLx storage and identity database test suites, runs `migrate` twice and `check-schema`, starts the diagnostic server, and confirms it exits unsuccessfully when the database is stopped. Cleanup removes only the named fixture container and its volumes. Do not run concurrent database fixtures against the same instance.
+It serially runs the ignored SQLx storage, identity, and profile database test suites. Profile checks include enforced read-only transactions, credential/grant revocation, proxy fallback and invalidation, domain aliases, unsupported authentication, and capacity bounds. The full fixture then runs `migrate` twice and `check-schema`, starts the diagnostic server, and confirms it exits unsuccessfully when the database is stopped. Cleanup removes only the named fixture container and its volumes. Do not run concurrent database fixtures against the same instance.
 
 ## Media fixture scope and schema lifecycle
 

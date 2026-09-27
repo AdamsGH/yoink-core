@@ -7,7 +7,7 @@ publish.workspace = true
 
 [dependencies]
 teloxide.workspace = true
-serde_json.workspace = true
+yoink-i18n = { path = "../yoink-i18n" }
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
@@ -19,6 +19,9 @@ yoink-domain.workspace = true
 yoink-downloads = { path = "../yoink-downloads" }
 yoink-executor = { path = "../yoink-executor" }
 yoink-storage.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

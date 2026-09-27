@@ -1,0 +1,1 @@
+UPDATE public.users SET role = 'banned', ban_until = now() + interval '1 hour' WHERE id = $1;

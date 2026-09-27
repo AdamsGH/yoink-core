@@ -10,7 +10,9 @@ const exec = promisify(execFile);
 const workspace = fileURLToPath(new URL('../', import.meta.url));
 const migrations = fileURLToPath(new URL('../../src/db', import.meta.url));
 const storageOnly = process.argv[2] === '--storage-only';
-if (process.argv.length > (storageOnly ? 3 : 2)) throw new Error('unsupported database fixture arguments');
+const profilesOnly = process.argv[2] === '--profiles-only';
+const focused = storageOnly || profilesOnly;
+if (process.argv.length > (focused ? 3 : 2)) throw new Error('unsupported database fixture arguments');
 const name = `yoink-rust-test-${randomUUID()}`;
 const password = randomUUID();
 let created = false;
@@ -73,9 +75,9 @@ try {
   console.log(`Alembic: ${[...migrationOutput.matchAll(/Running upgrade/g)].length} revisions applied to fresh fixture.`);
   if (interrupted) throw new Error('fixture interrupted');
   const env = { ...process.env, YOINK_TEST_DATABASE_URL: `postgresql://yoink_test:${password}@127.0.0.1:${port}/yoink_test` };
-  let rejected = storageOnly;
+  let rejected = focused;
   try {
-    if (!storageOnly) await command(binary, ['check-schema'], { env: { PATH: process.env.PATH, YOINK_RUST_DATABASE_URL: env.YOINK_TEST_DATABASE_URL } });
+    if (!focused) await command(binary, ['check-schema'], { env: { PATH: process.env.PATH, YOINK_RUST_DATABASE_URL: env.YOINK_TEST_DATABASE_URL } });
   } catch (error) {
     assert.match(error.message, /schema/i);
     assert.ok(!error.message.includes(password));
@@ -87,10 +89,10 @@ try {
   // The queue suite owns bootstrap from an absent runtime schema. Run it
   // explicitly before media cases, then legacy identity and process checks.
   // Serial execution also fences the deliberate schema-corruption fixtures.
-  const suites = [
+  const suites = profilesOnly ? [['yoink-downloads', '']] : [
     ['yoink-storage', 'queue_persistence_contract'],
     ['yoink-storage', ''],
-    ...(!storageOnly ? [['yoink-identity', '']] : []),
+    ...(!storageOnly ? [['yoink-identity', ''], ['yoink-downloads', '']] : []),
   ];
   for (const [crate, filter] of suites) {
     const skip = crate === 'yoink-storage' && !filter ? ['--skip', 'queue_persistence_contract'] : [];
@@ -99,7 +101,7 @@ try {
     const passed = [...output.matchAll(/test result: ok\. (\d+) passed;/g)].reduce((sum, match) => sum + Number(match[1]), 0);
     console.log(`${crate}: ${passed} database contract suite passed.`);
   }
-  if (!storageOnly) await verifyProcess(env.YOINK_TEST_DATABASE_URL);
+  if (!focused) await verifyProcess(env.YOINK_TEST_DATABASE_URL);
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

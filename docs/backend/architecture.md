@@ -1,31 +1,38 @@
 # Architecture
 
-The Rust workspace in [backend/Cargo.toml](../../backend/Cargo.toml) is a parallel implementation stage, not a replacement backend. The first opt-in media slice connects Telegram commands to identity authorization, PostgreSQL queueing, a container Python worker, and Telegram delivery. It remains experimental. Existing public/legacy tables are read-only, and there has been no production cutover.
+The Rust workspace in [backend/Cargo.toml](../../backend/Cargo.toml) is a parallel implementation, not a production replacement. The opt-in media path connects Telegram commands to identity authorization, PostgreSQL queueing, a confined container Python worker, and durable Telegram delivery. Existing public tables remain read-only. No production cutover has occurred.
 
 ## Runtime path
 
-The server binds HTTP diagnostics first and reports readiness only after configured dependencies initialize. Database and Telegram adapters are optional. If downloads are enabled, both are required; startup verifies the existing Rust schema without modifying it, checks for the expected container marker and fixed worker paths, prepares Telegram, then wires the download service into the Telegram adapter and starts queue workers.
+The server binds HTTP diagnostics first and reports readiness only after configured dependencies initialize. PostgreSQL and Telegram are optional unless downloads are enabled. Startup verifies schema compatibility without migrating, checks the experimental container and fixed worker launcher, validates embedded translations, then starts the configured adapters and queue workers.
 
 ```text
 yoink-server
-  -> yoink-http            diagnostics
-  -> yoink-telegram        optional polling and owner-private commands
-  -> yoink-downloads       identity rechecks, PostgreSQL queue, worker lifecycle, delivery state
-       -> yoink-identity  read-only public identity snapshot
-       -> yoink-executor  fixed container Python process and artifact validation
-       -> yoink-storage   SQLx PostgreSQL queue and schema check
-       -> Telegram Bot API sendDocument
-  -> Python worker         progressive HTTP(S) video only
+  -> yoink-http             diagnostics
+  -> yoink-telegram         owner-private commands and native media delivery
+       -> yoink-i18n        embedded EN/RU TOML catalogs
+  -> yoink-downloads        admission, reauthorization, profiles and worker lifecycle
+       -> yoink-identity   read-only legacy identity and grants
+       -> ProfileStore     read-only legacy settings and cookie/proxy selection
+       -> yoink-storage    durable queue, leases, quotas and delivery journal
+       -> yoink-executor   fixed worker process and artifact validation
+  -> Python worker          yt-dlp, gallery-dl and bounded ffmpeg processing
 ```
 
-The available media commands are `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The Telegram outer gate still admits commands only from the configured owner in private chat. Separately, the media service checks the requested owner's stored role and blocking status at admission, immediately before execution, and again before delivery.
+The available media commands are `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The outer Telegram gate admits only the configured owner in a private chat. The media service independently checks current identity and grants at admission, before execution, and before each delivery unit.
+
+## Credentials and request snapshots
+
+Admission loads supported stored user preferences and freezes opaque credential references. Personal cookies are separate from shared pool cookies, which require a current grant even when uploaded by the requesting actor. Proxy use follows the stored enable flag, preferring a personal proxy over the configured system fallback. Enabled-but-missing proxy configuration is rejected rather than silently using direct access.
+
+The queue stores identifiers, ownership metadata and credential versions, not cookie content or proxy passwords. Idempotent replays retain the first admitted snapshot. Resolution rereads current credentials and access before execution and delivery. Changed, deleted or revoked references fail rather than selecting replacement credentials. Actual credentials enter the worker through its bounded stdin protocol.
+
+Cache identity includes actor, bot, media parameters and selected credential versions. This separates credential-dependent results, but persisted cache keys alone do not implement Telegram file-ID cache reuse.
 
 ## Ownership boundaries and limitations
 
-- Existing tables in `public` remain owned by the Python service's Alembic chain. Rust reads selected identity rows and does not write them.
-- Rust SQLx migrations own only `yoink_runtime`, including queue, attempts, leases, cancellation, quotas, and delivery outcomes. Normal server startup checks schema compatibility and never migrates.
-- The Python process runs at the fixed image path with explicit time, socket, output, artifact, and workspace budgets. Worker process-group termination and reaping are lifecycle controls, not a security sandbox. Use container isolation and resource limits; see the [media slice guide](media-slice.md).
-- The slice only handles one progressive HTTP(S) MP4 or WebM video artifact. It does not provide audio, playlists, HLS/DASH, multi-artifact jobs, clipping, subtitles, cookies, proxies, tdlight, or other plugins.
-- The implementation is experimental and is not a production cutover or a performance claim.
-
-See [database ownership](../decisions/0001-database-ownership.md) for the boundary between Alembic and SQLx.
+- Alembic owns existing `public` tables. Rust reads identity, settings and credentials without modifying them.
+- SQLx migrations own only `yoink_runtime`, including operations, attempts, leases and delivery outcomes. Startup checks compatibility and never migrates.
+- The fixed Python worker runs under container read-only/noexec controls and Landlock, with process-group termination, network policy and resource budgets. See the [media slice guide](media-slice.md).
+- Worker engines support video/audio processing, playlists, clips and galleries. Transport options and settings are not yet at full Python parity. Interactive menus, group/topic routing, cache reuse, unsupported provider authentication and other product modules remain unfinished.
+- This is neither a production cutover nor a performance claim. See [database ownership](../decisions/0001-database-ownership.md).

@@ -6,6 +6,9 @@ use yoink_domain::{
 
 use crate::StoreError;
 
+mod network;
+use network::NetworkSelectionData;
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RequestData {
@@ -18,6 +21,8 @@ struct RequestData {
     params: DownloadParamsData,
     #[serde(default)]
     target: Option<DeliveryTargetData>,
+    #[serde(default)]
+    network: NetworkSelectionData,
     // Rows persisted by migration 0001 used this top-level field.
     #[serde(default)]
     max_height: Option<u32>,
@@ -197,6 +202,7 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
             thread_id: t.thread_id(),
             reply_to_message_id: t.reply_to_message_id(),
         }),
+        network: request.network().into(),
         max_height: None,
     };
     serde_json::to_value(data).map_err(|_| StoreError::InvalidStoredData)
@@ -273,7 +279,9 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
             .with_target(target)
             .map_err(|_| StoreError::InvalidStoredData)?;
     }
-    Ok(request)
+    request
+        .with_network(data.network.try_into()?)
+        .map_err(|_| StoreError::InvalidStoredData)
 }
 
 #[cfg(test)]

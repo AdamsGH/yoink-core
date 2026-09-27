@@ -1576,7 +1576,14 @@ async fn durable_batch_cancel_and_rejection_prefix_contract() {
         .unwrap();
     assert_eq!(rate_record.status, OperationStatus::Queued);
     assert!(rate_record.available_at >= before_retry + chrono::Duration::seconds(6));
-    assert!(rate_record.available_at <= rate_record.updated_at + chrono::Duration::seconds(6));
+    let after_retry: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar(include_str!("fixtures/database_clock.sql"))
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    // PostgreSQL may evaluate updated_at before available_at. Bound the retry
+    // against database clocks outside the statement, not assignment order.
+    assert!(rate_record.available_at <= after_retry + chrono::Duration::seconds(6));
     assert!(
         store
             .claim("retry-before-delay", Duration::from_secs(5))

@@ -214,7 +214,8 @@ impl fmt::Debug for NetworkCredentials {
     }
 }
 impl NetworkCredentials {
-    fn validate(&self) -> Result<(), ProtocolError> {
+    /// Validate transient stdin credentials without exposing their values in diagnostics.
+    pub fn validate(&self) -> Result<(), ProtocolError> {
         if let Some(proxy) = &self.proxy_url {
             if proxy.is_empty()
                 || proxy.len() > MAX_PROXY_URL_BYTES

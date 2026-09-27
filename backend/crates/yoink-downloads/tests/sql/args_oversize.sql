@@ -1,0 +1,1 @@
+UPDATE public.dl_user_settings SET args_json = json_build_object('padding', repeat('x', 70000)) WHERE user_id = $1;

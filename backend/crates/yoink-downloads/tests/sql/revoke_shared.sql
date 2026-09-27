@@ -1,0 +1,1 @@
+DELETE FROM public.user_permissions WHERE user_id = $1 AND plugin = 'dl' AND feature = 'shared_cookies';
