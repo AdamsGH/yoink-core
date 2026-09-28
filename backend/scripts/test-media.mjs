@@ -6,6 +6,7 @@ import { writeFailureReport } from './media-fixture/failure-report.mjs';
 import { isoBmffMdatPayloads } from './media-fixture/media-format.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { BotApiFixture } from './media-fixture/bot-api.mjs';
+import { runCommandMediaScenarios } from './media-fixture/command-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -96,7 +97,7 @@ function redact(value) {
 }
 function assertNoSecret(output, where) {
   for (const secret of [secretMarker, token, fixtureToken, cookieSecret, proxyPassword, proxyUser, proxyAuth]) assert(!output.includes(secret), `${where} leaked fixture credentials`);
-  assert(!/fixture-(video|document)-\d+/.test(output), `${where} leaked a Telegram file ID`);
+  assert(!/fixture-(video|document|audio)-\d+/.test(output), `${where} leaked a Telegram file ID`);
 }
 function safeTelegramSummary() { return botApi.calls.map(({method,data,status,uploadLength,cached}) => ({method,status,uploadLength,cached,chat_id:data?.chat_id,text:data?.text})); }
 async function fixtureDiagnostics() {
@@ -214,13 +215,15 @@ try {
     'workspace must be empty after the acknowledged delivery');
 
   const originalMediaSendCount = botApi.calls.filter(call => call.method === 'sendvideo' || call.method === 'senddocument').length;
+  const replayCallStart = botApi.calls.length;
   botApi.enqueue(42, 42, `/download ${sourceUrl}`, replayMessageId);
   botApi.enqueue(42, 42, `/job ${operationId}`);
   botApi.enqueue(43, 43, `/job ${operationId}`);
   botApi.enqueue(42, -10042, `/download ${sourceUrl}`);
   botApi.enqueue(42, 42, `/cancel ${operationId}`);
-  await waitFor(() => botApi.calls.filter(call => call.method === 'sendmessage').length >= 3, 'job and denial replies');
-  await sleep(350);
+  await waitFor(() => botApi.calls.slice(replayCallStart).some(call =>
+    call.method === 'sendmessage' && call.data.text.includes(operationId)), 'new existing-operation replay reply');
+  await waitFor(() => botApi.calls.slice(replayCallStart).filter(call => call.method === 'sendmessage').length >= 3, 'job and denial replies');
   assert.equal(botApi.calls.filter(call => call.method === 'sendvideo' || call.method === 'senddocument').length, originalMediaSendCount,
     'replayed admission and status/cancel/group commands must not redeliver media');
   assert.equal(sourceFixture.mediaRequests, initialSourceRequests, 'replayed update must not execute another download');
@@ -554,9 +557,12 @@ try {
   assert.equal(await cacheRevision(refreshedCache), beforeDisabled, 'disabled cache must not publish or refresh entries');
   await assertWorkspaceClean();
 
+  const commandScenarioSummary = await runCommandMediaScenarios({
+    botApi, sourcePort, sourceFixture, fixtureSql, queryJob, waitFor, helperContainer, image, assertWorkspaceClean,
+  });
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
-  console.log('Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios.');
+  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary}`);
 } catch (error) {
   await reportFailure(error, 'scenario');
   process.exitCode=1;

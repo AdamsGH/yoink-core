@@ -145,9 +145,9 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
         if not isinstance(playlist, dict) or set(playlist) != {"start", "end"} or type(playlist["start"]) is not int or (playlist["end"] is not None and type(playlist["end"]) is not int):
             raise ValueError("invalid request")
         start, end = playlist["start"], playlist["end"]
-        if not -0x7FFFFFFF <= start <= 0x7FFFFFFF or end is not None and not -0x7FFFFFFF <= end <= 0x7FFFFFFF or end is None and start < -100:
+        if not -0x80000000 <= start <= 0x7FFFFFFF or end is not None and not -0x80000000 <= end <= 0x7FFFFFFF or end is None and start < -100:
             raise ValueError("invalid request")
-        if start == 0 or end == 0 or end is not None and (start * end < 0 or (start > 0 and end < start) or (start < 0 and end > start) or abs(end - start) + 1 > 100):
+        if start == 0 or end == 0 or end is not None and (start * end < 0 or abs(end - start) + 1 > 100):
             raise ValueError("invalid request")
     clips = defaults["clips"]
     if not isinstance(clips, list) or len(clips) > 20:

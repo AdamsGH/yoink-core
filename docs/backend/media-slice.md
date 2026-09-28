@@ -4,13 +4,13 @@ This page describes the implemented Rust media architecture and its isolated ver
 
 ## Runtime and guarantees
 
-With downloads enabled, the configured Telegram bot accepts `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The outer command gate admits only the configured owner in a private chat. The media use case also requires a currently authorized private-scope identity at admission, execution, and delivery.
+With downloads enabled, the configured Telegram bot accepts `/download <http(s) URL>`, `/video URL`, `/audio [range] URL`, `/image URL`, `/playlist [range] URL`, inline `/cut URL START END`, `/job <UUID>`, and `/cancel <UUID>`. See the [downloader compatibility matrix](downloads-parity.md) for exact scope, range/clip semantics and remaining workflows. The outer command gate admits only the configured owner in a private chat. The media use case also requires a currently authorized private-scope identity at admission, execution, and delivery.
 
 Operations, leases, quotas, cache and delivery journals persist in the native Turso 0.7.2 database. One process owns the file through an advisory sidecar lock, and all calls use one serialized connection. No PostgreSQL, SQLx, or PostgreSQL privilege model participates in this runtime. The trusted server process owns access to all database contents, so filesystem ownership and private directory permissions protect credentials at rest. Access snapshots must not return credential values.
 
 The service freezes credential references and versions, never credential contents. It rechecks grants and references before work and each delivery unit. Queue claims use expiring leases and fencing tokens; stale workers cannot transition durable state. Retries are bounded. Cancellation stops and reaps a running worker. Delivery state is journaled before sending, confirmed units survive recovery, and uncertain outcomes are terminal rather than automatically resent. Exactly-once external delivery is not promised.
 
-The fixed Python worker performs media processing in a constrained container. The documented engine capabilities include video/audio processing, playlists, clips, and galleries, but not full legacy command or settings parity. The native media acceptance fixture covers real worker execution, persistent delivery state and recovery, access changes, retry/cancellation/quota behavior, file-ID cache recovery/expiry and credential redaction.
+The fixed Python worker performs media processing in a constrained container. The documented engine capabilities include video/audio processing, playlists, clips, and galleries, but not full legacy command or settings parity. The native media acceptance fixture covers real worker execution, persistent delivery state and recovery, access changes, retry/cancellation/quota behavior, file-ID cache recovery/expiry and credential redaction. Video, audio and inline-cut commands are checked through uploaded bytes with ffprobe. Playlist and gallery commands are checked for admission and persisted parameters only, then cancelled before execution. That does not establish provider or album-delivery compatibility.
 
 ## Isolated container layout
 

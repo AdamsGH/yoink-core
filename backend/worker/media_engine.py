@@ -142,7 +142,7 @@ def _ffmpeg_args(ffmpeg: str, source: Path, destination: Path, options: dict[str
         elif audio == "opus":
             args += ["-f", "opus"]
         elif audio in ("aac", "best"):
-            args += ["-f", "adts"]
+            args += ["-f", "mp4", "-movflags", "+faststart"]
     elif mode != "image":
         video = options.get("video_codec", "h264")
         codec = {"h264": "libx264", "h265": "libx265", "av1": "libaom-av1", "vp9": "libvpx-vp9", "any": "libx264" if options.get("max_height") else "copy"}[video]
@@ -473,7 +473,7 @@ def download_media(request: dict[str, Any], settings: Any,
         elif clips:
             for source_index, source in enumerate(sources, start=1):
                 for clip_index, clip in enumerate(clips, start=1):
-                    extension = ({"best": "aac", "aac": "aac", "mp3": "mp3", "opus": "opus"}[options.get("audio_codec", "best")]
+                    extension = ({"best": "m4a", "aac": "m4a", "mp3": "mp3", "opus": "opus"}[options.get("audio_codec", "best")]
                                  if mode == "audio" else options.get("container", "mp4"))
                     out = workspace / f"clip-{source_index:03d}-{clip_index:02d}.{extension}"
                     _bounded_output(_ffmpeg_args(ffmpeg, source, out, options, mode, clip), timeout, 64 * 1024)
@@ -488,7 +488,7 @@ def download_media(request: dict[str, Any], settings: Any,
                         produced.append(source)
                         continue
                 if mode == "audio":
-                    ext = {"best": "aac", "aac": "aac", "mp3": "mp3", "opus": "opus"}[options.get("audio_codec", "best")]
+                    ext = {"best": "m4a", "aac": "m4a", "mp3": "mp3", "opus": "opus"}[options.get("audio_codec", "best")]
                     target = workspace / f"media-{index:03d}.{ext}"
                 else:
                     target = workspace / f"media-{index:03d}.{options.get('container', 'mp4')}"

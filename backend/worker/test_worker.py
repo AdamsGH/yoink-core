@@ -131,6 +131,37 @@ class ProtocolAndSettingsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             main._validate_request(b"not-json")
 
+    def test_playlist_protocol_preserves_domain_order_and_signed_bounds(self):
+        base = {
+            "version": 2, "operation_id": "4f15ab1d-8f81-4886-999d-44c26db8b9ce",
+            "attempt": 1, "source_url": "https://example.test/playlist",
+            "task": {"kind": "download", "media_mode": "video"},
+        }
+        cases = (
+            (4, 2, [4, 3, 2]),
+            (-3, -1, [-3, -2, -1]),
+            (-1, -3, [-1, -2, -3]),
+            (-3, None, [-3, -2, -1]),
+            (7, None, [7]),
+            (1, 20, list(range(1, 21))),
+            (1, 100, list(range(1, 101))),
+            (-2147483648, -2147483648, [-2147483648]),
+            (2147483647, 2147483647, [2147483647]),
+        )
+        for start, end, expected in cases:
+            with self.subTest(start=start, end=end):
+                raw = {**base, "options": {"playlist": {"start": start, "end": end}}}
+                validated = main._validate_request(json.dumps(raw).encode())
+                self.assertEqual(media_engine.playlist_indices(validated["options"]["playlist"]), expected)
+        for start, end in (
+            (0, None), (1, 0), (1, -1), (-1, 1), (1, 101), (-101, None),
+            (-2147483649, -2147483649), (2147483648, 2147483648), (True, 1), (1, False),
+        ):
+            with self.subTest(start=start, end=end), self.assertRaises(ValueError):
+                main._validate_request(json.dumps({**base, "options": {
+                    "playlist": {"start": start, "end": end},
+                }}).encode())
+
     def test_task_audio_and_extract_content_are_classified_not_corrupt(self):
         for task in ({"kind": "download", "media_mode": "audio"}, {"kind": "extract_content"}):
             request = {

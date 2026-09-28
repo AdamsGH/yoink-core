@@ -21,11 +21,14 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
 use yoink_application::{ModuleStatus, SystemService};
+#[cfg(test)]
+use yoink_domain::Engine;
 use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode};
 use yoink_downloads::{DownloadError, DownloadService};
 use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for};
 use yoink_storage::{Admission, OperationStatus};
 
+mod media_command;
 mod sender;
 
 /// Safe, fixed error categories. Underlying Telegram errors are deliberately discarded.
@@ -196,15 +199,31 @@ impl TelegramAdapter {
 #[derive(Clone)]
 struct DownloadsDependency(Option<DownloadService>);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 enum Command {
     Start,
     Help,
     Status,
     Download(String),
+    Media(media_command::ParsedMedia),
     Job(Uuid),
     Cancel(Uuid),
     Invalid,
+}
+
+impl std::fmt::Debug for Command {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Media(_) => formatter.write_str("Media([REDACTED])"),
+            Self::Download(_) => formatter.write_str("Download([REDACTED])"),
+            Self::Start => formatter.write_str("Start"),
+            Self::Help => formatter.write_str("Help"),
+            Self::Status => formatter.write_str("Status"),
+            Self::Job(id) => formatter.debug_tuple("Job").field(id).finish(),
+            Self::Cancel(id) => formatter.debug_tuple("Cancel").field(id).finish(),
+            Self::Invalid => formatter.write_str("Invalid"),
+        }
+    }
 }
 
 fn parse_command(text: &str, own_username: &str) -> Option<Command> {
@@ -217,42 +236,48 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
         None => command,
     };
 
-    match name.to_ascii_lowercase().as_str() {
+    let name = name.to_ascii_lowercase();
+    let args = words.collect::<Vec<_>>();
+    if let Some(parsed) = media_command::parse(&name, &args) {
+        return Some(parsed.map_or(Command::Invalid, Command::Media));
+    }
+
+    match name.as_str() {
         "start" => {
-            if words.next().is_none() {
+            if args.is_empty() {
                 Some(Command::Start)
             } else {
                 Some(Command::Invalid)
             }
         }
         "help" => {
-            if words.next().is_none() {
+            if args.is_empty() {
                 Some(Command::Help)
             } else {
                 Some(Command::Invalid)
             }
         }
         "status" => {
-            if words.next().is_none() {
+            if args.is_empty() {
                 Some(Command::Status)
             } else {
                 Some(Command::Invalid)
             }
         }
         "download" => {
-            let Some(url) = words.next() else {
+            let Some(url) = args.first().copied() else {
                 return Some(Command::Invalid);
             };
-            if words.next().is_some() || url.len() > 4096 || !is_http_url(url) {
+            if args.len() != 1 || url.len() > 4096 || !is_http_url(url) {
                 return Some(Command::Invalid);
             }
             Some(Command::Download(url.to_owned()))
         }
         "job" => {
-            let Some(id) = words.next() else {
+            let Some(id) = args.first().copied() else {
                 return Some(Command::Invalid);
             };
-            if words.next().is_some() {
+            if args.len() != 1 {
                 return Some(Command::Invalid);
             }
             Some(
@@ -262,10 +287,10 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
             )
         }
         "cancel" => {
-            let Some(id) = words.next() else {
+            let Some(id) = args.first().copied() else {
                 return Some(Command::Invalid);
             };
-            if words.next().is_some() {
+            if args.len() != 1 {
                 return Some(Command::Invalid);
             }
             Some(
@@ -330,6 +355,10 @@ fn response(command: Command, language: Language, system: &SystemService, enable
         Command::Invalid => translate(language, Key::DownloadsUnavailable, &[]),
         _ => String::new(),
     }
+}
+
+fn media_unavailable_response(language: Language) -> String {
+    translate(language, Key::DownloadsUnavailable, &[])
 }
 
 fn format_status(system: &SystemService, language: Language) -> String {
@@ -468,8 +497,10 @@ async fn handle_message(
         Command::Start | Command::Help | Command::Status | Command::Invalid => {
             response(command, language, &system, downloads.is_some())
         }
-        Command::Download(_) | Command::Job(_) | Command::Cancel(_) if downloads.is_none() => {
-            translate(language, Key::DownloadsUnavailable, &[])
+        Command::Download(_) | Command::Media(_) | Command::Job(_) | Command::Cancel(_)
+            if downloads.is_none() =>
+        {
+            media_unavailable_response(language)
         }
         Command::Download(url) => {
             let Some(service) = downloads.as_ref() else {
@@ -490,6 +521,32 @@ async fn handle_message(
                 .map_err(|_| DownloadError::InvalidInput)?
                 .with_target(target)
                 .map_err(|_| DownloadError::InvalidInput)
+            });
+            match request {
+                Ok(request) => match service.submit_request(&request, &key).await {
+                    Ok(admission) => admitted_response(admission, language),
+                    Err(error) => download_error_response(error, language).to_owned(),
+                },
+                Err(error) => download_error_response(error, language).to_owned(),
+            }
+        }
+        Command::Media(media) => {
+            let Some(service) = downloads.as_ref() else {
+                return Ok(());
+            };
+            let key = format!("tg:{bot_id}:{}:{}", message.chat.id.0, message.id.0);
+            let target =
+                DeliveryTarget::new(bot_id as i64, message.chat.id.0, None, Some(message.id.0))
+                    .map_err(|_| DownloadError::InvalidInput);
+            let mut params = DownloadParams::default().with_playlist(media.playlist);
+            if let Some(engine) = media.engine {
+                params = params.with_engine(engine);
+            }
+            let request = target.and_then(|target| {
+                DownloadRequest::new(owner_id, &media.url, media.mode, media.clip, params)
+                    .map_err(|_| DownloadError::InvalidInput)?
+                    .with_target(target)
+                    .map_err(|_| DownloadError::InvalidInput)
             });
             match request {
                 Ok(request) => match service.submit_request(&request, &key).await {
@@ -601,6 +658,38 @@ mod tests {
         );
         assert_eq!(parse_command("status", "yoink_bot"), None);
         assert_eq!(parse_command("/settings", "yoink_bot"), None);
+    }
+
+    #[test]
+    fn media_commands_accept_suffixes_and_keep_urls_out_of_debug_output() {
+        let parsed = parse_command(
+            "/AUDIO@YOINK_BOT https://example.test/watch?token=secret 3",
+            "yoink_bot",
+        )
+        .unwrap();
+        assert!(matches!(parsed, Command::Media(_)));
+        assert!(!format!("{parsed:?}").contains("secret"));
+        assert!(
+            parse_command("/cut https://example.test/watch 00:01 00:03", "yoink_bot").is_some()
+        );
+        assert!(parse_command("/image https://example.test/photo", "yoink_bot")
+            .is_some_and(|command| matches!(command, Command::Media(media) if media.engine == Some(Engine::Gallery))));
+        assert!(parse_command("/playlist 3 https://example.test/list", "yoink_bot")
+            .is_some_and(|command| matches!(command, Command::Media(media) if media.playlist.is_some_and(|range| range.start() == 1 && range.end() == Some(3)))));
+        assert!(parse_command("/playlist https://example.test/list", "yoink_bot")
+            .is_some_and(|command| matches!(command, Command::Media(media) if media.playlist.is_some_and(|range| range.start() == 1 && range.end() == Some(20)))));
+        assert_eq!(
+            media_unavailable_response(Language::English),
+            "Experimental downloads are unavailable."
+        );
+        assert_eq!(
+            media_unavailable_response(Language::Russian),
+            "Экспериментальные загрузки недоступны."
+        );
+        assert_eq!(
+            parse_command("/video https://example.test/a extra extra", "yoink_bot"),
+            Some(Command::Invalid)
+        );
     }
 
     #[test]

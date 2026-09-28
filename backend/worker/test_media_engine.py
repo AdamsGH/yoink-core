@@ -49,7 +49,7 @@ class MediaEngineTests(unittest.TestCase):
         self.assertFalse(media_engine._already_compatible(info, "mov,mp4,m4a", {**options, "max_height": 480}))
 
     def test_audio_outputs_use_extensions_and_containers_matching_codecs(self):
-        for codec, extension, expected_format in (("mp3", "mp3", "mp3"), ("opus", "opus", "opus"), ("aac", "aac", "adts"), ("best", "aac", "adts")):
+        for codec, extension, expected_format in (("mp3", "mp3", "mp3"), ("opus", "opus", "opus"), ("aac", "m4a", "mp4"), ("best", "m4a", "mp4")):
             args = media_engine._ffmpeg_args("ffmpeg", Path("source.mkv"), Path(f"audio.{extension}"), {"audio_codec": codec}, "audio")
             self.assertEqual(args[-1], f"audio.{extension}")
             self.assertEqual(args[args.index("-f") + 1], expected_format)
@@ -126,13 +126,22 @@ class MediaEngineTests(unittest.TestCase):
                     {"start_seconds": 0.1, "end_seconds": 0.7},
                 ), 20)
                 media_engine._probe(clip, ffprobe, 10)
-                audio = Path("audio.mp3")
-                audio_options = {"container": "mp4", "video_codec": "h264", "audio_codec": "mp3"}
-                media_engine._bounded_output(media_engine._ffmpeg_args(
-                    ffmpeg, Path("generated.mp4"), audio, audio_options, "audio",
-                ), 20)
-                info, _fmt = media_engine._probe(audio, ffprobe, 10)
-                self.assertEqual(info["streams"][0]["codec_type"], "audio")
+                for codec, extension, mime in (
+                    ("best", "m4a", "audio/mp4"), ("aac", "m4a", "audio/mp4"),
+                    ("mp3", "mp3", "audio/mpeg"), ("opus", "opus", "audio/ogg"),
+                ):
+                    for clip_spec in (None, {"start_seconds": 0.1, "end_seconds": 0.7}):
+                        with self.subTest(codec=codec, clip=clip_spec):
+                            audio = Path(f"audio-{codec}.{extension}")
+                            audio_options = {**options, "audio_codec": codec}
+                            media_engine._bounded_output(media_engine._ffmpeg_args(
+                                ffmpeg, Path("generated.mp4"), audio, audio_options, "audio", clip_spec,
+                            ), 20)
+                            info, fmt = media_engine._probe(audio, ffprobe, 10)
+                            self.assertEqual({stream["codec_type"] for stream in info["streams"]}, {"audio"})
+                            self.assertEqual(media_engine._media_type(info, fmt), mime)
+                            if extension == "m4a":
+                                self.assertEqual(audio.read_bytes()[4:8], b"ftyp")
             finally:
                 os.chdir(old)
 

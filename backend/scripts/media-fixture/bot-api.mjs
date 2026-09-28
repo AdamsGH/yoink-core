@@ -15,9 +15,12 @@ export class BotApiFixture {
   #sendCalls = 0;
   #uploadCalls = 0;
   #cachedCalls = 0;
+  #expectedUpload = null;
+  #lastUploadedBytes;
 
-  constructor({ mediaBytes }) {
+  constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024 }) {
     this.mediaBytes = mediaBytes;
+    this.maxRequestBytes = maxRequestBytes;
   }
   get error() { return this.#error; }
   get calls() { return this.#calls; }
@@ -25,6 +28,16 @@ export class BotApiFixture {
   get uploadCalls() { return this.#uploadCalls; }
   get cachedCalls() { return this.#cachedCalls; }
   get sendMode() { return this.#sendMode; }
+  get lastUploadedBytes() { return this.#lastUploadedBytes; }
+  setExpectedUpload(contract) {
+    if (contract !== null) {
+      assert(contract && typeof contract.method === 'string', 'expected upload contract needs a Telegram method');
+      assert.equal(typeof contract.preserveMdat, 'boolean', 'expected upload contract needs an explicit mdat policy');
+      assert.equal(typeof contract.filename, 'string', 'expected upload contract needs a filename');
+      assert.equal(typeof contract.mimeType, 'string', 'expected upload contract needs a MIME type');
+    }
+    this.#expectedUpload = contract;
+  }
   setSendMode(mode) { this.#sendMode = mode; }
   holdNextUpload() {
     let release;
@@ -56,7 +69,12 @@ export class BotApiFixture {
   async #handle(req, res) {
     const method = (req.url.split('/').at(-1) ?? '').toLowerCase();
     const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
+    let requestLength = 0;
+    for await (const chunk of req) {
+      requestLength += chunk.length;
+      assert(requestLength <= this.maxRequestBytes, 'Telegram fixture request exceeds its byte bound');
+      chunks.push(chunk);
+    }
     const body = Buffer.concat(chunks);
     res.setHeader('content-type', 'application/json');
     if (method === 'getme') {
@@ -73,7 +91,7 @@ export class BotApiFixture {
       const data = JSON.parse(body.toString('utf8'));
       this.#calls.push({ method, data });
       res.end(JSON.stringify({ ok: true, result: this.#message(123456, Number(data.chat_id), data.text) }));
-    } else if (method === 'sendvideo' || method === 'senddocument') {
+    } else if (method === 'sendvideo' || method === 'senddocument' || method === 'sendaudio') {
       await this.#handleMedia(method, req, res, body);
     } else {
       res.writeHead(404);
@@ -85,6 +103,7 @@ export class BotApiFixture {
     const boundary = String(req.headers['content-type'] ?? '').match(/boundary=([^;]+)/)?.[1];
     let data;
     let filePart;
+    let uploadedMimeType;
     if (boundary) {
       const delimiter = Buffer.from(`--${boundary}`);
       const parts = [];
@@ -100,7 +119,9 @@ export class BotApiFixture {
         parts.push({ headers: body.subarray(start, headersEnd).toString('latin1'), value: body.subarray(headersEnd + 4, end) });
         offset = end + 2;
       }
-      filePart = parts.find(part => /filename="media\.mp4"/.test(part.headers));
+      const fileParts = parts.filter(part => /filename="/.test(part.headers));
+      assert(fileParts.length <= 1, 'Telegram upload must contain at most one file');
+      filePart = fileParts[0];
       assert(parts.every(part => !/filename=/.test(part.headers) || part === filePart), 'unexpected upload filename');
       data = Object.fromEntries(parts.filter(part => !/filename=/.test(part.headers)).map(part => {
         const name = part.headers.match(/name="([^"]+)"/)?.[1];
@@ -116,12 +137,24 @@ export class BotApiFixture {
     if (filePart) {
       this.#uploadCalls++;
       assert(filePart.value.length > 100 && filePart.value.length <= 2 * 1024 * 1024, 'uploaded media must stay within fixture bounds');
-      const sourceMdat = isoBmffMdatPayloads(this.mediaBytes);
-      const uploadedMdat = isoBmffMdatPayloads(filePart.value);
-      assert(sourceMdat.length > 0 && uploadedMdat.length > 0, 'source and upload must contain mdat boxes');
-      assert.deepEqual(uploadedMdat, sourceMdat, 'remuxed media must preserve source mdat bytes');
+      const contract = this.#expectedUpload;
+      if (contract) assert.equal(method, contract.method, 'upload must use the scenario expected Telegram method');
+      const filename = filePart.headers.match(/filename="([^"]+)"/)?.[1];
+      const mimeType = filePart.headers.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim();
+      uploadedMimeType = mimeType ?? contract?.mimeType;
+      assert.equal(filename, contract?.filename ?? 'media.mp4', 'upload filename must match its default or explicit transform contract');
+      // Teloxide streams file parts without a Content-Type header. If supplied,
+      // validate it. Real scenario checks independently probe captured media bytes.
+      if (mimeType !== undefined) assert.equal(mimeType, contract?.mimeType ?? 'video/mp4', 'upload MIME type must match its default or explicit transform contract');
+      if (contract?.preserveMdat ?? true) {
+        const sourceMdat = isoBmffMdatPayloads(this.mediaBytes);
+        const uploadedMdat = isoBmffMdatPayloads(filePart.value);
+        assert(sourceMdat.length > 0 && uploadedMdat.length > 0, 'source and upload must contain mdat boxes');
+        assert.deepEqual(uploadedMdat, sourceMdat, 'remuxed media must preserve source mdat bytes');
+      }
+      this.#lastUploadedBytes = Buffer.from(filePart.value);
     } else {
-      cachedFileId = data[method === 'sendvideo' ? 'video' : 'document'];
+      cachedFileId = data[method === 'sendvideo' ? 'video' : method === 'sendaudio' ? 'audio' : 'document'];
       assert(typeof cachedFileId === 'string' && this.#fileIds.has(cachedFileId), 'cache must reuse a previously confirmed file ID');
       this.#cachedCalls++;
     }
@@ -158,13 +191,15 @@ export class BotApiFixture {
       res.end(JSON.stringify({ ok: false, error_code: 400, description: 'Bad Request: chat not found' }));
       return;
     }
-    const kind = method === 'sendvideo' ? 'video' : 'document';
+    const kind = method === 'sendvideo' ? 'video' : method === 'sendaudio' ? 'audio' : 'document';
     const fileId = cachedFileId ?? `fixture-${kind}-${this.#sendCalls}`;
     this.#fileIds.add(fileId);
     const fileSize = filePart?.value.length ?? this.mediaBytes.length;
     const attachment = kind === 'video'
       ? { kind, value: { file_id: fileId, file_unique_id: `fixture-video-unique-${this.#sendCalls}`, width: 160, height: 120, duration: 1, mime_type: 'video/mp4', file_size: fileSize } }
-      : { kind, value: { file_id: fileId, file_unique_id: `fixture-document-unique-${this.#sendCalls}`, file_name: 'media.mp4', mime_type: 'video/mp4', file_size: fileSize } };
+      : kind === 'audio'
+        ? { kind, value: { file_id: fileId, file_unique_id: `fixture-audio-unique-${this.#sendCalls}`, duration: 1, performer: 'Fixture', title: 'Fixture audio', mime_type: uploadedMimeType ?? 'audio/mpeg', file_size: fileSize } }
+        : { kind, value: { file_id: fileId, file_unique_id: `fixture-document-unique-${this.#sendCalls}`, file_name: 'media.mp4', mime_type: 'video/mp4', file_size: fileSize } };
     res.end(JSON.stringify({ ok: true, result: this.#message(123456, chat, null, 9000 + this.#sendCalls, attachment, threadId) }));
   }
   #message(actor, chat, text, id = 1000, attachment, threadId) {
