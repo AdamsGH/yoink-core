@@ -21,6 +21,9 @@ export class BotApiFixture {
   #lastGroupBytes = [];
   #expectedAlbum;
   #sendPlan = [];
+  #messages = new Map();
+  #editMode = 'success';
+  #editFilter;
 
   constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024 }) {
     this.mediaBytes = mediaBytes;
@@ -49,14 +52,18 @@ export class BotApiFixture {
     this.#expectedUpload = contract;
   }
   setSendMode(mode) { this.#sendMode = mode; }
+  setEditMode(mode, textIncludes) { this.#editMode = mode; this.#editFilter = textIncludes; }
+  get progressMessages() { return [...this.#messages.values()]; }
   holdNextUpload() {
     let release;
     this.#sendGate = new Promise(resolve => { release = resolve; });
     this.#sendMode = 'hold';
     return () => { release(); this.#sendGate = undefined; };
   }
-  enqueue(actor, chat, text, id) {
-    this.#updates.push({ update_id: this.#updateId++, message: this.#message(actor, chat, text, id) });
+  enqueue(actor, chat, text, id, language = 'en') {
+    const message = this.#message(actor, chat, text, id);
+    message.from.language_code = language;
+    this.#updates.push({ update_id: this.#updateId++, message });
   }
   async start() {
     this.#server = http.createServer((req, res) => {
@@ -99,8 +106,25 @@ export class BotApiFixture {
       res.end(JSON.stringify({ ok: true, result: batch }));
     } else if (method === 'sendmessage') {
       const data = JSON.parse(body.toString('utf8'));
-      this.#calls.push({ method, data });
-      res.end(JSON.stringify({ ok: true, result: this.#message(123456, Number(data.chat_id), data.text) }));
+      const message = this.#message(123456, Number(data.chat_id), data.text, ++this.#nextMessageId);
+      this.#messages.set(`${message.chat.id}:${message.message_id}`, message);
+      this.#calls.push({ method, data, messageId: message.message_id });
+      res.end(JSON.stringify({ ok: true, result: message }));
+    } else if (method === 'editmessagetext') {
+      const data = JSON.parse(body.toString('utf8'));
+      assert(typeof data.text === 'string' && Buffer.byteLength(data.text) <= 4096, 'bounded progress text');
+      const message = this.#messages.get(`${data.chat_id}:${data.message_id}`);
+      const mode = this.#editFilter && !data.text.includes(this.#editFilter) ? 'success' : this.#editMode;
+      if (mode.endsWith('-once')) this.#editMode = 'success';
+      this.#calls.push({ method, data, status: mode, receivedAt: performance.now() });
+      const fail = (code, description, parameters) => { res.statusCode = code; res.end(JSON.stringify({ ok: false, error_code: code, description, ...(parameters ? { parameters } : {}) })); };
+      if (mode === 'rate-limit-once') { fail(429, 'Too Many Requests: retry after 2', { retry_after: 2 }); return; }
+      if (mode === 'api-ambiguous-once') { fail(500, 'Internal Server Error'); return; }
+      if (!message || mode === 'deleted') { fail(400, 'Bad Request: message to edit not found'); return; }
+      if (message.text === data.text) { fail(400, 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message'); return; }
+      message.text = data.text;
+      if (mode === 'socket-drop-once') { res.destroy(); return; }
+      res.end(JSON.stringify({ ok: true, result: message }));
     } else if (method === 'sendmediagroup') {
       await this.#handleGroup(req, res, body);
     } else if (['sendvideo', 'senddocument', 'sendaudio', 'sendphoto'].includes(method)) {

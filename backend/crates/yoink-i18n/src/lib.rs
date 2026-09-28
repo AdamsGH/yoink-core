@@ -72,6 +72,12 @@ define_keys! {
     StatusCancelled => "telegram.status_cancelled";
     Operation => "telegram.operation", ["id", "status", "attempt"];
     DeliveryUnconfirmed => "telegram.delivery_unconfirmed";
+    ProgressFetching => "telegram.progress_fetching";
+    ProgressProcessing => "telegram.progress_processing";
+    ProgressWriting => "telegram.progress_writing";
+    ProgressPercent => "telegram.progress_percent", ["percent"];
+    ProgressDelivered => "telegram.progress_delivered", ["delivered", "total"];
+    DeliveryPartialHint => "telegram.delivery_partial_hint";
     DeliveredMessage => "telegram.delivered_message", ["id"];
     ExistingOperation => "telegram.existing_operation", ["id"];
     OperationCreated => "telegram.operation_created", ["id"];

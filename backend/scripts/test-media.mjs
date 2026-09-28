@@ -2,13 +2,14 @@
 import assert from 'node:assert/strict';
 import { createProcessRunner, createContainerLifecycle } from './media-fixture/process-lifecycle.mjs';
 import { createNativeDbClient } from './media-fixture/native-db.mjs';
-import { writeFailureReport } from './media-fixture/failure-report.mjs';
+import { boundReport, writeFailureReport } from './media-fixture/failure-report.mjs';
 import { isoBmffMdatPayloads } from './media-fixture/media-format.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { BotApiFixture } from './media-fixture/bot-api.mjs';
 import { runCommandMediaScenarios } from './media-fixture/command-scenarios.mjs';
 import { runPreferenceScenarios } from './media-fixture/preference-scenarios.mjs';
 import { runBatchScenarios } from './media-fixture/batch-scenarios.mjs';
+import { runProgressScenarios } from './media-fixture/progress-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,6 +50,7 @@ let proxyPort;
 let volumeCreated = false;
 let downloadMaxAttempts;
 let downloadTimeoutSeconds = 3;
+let workerSocketTimeoutSeconds = 1;
 let cacheTtlSeconds;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
 const { capture: spawnCapture, docker } = processRunner;
@@ -96,18 +98,18 @@ async function assertWorkspaceClean() {
   assert.equal((await docker(['exec', appName, 'sh', '-c', 'test -z "$(ls -A /tmp/yoink-work)" && echo clean'])).trim(), 'clean', 'worker workspace must be empty');
 }
 function redact(value) {
-  return String(value).slice(-maxLog).split(token).join('[REDACTED_TOKEN]').split(fixtureToken).join('[REDACTED_FIXTURE_TOKEN]').split(secretMarker).join('[REDACTED_SOURCE]').split(cookieSecret).join('[REDACTED_COOKIE]').split(proxyPassword).join('[REDACTED_PROXY_PASSWORD]').split(proxyUser).join('[REDACTED_PROXY_USER]').split(proxyAuth).join('[REDACTED_PROXY_AUTH]');
+  return boundReport(String(value).split(token).join('[REDACTED_TOKEN]').split(fixtureToken).join('[REDACTED_FIXTURE_TOKEN]').split(secretMarker).join('[REDACTED_SOURCE]').split(cookieSecret).join('[REDACTED_COOKIE]').split(proxyPassword).join('[REDACTED_PROXY_PASSWORD]').split(proxyUser).join('[REDACTED_PROXY_USER]').split(proxyAuth).join('[REDACTED_PROXY_AUTH]'), maxLog);
 }
 function assertNoSecret(output, where) {
   for (const secret of [secretMarker, token, fixtureToken, cookieSecret, proxyPassword, proxyUser, proxyAuth]) assert(!output.includes(secret), `${where} leaked fixture credentials`);
   assert(!/fixture-(video|document|audio|photo)-\d+/.test(output), `${where} leaked a Telegram file ID`);
 }
-function safeTelegramSummary() { return botApi.calls.map(({method,data,status,uploadLength,cached}) => ({method,status,uploadLength,cached,chat_id:data?.chat_id,text:data?.text})); }
+function safeTelegramSummary() { return botApi.calls.slice(-20).map(({method,data,status,uploadLength,cached}) => ({method,status,uploadLength,cached,chat_id:data?.chat_id,text:data?.text})); }
 async function fixtureDiagnostics() {
   const status = await docker(['inspect','--format','{{.State.Status}} exit={{.State.ExitCode}}',appName]).catch(error => `unavailable: ${error.message}`);
   const logs = await docker(['logs','--tail','80',appName]).catch(error => `unavailable: ${error.message}`);
   const jobs = await nativeQuery('SELECT id,status,attempt,json_extract(request, \'$.target.bot_id\'),progress_stage,progress_percent FROM runtime_operations ORDER BY created_at DESC LIMIT 10').catch(error => `unavailable: ${error.message}`);
-  return `app=${status}\njobs (safe fields):\n${redact(jobs)}\nlogs (bounded, redacted):\n${redact(logs)}\ntelegram calls=${JSON.stringify(safeTelegramSummary())}`;
+  return `app=${status}\njobs (safe fields):\n${redact(jobs)}\nlogs (bounded, redacted):\n${redact(logs)}\ntelegram calls (last 20 of ${botApi.calls.length}):\n${safeTelegramSummary().map(call => JSON.stringify(call)).join('\n')}`;
 }
 async function reportFailure(error, phase) {
   const details = error instanceof AggregateError
@@ -130,6 +132,7 @@ async function launchApp() {
     '--tmpfs','/tmp/yoink-work:rw,noexec,nosuid,size=256m,uid=10001,gid=10001,mode=0700',
     '--tmpfs','/tmp/yoink-db:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
     '--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','128','--memory','512m',
+    '--env','YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS=1','--env','YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS=2',
     '--env','YOINK_RUST_TELEGRAM_ENABLED=true','--env',`YOINK_RUST_TELEGRAM_TOKEN=${token}`,'--env','YOINK_RUST_OWNER_ID=42',
     '--env',`YOINK_RUST_BOT_API_URL=http://127.0.0.1:${apiPort}`,'--env','TURSO_TMPDIR=/tmp/yoink-db','--env','TMPDIR=/tmp/yoink-db',
     '--env','YOINK_RUST_DATABASE_PATH=/state/private/state.db',
@@ -139,7 +142,7 @@ async function launchApp() {
     '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=["http://127.0.0.1:${sourcePort}"]`,
     '--env',`YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=["http://127.0.0.1:${proxyPort}"]`,
     '--env','YOINK_RUST_DOWNLOAD_LEASE_SECS=6','--env','YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1','--env','YOINK_RUST_DELIVERY_TIMEOUT_SECS=2',
-    '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env','YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=1',
+    '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env',`YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=${workerSocketTimeoutSeconds}`,
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
@@ -576,9 +579,12 @@ try {
   cacheTtlSeconds = 3600;
   await restartApp();
   const batchSummary = await runBatchScenarios({ ...commandContext, playlistMedia, imageBytes, restartApp });
+  workerSocketTimeoutSeconds = 20;
+  await restartApp();
+  const progressSummary = await runProgressScenarios({ ...commandContext, restartApp });
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
-  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary} ${preferenceSummary}. ${batchSummary}.`);
+  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary} ${preferenceSummary}. ${batchSummary}. ${progressSummary}.`);
 } catch (error) {
   await reportFailure(error, 'scenario');
   process.exitCode=1;

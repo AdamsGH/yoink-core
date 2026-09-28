@@ -4,6 +4,7 @@ mod cache_key;
 mod codec;
 mod error;
 mod model;
+mod progress;
 mod schema;
 mod store;
 pub use cache::CachedBatch;
@@ -13,4 +14,5 @@ pub use model::{
     Admission, AdmissionPolicy, Claim, LeaseHeartbeat, OperationRecord, OperationStatus,
     ProgressStage,
 };
+pub use progress::{ProgressMessage, ProgressNotice};
 pub use store::{StopDeliveryReason, Store};

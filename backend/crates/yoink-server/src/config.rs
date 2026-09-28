@@ -47,6 +47,7 @@ pub struct TelegramConfig {
     pub owner_id: u64,
     pub api_url: Option<Url>,
     pub poll_timeout: Duration,
+    pub progress: yoink_telegram::ProgressConfig,
 }
 
 #[derive(Debug)]
@@ -154,11 +155,37 @@ impl Config {
                     "expected seconds in range 1..=50",
                 ));
             }
+            let progress_interval = timeout(
+                read("TELEGRAM_PROGRESS_INTERVAL_SECS")?,
+                "TELEGRAM_PROGRESS_INTERVAL_SECS",
+                2,
+            )?;
+            let progress_timeout = timeout(
+                read("TELEGRAM_PROGRESS_TIMEOUT_SECS")?,
+                "TELEGRAM_PROGRESS_TIMEOUT_SECS",
+                10,
+            )?;
+            for (key, duration) in [
+                ("TELEGRAM_PROGRESS_INTERVAL_SECS", progress_interval),
+                ("TELEGRAM_PROGRESS_TIMEOUT_SECS", progress_timeout),
+            ] {
+                if duration.as_secs() > 60 {
+                    return Err(invalid(key, "expected seconds in range 1..=60"));
+                }
+            }
+            let progress = yoink_telegram::ProgressConfig::new(progress_interval, progress_timeout)
+                .map_err(|_| {
+                    invalid(
+                        "TELEGRAM_PROGRESS_INTERVAL_SECS",
+                        "invalid progress configuration",
+                    )
+                })?;
             Some(TelegramConfig {
                 token: SecretToken(token),
                 owner_id,
                 api_url,
                 poll_timeout,
+                progress,
             })
         } else {
             None
@@ -287,6 +314,30 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn progress_settings_accept_bounds_and_reject_invalid_enabled_values() {
+        let base = [
+            ("YOINK_RUST_TELEGRAM_ENABLED", "true"),
+            ("YOINK_RUST_TELEGRAM_TOKEN", "fixture-token"),
+            ("YOINK_RUST_OWNER_ID", "42"),
+        ];
+        for key in [
+            "YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS",
+            "YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS",
+        ] {
+            for value in ["0", "61", "1.5", "invalid"] {
+                let mut values = base.to_vec();
+                values.push((key, value));
+                assert!(config(&values).is_err(), "{key}={value}");
+            }
+            for value in ["1", "60"] {
+                let mut values = base.to_vec();
+                values.push((key, value));
+                assert!(config(&values).is_ok(), "{key}={value}");
+            }
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 mod cache;
 pub mod profile;
+mod progress;
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 

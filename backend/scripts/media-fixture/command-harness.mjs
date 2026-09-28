@@ -4,9 +4,9 @@ export function commandHarness({
   botApi, fixtureSql, queryJob, waitFor, helperContainer, image, assertWorkspaceClean,
 }, messageIdStart = 900) {
   let nextMessageId = messageIdStart;
-  async function submit(command, { actor = 42, chat = 42, messageId = nextMessageId++ } = {}) {
+  async function submit(command, { actor = 42, chat = 42, messageId = nextMessageId++, language = 'en' } = {}) {
     const callStart = botApi.calls.length;
-    botApi.enqueue(actor, chat, command, messageId);
+    botApi.enqueue(actor, chat, command, messageId, language);
     const operationId = await waitFor(() => {
       const reply = botApi.calls.slice(callStart).find(call =>
         call.method === 'sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(call.data.text));

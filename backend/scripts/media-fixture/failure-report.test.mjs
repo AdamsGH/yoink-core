@@ -3,7 +3,18 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { writeFailureReport } from './failure-report.mjs';
+import { boundReport, writeFailureReport } from './failure-report.mjs';
+
+test('bounded reports retain the primary failure and latest diagnostics', () => {
+  const report = 'AssertionError: primary failure\n' + 'older diagnostics\n'.repeat(3000) + '\nlatest operation';
+  const bounded = boundReport(report, 1024);
+  assert.equal(bounded.length, 1024);
+  assert(bounded.startsWith('AssertionError: primary failure'));
+  assert(bounded.endsWith('latest operation'));
+  assert(bounded.includes('diagnostics truncated'));
+  assert.equal(boundReport('small'), 'small');
+  assert.throws(() => boundReport(report, 1), /invalid report bound/);
+});
 
 test('failure reports survive independently of fixture cleanup and never overwrite evidence', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'yoink-report-test-'));

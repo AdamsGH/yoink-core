@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 4] = [
+const MIGRATIONS: [Migration; 5] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -30,6 +30,11 @@ const MIGRATIONS: [Migration; 4] = [
         version: 4,
         sql: include_str!("../migrations-turso/0004_fk_rowid_indexes.sql"),
         expected_tables: 47,
+    },
+    Migration {
+        version: 5,
+        sql: include_str!("../migrations-turso/0005_progress_notices.sql"),
+        expected_tables: 48,
     },
 ];
 
@@ -286,11 +291,12 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 4);
+        assert_eq!(versions.len(), 5);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
         assert_eq!(versions[3].try_get::<i64, _>("version").unwrap(), 4);
+        assert_eq!(versions[4].try_get::<i64, _>("version").unwrap(), 5);
     }
 
     #[tokio::test]

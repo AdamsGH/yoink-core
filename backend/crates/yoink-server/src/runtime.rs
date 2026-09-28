@@ -130,7 +130,8 @@ async fn run_impl(
                     telegram.poll_timeout,
                 )
                 .await
-                .map_err(|_| ServerError::TelegramStartup)?,
+                .map_err(|_| ServerError::TelegramStartup)?
+                .with_progress(telegram.progress),
             ),
             None => None,
         };

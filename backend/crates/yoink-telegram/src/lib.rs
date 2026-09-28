@@ -32,7 +32,9 @@ use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for}
 use yoink_storage::{Admission, OperationStatus};
 
 mod media_command;
+mod progress;
 mod sender;
+pub use progress::ProgressConfig;
 
 /// Safe, fixed error categories. Underlying Telegram errors are deliberately discarded.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,6 +81,7 @@ pub struct TelegramAdapter {
     system: SystemService,
     downloads: Option<DownloadService>,
     poll_timeout: Duration,
+    progress: ProgressConfig,
 }
 
 impl TelegramAdapter {
@@ -122,12 +125,18 @@ impl TelegramAdapter {
             system,
             downloads: None,
             poll_timeout,
+            progress: ProgressConfig::default(),
         })
     }
 
     /// Enables the progressive video-download slice.
     pub fn with_downloads(mut self, service: DownloadService) -> Self {
         self.downloads = Some(service);
+        self
+    }
+
+    pub fn with_progress(mut self, config: ProgressConfig) -> Self {
+        self.progress = config;
         self
     }
 
@@ -150,6 +159,7 @@ impl TelegramAdapter {
             .build();
         let stop = listener.stop_token();
         let failed = Arc::new(AtomicBool::new(false));
+        let progress = progress::run(self.bot.clone(), self.downloads.clone(), self.progress);
         let handler = Update::filter_message().endpoint(handle_message);
         let mut dispatcher = Dispatcher::builder(self.bot.clone(), handler)
             .dependencies(dptree::deps![
@@ -178,6 +188,7 @@ impl TelegramAdapter {
         tokio::pin!(dispatch);
 
         tokio::select! {
+            () = progress => unreachable!("progress loop runs until dropped"),
             _ = shutdown.cancelled() => {
                 stop.stop();
                 (&mut dispatch)
@@ -496,6 +507,7 @@ async fn handle_message(
             .and_then(|user| user.language_code.as_deref()),
     );
 
+    let mut admitted = None;
     let reply = match command {
         Command::Start | Command::Help | Command::Status | Command::Invalid => {
             response(command, language, &system, downloads.is_some())
@@ -534,7 +546,10 @@ async fn handle_message(
                     )
                     .await
                 {
-                    Ok(admission) => admitted_response(admission, language),
+                    Ok(admission) => {
+                        admitted = Some(admission.operation_id);
+                        admitted_response(admission, language)
+                    }
                     Err(error) => download_error_response(error, language).to_owned(),
                 },
                 Err(error) => download_error_response(error, language).to_owned(),
@@ -563,7 +578,10 @@ async fn handle_message(
                     .submit_preferred_request(&request, &key, media.overrides)
                     .await
                 {
-                    Ok(admission) => admitted_response(admission, language),
+                    Ok(admission) => {
+                        admitted = Some(admission.operation_id);
+                        admitted_response(admission, language)
+                    }
                     Err(error) => download_error_response(error, language).to_owned(),
                 },
                 Err(error) => download_error_response(error, language).to_owned(),
@@ -574,13 +592,7 @@ async fn handle_message(
                 return Ok(());
             };
             match service.status(owner_id, id).await {
-                Ok(Some(record)) => operation_response(
-                    id,
-                    record.status,
-                    record.attempt,
-                    record.delivered_message_id,
-                    language,
-                ),
+                Ok(Some(record)) => progress::render(&record, language),
                 Ok(None) => unknown_operation(language),
                 Err(error) => download_error_response(error, language).to_owned(),
             }
@@ -601,8 +613,23 @@ async fn handle_message(
         }
     };
 
-    if bot.send_message(message.chat.id, reply).await.is_err() {
-        tracing::warn!("Telegram response delivery failed");
+    match bot.send_message(message.chat.id, reply).await {
+        Ok(sent) if sent.chat.id == message.chat.id && sent.id.0 > 0 => {
+            if let (Some(id), Some(service)) = (admitted, downloads.as_ref()) {
+                let code = match language {
+                    Language::English => "en",
+                    Language::Russian => "ru",
+                };
+                if service
+                    .register_progress_message(owner_id, id, sent.id.0, code)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("Telegram progress registration failed");
+                }
+            }
+        }
+        _ => tracing::warn!("Telegram response delivery failed"),
     }
     Ok(())
 }

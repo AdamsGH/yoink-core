@@ -39,6 +39,8 @@ Telegram is disabled unless enabled explicitly.
 | `YOINK_RUST_OWNER_ID` | unset | Positive ID up to signed 64-bit maximum | Required configured owner identity. |
 | `YOINK_RUST_BOT_API_URL` | unset | HTTP(S) origin without credentials, path, query, or fragment | Optional Bot API endpoint override. |
 | `YOINK_RUST_TELEGRAM_POLL_TIMEOUT_SECS` | `30` | 1 through 50 seconds | Long-poll timeout. |
+| `YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS` | `2` | 1 through 60 seconds | Global progress tick. At most one status-message edit per tick, coalescing unchanged text. |
+| `YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS` | `10` | 1 through 60 seconds | Deadline for editing an already-confirmed status message. Ambiguous edits are safe to retry, unlike media sends. |
 
 The outer command gate remains restricted to the configured owner in a private chat. The media service separately uses an authorized identity snapshot for admission, execution, and delivery. Database files have no PostgreSQL-style column or role ACLs: the trusted server process can read every row, including credentials. Treat the process, its host, and the private state directory as the security boundary. Read snapshots must not expose credential contents through operator or user-facing APIs.
 

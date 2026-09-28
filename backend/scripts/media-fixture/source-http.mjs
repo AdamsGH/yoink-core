@@ -12,6 +12,8 @@ export class SourceHttpFixture {
   #revokedQueued = 0;
   #lateProxyQueued = 0;
   #gateOpen = false;
+  #progressOpen = false;
+  #progress = new Set();
   constructor({ mediaBytes, cookieSecret, playlistMedia = [mediaBytes], imageBytes }) {
     this.mediaBytes = mediaBytes;
     this.cookieSecret = cookieSecret;
@@ -27,6 +29,11 @@ export class SourceHttpFixture {
   get slowResponses() { return this.#slow; }
   get gatedResponses() { return this.#gated; }
   openGate() { this.#gateOpen = true; }
+  closeProgressGate() { this.#progressOpen = false; }
+  releaseProgressResponses() {
+    this.#progressOpen = true;
+    for (const response of this.#progress) response.end(this.mediaBytes.subarray(Math.floor(this.mediaBytes.length / 2)));
+  }
   closeGate() { this.#gateOpen = false; }
   destroySlowResponses() { for (const response of this.#slow) response.destroy(); }
   releaseGatedResponses() {
@@ -66,6 +73,14 @@ export class SourceHttpFixture {
         res.end(this.imageBytes);
         return;
       }
+      if (url.pathname === '/progress.mp4' && !this.#progressOpen) {
+        res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': this.mediaBytes.length });
+        res.write(this.mediaBytes.subarray(0, Math.floor(this.mediaBytes.length / 2)));
+        this.#progress.add(res);
+        res.once('close', () => this.#progress.delete(res));
+        return;
+      }
+      if (url.pathname === '/progress.mp4') { this.#sendMedia(res); return; }
       if (req.url.startsWith('/gated')) {
         if (!this.#gateOpen) {
           this.#gated.add(res);
