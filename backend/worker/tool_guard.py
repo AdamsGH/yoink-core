@@ -5,7 +5,7 @@ import os
 
 
 _PROTOCOLS = "file,pipe"
-_FORMATS = "3gp,aac,ac3,aiff,alac,amr,ape,asf,ass,avi,avr,bmp,caf,cdg,daud,dv,ffm,flac,flv,gif,gsm,h261,h263,h264,hevc,ico,iff,ilbc,image2,image2pipe,jpeg,jpg,ljpeg,m4a,m4v,matroska,mjpeg,mlp,mov,mp3,mp4,mpeg,mpg,oga,ogg,ogv,opus,png,rm,roq,s16be,s16le,s24be,s24le,s32be,s32le,s8,smjpeg,sox,spx,srt,svg,swf,truehd,tta,txd,vob,w64,wav,webm,webp,wma,wmv,wtv,yuv4mpegpipe,png_pipe,jpeg_pipe,webp_pipe"
+_FORMATS = "3gp,aac,ac3,aiff,alac,amr,ape,asf,ass,avi,avr,bmp,caf,cdg,daud,dv,ffm,flac,flv,gif,gsm,h261,h263,h264,hevc,ico,iff,ilbc,image2,image2pipe,jpeg,jpg,ljpeg,m4a,m4v,matroska,mjpeg,mlp,mov,mp3,mp4,mpeg,mpegts,mpg,oga,ogg,ogv,opus,png,rm,roq,s16be,s16le,s24be,s24le,s32be,s32le,s8,smjpeg,sox,spx,srt,svg,swf,truehd,tta,txd,vob,w64,wav,webm,webp,wma,wmv,wtv,yuv4mpegpipe,png_pipe,jpeg_pipe,webp_pipe"
 _SAFE_OPTIONS = ["-protocol_whitelist", _PROTOCOLS, "-format_whitelist", _FORMATS]
 _BINARIES = {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe"}
 

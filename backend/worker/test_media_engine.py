@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,24 @@ class MediaEngineTests(unittest.TestCase):
         self.assertEqual(media_engine._PROTOCOLS, "file,pipe")
         self.assertNotIn("hls", media_engine._FORMATS)
         self.assertNotIn("concat", media_engine._FORMATS)
+
+    def test_local_mpegts_can_be_remuxed_by_guarded_ffmpeg(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "segment.ts"
+            destination = Path(directory) / "media.mp4"
+            subprocess.run(["/usr/bin/ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                            "-i", "color=c=blue:s=160x120:d=1", "-c:v", "libx264", "-f", "mpegts", str(source)],
+                           check=True, capture_output=True, timeout=15)
+            ffmpeg, ffprobe, _ = media_engine._tools(Path(directory))
+            for args in ([ffprobe, "-v", "error", "-show_format", str(source)],
+                         [ffmpeg, "-v", "error", "-i", str(source), "-c", "copy", str(destination)]):
+                result = subprocess.run(args, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertGreater(destination.stat().st_size, 0)
+            self.assertEqual(tool_guard._PROTOCOLS, "file,pipe")
+            self.assertNotIn("hls", tool_guard._FORMATS.split(","))
+            self.assertNotIn("dash", tool_guard._FORMATS.split(","))
+            self.assertNotIn("concat", tool_guard._FORMATS.split(","))
 
     def test_static_tools_and_guarded_invocation_contract(self):
         with tempfile.TemporaryDirectory() as directory:

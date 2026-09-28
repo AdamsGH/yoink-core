@@ -14,6 +14,8 @@ import { runGroupScenarios } from './media-fixture/group-scenarios.mjs';
 import { startGallerySource } from './media-fixture/gallery-source.mjs';
 import { runGalleryScenarios } from './media-fixture/gallery-scenarios.mjs';
 import { runSubtitleScenarios } from './media-fixture/subtitle-scenarios.mjs';
+import { createAdaptiveSource } from './media-fixture/adaptive-source.mjs';
+import { runAdaptiveScenarios } from './media-fixture/adaptive-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles]');
+assert(['all', 'gallery', 'subtitles', 'adaptive'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|adaptive]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -216,6 +218,7 @@ try {
   const imageBytes = await readFile(path.join(fixtureDir,'image.png'));
   botApi=new BotApiFixture({mediaBytes}); apiPort=await botApi.start();
   sourceFixture=new SourceHttpFixture({mediaBytes,cookieSecret,playlistMedia,imageBytes}); sourcePort=await sourceFixture.start();
+  if (scenario === 'all' || scenario === 'adaptive') sourceFixture.adaptiveSource = await createAdaptiveSource({ fixtureDir, helperContainer, image });
   proxyFixture=new AuthenticatedProxyFixture({originPort:sourcePort,authorization:proxyAuth}); proxyPort=await proxyFixture.start();
   appHttpPort=await freeLoopbackPort(); fixturePort=await freeLoopbackPort();
   await launchApp();
@@ -600,6 +603,7 @@ try {
   await restartApp();
   if (scenario === 'all') summaries.push(await runProgressScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'subtitles') summaries.push(await runSubtitleScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'adaptive') summaries.push(await runAdaptiveScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'gallery') {
   gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image });
   const gallerySummary = await runGalleryScenarios({ ...commandContext, gallerySource,

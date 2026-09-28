@@ -53,6 +53,7 @@ export class SourceHttpFixture {
       if (req.url.includes('case=revoked-queued')) this.#revokedQueued++;
       if (req.url.includes('case=late-proxy-queued')) this.#lateProxyQueued++;
       const url = new URL(req.url, 'http://fixture.invalid');
+      if (this.adaptiveSource?.respond(req, res, url)) return;
       const subtitle = subtitleResponse(url);
       if (subtitle) {
         res.writeHead(subtitle.status ?? 200, { 'content-type': subtitle.type ?? 'text/plain',
