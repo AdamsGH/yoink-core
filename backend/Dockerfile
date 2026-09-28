@@ -28,6 +28,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release -p yoink-import \
     && cp target/release/yoink-import /
 
+# Backup/restore is a separate operator binary. Test its safety contracts on Rust 1.88.
+FROM rust-build AS operations-build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo test --locked -p yoink-ops \
+    && cargo build --locked --release -p yoink-ops \
+    && cp target/release/yoink-ops /
+
 # Test the separate search component with the pinned compiler and synthetic data.
 FROM rust-build AS stats-search-tests
 COPY scripts/stats-search-fixture/ ./scripts/stats-search-fixture/
@@ -62,7 +71,7 @@ COPY --from=fixture-build /yoink-fixture-server /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/yoink-fixture-server"]
 
 # Operator CLI has no Python interpreter, media tools or server entrypoint.
-FROM debian:bookworm-slim AS importer
+FROM debian:bookworm-slim AS operator-base
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -71,10 +80,16 @@ RUN apt-get update \
     && mkdir -p /tmp/yoink-work \
     && chown yoink:yoink /tmp/yoink-work \
     && chmod 0700 /tmp/yoink-work
-COPY --from=importer-build /yoink-import /usr/local/bin/
 ENV TMPDIR=/tmp/yoink-work TURSO_TMPDIR=/tmp/yoink-work
 USER 10001:10001
 WORKDIR /tmp/yoink-work
+
+FROM operator-base AS importer
+COPY --from=importer-build /yoink-import /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/yoink-import"]
+
+FROM operator-base AS operations
+COPY --from=operations-build /yoink-ops /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/yoink-ops"]
 
 FROM runtime-base AS runtime

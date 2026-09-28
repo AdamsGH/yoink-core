@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 turso = { version = "=0.7.2", default-features = false }
 fs2 = "0.4"
+rustix = { version = "1", features = ["fs", "process"] }
+tempfile = "3"
 chrono.workspace = true
 uuid.workspace = true
 serde_json.workspace = true

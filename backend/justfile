@@ -105,7 +105,7 @@ import-postgres destination: build-import
     target/debug/yoink-import --destination {{quote(destination)}}
 
 # Actual Alembic source, read-only import and native value/safety assertions.
-test-import image='': build-import
+test-import image='': build-import build-ops
     node --test scripts/import-fixture/process.test.mjs
     cargo build --locked -p yoink-server --features test-fixtures --bin yoink-fixture-server
     node scripts/import-fixture/test-import.mjs {{quote(image)}}
@@ -116,6 +116,27 @@ build-import-image:
     docker run --rm --pull never --network none --read-only yoink/rust-importer:experimental --help
 
 verify-import: verify build-import-image (test-import "yoink/rust-importer:experimental")
+
+# Safe operator commands require explicit source and new destination paths.
+build-ops:
+    cargo build --locked -p yoink-ops
+
+backup source destination: build-ops
+    target/debug/yoink-ops backup --source {{quote(source)}} --destination {{quote(destination)}}
+
+restore source destination: build-ops
+    target/debug/yoink-ops restore --source {{quote(source)}} --destination {{quote(destination)}}
+
+build-ops-image:
+    docker build --target operations -t yoink/rust-operations:experimental .
+    docker run --rm --pull never --network none --read-only yoink/rust-operations:experimental --help
+
+# Production-shaped PostgreSQL import -> native backup -> restored native values.
+test-ops image='': build-import build-ops
+    cargo build --locked -p yoink-server --features test-fixtures --bin yoink-fixture-server
+    YOINK_OPS_TEST_IMAGE={{quote(image)}} node scripts/import-fixture/test-import.mjs
+
+verify-ops: verify build-ops-image (test-ops "yoink/rust-operations:experimental")
 
 # Opt-in image only, never changes the existing Compose deployment.
 build-media:

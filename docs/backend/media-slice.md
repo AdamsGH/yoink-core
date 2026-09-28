@@ -50,4 +50,4 @@ Size temporary workspace storage for at least `DOWNLOAD_WORKSPACE_MAX_BYTES * DO
 
 ## Current limitations and pending gates
 
-Legacy command/settings parity, group/topic access, unsupported provider authentication, and other product modules remain unfinished. The [PostgreSQL importer](import.md) is verified on isolated fixtures, not production data. The separate [Stats search component](stats-search.md) has an approved Tantivy contract. Stats product integration, backup/restore and production cutover remain pending. A live database file plus its WAL must not be copied as a backup.
+Legacy command/settings parity, group/topic access, unsupported provider authentication, and other product modules remain unfinished. The [PostgreSQL importer](import.md) is verified on isolated fixtures, not production data. The separate [Stats search component](stats-search.md) has an approved Tantivy contract. [Native backup/restore](backup-restore.md) is verified on isolated data. Stats product integration and production cutover remain pending. A live database file plus its WAL must not be copied as a backup.

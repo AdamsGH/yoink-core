@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 3] = [
+const MIGRATIONS: [Migration; 4] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -24,6 +24,11 @@ const MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 3,
         sql: include_str!("../migrations-turso/0003_stats_search.sql"),
+        expected_tables: 47,
+    },
+    Migration {
+        version: 4,
+        sql: include_str!("../migrations-turso/0004_fk_rowid_indexes.sql"),
         expected_tables: 47,
     },
 ];
@@ -281,10 +286,102 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 3);
+        assert_eq!(versions.len(), 4);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
+        assert_eq!(versions[3].try_get::<i64, _>("version").unwrap(), 4);
+    }
+
+    #[tokio::test]
+    async fn version_three_upgrade_preserves_rows_and_protects_all_rowid_foreign_keys() {
+        let (_directory, store) = version_one_store().await;
+        {
+            let connection = store.database().connection().await.unwrap();
+            for migration in &MIGRATIONS[1..3] {
+                raw_sql(migration.sql).execute(&*connection).await.unwrap();
+                let fingerprint = schema_hash(&connection, migration.expected_tables)
+                    .await
+                    .unwrap();
+                query(include_str!("../sql/record_migration.sql"))
+                    .bind(migration.version)
+                    .bind(checksum(migration))
+                    .bind(fingerprint)
+                    .bind(chrono::Utc::now())
+                    .execute(&*connection)
+                    .await
+                    .unwrap();
+            }
+        }
+        let rows = [
+            (
+                "dl_user_settings",
+                "INSERT INTO dl_user_settings(user_id,created_at,updated_at) VALUES(1,1,1)",
+            ),
+            (
+                "inbox_gh_sync_state",
+                "INSERT INTO inbox_gh_sync_state(user_id) VALUES(2)",
+            ),
+            (
+                "inbox_user_settings",
+                "INSERT INTO inbox_user_settings(user_id) VALUES(3)",
+            ),
+            (
+                "insight_access",
+                "INSERT INTO insight_access(user_id,granted_by,granted_at) VALUES(4,1,1)",
+            ),
+            (
+                "insight_user_byok",
+                "INSERT INTO insight_user_byok(user_id,provider,api_key,model,created_at,updated_at) VALUES(5,'test','synthetic','test',1,1)",
+            ),
+            (
+                "insight_user_settings",
+                "INSERT INTO insight_user_settings(user_id) VALUES(6)",
+            ),
+        ];
+        for (i, (_, sql)) in rows.iter().enumerate() {
+            query("INSERT INTO users(id,created_at,updated_at) VALUES(?1,1,1)")
+                .bind((i + 1) as i64)
+                .execute(store.database())
+                .await
+                .unwrap();
+            raw_sql(sql).execute(store.database()).await.unwrap();
+        }
+        store.migrate().await.unwrap();
+        store.verify_schema().await.unwrap();
+        for (i, (table, _)) in rows.iter().enumerate() {
+            let id = (i + 1) as i64;
+            assert!(
+                query("UPDATE users SET id=?1 WHERE id=?2")
+                    .bind(id + 100)
+                    .bind(id)
+                    .execute(store.database())
+                    .await
+                    .is_err(),
+                "parent update must not orphan {table}"
+            );
+            let count: i64 = query(&format!(
+                "SELECT count(*) AS n FROM {table} WHERE user_id={id}"
+            ))
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get("n")
+            .unwrap();
+            assert_eq!(count, 1);
+            query("DELETE FROM users WHERE id=?1")
+                .bind(id)
+                .execute(store.database())
+                .await
+                .unwrap();
+            let count: i64 = query(&format!("SELECT count(*) AS n FROM {table}"))
+                .fetch_one(store.database())
+                .await
+                .unwrap()
+                .try_get("n")
+                .unwrap();
+            assert_eq!(count, 0, "CASCADE must preserve its behavior for {table}");
+        }
     }
 
     #[tokio::test]

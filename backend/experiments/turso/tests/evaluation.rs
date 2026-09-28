@@ -33,6 +33,114 @@ async fn prepared() -> (TempDir, turso::Database, turso::Connection) {
     (dir, db, conn)
 }
 
+async fn scalar(conn: &turso::Connection, sql: &str) -> Result<i64, Error> {
+    let mut rows = conn.query(sql, ()).await?;
+    let value = rows.next().await?.expect("scalar row").get::<i64>(0)?;
+    assert!(rows.next().await?.is_none());
+    Ok(value)
+}
+
+async fn fk_delete_probe(
+    action: &str,
+    inline: bool,
+    timing: &str,
+    layout: &str,
+) -> Result<(), Error> {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = path(&dir);
+    let (_db, mut conn) = open(&db_path).await.unwrap();
+    conn.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)", ())
+        .await
+        .unwrap();
+    conn.execute("INSERT INTO parent VALUES (1)", ())
+        .await
+        .unwrap();
+
+    let column = match layout {
+        "int-key" => "id INT PRIMARY KEY NOT NULL",
+        "ordinary" => "id INTEGER NOT NULL",
+        _ => "id INTEGER PRIMARY KEY",
+    };
+    let child = if inline {
+        format!("CREATE TABLE pin ({column} REFERENCES parent(id) ON DELETE {action})")
+    } else {
+        format!(
+            "CREATE TABLE pin ({column}, FOREIGN KEY(id) REFERENCES parent(id) ON DELETE {action})"
+        )
+    };
+    if timing != "post-query" {
+        conn.execute(&child, ()).await.unwrap();
+        conn.execute("INSERT INTO pin VALUES (1)", ())
+            .await
+            .unwrap();
+    }
+    if timing != "fresh" {
+        assert_eq!(
+            scalar(&conn, "SELECT count(*) FROM parent").await.unwrap(),
+            1
+        );
+    }
+    if timing == "post-query" {
+        conn.execute(&child, ()).await.unwrap();
+        conn.execute("INSERT INTO pin VALUES (1)", ())
+            .await
+            .unwrap();
+    }
+    if timing == "reopened" {
+        drop(conn);
+        let (_db, reopened) = open_existing(&db_path).await.unwrap();
+        conn = reopened;
+    }
+
+    if layout == "indexed-rowid" {
+        conn.execute("CREATE INDEX pin_id_fk ON pin(id)", ())
+            .await
+            .unwrap();
+    }
+    assert_eq!(scalar(&conn, "PRAGMA foreign_keys").await.unwrap(), 1);
+    let mut foreign_keys = conn.query("PRAGMA foreign_key_list('pin')", ()).await?;
+    assert!(foreign_keys.next().await?.is_some(), "expected declared FK");
+    assert!(
+        foreign_keys.next().await?.is_none(),
+        "expected exactly one FK"
+    );
+    let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate).await?;
+    let result = tx.execute("DELETE FROM parent WHERE id = 1", ()).await;
+    tx.rollback().await?;
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM parent").await?, 1);
+    assert_eq!(scalar(&conn, "SELECT count(*) FROM pin").await?, 1);
+    result.map(|_| ())
+}
+
+#[tokio::test]
+async fn rowid_reference_delete_requires_explicit_child_index() {
+    let mut unexpected = Vec::new();
+    for action in ["RESTRICT", "NO ACTION"] {
+        for inline in [false, true] {
+            for timing in ["fresh", "post-query", "reopened"] {
+                for layout in ["rowid", "indexed-rowid", "int-key", "ordinary"] {
+                    let result = fk_delete_probe(action, inline, timing, layout).await;
+                    println!(
+                        "ON DELETE {action}, inline={inline}, timing={timing}, layout={layout}: {result:?}"
+                    );
+                    let expected = if layout == "rowid" {
+                        result.is_ok()
+                    } else {
+                        matches!(&result, Err(Error::Constraint(_)))
+                    };
+                    if !expected {
+                        unexpected.push(format!("ON DELETE {action}, inline={inline}, timing={timing}, layout={layout}: {result:?}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        unexpected.is_empty(),
+        "unexpected rowid FK matrix outcomes: {unexpected:#?}"
+    );
+}
+
 async fn admit_bounded(conn: &mut turso::Connection, payload: &str) {
     let mut delay = 2;
     for attempt in 0..40 {

@@ -12,6 +12,7 @@ import { compareAllContent } from './content.mjs';
 import { edgeChecks } from './edges.mjs';
 import { nativeRequest } from './native.mjs';
 import { seedSynthetic } from './synthetic.mjs';
+import { operationsChecks } from './operations.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const backend = path.resolve(here, '../..');
@@ -86,6 +87,7 @@ await withLegacyFixture(async fixture => {
       assert.equal(Number(row.rows[0][0]), seededCounts[table], `imported row count for ${table}`);
     }
     await compareAllContent(query, contract, native, successfulPrerequisite.db);
+    await operationsChecks({ backend, root: successfulPrerequisite.root, database: successfulPrerequisite.db, query, contract, native, secrets, image: process.env.YOINK_OPS_TEST_IMAGE });
     const nulls = await nativeRequest(native, successfulPrerequisite.db,
       "SELECT payload FROM events WHERE plugin='fixture-edge' ORDER BY id");
     assert.deepEqual(nulls.rows, [['null'], [null]], 'JSON null and SQL NULL remain distinct');

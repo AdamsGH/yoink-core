@@ -1,5 +1,6 @@
 mod error;
 mod files;
+pub mod publication;
 
 pub use error::Error;
 

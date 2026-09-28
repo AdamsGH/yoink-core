@@ -1,0 +1,25 @@
+[package]
+name = "yoink-ops"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustix = { version = "1", features = ["fs", "process"] }
+sha2 = "0.10"
+serde_json.workspace = true
+tempfile = "3"
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+turso = { version = "=0.7.2", default-features = false }
+yoink-db.workspace = true
+yoink-storage.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["process"] }
+yoink-stats-search = { path = "../yoink-stats-search" }
+
+[lints]
+workspace = true

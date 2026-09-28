@@ -14,6 +14,7 @@ Run Rust workspace commands from the repository root:
 | `cd backend && just fmt` | Check Rust formatting. |
 | `cd backend && just lint` | Clippy all workspace targets with warnings denied. |
 | `cd backend && just test` | Workspace tests. |
+| `cd backend && just verify-ops` | Workspace checks, Rust 1.88 operator image, and synthetic 41-table import/backup/restore with host/container CLIs and real ENOSPC checks. |
 | `cd backend && just verify` | Formatting, lint, Rust and fixture unit tests, smoke checks, recursive script syntax checks, canonical schema generation checks, and documentation link checks. |
 | `cd backend && just test-storage-db` | Native storage contracts using private temporary file databases. No PostgreSQL or Docker required. |
 | `cd backend && just test-profile-db` | Native profile and credential contracts using private temporary databases. No PostgreSQL or Docker required. |
@@ -42,6 +43,6 @@ Run `cd backend && just verify-media` to invoke the supported sequence. It build
 
 ## Migration and outstanding gates
 
-The legacy Alembic chain remains offline legacy-catalog tooling and does not run in the native Rust process. [The source schema guide](../../backend/schema/README.md) describes the historical PostgreSQL source catalog. The [PostgreSQL import guide](import.md) documents `just verify-import`, which uses disposable real-Alembic fixtures and a separate importer image. [Stats search verification](stats-search.md) compares the approved Tantivy contract with real PostgreSQL results and tests source/index recovery. Full Stats product adapters, backup/restore and production cutover remain separate tasks. No production import, restore rehearsal, or cutover is claimed.
+The legacy Alembic chain remains offline legacy-catalog tooling and does not run in the native Rust process. [The source schema guide](../../backend/schema/README.md) describes the historical PostgreSQL source catalog. The [PostgreSQL import guide](import.md) documents `just verify-import`, which uses disposable real-Alembic fixtures and a separate importer image. [Stats search verification](stats-search.md) compares the approved Tantivy contract with real PostgreSQL results and tests source/index recovery. [Native backup/restore](backup-restore.md) is verified separately with `just verify-ops`. Full Stats product adapters and production cutover remain separate tasks. No production import, production restore rehearsal, or cutover is claimed.
 
-Never copy a live database file and WAL files as a backup. A consistent backup requires an explicitly designed and verified quiesced/engine-aware process. Production backup/restore and cutover procedures remain unapproved and unverified.
+Never copy a live database file and WAL files as a backup. Use the engine-aware operator utility with its documented ownership and restore constraints. Dataset-scale sizing and production cutover remain unverified.

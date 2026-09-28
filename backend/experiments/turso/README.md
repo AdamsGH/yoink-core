@@ -34,15 +34,23 @@ just verify-turso-container
 
 `verify-turso` checks formatting, Clippy with warnings denied, and tests. The observed host compiler was Rust 1.97.1. `verify-turso-container` compiles and runs the tests with the existing server compiler, Rust 1.88, and disables network access during compilation and test execution. Dependency fetching is a separate build step. Both suites have a 90-second deadline after compilation.
 
-Both checks passed with **13 tests passed, 0 failed, 1 ignored**. The ignored item is the crash-child entrypoint, invoked explicitly by the passing SIGKILL parent test. It is not missing crash coverage. Normal server `just verify` also passed, with 135 tests passed and 16 PostgreSQL fixture tests ignored. This experiment did not change those repositories or require repeating their Docker integration fixtures.
+The original evaluation passed 13 parent tests. Both current checks pass **14 tests, 0 failed, 1 ignored** after adding the 48-case rowid-FK regression. The ignored item is the crash-child entrypoint, invoked explicitly by the passing SIGKILL parent test. It is not missing crash coverage. The original PostgreSQL-backed server baseline passed 135 tests with 16 integration tests ignored. Those historical counts do not describe the current native runtime.
 
 The package declares Rust 1.88 and its lockfile selects Roaring 0.11.3. Unconstrained resolution initially selected Roaring 0.11.5, which needs Rust 1.90. The server compiler and dependency lockfile remain unchanged.
+
+## Foreign-key RESTRICT regression probe
+
+`tests/evaluation.rs::rowid_reference_delete_requires_explicit_child_index` covers 48 cases: `RESTRICT`/`NO ACTION`, inline/table-level FK, fresh/post-query-DDL/reopened connection, and four child-column layouts. All 12 unindexed `INTEGER PRIMARY KEY` child references allow an invalid parent delete. All 36 indexed-rowid, `INT PRIMARY KEY`, and ordinary-column references reject it. Each case checks enabled/declarative FKs and rollback preservation. This is a rowid-alias lookup defect, not a schema-cache timing problem.
+
+The pinned engine's `translate/fkeys.rs::table_scan_match_any` emits `Column` for the child key, including rowid aliases, whose record-column value is NULL. An explicit child index selects a different, correct lookup path. Native migration V4 adds indexes for all six affected application FK keys. Storage regression `version_three_upgrade_preserves_rows_and_protects_all_rowid_foreign_keys` checks their real `ON UPDATE NO ACTION` restrictions, existing rows, and unchanged delete cascades.
+
+Run the focused probe from `backend/`: `cargo test --manifest-path experiments/turso/Cargo.toml --target-dir target/turso-probe --locked -- --exact rowid_reference_delete_requires_explicit_child_index --nocapture`. The test deliberately records the unsupported unindexed layout under the pinned version. Do not introduce a new rowid-alias FK without its explicit child index.
 
 ## Native backup limitations
 
 Turso 0.7.2 rejects a bind parameter in `VACUUM INTO` with `VACUUM INTO requires a string literal path`. Its path extractor also strips surrounding quotes without decoding SQL-doubled apostrophes. A destination containing an apostrophe therefore produced a differently named file in the initial test.
 
-The fixture's `backup_into` substitutes a restricted literal path from a SQL file. It rejects quote and NUL characters before executing SQL and checks that the requested nonempty file exists afterward. Spaces are covered. This restriction does not fix native arbitrary-path handling, and the fixture helper is not a production backup API. Before production use, define controlled backup names and test destination collisions, concurrent writers, permissions, disk exhaustion and restore procedures.
+The fixture's `backup_into` substitutes a restricted literal path from a SQL file. It rejects quote and NUL characters before executing SQL and checks that the requested nonempty file exists afterward. Spaces are covered. This restriction does not fix native arbitrary-path handling, and the fixture helper is not a production backup API. The separate [operator implementation](../../../docs/backend/backup-restore.md) uses an owned directory descriptor and a fixed `/proc/self/fd/<fd>/snapshot.db` literal, supporting quoted destination paths without interpolating user-controlled SQL.
 
 ## Limits and next decision
 

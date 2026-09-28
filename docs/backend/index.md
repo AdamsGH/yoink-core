@@ -10,6 +10,7 @@ The Rust backend lives in `backend/`. It runs alongside the Python implementatio
 - [Native database ownership](../decisions/0003-native-turso-runtime.md): single-process file ownership, schema verification, and security boundaries.
 - [PostgreSQL import](import.md): explicit source selection, atomic publication, verification, and cutover/rollback limits.
 - [Stats search](stats-search.md): approved Tantivy matching rules, deliberate PostgreSQL differences, synchronization and rebuild.
+- [Backup and restore](backup-restore.md): native snapshot format, safe new-path publication, crash recovery, and external-effect risks.
 
 ## Understand the implementation
 

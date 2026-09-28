@@ -4779,6 +4779,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "fs2",
+ "rustix 1.1.5",
  "serde_json",
  "tempfile",
  "thiserror",
@@ -4893,6 +4894,23 @@ dependencies = [
  "tokio-postgres-rustls",
  "turso",
  "yoink-db",
+ "yoink-storage",
+]
+
+[[package]]
+name = "yoink-ops"
+version = "0.1.0"
+dependencies = [
+ "rustix 1.1.5",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "turso",
+ "yoink-db",
+ "yoink-stats-search",
  "yoink-storage",
 ]
 
