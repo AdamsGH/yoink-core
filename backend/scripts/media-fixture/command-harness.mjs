@@ -4,9 +4,9 @@ export function commandHarness({
   botApi, fixtureSql, queryJob, waitFor, helperContainer, image, assertWorkspaceClean,
 }, messageIdStart = 900) {
   let nextMessageId = messageIdStart;
-  async function submit(command, { actor = 42, chat = 42, messageId = nextMessageId++, language = 'en', thread } = {}) {
+  async function submit(command, { actor = 42, chat = 42, messageId = nextMessageId++, language = 'en', thread, entities, viaBot, replyToBot } = {}) {
     const callStart = botApi.calls.length;
-    botApi.enqueue(actor, chat, command, messageId, language, { thread });
+    botApi.enqueue(actor, chat, command, messageId, language, { thread, entities, viaBot, replyToBot });
     const operationId = await waitFor(() => {
       const reply = botApi.calls.slice(callStart).find(call =>
         call.method === 'sendmessage' && Number(call.data.chat_id) === chat && call.data.message_thread_id === thread && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(call.data.text));
@@ -52,12 +52,12 @@ export function commandHarness({
     if (height !== undefined) assert.equal(probe.streams.find(s => s.codec_type === 'video')?.height, height);
     if (audioCodec !== undefined) assert.equal(probe.streams.find(s => s.codec_type === 'audio')?.codec_name, audioCodec);
   }
-  async function execute(label, command, method, mediaExpectation, uploadContract = {}) {
+  async function execute(label, command, method, mediaExpectation, uploadContract = {}, submissionOptions = {}) {
     botApi.setExpectedUpload(uploadContract.filename
       ? { method, preserveMdat: false, ...uploadContract }
       : null);
     const before = botApi.uploadCalls;
-    const sent = await submit(command);
+    const sent = await submit(command, submissionOptions);
     await succeeded(sent.operationId);
     assert.equal(botApi.uploadCalls, before + 1, `${label} must perform exactly one real upload`);
     const upload = botApi.calls.slice(sent.callStart).find(call => call.method === method);
@@ -79,10 +79,10 @@ export function commandHarness({
     assert.equal(await fixtureSql('SELECT count(*) FROM runtime_operations'), count,
       'rejected input must not create an operation');
   }
-  async function replay(command, original) {
+  async function replay(command, original, submissionOptions = {}) {
     const uploads = botApi.uploadCalls;
     const sends = botApi.sendCalls;
-    const replayed = await submit(command, { messageId: original.messageId });
+    const replayed = await submit(command, { ...submissionOptions, messageId: original.messageId });
     assert.equal(replayed.operationId, original.operationId);
     assert.equal(botApi.uploadCalls, uploads);
     assert.equal(botApi.sendCalls, sends);

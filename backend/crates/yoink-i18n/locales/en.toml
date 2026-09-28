@@ -1,4 +1,5 @@
 [telegram]
+plain_url_usage = "Send one visible HTTP(S) link, optionally followed by START DURATION or START END_TIME. A single duration needs a t/start URL timestamp. For incomplete clips in groups, use /cut URL START END. Hidden links and music links are not automatic video downloads."
 settings_stale = "These buttons are outdated. Open /settings again to use the current values."
 cut_usage = "Use /cut URL to choose the start, /cut URL START to set the start and choose the end, or /cut to resume a draft."
 cut_ask_start = "Clip start\nSend a start time as seconds or MM:SS / HH:MM:SS."

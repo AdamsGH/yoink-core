@@ -383,7 +383,12 @@ fn is_numeric(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit() || b == b'.')
 }
 
-async fn send_session(bot: &Bot, source: &Message, session: &CutSession, language: Language) {
+pub(super) async fn send_session(
+    bot: &Bot,
+    source: &Message,
+    session: &CutSession,
+    language: Language,
+) {
     let (text, markup) = render(session, language);
     let send = bot.send_message(source.chat.id, text);
     if matches!(session.stage, CutStage::Ready | CutStage::Confirming) {

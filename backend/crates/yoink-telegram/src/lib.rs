@@ -33,6 +33,7 @@ use yoink_storage::{Admission, OperationStatus};
 
 mod cut;
 mod media_command;
+mod plain_url;
 mod progress;
 mod sender;
 mod settings;
@@ -238,6 +239,7 @@ enum Command {
     Job(Uuid),
     Cancel(Uuid),
     Invalid,
+    InvalidUrl,
 }
 
 impl std::fmt::Debug for Command {
@@ -252,6 +254,7 @@ impl std::fmt::Debug for Command {
             Self::Job(id) => formatter.debug_tuple("Job").field(id).finish(),
             Self::Cancel(id) => formatter.debug_tuple("Cancel").field(id).finish(),
             Self::Invalid => formatter.write_str("Invalid"),
+            Self::InvalidUrl => formatter.write_str("InvalidUrl"),
         }
     }
 }
@@ -417,12 +420,18 @@ fn response(command: Command, language: Language, system: &SystemService, enable
         Command::Start | Command::Help => translate(language, Key::HelpBasic, &[]),
         Command::Status => format_status(system, language),
         Command::Invalid if enabled => translate(language, Key::UsageDownload, &[]),
-        Command::Invalid => translate(language, Key::DownloadsUnavailable, &[]),
+        Command::Invalid | Command::InvalidUrl if !enabled => {
+            translate(language, Key::DownloadsUnavailable, &[])
+        }
+        Command::InvalidUrl => translate(language, Key::PlainUrlUsage, &[]),
+        Command::Invalid => translate(language, Key::UsageDownload, &[]),
         _ => String::new(),
     };
     if show_cut {
         text.push('\n');
         text.push_str(&translate(language, Key::CutUsage, &[]));
+        text.push('\n');
+        text.push_str(&translate(language, Key::PlainUrlUsage, &[]));
     }
     text
 }
@@ -571,8 +580,33 @@ async fn handle_message(
     {
         return Ok(());
     }
-    let Some(command) = parse_command(text, &bot_username) else {
-        return Ok(());
+    let command = match parse_command(text, &bot_username) {
+        Some(command) => command,
+        None => match plain_url::parse(&message, bot_id) {
+            None => return Ok(()),
+            Some(Err(())) => Command::InvalidUrl,
+            Some(Ok(plain_url::Action::Download(media))) => Command::Media(media),
+            Some(Ok(plain_url::Action::AskEnd { media, start })) => {
+                // The parser only offers a dialog in a private chat. Its storage,
+                // authorization and recovery are shared with explicit /cut.
+                let reply = if let Some(service) = downloads.as_ref() {
+                    match service
+                        .cut_begin(actor_id, target, message.id.0, &media.url, Some(start))
+                        .await
+                    {
+                        Ok(session) => {
+                            cut::send_session(&bot, &message, &session, language).await;
+                            return Ok(());
+                        }
+                        Err(error) => download_error_response(error, language).to_owned(),
+                    }
+                } else {
+                    media_unavailable_response(language)
+                };
+                let _ = bot.send_message(message.chat.id, reply).await;
+                return Ok(());
+            }
+        },
     };
 
     if let Command::Settings(action) = command {
@@ -607,9 +641,11 @@ async fn handle_message(
         Command::Start | Command::Help if target.chat_id() < 0 => {
             translate(language, Key::UsageDownload, &[])
         }
-        Command::Start | Command::Help | Command::Status | Command::Invalid => {
-            response(command, language, &system, downloads.is_some())
-        }
+        Command::Start
+        | Command::Help
+        | Command::Status
+        | Command::Invalid
+        | Command::InvalidUrl => response(command, language, &system, downloads.is_some()),
         Command::Download(_) | Command::Media(_) | Command::Job(_) | Command::Cancel(_)
             if downloads.is_none() =>
         {

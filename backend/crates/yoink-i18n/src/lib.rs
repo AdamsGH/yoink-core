@@ -77,6 +77,7 @@ define_keys! {
     HelpEnabled => "telegram.help_enabled";
     HelpBasic => "telegram.help_basic";
     UsageDownload => "telegram.usage_download";
+    PlainUrlUsage => "telegram.plain_url_usage";
     DownloadsUnavailable => "telegram.downloads_unavailable";
     Status => "telegram.status", ["version", "readiness", "modules"];
     ReadinessReady => "telegram.readiness_ready";

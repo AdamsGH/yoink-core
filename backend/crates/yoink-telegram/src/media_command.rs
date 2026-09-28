@@ -362,7 +362,7 @@ fn playlist_range(token: &str, playlist_command: bool) -> Result<PlaylistRange, 
 }
 
 /// Reads a unique, strictly valid t/start marker without normalizing the original URL.
-fn query_start(url: &str) -> Result<Option<f64>, ()> {
+pub(super) fn query_start(url: &str) -> Result<Option<f64>, ()> {
     let parsed = Url::parse(url).map_err(|_| ())?;
     let mut marker = None;
     for (key, value) in parsed.query_pairs() {

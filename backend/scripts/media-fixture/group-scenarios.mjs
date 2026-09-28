@@ -35,6 +35,25 @@ export async function runGroupScenarios(context) {
       [42, group, 18, { senderChat: { id: group, type: 'supergroup', title: 'Anonymous sender' } }],
       [user, user], [user, group, 18, { command: '/status' }],
     ]);
+    const bareSource = `${origin}/media?case=group-bare-url`;
+    const bareMetadata = { entities: [{ type: 'url', offset: 0, length: bareSource.length }], command: bareSource };
+    await silent([
+      [user, group, 18, bareMetadata],
+      [user, group, 18, { ...bareMetadata, replyToBot: 999 }],
+      [user, group, 18, { ...bareMetadata, viaBot: 999 }],
+      [user, group, 17, { ...bareMetadata, replyToBot: 123456 }],
+      [777777, group, 18, { ...bareMetadata, viaBot: 123456 }],
+    ]);
+    for (const trigger of [{ replyToBot: 123456 }, { viaBot: 123456 }]) {
+      const sent = await h.submit(bareSource, { ...route, ...bareMetadata, ...trigger });
+      await h.succeeded(sent.operationId);
+      await finished(sent.operationId);
+      const upload = botApi.calls.slice(sent.callStart).find(call => call.method === 'sendvideo');
+      assert.equal(upload.chat_id, group);
+      assert.equal(upload.message_thread_id, 18);
+      assert.equal(upload.reply_to_message_id, sent.messageId);
+      await h.replay(bareSource, sent, { ...route, ...bareMetadata, ...trigger });
+    }
     const command = `/video ${origin}/media?case=group-route`;
     const first = await h.submit(command, route);
     await h.succeeded(first.operationId);

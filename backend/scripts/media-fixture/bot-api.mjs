@@ -60,10 +60,16 @@ export class BotApiFixture {
     this.#sendMode = 'hold';
     return () => { release(); this.#sendGate = undefined; };
   }
-  enqueue(actor, chat, text, id, language = 'en', { thread, senderChat, isBot = false } = {}) {
+  enqueue(actor, chat, text, id, language = 'en', { thread, senderChat, isBot = false, entities, viaBot, replyToBot } = {}) {
     const message = this.#message(actor, chat, text, id, undefined, thread);
     message.from.is_bot = isBot;
     if (senderChat) message.sender_chat = senderChat;
+    if (entities) message.entities = structuredClone(entities);
+    if (viaBot) message.via_bot = { id: viaBot, is_bot: true, first_name: 'Inline bot' };
+    if (replyToBot) {
+      message.reply_to_message = this.#message(replyToBot, chat, 'Fixture prompt', 1, undefined, thread);
+      message.reply_to_message.from.is_bot = true;
+    }
     message.from.language_code = language;
     this.#updates.push({ update_id: this.#updateId++, message });
   }
