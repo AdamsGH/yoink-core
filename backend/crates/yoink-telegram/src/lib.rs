@@ -34,6 +34,7 @@ use yoink_storage::{Admission, OperationStatus};
 mod media_command;
 mod progress;
 mod sender;
+mod settings;
 pub use progress::ProgressConfig;
 
 /// Safe, fixed error categories. Underlying Telegram errors are deliberately discarded.
@@ -169,7 +170,9 @@ impl TelegramAdapter {
         let stop = listener.stop_token();
         let failed = Arc::new(AtomicBool::new(false));
         let progress = progress::run(self.bot.clone(), self.downloads.clone(), self.progress);
-        let handler = Update::filter_message().endpoint(handle_message);
+        let handler = dptree::entry()
+            .branch(Update::filter_message().endpoint(handle_message))
+            .branch(Update::filter_callback_query().endpoint(settings::handle_callback));
         let mut dispatcher = Dispatcher::builder(self.bot.clone(), handler)
             .dependencies(dptree::deps![
                 TelegramIdentity {
@@ -228,6 +231,7 @@ enum Command {
     Start,
     Help,
     Status,
+    Settings(settings::Action),
     Download(String),
     Media(media_command::ParsedMedia),
     Job(Uuid),
@@ -243,6 +247,7 @@ impl std::fmt::Debug for Command {
             Self::Start => formatter.write_str("Start"),
             Self::Help => formatter.write_str("Help"),
             Self::Status => formatter.write_str("Status"),
+            Self::Settings(_) => formatter.write_str("Settings"),
             Self::Job(id) => formatter.debug_tuple("Job").field(id).finish(),
             Self::Cancel(id) => formatter.debug_tuple("Cancel").field(id).finish(),
             Self::Invalid => formatter.write_str("Invalid"),
@@ -262,6 +267,12 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
 
     let name = name.to_ascii_lowercase();
     let args = words.collect::<Vec<_>>();
+    if name == "settings" || name == "format" {
+        return Some(settings::command(&args).map_or(
+            Command::Settings(settings::Action::Invalid),
+            Command::Settings,
+        ));
+    }
     if let Some(parsed) = media_command::parse(&name, &args) {
         return Some(parsed.map_or(Command::Invalid, Command::Media));
     }
@@ -544,6 +555,21 @@ async fn handle_message(
             .and_then(|user| user.language_code.as_deref()),
     );
 
+    if let Command::Settings(action) = command {
+        if target.chat_id() > 0 {
+            if let Some(service) = downloads.as_ref() {
+                settings::handle_command(
+                    &bot, &message, service, actor_id, target, action, language,
+                )
+                .await;
+            } else {
+                let _ = bot
+                    .send_message(message.chat.id, media_unavailable_response(language))
+                    .await;
+            }
+        }
+        return Ok(());
+    }
     if target.chat_id() < 0 {
         if matches!(command, Command::Status) {
             return Ok(());
@@ -557,6 +583,7 @@ async fn handle_message(
     }
     let mut admitted = None;
     let reply = match command {
+        Command::Settings(_) => unreachable!("settings handled before media routing"),
         Command::Start | Command::Help if target.chat_id() < 0 => {
             translate(language, Key::UsageDownload, &[])
         }
@@ -820,7 +847,19 @@ mod tests {
             Some(Command::Invalid)
         );
         assert_eq!(parse_command("status", "yoink_bot"), None);
-        assert_eq!(parse_command("/settings", "yoink_bot"), None);
+        assert_eq!(
+            parse_command("/settings", "yoink_bot"),
+            Some(Command::Settings(settings::Action::Menu))
+        );
+        assert_eq!(
+            parse_command("/format@YOINK_BOT", "yoink_bot"),
+            Some(Command::Settings(settings::Action::Menu))
+        );
+        assert_eq!(
+            parse_command("/settings role owner", "yoink_bot"),
+            Some(Command::Settings(settings::Action::Invalid))
+        );
+        assert_eq!(parse_command("/settings@other_bot", "yoink_bot"), None);
     }
 
     #[test]

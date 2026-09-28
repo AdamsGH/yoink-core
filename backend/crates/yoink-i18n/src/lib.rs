@@ -44,6 +44,21 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    SettingsStale => "telegram.settings_stale";
+    SettingsUsage => "telegram.settings_usage";
+    SettingsTitle => "telegram.settings_title", ["values"];
+    SettingsQuality => "telegram.settings_quality";
+    SettingsCodec => "telegram.settings_codec";
+    SettingsContainer => "telegram.settings_container";
+    SettingsAudioCodec => "telegram.settings_audio_codec";
+    SettingsSendAsFile => "telegram.settings_send_as_file";
+    SettingsGalleryZip => "telegram.settings_gallery_zip";
+    SettingsSubtitleLanguage => "telegram.settings_subtitle_language";
+    SettingsSubtitleAutomatic => "telegram.settings_subtitle_automatic";
+    SettingsOn => "telegram.settings_on";
+    SettingsOff => "telegram.settings_off";
+    SettingsBest => "telegram.settings_best";
+    SettingsBack => "telegram.settings_back";
     HelpEnabled => "telegram.help_enabled";
     HelpBasic => "telegram.help_basic";
     UsageDownload => "telegram.usage_download";

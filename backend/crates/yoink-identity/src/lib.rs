@@ -48,6 +48,11 @@ pub struct IdentityStore {
 }
 
 impl IdentityStore {
+    /// Configuration-only owner elevation. Global bans still take precedence.
+    pub fn is_configured_owner(&self, user_id: i64) -> bool {
+        self.owner_id == Some(user_id)
+    }
+
     pub fn new(database: Database, owner_id: Option<i64>, insight_enabled: bool) -> Self {
         Self {
             database,

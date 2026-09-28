@@ -67,6 +67,19 @@ export class BotApiFixture {
     message.from.language_code = language;
     this.#updates.push({ update_id: this.#updateId++, message });
   }
+  enqueueCallback(actor, chat, messageId, data, { language = 'en', id, messagePatch = {}, isBot = false, inaccessible = false } = {}) {
+    const updateId = this.#updateId++;
+    const callbackId = id ?? `fixture-callback-${updateId}`;
+    const original = this.#messages.get(`${chat}:${messageId}`);
+    assert(original, 'callback must reference a fixture message');
+    const message = { ...structuredClone(original), ...messagePatch };
+    if (inaccessible) message.date = 0;
+    this.#updates.push({ update_id: updateId, callback_query: {
+      id: callbackId, from: { id: actor, is_bot: isBot, first_name: 'Fixture', language_code: language },
+      message, chat_instance: 'fixture-private', data,
+    } });
+    return callbackId;
+  }
   async start() {
     this.#server = http.createServer((req, res) => {
       void this.#handle(req, res).catch(error => {
@@ -101,7 +114,7 @@ export class BotApiFixture {
     } else if (method === 'deletewebhook') {
       res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'getwebhookinfo') {
-      res.end(JSON.stringify({ ok: true, result: { url: '', has_custom_certificate: false, pending_update_count: 0, allowed_updates: ['message'] } }));
+      res.end(JSON.stringify({ ok: true, result: { url: '', has_custom_certificate: false, pending_update_count: 0, allowed_updates: ['message', 'callback_query'] } }));
     } else if (method === 'getupdates') {
       const batch = this.#updates;
       this.#updates = [];
@@ -109,9 +122,15 @@ export class BotApiFixture {
     } else if (method === 'sendmessage') {
       const data = JSON.parse(body.toString('utf8'));
       const message = this.#message(123456, Number(data.chat_id), data.text, ++this.#nextMessageId, undefined, data.message_thread_id);
+      if (data.reply_markup) message.reply_markup = data.reply_markup;
       this.#messages.set(`${message.chat.id}:${message.message_id}`, message);
       this.#calls.push({ method, data, messageId: message.message_id });
       res.end(JSON.stringify({ ok: true, result: message }));
+    } else if (method === 'answercallbackquery') {
+      const data = JSON.parse(body.toString('utf8'));
+      assert.equal(typeof data.callback_query_id, 'string');
+      this.#calls.push({ method, data });
+      res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'editmessagetext') {
       const data = JSON.parse(body.toString('utf8'));
       assert(typeof data.text === 'string' && Buffer.byteLength(data.text) <= 4096, 'bounded progress text');
@@ -123,8 +142,9 @@ export class BotApiFixture {
       if (mode === 'rate-limit-once') { fail(429, 'Too Many Requests: retry after 2', { retry_after: 2 }); return; }
       if (mode === 'api-ambiguous-once') { fail(500, 'Internal Server Error'); return; }
       if (!message || mode === 'deleted') { fail(400, 'Bad Request: message to edit not found'); return; }
-      if (message.text === data.text) { fail(400, 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message'); return; }
+      if (message.text === data.text && JSON.stringify(message.reply_markup) === JSON.stringify(data.reply_markup)) { fail(400, 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message'); return; }
       message.text = data.text;
+      message.reply_markup = data.reply_markup;
       if (mode === 'socket-drop-once') { res.destroy(); return; }
       res.end(JSON.stringify({ ok: true, result: message }));
     } else if (method === 'sendmediagroup') {
@@ -321,7 +341,7 @@ export class BotApiFixture {
     const type = chat > 0 ? 'private' : threadId === undefined ? 'group' : 'supergroup';
     return {
       message_id: id, date: 1700000000,
-      from: { id: actor, is_bot: false, first_name: 'Fixture', language_code: 'en' },
+      from: { id: actor, is_bot: actor === 123456, first_name: 'Fixture', language_code: 'en' },
       chat: type === 'private' ? { id: chat, type } : { id: chat, type, title: 'Fixture group' },
       ...(text === null ? {} : { text }),
       ...(threadId === undefined ? {} : { message_thread_id: threadId, is_topic_message: true }),

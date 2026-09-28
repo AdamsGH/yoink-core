@@ -2,6 +2,8 @@ mod cache;
 mod chat_access;
 pub mod profile;
 mod progress;
+mod settings;
+pub use settings::{EditableSettings, SettingChange, SettingField};
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 

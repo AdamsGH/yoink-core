@@ -370,6 +370,168 @@ fn explicit_overrides_for_ban() -> DownloadPreferenceOverrides {
 }
 
 #[tokio::test]
+async fn settings_writes_preserve_secrets_and_admitted_jobs_and_survive_reopen() {
+    use yoink_downloads::{SettingChange, SettingField, profile::ProfileStore};
+    let (directory, store, service) = setup().await;
+    let target = *request().target().unwrap();
+    let profiles = ProfileStore::new(store.database().clone());
+    let before = profiles.preferences(ACTOR).await.unwrap().unwrap();
+    let admission = service
+        .submit_preferred_request(
+            &request(),
+            "before-settings",
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap();
+    let frozen = persisted_request(&store, &admission.operation_id).await;
+    for (field, value) in [
+        (SettingField::Quality, "360"),
+        (SettingField::SendAsFile, "false"),
+        (SettingField::SubtitleLanguage, "zh-Hans"),
+    ] {
+        let change = SettingChange::new(field, value).unwrap();
+        service
+            .change_setting(ACTOR, target, change.clone(), None)
+            .await
+            .unwrap();
+        service
+            .change_setting(ACTOR, target, change, None)
+            .await
+            .unwrap();
+    }
+    let after = profiles.preferences(ACTOR).await.unwrap().unwrap();
+    assert_eq!(after.quality, "360");
+    assert!(!after.send_as_file);
+    assert_eq!(after.subs_lang, "zh-Hans");
+    assert_eq!(after.args_json, before.args_json);
+    assert_eq!(after.proxy_url, before.proxy_url);
+    assert_eq!(after.audio_codec, before.audio_codec);
+    assert_eq!(after.use_pool_cookies, before.use_pool_cookies);
+    assert_eq!(
+        persisted_request(&store, &admission.operation_id).await,
+        frozen
+    );
+    let next = service
+        .submit_preferred_request(
+            &request(),
+            "after-settings",
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted_request(&store, &next.operation_id).await["params"]["max_height"],
+        360
+    );
+    assert!(
+        !format!("{:?}", service.settings(ACTOR, target).await.unwrap())
+            .contains("raw-args-secret-marker")
+    );
+    drop(profiles);
+    drop(service);
+    store.close().await.unwrap();
+    drop(store);
+    let reopened = Store::open(
+        &directory.path().join("preferences.db"),
+        false,
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ProfileStore::new(reopened.database().clone())
+            .preferences(ACTOR)
+            .await
+            .unwrap()
+            .unwrap()
+            .quality,
+        "360"
+    );
+    reopened.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_settings_buttons_cannot_replace_a_later_choice() {
+    use yoink_downloads::{SettingChange, SettingField};
+    let (_directory, _store, service) = setup().await;
+    let target = *request().target().unwrap();
+    let revision = service.settings(ACTOR, target).await.unwrap().revision;
+    let first = SettingChange::new(SettingField::Quality, "360").unwrap();
+    service
+        .change_setting(ACTOR, target, first.clone(), Some(revision))
+        .await
+        .unwrap();
+    let newer = service.settings(ACTOR, target).await.unwrap().revision;
+    assert!(newer > revision);
+    service
+        .change_setting(
+            ACTOR,
+            target,
+            SettingChange::new(SettingField::Quality, "720").unwrap(),
+            Some(newer),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .change_setting(ACTOR, target, first, Some(revision))
+            .await,
+        Err(DownloadError::Conflict)
+    );
+    assert!(
+        service
+            .settings(ACTOR, target)
+            .await
+            .unwrap()
+            .values
+            .contains(&(SettingField::Quality, "720".into()))
+    );
+}
+
+#[tokio::test]
+async fn settings_create_only_for_authorized_private_actor_and_never_change_other_actor() {
+    use yoink_downloads::{SettingChange, SettingField};
+    let (_directory, _store, service) = setup().await;
+    let change = || SettingChange::new(SettingField::AudioCodec, "mp3").unwrap();
+    let user = 8000000000011;
+    let target = DeliveryTarget::new(BOT, user as i64, None, None).unwrap();
+    service
+        .change_setting(user, target, change(), None)
+        .await
+        .unwrap();
+    assert!(
+        service
+            .settings(user, target)
+            .await
+            .unwrap()
+            .values
+            .contains(&(SettingField::AudioCodec, "mp3".into()))
+    );
+    for actor in [8000000000012, 8000000000013, 8000000000014, 999999] {
+        let target = DeliveryTarget::new(BOT, actor as i64, None, None).unwrap();
+        assert_eq!(
+            service.change_setting(actor, target, change(), None).await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service.settings(actor, target).await,
+            Err(DownloadError::Denied)
+        );
+    }
+    for target in [
+        DeliveryTarget::new(BOT, 43, None, None).unwrap(),
+        DeliveryTarget::new(BOT, -43, None, None).unwrap(),
+        DeliveryTarget::new(BOT + 1, 42, None, None).unwrap(),
+    ] {
+        assert_eq!(
+            service.change_setting(ACTOR, target, change(), None).await,
+            Err(DownloadError::Denied)
+        );
+    }
+}
+
+#[tokio::test]
 async fn explicit_submit_still_rejects_a_forged_preference_marker() {
     let (_directory, _store, service) = setup().await;
     let forged = request().with_preference_overrides(DownloadPreferenceOverrides::default());
