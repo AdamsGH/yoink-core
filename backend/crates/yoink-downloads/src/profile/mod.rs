@@ -12,7 +12,7 @@ use yoink_db::{Database, query};
 use yoink_domain::{
     AudioCodec, Container, CookieReference, CredentialVersion, DownloadParams,
     DownloadPreferenceOverrides, MediaMode, NetworkSelection, ProxyReference, ProxySource,
-    VideoCodec,
+    SubtitleOptions, VideoCodec,
 };
 use yoink_identity::IdentitySnapshot;
 use yoink_worker_protocol::{MAX_COOKIE_JAR_BYTES, MAX_PROXY_URL_BYTES, NetworkCredentials};
@@ -41,6 +41,8 @@ pub(super) struct FormatPreferences {
     send_as_file: bool,
     audio_codec: Option<String>,
     gallery_zip: bool,
+    subtitle_language: Option<String>,
+    subtitle_automatic: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -177,6 +179,12 @@ impl ProfileStore {
                 .map_err(|_| ProfileError::Database)?,
             gallery_zip: row
                 .try_get("gallery_zip")
+                .map_err(|_| ProfileError::Database)?,
+            subtitle_language: row
+                .try_get("subtitle_language")
+                .map_err(|_| ProfileError::Database)?,
+            subtitle_automatic: row
+                .try_get("subtitle_automatic")
                 .map_err(|_| ProfileError::Database)?,
         }))
     }
@@ -640,6 +648,8 @@ pub fn resolve_format_preferences(
         send_as_file: p.send_as_file,
         audio_codec: Some(p.audio_codec.clone()),
         gallery_zip: p.gallery_zip,
+        subtitle_language: Some(p.subs_lang.clone()),
+        subtitle_automatic: p.subs_auto,
     });
     resolve_format_values(mode, compact.as_ref(), overrides)
 }
@@ -649,7 +659,20 @@ pub(super) fn resolve_format_values(
     preferences: Option<&FormatPreferences>,
     o: &DownloadPreferenceOverrides,
 ) -> Result<DownloadParams, ProfileError> {
+    if mode != MediaMode::Subtitles
+        && (o.subtitle_language.is_some() || o.subtitle_automatic.is_some())
+    {
+        return Err(ProfileError::InvalidPreferences);
+    }
     let irrelevant = match mode {
+        MediaMode::Subtitles => {
+            o.max_height.is_some()
+                || o.video_codec.is_some()
+                || o.audio_codec.is_some()
+                || o.container.is_some()
+                || o.gallery_zip.is_some()
+                || o.send_as_file.is_some()
+        }
         MediaMode::Video => o.gallery_zip.is_some(),
         MediaMode::Audio => {
             o.max_height.is_some()
@@ -678,10 +701,26 @@ pub(super) fn resolve_format_values(
         send_as_file: false,
         audio_codec: Some("best".to_owned()),
         gallery_zip: false,
+        subtitle_language: Some("en".into()),
+        subtitle_automatic: false,
     };
     let p = Some(preferences.unwrap_or(&defaults));
     let mut params = DownloadParams::default();
     match mode {
+        MediaMode::Subtitles => {
+            let language = o
+                .subtitle_language
+                .as_deref()
+                .or_else(|| p.and_then(|p| p.subtitle_language.as_deref()))
+                .ok_or(ProfileError::InvalidPreferences)?;
+            let automatic = o
+                .subtitle_automatic
+                .unwrap_or(p.is_some_and(|p| p.subtitle_automatic));
+            params = params.with_subtitles(Some(
+                SubtitleOptions::new(language, automatic)
+                    .map_err(|_| ProfileError::InvalidPreferences)?,
+            ));
+        }
         MediaMode::Video => {
             let height = match o.max_height {
                 Some(height) => height,
@@ -1024,6 +1063,8 @@ mod tests {
             send_as_file: false,
             audio_codec: Some(audio.to_owned()),
             gallery_zip: false,
+            subtitle_language: Some("en".into()),
+            subtitle_automatic: false,
         }
     }
 

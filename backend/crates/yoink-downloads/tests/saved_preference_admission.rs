@@ -114,6 +114,89 @@ async fn persisted_request(store: &Store, operation_id: &uuid::Uuid) -> serde_js
 }
 
 #[tokio::test]
+async fn subtitle_preferences_are_frozen_and_replay_does_not_reresolve_them() {
+    let (_directory, store, service) = setup().await;
+    let request = DownloadRequest::new(
+        ACTOR,
+        URL,
+        MediaMode::Subtitles,
+        None,
+        DownloadParams::default(),
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2001)).unwrap())
+    .unwrap();
+    let update = |language: &'static str, automatic: bool| {
+        yoink_db::query(include_str!("sql/update_subtitle_preferences.sql"))
+            .bind(ACTOR as i64)
+            .bind(language)
+            .bind(automatic)
+            .bind(false)
+    };
+    update("ru", true).execute(store.database()).await.unwrap();
+    let first = service
+        .submit_preferred_request(
+            &request,
+            "subtitle-frozen",
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap();
+    let frozen = persisted_request(&store, &first.operation_id).await;
+    assert_eq!(
+        frozen["params"]["subtitles"],
+        serde_json::json!({"language": "ru", "automatic": true})
+    );
+    assert_eq!(frozen["params"]["max_height"], serde_json::Value::Null);
+    assert_eq!(frozen["params"]["audio_codec"], "best");
+    // subs_enabled is false: an explicit /subs request is not an embedding preference.
+    update("en.*", false)
+        .execute(store.database())
+        .await
+        .unwrap();
+    let replay = service
+        .submit_preferred_request(
+            &request,
+            "subtitle-frozen",
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.operation_id, first.operation_id);
+    assert!(!replay.created);
+    assert_eq!(persisted_request(&store, &first.operation_id).await, frozen);
+    assert_eq!(
+        service
+            .submit_preferred_request(
+                &request,
+                "subtitle-invalid",
+                DownloadPreferenceOverrides::default()
+            )
+            .await,
+        Err(DownloadError::InvalidPreferences)
+    );
+    let override_options = DownloadPreferenceOverrides {
+        subtitle_language: Some("en".into()),
+        subtitle_automatic: Some(false),
+        ..Default::default()
+    };
+    let overridden = service
+        .submit_preferred_request(&request, "subtitle-overridden", override_options.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted_request(&store, &overridden.operation_id).await["params"]["subtitles"],
+        serde_json::json!({"language": "en", "automatic": false})
+    );
+    assert!(
+        service
+            .submit_preferred_request(&request, "subtitle-frozen", override_options)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn admitted_preferences_are_frozen_and_replayed_before_settings_are_read() {
     let (_directory, store, service) = setup().await;
     let request = request();

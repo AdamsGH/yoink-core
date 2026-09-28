@@ -13,24 +13,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 import tool_guard
-from failures import classify_error
+from failures import MediaFailure, classify_error
+from subtitle_engine import download_subtitles
 
 
 _FORMATS = tool_guard._FORMATS
 _PROTOCOLS = tool_guard._PROTOCOLS
-
-
-class MediaFailure(Exception):
-    """A classified worker failure with no source-derived diagnostic."""
-
-    def __init__(self, failure_class: str):
-        if failure_class not in {
-            "unsupported_source", "source_unavailable", "rate_limited",
-            "invalid_media", "processing_failed", "resource_limit",
-        }:
-            failure_class = "invalid_media"
-        self.failure_class = failure_class
-        super().__init__(failure_class)
 
 
 def _bounded_output(command: list[str], timeout: int, output_limit: int = 64 * 1024) -> bytes:
@@ -326,7 +314,7 @@ def download_media(request: dict[str, Any], settings: Any,
     if task.get("kind") != "download":
         raise MediaFailure("unsupported_source")
     mode = task.get("media_mode")
-    if mode not in ("best", "video", "audio", "image"):
+    if mode not in ("best", "video", "audio", "image", "subtitles"):
         raise MediaFailure("unsupported_source")
     engine = options.get("engine", "auto")
     if mode == "image" and (
@@ -434,6 +422,8 @@ def download_media(request: dict[str, Any], settings: Any,
             if options.get("max_height"):
                 opts["format_sort"] = [f"res:{options['max_height']}"]
             try:
+                if mode == "subtitles":
+                    return download_subtitles(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
                 with yt_dlp.YoutubeDL(opts) as downloader:
                     return_code = downloader.download([request["source_url"]])
                     if return_code:

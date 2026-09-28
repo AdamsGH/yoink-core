@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use yoink_domain::{
     AudioCodec, ClipRange, Container, DeliveryTarget, DownloadParams, DownloadPreferenceOverrides,
-    DownloadRequest, Engine, MediaMode, PlaylistRange, VideoCodec,
+    DownloadRequest, Engine, MediaMode, PlaylistRange, SubtitleOptions, VideoCodec,
 };
 
 use crate::StoreError;
@@ -49,6 +49,10 @@ struct PreferenceOverridesData {
     send_as_file: Option<bool>,
     #[serde(default)]
     gallery_zip: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subtitle_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subtitle_automatic: Option<bool>,
 }
 
 fn deserialize_override_height<'de, D>(deserializer: D) -> Result<Option<Option<u32>>, D::Error>
@@ -64,6 +68,7 @@ enum MediaModeData {
     Video,
     Audio,
     Image,
+    Subtitles,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -119,6 +124,15 @@ struct DownloadParamsData {
     send_as_file: bool,
     #[serde(default)]
     gallery_zip: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subtitles: Option<SubtitleOptionsData>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubtitleOptionsData {
+    language: String,
+    automatic: bool,
 }
 fn default_video_codec() -> VideoCodecData {
     VideoCodecData::H264
@@ -144,6 +158,7 @@ impl Default for DownloadParamsData {
             clips: Vec::new(),
             send_as_file: false,
             gallery_zip: false,
+            subtitles: None,
         }
     }
 }
@@ -181,6 +196,7 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
             MediaMode::Video => MediaModeData::Video,
             MediaMode::Audio => MediaModeData::Audio,
             MediaMode::Image => MediaModeData::Image,
+            MediaMode::Subtitles => MediaModeData::Subtitles,
         },
         clip_range: request.clip_range().map(|r| ClipRangeData {
             start_seconds: r.start_seconds(),
@@ -225,6 +241,10 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
                 .collect(),
             send_as_file: p.send_as_file(),
             gallery_zip: p.gallery_zip(),
+            subtitles: p.subtitles().map(|s| SubtitleOptionsData {
+                language: s.language().into(),
+                automatic: s.automatic(),
+            }),
         },
         target: request.target().map(|t| DeliveryTargetData {
             bot_id: t.bot_id(),
@@ -258,6 +278,8 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
                 }),
                 send_as_file: o.send_as_file,
                 gallery_zip: o.gallery_zip,
+                subtitle_language: o.subtitle_language.clone(),
+                subtitle_automatic: o.subtitle_automatic,
             }),
     };
     serde_json::to_value(data).map_err(|_| StoreError::InvalidStoredData)
@@ -270,6 +292,7 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
         MediaModeData::Video => MediaMode::Video,
         MediaModeData::Audio => MediaMode::Audio,
         MediaModeData::Image => MediaMode::Image,
+        MediaModeData::Subtitles => MediaMode::Subtitles,
     };
     let range = data
         .clip_range
@@ -324,7 +347,13 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
         .with_clips(clips)
         .map_err(|_| StoreError::InvalidStoredData)?
         .with_send_as_file(p.send_as_file)
-        .with_gallery_zip(p.gallery_zip);
+        .with_gallery_zip(p.gallery_zip)
+        .with_subtitles(
+            p.subtitles
+                .map(|s| SubtitleOptions::new(&s.language, s.automatic))
+                .transpose()
+                .map_err(|_| StoreError::InvalidStoredData)?,
+        );
     let mut request = DownloadRequest::new(data.actor_id, &data.source_url, mode, range, params)
         .map_err(|_| StoreError::InvalidStoredData)?;
     if let Some(t) = data.target {
@@ -363,6 +392,8 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
             }),
             send_as_file: o.send_as_file,
             gallery_zip: o.gallery_zip,
+            subtitle_language: o.subtitle_language,
+            subtitle_automatic: o.subtitle_automatic,
         });
     }
     request

@@ -329,7 +329,8 @@ impl DownloadService {
             .with_audio_codec(resolved.audio_codec())
             .with_container(resolved.container())
             .with_send_as_file(resolved.send_as_file())
-            .with_gallery_zip(resolved.gallery_zip());
+            .with_gallery_zip(resolved.gallery_zip())
+            .with_subtitles(resolved.subtitles().cloned());
         let prepared_intent = intent
             .with_params(params)
             .map_err(|_| DownloadError::InvalidInput)?;
@@ -1151,11 +1152,18 @@ fn worker_request(claim: &Claim, credentials: NetworkCredentials) -> Result<Work
             )
             .collect(),
         gallery_zip: params.gallery_zip(),
+        subtitles: params
+            .subtitles()
+            .map(|s| yoink_worker_protocol::SubtitleOptions {
+                language: s.language().into(),
+                automatic: s.automatic(),
+            }),
     };
     let media_mode = match request.media_mode() {
         DomainMediaMode::Video => MediaMode::Video,
         DomainMediaMode::Audio => MediaMode::Audio,
         DomainMediaMode::Image => MediaMode::Image,
+        DomainMediaMode::Subtitles => MediaMode::Subtitles,
     };
     Ok(WorkerRequest {
         version: PROTOCOL_VERSION,
@@ -1200,6 +1208,10 @@ fn request_format_defaults(request: &DownloadRequest) -> bool {
         && p.container() == yoink_domain::Container::Mp4
         && !p.send_as_file()
         && !p.gallery_zip()
+        && p.subtitles().is_none_or(|s| {
+            request.media_mode() == DomainMediaMode::Subtitles
+                && s == &yoink_domain::SubtitleOptions::default()
+        })
 }
 
 fn validate_config(config: &DownloadConfig) -> Result<(), DownloadError> {

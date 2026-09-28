@@ -175,7 +175,7 @@ export class BotApiFixture {
     let cachedFileId;
     if (filePart) {
       this.#uploadCalls++;
-      assert(filePart.value.length > 100 && filePart.value.length <= 2 * 1024 * 1024, 'uploaded media must stay within fixture bounds');
+      assert(filePart.value.length > 0 && filePart.value.length <= 2 * 1024 * 1024, 'uploaded media must stay within fixture bounds');
       const contract = this.#expectedUpload;
       if (contract) assert.equal(method, contract.method, 'upload must use the scenario expected Telegram method');
       const filename = filePart.headers.match(/filename="([^"]+)"/)?.[1];
@@ -273,7 +273,7 @@ export class BotApiFixture {
         const part = files.get(name);
         assert(part, 'album attachment reference must resolve');
         bytes = part.value;
-        assert(bytes.length > 100 && bytes.length <= 2 * 1024 * 1024, 'album item byte bounds');
+        assert(bytes.length > 0 && bytes.length <= 2 * 1024 * 1024, 'album item byte bounds');
         assert.equal(part.headers.match(/filename="([^"]+)"/)?.[1], expected.filename, 'album filename');
         const mimeType = part.headers.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim();
         if (mimeType !== undefined) assert.equal(mimeType, expected.mimeType, 'album MIME type');

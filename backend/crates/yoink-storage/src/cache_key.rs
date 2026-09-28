@@ -62,6 +62,46 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_languages_and_automatic_captions_partition_cache_without_changing_legacy_json() {
+        let make = |language, automatic| {
+            request(
+                42,
+                700,
+                MediaMode::Subtitles,
+                DownloadParams::default().with_subtitles(Some(
+                    yoink_domain::SubtitleOptions::new(language, automatic).unwrap(),
+                )),
+            )
+        };
+        let base = make("en", false);
+        let key = media_cache_key(&base).unwrap();
+        assert_ne!(key, media_cache_key(&make("ru", false)).unwrap());
+        assert_ne!(key, media_cache_key(&make("en", true)).unwrap());
+        assert_ne!(
+            key,
+            media_cache_key(&request(
+                42,
+                700,
+                MediaMode::Video,
+                DownloadParams::default()
+            ))
+            .unwrap()
+        );
+        assert_eq!(codec::decode(codec::encode(&base).unwrap()).unwrap(), base);
+        let mut corrupt = codec::encode(&base).unwrap();
+        corrupt["params"]["subtitles"]["language"] = "en.*".into();
+        assert!(codec::decode(corrupt).is_err());
+        let legacy = codec::encode(&request(
+            42,
+            700,
+            MediaMode::Video,
+            DownloadParams::default(),
+        ))
+        .unwrap();
+        assert!(legacy["params"].get("subtitles").is_none());
+    }
+
+    #[test]
     fn partitions_actors_bots_modes_and_every_output_parameter() {
         let base = request(42, 700, MediaMode::Video, DownloadParams::default());
         let key = media_cache_key(&base).unwrap();

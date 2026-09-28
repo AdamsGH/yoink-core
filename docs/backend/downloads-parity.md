@@ -10,7 +10,7 @@ The existing [media fixture](../../backend/scripts/test-media.mjs) already exerc
 
 | Area | Rust implementation | Remaining compatibility work |
 | --- | --- | --- |
-| Commands | `/download`, `/job` and `/cancel` are established. The current slice adds `/video`, `/audio`, `/image`, `/playlist` and inline `/cut`, including own-bot suffix handling, safe validation and stable message-based idempotency. | Settings menus, callbacks, interactive conversations and the complete plain-URL flow. |
+| Commands | `/download`, `/job` and `/cancel` are established. Immediate commands include `/video`, `/audio`, `/image`, `/playlist`, inline `/cut` and standalone `/subs`, including own-bot suffix handling, safe validation and stable message-based idempotency. | Settings menus, callbacks, interactive conversations and the complete plain-URL flow. |
 | Formats | Telegram submission freezes saved mode-specific format settings and explicit per-request flags into effective parameters. AAC/default audio uses M4A for native sending. Caller override intent is persisted separately for replay, while cache identity uses effective output parameters. | Settings menus and interactive quality selection. Provider-specific format fallback behavior is not claimed to match the legacy downloader. |
 | Clips | Worker FFmpeg clipping and bounded clip lists exist. Inline commands construct validated clip requests. | Interactive `/cut` state, prompts, cancellation and full legacy conversational behavior. |
 | Playlists | Signed, bounded ranges retain extraction order through Telegram delivery, including reverse selections. The default is the first 20 entries. Real generic-extractor fixtures verify albums, cache reuse/recovery and durable confirmed prefixes. | External-provider behavior and provider-specific format selection. Deterministic HTML fixtures do not establish live-site compatibility. |
@@ -19,21 +19,22 @@ The existing [media fixture](../../backend/scripts/test-media.mjs) already exerc
 | Cookies/proxies | Read-only legacy profile resolution freezes versioned references at admission. Execution and delivery recheck authorization and current credentials. Acceptance covers authenticated fixture networking and revocation. | Cookie upload/delete/token/settings workflows and provider-specific authentication compatibility. |
 | Progress | Confirmed admission replies become durable EN/RU status messages. Worker percentages, stage and confirmed file counts are edited with restart recovery, rate-limit handling and terminal acknowledgement. `/job` uses the same rendering. | Legacy progress presentation and interactive controls. A lost initial send acknowledgement cannot be recovered safely and falls back to `/job`. |
 | Permissions | Groups require a separate opt-in. Global bans, group enablement, topic policy and local roles apply at admission, execution, delivery and progress. Media and replies retain the original chat/topic. `/job` and `/cancel` also require the original actor, bot, chat and topic. | New-user/group registration, non-owner private commands, private-delivery redirects, forwarding and legacy group settings workflows. |
-| Subtitles | No Rust request/worker option or command yet. | Saved preferences, language selection, automatic subtitles and standalone subtitle delivery. |
+| Subtitles | `/subs URL` freezes saved language/automatic preferences or explicit flags and sends bounded UTF-8 SRT/VTT documents. Native fixtures verify extraction, cache isolation/recovery and rejection without partial delivery. | Settings menus, embedding/burn-in, ASS/SSA fallback and live-provider coverage. Automatic fallback is tested with real yt-dlp selection over synthetic metadata, not a live provider. |
 
 ## Command contract
 
 - `/download URL` retains its single-video grammar and does not accept flags. It now inherits saved video settings at admission.
 - `/video URL`, `/audio URL` and `/image URL` select video, audio and gallery-image modes.
+- `/subs URL` sends standalone SRT/VTT documents without downloading video. It accepts only `--subtitle-language CODE` and `--subtitle-auto true|false`. Bare `/subs` returns usage rather than opening the legacy settings menu. This command does not embed or burn subtitles into video.
 - `/playlist URL` requests entries 1 through 20. `/playlist N URL` requests 1 through N. `/audio N URL` and `/video N URL` request only entry N. Explicit `A-B` preserves order, and `-N` selects the final N entries. A range before the URL is always a playlist selector, even when the URL has a `t`/`start` query parameter. Domain/protocol ranges are bounded to 100 entries, while configured worker item/byte budgets may be tighter.
 - `/cut URL START END` is an immediate request, not the legacy interactive conversation. Unsigned decimal seconds and colon-form times are accepted. A numeric END smaller than START is a duration, otherwise it is absolute. A colon-form END is always absolute. For `/video` and `/audio`, trailing `URL START DURATION` or `URL?t=START DURATION` arguments instead use numeric durations. Parser tests and EN/RU help distinguish these forms.
 - Unknown or malformed arguments must not create operations. Source URLs and credential-bearing query values stay out of debug output and error replies.
 
 ## Saved settings and overrides
 
-Saved video settings apply quality, video codec, container and file delivery. Audio mode applies audio codec and file delivery, ignoring video-only settings. Image mode applies ZIP and file-delivery preferences. Unrelated subtitle, keyboard and raw `args_json` settings are not forwarded to the worker. Cookie/proxy authorization remains separate and is still checked.
+Saved video settings apply quality, video codec, container and file delivery. Audio mode applies audio codec and file delivery, ignoring video-only settings. Image mode applies ZIP and file-delivery preferences. Subtitle mode applies only `subs_lang` and `subs_auto`. An explicit `/subs` works even when the embedding preference `subs_enabled` is false. Subtitle preferences do not affect other media modes. Keyboard and raw `args_json` settings are not forwarded to the worker. Cookie/proxy authorization remains separate and is still checked.
 
-Explicit flags are available on `/video`, `/audio`, `/image`, `/playlist` and inline `/cut`:
+Explicit flags are mode-specific:
 
 | Flag | Values | Modes |
 | --- | --- | --- |
@@ -41,12 +42,16 @@ Explicit flags are available on `/video`, `/audio`, `/image`, `/playlist` and in
 | `--video-codec` | `h264`, `h265`, `av1`, `vp9`, `any` | Video, playlist, cut |
 | `--audio-codec` | `best`, `aac`, `mp3`, `opus` | Video, audio, playlist, cut |
 | `--container` | `mp4`, `mkv`, `webm` | Video, playlist, cut |
-| `--send-as-file` | `true`, `false` | All media commands |
+| `--send-as-file` | `true`, `false` | Video, audio, image, playlist, cut |
 | `--gallery-zip` | `true`, `false` | Image only |
+| `--subtitle-language` | Exact language tag, such as `en`, `ru`, `zh-Hans` | Subs only |
+| `--subtitle-auto` | `true`, `false` | Subs only |
 
 Absent flags inherit relevant saved settings. Explicit `best` and `false` override saved values rather than meaning “inherit”. Duplicate, unknown, missing-value and mode-inappropriate flags are rejected. WebM requires VP9/AV1 video and explicit Opus audio. Stored `ask` requires interactive selection, which is not yet implemented, so video admission rejects it unless `--height` supplies a concrete choice or `best`. Stored audio preferences do not change video audio encoding unless an explicit `--audio-codec` is supplied.
 
 For example, `/video --height best --send-as-file false URL` overrides a saved height limit and document delivery. `/audio --audio-codec aac URL` overrides the saved audio codec. Settings changes after admission do not alter queued processing, cache identity or same-message replay. Changing flags or other request intent under the same message ID is a conflict, not a second operation. Replay still requires current access authorization. Execution and delivery also revalidate network credentials.
+
+Subtitle language tags contain two or three lowercase ASCII letters and at most one two-to-eight-character alphanumeric suffix. Regexes, comma lists and wildcard selection are not accepted. Track selection keeps the legacy `en`-only rule, while other languages also request their exact `-orig` track. Manual tracks take priority, and automatic tracks are eligible only when enabled. Outputs prefer SRT over VTT and must contain valid UTF-8 timing cues. At most two files are returned, each bounded by both the configured artifact limit and a 4 MiB text ceiling. The aggregate byte/item budgets still apply. Unsupported formats, absent tracks or any failed track abort before delivery. Existing non-subtitle serialized requests and cache identities remain unchanged. Older binaries cannot decode stored subtitle jobs. Keep runtime and worker revisions matched, and verify rollback compatibility separately.
 
 ## Group and topic boundary
 
@@ -70,6 +75,8 @@ Worker tests run only in Docker via `just test-worker`. The real command scenari
 
 The [gallery scenarios](../../backend/scripts/media-fixture/gallery-scenarios.mjs) use the installed Imgbox extractor without replacing its implementation. Disposable DNS pins `imgbox.com` to a documentation address. An authenticated fixture proxy maps only that address and port to the loopback HTTPS source. A one-day fixture certificate replaces trust only in the disposable test container. Without that trust mount, extraction fails before any HTTP request or media send. The successful cases compare distinct sub-1-KiB PNGs in photo/document albums, inspect all 12 ZIP members and hashes, and verify cache reuse and invalid-ID recovery. Valid small files remain cacheable under the same upper limits as uploads. A rejected ZIP preserves nine confirmed photos across restart and replay. Missing source images and the 20-item worker bound fail without sending a partial album. `just test-media gallery` runs this subset against the built images. `just verify-media` still runs every scenario.
 
+The [subtitle scenarios](../../backend/scripts/media-fixture/subtitle-scenarios.mjs) exercise the unchanged generic extractor against local HTML track markup. Native acceptance compares SRT/VTT bytes and document albums, checks saved and explicit preference snapshots, language/automatic cache separation, invalid-ID recovery and restart reuse, and confirms no video GET occurs. Missing original tracks, invalid text, a chunked oversized body and a redirect to a prohibited private destination fail without delivery units. `just test-media subtitles` runs the focused subset against rebuilt runtime and fixture images. Container unit tests separately cover real yt-dlp manual/automatic selection and exact language matching over synthetic metadata. These checks do not establish live YouTube subtitle compatibility.
+
 The [progress scenarios](../../backend/scripts/media-fixture/progress-scenarios.mjs) hold a real HTTP download mid-body and observe worker percentages in actual Telegram edits. They cover unchanged-text coalescing, `429` delay, a lost terminal-edit acknowledgement followed by process restart and `message is not modified`, no duplicate media or status messages, deleted-message retirement, EN/RU and authorization revocation. The test database and Bot API are disposable fixtures.
 
 The [group scenarios](../../backend/scripts/media-fixture/group-scenarios.mjs) verify opt-in and silent denials, group-local roles without global mutation, original reply/topic routing, cached delivery to another authorized topic, albums, scoped job/cancel commands, topic revocation during a real download, and restart/replay after a wrong-topic media receipt. Native service tests also revoke group, topic or configuration access while a job is queued and assert that no worker starts.
@@ -82,4 +89,4 @@ The immediate-command slice is verified by `just verify`, `just test-worker` and
 - Rust adapter and parser: `backend/crates/yoink-telegram/src/lib.rs` and `media_command.rs`.
 - Request invariants: `backend/crates/yoink-domain/src/lib.rs` and `backend/crates/yoink-worker-protocol/src/lib.rs`.
 - Profile and cache behavior: `backend/crates/yoink-downloads/src/profile/` and `cache.rs`.
-- Worker validation, processing and networking: `backend/worker/main.py`, `media_engine.py`, `network_guard.py` and `proxy_tunnel.py`.
+- Worker validation, processing and networking: `backend/worker/main.py`, `media_engine.py`, `subtitle_engine.py`, `network_guard.py` and `proxy_tunnel.py`.

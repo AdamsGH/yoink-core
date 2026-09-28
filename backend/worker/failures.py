@@ -4,6 +4,19 @@ from __future__ import annotations
 import re
 
 
+class MediaFailure(Exception):
+    """A classified worker failure with no source-derived diagnostic."""
+
+    def __init__(self, failure_class: str):
+        if failure_class not in {
+            "unsupported_source", "source_unavailable", "rate_limited",
+            "invalid_media", "processing_failed", "resource_limit",
+        }:
+            failure_class = "invalid_media"
+        self.failure_class = failure_class
+        super().__init__(failure_class)
+
+
 def classify_error(exc: BaseException) -> str:
     chain: list[BaseException] = []
     current: BaseException | None = exc

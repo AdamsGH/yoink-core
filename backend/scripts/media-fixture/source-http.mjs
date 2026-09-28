@@ -1,5 +1,6 @@
 import http from 'node:http';
 import net from 'node:net';
+import { subtitleResponse } from './subtitle-source.mjs';
 
 export class SourceHttpFixture {
   #server;
@@ -9,6 +10,7 @@ export class SourceHttpFixture {
   #requestTimes = [];
   #mediaRequests = 0;
   #protectedRequests = 0;
+  #subtitleVideoRequests = 0;
   #revokedQueued = 0;
   #lateProxyQueued = 0;
   #gateOpen = false;
@@ -23,6 +25,7 @@ export class SourceHttpFixture {
   get error() { return this.#error; }
   get mediaRequests() { return this.#mediaRequests; }
   get protectedRequests() { return this.#protectedRequests; }
+  get subtitleVideoRequests() { return this.#subtitleVideoRequests; }
   get revokedQueuedFetches() { return this.#revokedQueued; }
   get lateProxyQueuedFetches() { return this.#lateProxyQueued; }
   get requestTimes() { return this.#requestTimes; }
@@ -50,6 +53,19 @@ export class SourceHttpFixture {
       if (req.url.includes('case=revoked-queued')) this.#revokedQueued++;
       if (req.url.includes('case=late-proxy-queued')) this.#lateProxyQueued++;
       const url = new URL(req.url, 'http://fixture.invalid');
+      const subtitle = subtitleResponse(url);
+      if (subtitle) {
+        res.writeHead(subtitle.status ?? 200, { 'content-type': subtitle.type ?? 'text/plain',
+          ...(subtitle.location ? { location: subtitle.location } : {}),
+          ...(!subtitle.chunked ? { 'content-length': subtitle.body.length } : {}) });
+        res.end(subtitle.body);
+        return;
+      }
+      if (url.pathname === '/subtitle-video.mp4') {
+        if (req.method === 'GET') this.#subtitleVideoRequests++;
+        this.#sendMedia(res);
+        return;
+      }
       if (url.pathname === '/playlist.html') {
         const count = Number(url.searchParams.get('count') ?? 2);
         if (!Number.isInteger(count) || count < 1 || count > 21) { res.writeHead(400); res.end(); return; }

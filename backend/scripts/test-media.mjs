@@ -13,6 +13,7 @@ import { runProgressScenarios } from './media-fixture/progress-scenarios.mjs';
 import { runGroupScenarios } from './media-fixture/group-scenarios.mjs';
 import { startGallerySource } from './media-fixture/gallery-source.mjs';
 import { runGalleryScenarios } from './media-fixture/gallery-scenarios.mjs';
+import { runSubtitleScenarios } from './media-fixture/subtitle-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery]');
+assert(['all', 'gallery', 'subtitles'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -598,12 +599,15 @@ try {
   workerSocketTimeoutSeconds = 20;
   await restartApp();
   if (scenario === 'all') summaries.push(await runProgressScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'subtitles') summaries.push(await runSubtitleScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'gallery') {
   gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image });
   const gallerySummary = await runGalleryScenarios({ ...commandContext, gallerySource,
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}`,
     restartGallery: async (enabled, trusted = true) => { galleryEnabled = enabled; galleryTrusted = trusted; proxyFixture.galleryPort = enabled ? gallerySource.port : undefined; await restartApp(); },
     restartApp });
   summaries.push(gallerySummary);
+  }
   if (scenario === 'all') summaries.push(await runGroupScenarios({ ...commandContext, playlistMedia, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');

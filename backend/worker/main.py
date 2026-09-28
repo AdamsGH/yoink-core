@@ -23,6 +23,7 @@ from failures import classify_error as _classify_error
 from media_engine import MediaFailure, download_media
 from network_guard import configure_proxy, guard_context, validate_source_url
 from proxy_tunnel import proxy_route
+from subtitle_engine import validate_options as validate_subtitle_options
 
 MAX_FRAME_BYTES = 1024 * 1024
 MAX_CONFIG_BYTES = 50 * 1024 * 1024
@@ -126,12 +127,12 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     if not isinstance(task, dict) or task.get("kind") not in ("download", "extract_content"):
         raise ValueError("invalid request")
     if task["kind"] == "download":
-        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio", "image"):
+        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio", "image", "subtitles"):
             raise ValueError("invalid request")
     elif set(task) != {"kind"}:
         raise ValueError("invalid request")
     options = request.get("options", {})
-    option_keys = {"max_height", "video_codec", "audio_codec", "container", "engine", "playlist", "clips", "gallery_zip"}
+    option_keys = {"max_height", "video_codec", "audio_codec", "container", "engine", "playlist", "clips", "gallery_zip", "subtitles"}
     if not isinstance(options, dict) or set(options) - option_keys:
         raise ValueError("invalid request")
     defaults = {"max_height": None, "video_codec": "h264", "audio_codec": "best", "container": "mp4", "engine": "auto", "playlist": None, "clips": [], "gallery_zip": False}
@@ -157,6 +158,15 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
             raise ValueError("invalid request")
         start, end = clip["start_seconds"], clip["end_seconds"]
         if type(start) not in (float, int) or type(end) not in (float, int) or not (0 <= start < end < float("inf")):
+            raise ValueError("invalid request")
+    subtitles = defaults.get("subtitles")
+    if (task.get("media_mode") == "subtitles") != (subtitles is not None):
+        raise ValueError("invalid request")
+    if subtitles is not None:
+        validate_subtitle_options(subtitles)
+        if (defaults["max_height"] is not None or defaults["video_codec"] != "h264"
+                or defaults["audio_codec"] != "best" or defaults["container"] != "mp4"
+                or defaults["engine"] == "gallery" or playlist is not None or clips or defaults["gallery_zip"]):
             raise ValueError("invalid request")
     request["options"] = defaults
     network = request.get("network")

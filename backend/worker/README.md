@@ -2,9 +2,11 @@
 
 The worker consumes one version 2 JSON request from stdin and emits version 2 NDJSON events on stdout. Each process handles one attempt in an empty private workspace. A successful terminal event contains an ordered, bounded artifact list. Classified download failures emit one failure event and exit successfully. Invalid envelopes and invalid configuration emit no events and exit unsuccessfully. Library diagnostics do not belong on stdout, and the production entrypoint suppresses stderr logging.
 
-`main.py` validates the envelope and configures networking. `media_engine.py` uses pinned yt-dlp and gallery-dl libraries for video, audio, clips, selected playlist entries, image batches and optional gallery ZIP output. Arbitrary downloader arguments, ambient configuration, plugins, browser cookies and downloaded executable components are disabled. Content extraction is not implemented. Python-native adaptive downloads may run, but external FFmpeg networking is prohibited. End-to-end adaptive-streaming coverage remains required before claiming compatibility.
+`main.py` validates the envelope and configures networking. `media_engine.py` uses pinned yt-dlp and gallery-dl libraries for video, audio, clips, selected playlist entries, image batches and optional gallery ZIP output. `subtitle_engine.py` retrieves standalone SRT/VTT tracks through the same guarded yt-dlp HTTP stack without downloading video. Arbitrary downloader arguments, ambient configuration, plugins, browser cookies and downloaded executable components are disabled. Content extraction is not implemented. Python-native adaptive downloads may run, but external FFmpeg networking is prohibited. End-to-end adaptive-streaming coverage remains required before claiming compatibility.
 
 FFmpeg and ffprobe run through immutable image-owned wrappers under `worker/bin/` that restrict protocols to `file,pipe` and allow only selected local demuxers. No executable files are created in the noexec workspace. Their execution and output are bounded. The engine probes output before producing artifact metadata. The Rust executor independently checks file types, sizes, aggregate limits and open-file identity before handing artifacts to delivery.
+
+Standalone subtitles require `media_mode: "subtitles"` and `options.subtitles: {"language":"en","automatic":false}`. Both fields are required, with no unknown subtitle keys. Tags are exact bounded language codes, not regexes. English selects only `en`, while other languages also select their exact `-orig` track. Manual tracks take priority over automatic ones. At most two UTF-8 files are returned, preferring SRT over VTT, with a 4 MiB per-text ceiling plus the configured artifact/aggregate/item limits. Timing and text validation reject empty, malformed and binary output. Clips, playlists, gallery and encoding options cannot accompany this mode. The Rust executor checks signatures and safe language-bearing filenames rather than invoking ffprobe on text. Embedding, burn-in and ASS/SSA are not supported.
 
 ## Isolation and networking
 
@@ -38,8 +40,11 @@ cd backend
 just test-worker
 just test-worker test_gallery_integration.py
 just test-worker test_proxy_tunnel.py
+just test-worker test_subtitle_engine.py
 ```
 
-After `just build-media`, `just test-worker-launcher` checks the exact default launcher and isolated Python imports inside the read-only, noexec, capability-dropped deployment profile. `just test-media` exercises real processing and native Bot API uploads under that same profile.
+After rebuilding both images with `just build-media` and `just build-media-fixture`, `just test-worker-launcher` checks the exact default launcher and isolated Python imports inside the read-only, noexec, capability-dropped deployment profile. `just test-media` exercises real processing and native Bot API uploads under that same profile.
+
+`just test-media subtitles` exercises real generic-extractor track parsing, SRT/VTT document uploads, exact language/original-track selection, saved preference snapshots and cache recovery/restart. Missing or invalid tracks, chunked oversized text and private redirects fail without partial sends. Worker unit tests separately exercise automatic fallback using real yt-dlp selection over synthetic metadata. No live provider compatibility is claimed.
 
 The gallery tests exercise the pinned gallery-dl download/write path, per-file and aggregate limits, partial-source failures, ZIP ordering and protocol-only subprocess stdout. `just test-media gallery` adds the unchanged Imgbox extractor, synthetic multi-page HTTPS source, native photo/document albums, mixed photo/ZIP sends, small-image cache recovery and durable partial delivery. The fixture checks both rejected untrusted TLS and successful trusted TLS. Its DNS and certificate overrides exist only in disposable test containers. Worker tests do not replace the Rust executor, confinement, native database or Bot API integration gates.

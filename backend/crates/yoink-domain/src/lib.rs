@@ -46,12 +46,16 @@ impl fmt::Debug for OperationId {
     }
 }
 
+#[cfg(test)]
+mod subtitle_tests;
+
 /// The representation requested from a downloader.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MediaMode {
     Video,
     Audio,
     Image,
+    Subtitles,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,6 +192,48 @@ impl ClipRange {
     }
 }
 
+/// Exact subtitle language selection, never a provider regex or filename.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubtitleOptions {
+    language: String,
+    automatic: bool,
+}
+
+impl Default for SubtitleOptions {
+    fn default() -> Self {
+        Self {
+            language: "en".into(),
+            automatic: false,
+        }
+    }
+}
+
+impl SubtitleOptions {
+    pub fn new(language: &str, automatic: bool) -> Result<Self, RequestValidationError> {
+        let parts: Vec<_> = language.split('-').collect();
+        if language.len() > 16
+            || parts.len() > 2
+            || !(2..=3).contains(&parts[0].len())
+            || !parts[0].bytes().all(|b| b.is_ascii_lowercase())
+            || parts.get(1).is_some_and(|part| {
+                !(2..=8).contains(&part.len()) || !part.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+        {
+            return Err(RequestValidationError::InvalidParameters);
+        }
+        Ok(Self {
+            language: language.into(),
+            automatic,
+        })
+    }
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+    pub const fn automatic(&self) -> bool {
+        self.automatic
+    }
+}
+
 /// Caller-selected format overrides used to freeze saved preferences at admission.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct DownloadPreferenceOverrides {
@@ -197,6 +243,8 @@ pub struct DownloadPreferenceOverrides {
     pub container: Option<Container>,
     pub send_as_file: Option<bool>,
     pub gallery_zip: Option<bool>,
+    pub subtitle_language: Option<String>,
+    pub subtitle_automatic: Option<bool>,
 }
 
 /// Per-operation download options. These values are never stored as shared user state.
@@ -211,6 +259,7 @@ pub struct DownloadParams {
     clips: Vec<ClipRange>,
     send_as_file: bool,
     gallery_zip: bool,
+    subtitles: Option<SubtitleOptions>,
 }
 
 impl Default for DownloadParams {
@@ -225,6 +274,7 @@ impl Default for DownloadParams {
             clips: Vec::new(),
             send_as_file: false,
             gallery_zip: false,
+            subtitles: None,
         }
     }
 }
@@ -307,6 +357,38 @@ impl DownloadParams {
         self.send_as_file = value;
         self
     }
+    pub fn subtitles(&self) -> Option<&SubtitleOptions> {
+        self.subtitles.as_ref()
+    }
+    pub fn with_subtitles(mut self, value: Option<SubtitleOptions>) -> Self {
+        self.subtitles = value;
+        self
+    }
+
+    fn validate_mode(
+        &self,
+        mode: MediaMode,
+        clip: Option<ClipRange>,
+    ) -> Result<(), RequestValidationError> {
+        if mode == MediaMode::Subtitles {
+            if clip.is_some()
+                || self.max_height.is_some()
+                || self.video_codec != VideoCodec::H264
+                || self.audio_codec != AudioCodec::Best
+                || self.container != Container::Mp4
+                || self.engine == Engine::Gallery
+                || self.playlist.is_some()
+                || !self.clips.is_empty()
+                || self.gallery_zip
+            {
+                return Err(RequestValidationError::InvalidParameters);
+            }
+        } else if self.subtitles.is_some() {
+            return Err(RequestValidationError::InvalidParameters);
+        }
+        Ok(())
+    }
+
     pub fn with_gallery_zip(mut self, value: bool) -> Self {
         self.gallery_zip = value;
         self
@@ -356,6 +438,13 @@ impl DownloadRequest {
             return Err(RequestValidationError::InvalidParameters);
         }
 
+        let mut params = params;
+        params.validate_mode(media_mode, clip_range)?;
+        if media_mode == MediaMode::Subtitles {
+            params
+                .subtitles
+                .get_or_insert_with(SubtitleOptions::default);
+        }
         Ok(Self {
             actor_id,
             source_url,
@@ -409,6 +498,13 @@ impl DownloadRequest {
     pub fn with_params(mut self, params: DownloadParams) -> Result<Self, RequestValidationError> {
         if self.clip_range.is_some() && !params.clips().is_empty() {
             return Err(RequestValidationError::InvalidParameters);
+        }
+        let mut params = params;
+        params.validate_mode(self.media_mode, self.clip_range)?;
+        if self.media_mode == MediaMode::Subtitles {
+            params
+                .subtitles
+                .get_or_insert_with(SubtitleOptions::default);
         }
         self.params = params;
         Ok(self)

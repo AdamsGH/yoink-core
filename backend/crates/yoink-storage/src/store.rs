@@ -919,7 +919,8 @@ fn same_request_intent(
                 .with_audio_codec(defaults.audio_codec())
                 .with_container(defaults.container())
                 .with_send_as_file(defaults.send_as_file())
-                .with_gallery_zip(defaults.gallery_zip());
+                .with_gallery_zip(defaults.gallery_zip())
+                .with_subtitles(None);
             request
                 .with_params(params)
                 .map_err(|_| StoreError::InvalidInput)

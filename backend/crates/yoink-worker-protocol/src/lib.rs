@@ -74,6 +74,7 @@ pub enum MediaMode {
     Video,
     Audio,
     Image,
+    Subtitles,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +157,29 @@ impl ClipRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubtitleOptions {
+    pub language: String,
+    pub automatic: bool,
+}
+impl SubtitleOptions {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let parts: Vec<_> = self.language.split('-').collect();
+        if self.language.len() > 16
+            || parts.len() > 2
+            || !(2..=3).contains(&parts[0].len())
+            || !parts[0].bytes().all(|b| b.is_ascii_lowercase())
+            || parts.get(1).is_some_and(|part| {
+                !(2..=8).contains(&part.len()) || !part.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
+        {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DownloadOptions {
     pub max_height: Option<u32>,
@@ -166,6 +190,8 @@ pub struct DownloadOptions {
     pub playlist: Option<PlaylistRange>,
     pub clips: Vec<ClipRange>,
     pub gallery_zip: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitles: Option<SubtitleOptions>,
 }
 impl Default for DownloadOptions {
     fn default() -> Self {
@@ -178,6 +204,7 @@ impl Default for DownloadOptions {
             playlist: None,
             clips: Vec::new(),
             gallery_zip: false,
+            subtitles: None,
         }
     }
 }
@@ -285,6 +312,30 @@ impl WorkerRequest {
             return Err(ProtocolError::InvalidRequest);
         }
         self.options.validate()?;
+        let subtitles_mode = matches!(
+            self.task,
+            TaskKind::Download {
+                media_mode: MediaMode::Subtitles
+            }
+        );
+        if subtitles_mode != self.options.subtitles.is_some() {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        if let Some(subtitles) = &self.options.subtitles {
+            subtitles.validate()?;
+            let o = &self.options;
+            if o.max_height.is_some()
+                || o.video_codec != VideoCodec::H264
+                || o.audio_codec != AudioCodec::Best
+                || o.container != Container::Mp4
+                || o.engine == Engine::Gallery
+                || o.playlist.is_some()
+                || !o.clips.is_empty()
+                || o.gallery_zip
+            {
+                return Err(ProtocolError::InvalidRequest);
+            }
+        }
         if let Some(network) = &self.network {
             network.validate()?;
         }
@@ -608,6 +659,35 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_options_are_mode_specific_and_bounded() {
+        let mut req = request();
+        req.task = TaskKind::Download {
+            media_mode: MediaMode::Subtitles,
+        };
+        assert!(req.validate().is_err());
+        req.options.subtitles = Some(SubtitleOptions {
+            language: "ru".into(),
+            automatic: true,
+        });
+        req.validate().unwrap();
+        let decoded: WorkerRequest =
+            serde_json::from_slice(&serde_json::to_vec(&req).unwrap()).unwrap();
+        assert_eq!(decoded, req);
+        for language in ["en.*", "en,ru", "../../x", "EN", "", "en-US-extra"] {
+            req.options.subtitles.as_mut().unwrap().language = language.into();
+            assert!(req.validate().is_err());
+        }
+        req.options.subtitles.as_mut().unwrap().language = "en".into();
+        req.options.max_height = Some(720);
+        assert!(req.validate().is_err());
+        req.options.max_height = None;
+        req.task = TaskKind::Download {
+            media_mode: MediaMode::Video,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
     fn download_options_and_network_credentials_are_bounded_and_redacted() {
         let mut req = request();
         req.options = DownloadOptions {
@@ -625,6 +705,7 @@ mod tests {
                 end_seconds: 2.0,
             }],
             gallery_zip: true,
+            subtitles: None,
         };
         req.network = Some(NetworkCredentials {
             proxy_url: Some("https://proxy.example:8443".into()),

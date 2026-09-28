@@ -35,6 +35,7 @@ pub(super) fn parse(name: &str, args: &[&str]) -> Option<Result<ParsedMedia, ()>
         "video" => MediaMode::Video,
         "audio" => MediaMode::Audio,
         "image" => MediaMode::Image,
+        "subs" => MediaMode::Subtitles,
         "playlist" | "cut" => MediaMode::Video,
         _ => return None,
     };
@@ -88,6 +89,12 @@ fn parse_inner(name: &str, args: &[&str], mode: MediaMode) -> Result<ParsedMedia
                 None,
             )
         }
+        "subs" => {
+            if !tail.is_empty() {
+                return Err(());
+            }
+            (None, None, Some(Engine::YtDlp))
+        }
         "image" => {
             if !tail.is_empty() {
                 return Err(());
@@ -139,7 +146,23 @@ fn parse_overrides<'a>(
         if value.starts_with("--") {
             return Err(());
         }
+        if name == "subs" && !matches!(token, "--subtitle-language" | "--subtitle-auto") {
+            return Err(());
+        }
         match token {
+            "--subtitle-language" => {
+                if name != "subs" {
+                    return Err(());
+                }
+                yoink_domain::SubtitleOptions::new(value, false).map_err(|_| ())?;
+                overrides.subtitle_language = Some(value.into());
+            }
+            "--subtitle-auto" => {
+                if name != "subs" {
+                    return Err(());
+                }
+                overrides.subtitle_automatic = Some(parse_bool(value)?);
+            }
             "--height" => {
                 if name == "audio" || name == "image" {
                     return Err(());
@@ -205,6 +228,47 @@ fn parse_overrides<'a>(
         index += 2;
     }
     Ok((positional, overrides))
+}
+
+#[cfg(test)]
+#[test]
+fn standalone_subtitles_accept_only_their_exact_options() {
+    let url = "https://example.test/watch?t=30";
+    let parsed = parse(
+        "subs",
+        &[
+            url,
+            "--subtitle-language",
+            "zh-Hans",
+            "--subtitle-auto",
+            "true",
+        ],
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(parsed.mode, MediaMode::Subtitles);
+    assert!(parsed.playlist.is_none() && parsed.clip.is_none());
+    assert_eq!(
+        parsed.overrides.subtitle_language.as_deref(),
+        Some("zh-Hans")
+    );
+    assert_eq!(parsed.overrides.subtitle_automatic, Some(true));
+    assert!(parse("subs", &[url]).unwrap().is_ok());
+    for args in [
+        vec![url, "en"],
+        vec![url, "--height", "720"],
+        vec![url, "--send-as-file", "true"],
+        vec![url, "--subtitle-language", "en.*"],
+        vec![url, "--subtitle-auto", "true", "--subtitle-auto", "false"],
+        vec![],
+    ] {
+        assert!(parse("subs", &args).unwrap().is_err());
+    }
+    assert!(
+        parse("video", &[url, "--subtitle-language", "en"])
+            .unwrap()
+            .is_err()
+    );
 }
 
 fn parse_bool(value: &str) -> Result<bool, ()> {

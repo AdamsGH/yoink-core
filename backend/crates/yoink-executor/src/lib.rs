@@ -688,6 +688,12 @@ fn load_artifact(
             "image/gif",
             header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a"),
         ),
+        "text/vtt" => ("subtitles.vtt", "text/vtt", subtitle_magic(header, true)),
+        "application/x-subrip" => (
+            "subtitles.srt",
+            "application/x-subrip",
+            subtitle_magic(header, false),
+        ),
         "application/zip" => (
             "archive.zip",
             "application/zip",
@@ -700,12 +706,74 @@ fn load_artifact(
     if !valid_magic {
         return Err(ExecutorError::UnsafeArtifact);
     }
+    let filename = if matches!(media_type, "text/vtt" | "application/x-subrip") {
+        let name = path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or(ExecutorError::UnsafeArtifact)?;
+        if name.len() > 64
+            || !name.starts_with("subtitles-")
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+            || !name.ends_with(if media_type == "text/vtt" {
+                ".vtt"
+            } else {
+                ".srt"
+            })
+        {
+            return Err(ExecutorError::UnsafeArtifact);
+        }
+        name
+    } else {
+        filename
+    };
     Ok(ValidatedArtifact {
         file,
         filename: filename.into(),
         media_type: media_type.into(),
         size_bytes: descriptor.size_bytes,
     })
+}
+
+fn subtitle_magic(header: &[u8], vtt: bool) -> bool {
+    let header = header.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(header);
+    if vtt {
+        return header.starts_with(b"WEBVTT")
+            && header
+                .get(6)
+                .is_some_and(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'));
+    }
+    let mut lines = header.split(|b| *b == b'\n');
+    let number = lines.next().unwrap_or_default();
+    let number = number.strip_suffix(b"\r").unwrap_or(number);
+    if number.is_empty() || !number.iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    let Some(line) = lines.next().and_then(|line| std::str::from_utf8(line).ok()) else {
+        return false;
+    };
+    let mut parts = line.split_ascii_whitespace();
+    let timestamp = |value: &str| {
+        let mut fields = value.split(':');
+        let (Some(hours), Some(minutes), Some(seconds)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            return false;
+        };
+        hours.len() >= 2
+            && hours.bytes().all(|b| b.is_ascii_digit())
+            && minutes.len() == 2
+            && minutes.parse::<u8>().is_ok_and(|v| v < 60)
+            && seconds.len() == 6
+            && seconds.as_bytes()[2] == b','
+            && seconds[..2].parse::<u8>().is_ok_and(|v| v < 60)
+            && seconds[3..].bytes().all(|b| b.is_ascii_digit())
+            && fields.next().is_none()
+    };
+    parts.next().is_some_and(timestamp)
+        && parts.next() == Some("-->")
+        && parts.next().is_some_and(timestamp)
 }
 
 fn libc_mode_type_mask() -> u32 {
@@ -756,6 +824,29 @@ impl Drop for ProcessGroupGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtitle_sniff_checks_signatures_without_decoding_truncated_body_text() {
+        assert!(subtitle_magic(
+            b"WEBVTT\n\n00:00.000 --> 00:02.000\n\xd0",
+            true
+        ));
+        assert!(subtitle_magic(b"\xef\xbb\xbfWEBVTT\r\n", true));
+        assert!(subtitle_magic(
+            b"1\r\n00:00:00,000 --> 00:00:02,000\r\n\xd0",
+            false
+        ));
+        for bytes in [b"WEBVTTX".as_slice(), b"<html>text</html>", b"WEBVTT"] {
+            assert!(!subtitle_magic(bytes, true));
+        }
+        for bytes in [
+            b"1\n00:00:00,000 --> garbage".as_slice(),
+            b"x\n00:00:00,000 --> 00:00:02,000",
+            b"1\n00:99:00,000 --> 00:00:02,000",
+        ] {
+            assert!(!subtitle_magic(bytes, false));
+        }
+    }
     use std::io::Write;
 
     #[test]
