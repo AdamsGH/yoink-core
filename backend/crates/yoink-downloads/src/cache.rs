@@ -18,8 +18,9 @@ pub(super) fn valid_cached_media(
     let mut total = 0u64;
     for item in media {
         let size = item.size_bytes();
-        if size < 1024
-            || size > limits.max_artifact_bytes
+        // CachedMedia already rejects zero bytes. Valid PNGs and other confirmed
+        // uploads can be smaller than 1 KiB, just like their fresh-upload path.
+        if size > limits.max_artifact_bytes
             || (send_as_file && item.kind() != CachedMediaKind::Document)
         {
             return false;
@@ -111,18 +112,27 @@ mod tests {
     }
 
     #[test]
-    fn cached_media_validation_enforces_item_file_total_minimum_and_file_mode() {
+    fn cached_media_validation_enforces_item_file_total_and_file_mode() {
         assert!(valid_cached_media(
             &[media(CachedMediaKind::Photo, 1024)],
             limits(),
             false
         ));
         assert!(!valid_cached_media(&[], limits(), false));
-        assert!(!valid_cached_media(
-            &[media(CachedMediaKind::Photo, 1023)],
+        assert!(valid_cached_media(
+            &[
+                media(CachedMediaKind::Photo, 357),
+                media(CachedMediaKind::Photo, 721)
+            ],
             limits(),
             false
         ));
+        assert!(valid_cached_media(
+            &[media(CachedMediaKind::Document, 357)],
+            limits(),
+            true
+        ));
+        assert!(CachedMedia::new(CachedMediaKind::Photo, "opaque-id".into(), 0).is_err());
         assert!(!valid_cached_media(
             &[media(CachedMediaKind::Video, 10_001)],
             limits(),

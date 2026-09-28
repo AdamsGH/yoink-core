@@ -151,8 +151,8 @@ test-worker-launcher:
     node scripts/test-worker-launcher.mjs
 
 # Disposable native DB, fixture Bot API and real container Python worker.
-test-media:
-    node scripts/test-media.mjs
+test-media scenario="all":
+    node scripts/test-media.mjs {{quote(scenario)}}
 
 verify-media: build-media build-media-fixture test-worker test-worker-launcher test-media
 

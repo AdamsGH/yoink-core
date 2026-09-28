@@ -137,6 +137,7 @@ export class AuthenticatedProxyFixture {
   #sockets = new Set();
   #hits = 0;
   #authHits = 0;
+  galleryPort;
   constructor({ originPort, authorization }) {
     this.originPort = originPort;
     this.authorization = authorization;
@@ -167,11 +168,13 @@ export class AuthenticatedProxyFixture {
         const match = requestLine.match(/^CONNECT ([^ ]+) HTTP\/1\.[01]$/);
         const authorization = headers.find(line => /^proxy-authorization:/i.test(line))?.split(':', 2)[1]?.trim();
         const permittedTarget = `127.0.0.1:${this.originPort}`;
-        if (!match || match[1] !== permittedTarget) { client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
+        const targetPort = match?.[1] === permittedTarget ? this.originPort
+          : match?.[1] === '192.0.2.1:443' ? this.galleryPort : undefined;
+        if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) { client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
         if (authorization !== this.authorization) { client.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="fixture"\r\nContent-Length: 0\r\n\r\n'); return; }
         this.#hits++;
         this.#authHits++;
-        upstream = net.connect(this.originPort, '127.0.0.1');
+        upstream = net.connect(targetPort, '127.0.0.1');
         this.#sockets.add(upstream);
         upstream.once('close', () => this.#sockets.delete(upstream));
         upstream.once('connect', () => {
