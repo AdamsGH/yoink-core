@@ -10,6 +10,7 @@ import { runCommandMediaScenarios } from './media-fixture/command-scenarios.mjs'
 import { runPreferenceScenarios } from './media-fixture/preference-scenarios.mjs';
 import { runBatchScenarios } from './media-fixture/batch-scenarios.mjs';
 import { runProgressScenarios } from './media-fixture/progress-scenarios.mjs';
+import { runGroupScenarios } from './media-fixture/group-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,6 +53,7 @@ let downloadMaxAttempts;
 let downloadTimeoutSeconds = 3;
 let workerSocketTimeoutSeconds = 1;
 let cacheTtlSeconds;
+let groupsEnabled = false;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
 const { capture: spawnCapture, docker } = processRunner;
 const containerLifecycle = createContainerLifecycle({ docker, capture: spawnCapture, containers, assert, runId });
@@ -134,6 +136,7 @@ async function launchApp() {
     '--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','128','--memory','512m',
     '--env','YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS=1','--env','YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS=2',
     '--env','YOINK_RUST_TELEGRAM_ENABLED=true','--env',`YOINK_RUST_TELEGRAM_TOKEN=${token}`,'--env','YOINK_RUST_OWNER_ID=42',
+    '--env',`YOINK_RUST_TELEGRAM_GROUPS_ENABLED=${groupsEnabled}`,
     '--env',`YOINK_RUST_BOT_API_URL=http://127.0.0.1:${apiPort}`,'--env','TURSO_TMPDIR=/tmp/yoink-db','--env','TMPDIR=/tmp/yoink-db',
     '--env','YOINK_RUST_DATABASE_PATH=/state/private/state.db',
     '--env',`YOINK_FIXTURE_BIND=127.0.0.1:${fixturePort}`,'--env',`YOINK_FIXTURE_TOKEN=${fixtureToken}`,
@@ -582,9 +585,10 @@ try {
   workerSocketTimeoutSeconds = 20;
   await restartApp();
   const progressSummary = await runProgressScenarios({ ...commandContext, restartApp });
+  const groupSummary = await runGroupScenarios({ ...commandContext, playlistMedia, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } });
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
-  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary} ${preferenceSummary}. ${batchSummary}. ${progressSummary}.`);
+  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary} ${preferenceSummary}. ${batchSummary}. ${progressSummary}. ${groupSummary}.`);
 } catch (error) {
   await reportFailure(error, 'scenario');
   process.exitCode=1;

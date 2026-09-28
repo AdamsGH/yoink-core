@@ -20,6 +20,37 @@ async function postUpload(port, method, filename, mimeType, bytes) {
   return { status: response.status, body: await response.json() };
 }
 
+test('group fixture preserves topic and reply routing in updates, notices, edits and media', async t => {
+  const source = fixtureMedia();
+  const api = new BotApiFixture({ mediaBytes: source });
+  const port = await api.start();
+  t.after(() => api.close());
+  const post = async (method, data) => (await fetch(`http://127.0.0.1:${port}/bottoken/${method}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data),
+  })).json();
+  api.enqueue(43, -10010, '/help', 10, 'ru', { thread: 18 });
+  const update = (await post('getupdates', {})).result[0].message;
+  assert.equal(update.message_thread_id, 18);
+  assert.equal(update.chat.type, 'supergroup');
+  assert.equal(update.from.language_code, 'ru');
+  const notice = (await post('sendmessage', { chat_id: -10010, message_thread_id: 18, text: 'queued' })).result;
+  assert.equal(notice.message_thread_id, 18);
+  const edit = (await post('editmessagetext', { chat_id: -10010, message_id: notice.message_id, text: 'downloading' })).result;
+  assert.equal(edit.message_thread_id, 18);
+  const form = new FormData();
+  form.set('chat_id', '-10010');
+  form.set('message_thread_id', '18');
+  form.set('reply_parameters', JSON.stringify({ message_id: 10 }));
+  form.set('video', new Blob([source], { type: 'video/mp4' }), 'media.mp4');
+  const media = await (await fetch(`http://127.0.0.1:${port}/bottoken/sendvideo`, { method: 'POST', body: form })).json();
+  assert.equal(media.result.chat.id, -10010);
+  assert.equal(media.result.message_thread_id, 18);
+  const send = api.calls.at(-1);
+  assert.equal(send.chat_id, -10010);
+  assert.equal(send.message_thread_id, 18);
+  assert.equal(send.reply_to_message_id, 10);
+});
+
 test('default video upload retains bounded original media bytes and safe filename', async t => {
   const source = fixtureMedia();
   const api = new BotApiFixture({ mediaBytes: source, maxRequestBytes: 4096 });

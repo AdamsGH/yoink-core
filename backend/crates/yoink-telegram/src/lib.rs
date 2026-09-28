@@ -1,4 +1,4 @@
-//! Owner-only experimental Telegram adapter with opt-in video download commands.
+//! Experimental Telegram adapter with owner-private diagnostics and opt-in group media.
 
 use sender::TelegramDelivery;
 #[cfg(test)]
@@ -70,6 +70,7 @@ impl std::error::Error for TelegramError {}
 struct TelegramIdentity {
     owner_id: u64,
     bot_id: u64,
+    groups_enabled: bool,
 }
 
 /// Owner-only diagnostics and opt-in media delivery over Telegram long polling.
@@ -82,6 +83,7 @@ pub struct TelegramAdapter {
     downloads: Option<DownloadService>,
     poll_timeout: Duration,
     progress: ProgressConfig,
+    groups_enabled: bool,
 }
 
 impl TelegramAdapter {
@@ -126,12 +128,19 @@ impl TelegramAdapter {
             downloads: None,
             poll_timeout,
             progress: ProgressConfig::default(),
+            groups_enabled: false,
         })
     }
 
     /// Enables the progressive video-download slice.
     pub fn with_downloads(mut self, service: DownloadService) -> Self {
         self.downloads = Some(service);
+        self
+    }
+
+    /// Keeps owner-private access unchanged and permits policy-checked group commands.
+    pub fn with_group_access(mut self, enabled: bool) -> Self {
+        self.groups_enabled = enabled;
         self
     }
 
@@ -165,7 +174,8 @@ impl TelegramAdapter {
             .dependencies(dptree::deps![
                 TelegramIdentity {
                     owner_id: self.owner_id,
-                    bot_id: self.bot_id
+                    bot_id: self.bot_id,
+                    groups_enabled: self.groups_enabled
                 },
                 self.bot_username,
                 self.system,
@@ -320,6 +330,34 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
 fn is_http_url(value: &str) -> bool {
     Url::parse(value)
         .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
+}
+
+fn incoming_route(identity: TelegramIdentity, message: &Message) -> Option<(u64, DeliveryTarget)> {
+    let user = message.from.as_ref()?;
+    if user.is_bot || message.sender_chat.is_some() {
+        return None;
+    }
+    if message.chat.is_private() {
+        if !is_owner_private(identity.owner_id, message) || message.thread_id.is_some() {
+            return None;
+        }
+    } else if !identity.groups_enabled
+        || !(message.chat.is_group() || message.chat.is_supergroup())
+        || message.chat.id.0 >= 0
+    {
+        return None;
+    }
+    let target = DeliveryTarget::new(
+        i64::try_from(identity.bot_id).ok()?,
+        message.chat.id.0,
+        message.thread_id.map(|thread| i64::from(thread.0.0)),
+        Some(message.id.0),
+    )
+    .ok()?;
+    if target.chat_id() > 0 && u64::try_from(target.chat_id()).ok()? != user.id.0 {
+        return None;
+    }
+    Some((user.id.0, target))
 }
 
 fn is_owner_private(owner_id: u64, message: &Message) -> bool {
@@ -488,11 +526,10 @@ async fn handle_message(
     system: SystemService,
     DownloadsDependency(downloads): DownloadsDependency,
 ) -> Result<(), Infallible> {
-    let TelegramIdentity { owner_id, bot_id } = identity;
-    // This authorization check is deliberately the first boundary for all commands.
-    if !is_owner_private(owner_id, &message) {
+    let bot_id = identity.bot_id;
+    let Some((actor_id, target)) = incoming_route(identity, &message) else {
         return Ok(());
-    }
+    };
 
     let Some(text) = message.text() else {
         return Ok(());
@@ -507,8 +544,22 @@ async fn handle_message(
             .and_then(|user| user.language_code.as_deref()),
     );
 
+    if target.chat_id() < 0 {
+        if matches!(command, Command::Status) {
+            return Ok(());
+        }
+        let Some(service) = downloads.as_ref() else {
+            return Ok(());
+        };
+        if service.authorize_chat(actor_id, target).await.is_err() {
+            return Ok(());
+        }
+    }
     let mut admitted = None;
     let reply = match command {
+        Command::Start | Command::Help if target.chat_id() < 0 => {
+            translate(language, Key::UsageDownload, &[])
+        }
         Command::Start | Command::Help | Command::Status | Command::Invalid => {
             response(command, language, &system, downloads.is_some())
         }
@@ -522,21 +573,17 @@ async fn handle_message(
                 return Ok(());
             };
             let key = format!("tg:{bot_id}:{}:{}", message.chat.id.0, message.id.0);
-            let target =
-                DeliveryTarget::new(bot_id as i64, message.chat.id.0, None, Some(message.id.0))
-                    .map_err(|_| DownloadError::InvalidInput);
-            let request = target.and_then(|target| {
+            let request = {
                 DownloadRequest::new(
-                    owner_id,
+                    actor_id,
                     &url,
                     DomainMediaMode::Video,
                     None,
                     DownloadParams::default(),
                 )
-                .map_err(|_| DownloadError::InvalidInput)?
-                .with_target(target)
+                .and_then(|request| request.with_target(target))
                 .map_err(|_| DownloadError::InvalidInput)
-            });
+            };
             match request {
                 Ok(request) => match service
                     .submit_preferred_request(
@@ -560,19 +607,14 @@ async fn handle_message(
                 return Ok(());
             };
             let key = format!("tg:{bot_id}:{}:{}", message.chat.id.0, message.id.0);
-            let target =
-                DeliveryTarget::new(bot_id as i64, message.chat.id.0, None, Some(message.id.0))
-                    .map_err(|_| DownloadError::InvalidInput);
             let mut params = DownloadParams::default().with_playlist(media.playlist);
             if let Some(engine) = media.engine {
                 params = params.with_engine(engine);
             }
-            let request = target.and_then(|target| {
-                DownloadRequest::new(owner_id, &media.url, media.mode, media.clip, params)
-                    .map_err(|_| DownloadError::InvalidInput)?
-                    .with_target(target)
-                    .map_err(|_| DownloadError::InvalidInput)
-            });
+            let request =
+                DownloadRequest::new(actor_id, &media.url, media.mode, media.clip, params)
+                    .and_then(|request| request.with_target(target))
+                    .map_err(|_| DownloadError::InvalidInput);
             match request {
                 Ok(request) => match service
                     .submit_preferred_request(&request, &key, media.overrides)
@@ -591,7 +633,7 @@ async fn handle_message(
             let Some(service) = downloads.as_ref() else {
                 return Ok(());
             };
-            match service.status(owner_id, id).await {
+            match service.status_in_chat(actor_id, id, target).await {
                 Ok(Some(record)) => progress::render(&record, language),
                 Ok(None) => unknown_operation(language),
                 Err(error) => download_error_response(error, language).to_owned(),
@@ -601,7 +643,7 @@ async fn handle_message(
             let Some(service) = downloads.as_ref() else {
                 return Ok(());
             };
-            match service.cancel(owner_id, id).await {
+            match service.cancel_in_chat(actor_id, id, target).await {
                 Ok(true) => translate(
                     language,
                     Key::CancellationRequested,
@@ -613,15 +655,31 @@ async fn handle_message(
         }
     };
 
-    match bot.send_message(message.chat.id, reply).await {
-        Ok(sent) if sent.chat.id == message.chat.id && sent.id.0 > 0 => {
+    if target.chat_id() < 0 {
+        let Some(service) = downloads.as_ref() else {
+            return Ok(());
+        };
+        if service.authorize_chat(actor_id, target).await.is_err() {
+            return Ok(());
+        }
+    }
+    let mut send = bot.send_message(message.chat.id, reply);
+    if let Some(thread) = message.thread_id {
+        send = send.message_thread_id(thread);
+    }
+    match send.await {
+        Ok(sent)
+            if sent.chat.id == message.chat.id
+                && sent.thread_id == message.thread_id
+                && sent.id.0 > 0 =>
+        {
             if let (Some(id), Some(service)) = (admitted, downloads.as_ref()) {
                 let code = match language {
                     Language::English => "en",
                     Language::Russian => "ru",
                 };
                 if service
-                    .register_progress_message(owner_id, id, sent.id.0, code)
+                    .register_progress_message(actor_id, id, sent.id.0, code)
                     .await
                     .is_err()
                 {
@@ -642,6 +700,64 @@ fn unknown_operation(language: Language) -> String {
 mod tests {
     use super::*;
     use yoink_downloads::DeliveryError;
+
+    #[test]
+    fn incoming_routes_require_opt_in_and_an_identified_user_in_the_original_chat() {
+        let identity = TelegramIdentity {
+            owner_id: 42,
+            bot_id: 123456,
+            groups_enabled: false,
+        };
+        let value = serde_json::json!({
+            "message_id": 10, "date": 0, "from": {"id": 42, "is_bot": false, "first_name": "Fixture"},
+            "chat": {"id": 42, "type": "private"}, "text": "/video https://example.com/media"
+        });
+        let route = |identity, value: serde_json::Value| {
+            incoming_route(identity, &serde_json::from_value(value).unwrap())
+        };
+        assert_eq!(route(identity, value.clone()).unwrap().0, 42);
+        let mut group = value.clone();
+        group["chat"] = serde_json::json!({"id": -10010, "type": "supergroup", "title": "Fixture", "is_forum": true});
+        group["from"]["id"] = 43.into();
+        group["message_thread_id"] = 18.into();
+        assert!(route(identity, group.clone()).is_none());
+        let enabled = TelegramIdentity {
+            groups_enabled: true,
+            ..identity
+        };
+        let (actor, target) = route(enabled, group.clone()).unwrap();
+        assert_eq!(actor, 43);
+        assert_eq!(target.chat_id(), -10010);
+        assert_eq!(target.thread_id(), Some(18));
+        assert_eq!(target.reply_to_message_id(), Some(10));
+        for (field, changed) in [
+            ("sender_chat", group["chat"].clone()),
+            (
+                "from",
+                serde_json::json!({"id": 43, "is_bot": true, "first_name": "Bot"}),
+            ),
+            ("from", serde_json::Value::Null),
+            (
+                "chat",
+                serde_json::json!({"id": -10010, "type": "channel", "title": "Channel"}),
+            ),
+            ("message_id", 0.into()),
+        ] {
+            let mut denied = group.clone();
+            denied[field] = changed;
+            assert!(route(enabled, denied).is_none(), "{field}");
+        }
+        let mut wrong_private = value.clone();
+        wrong_private["chat"]["id"] = 43.into();
+        assert!(route(enabled, wrong_private).is_none());
+        let mut nonowner = value.clone();
+        nonowner["from"]["id"] = 43.into();
+        nonowner["chat"]["id"] = 43.into();
+        assert!(route(enabled, nonowner).is_none());
+        let mut private_topic = value;
+        private_topic["message_thread_id"] = 18.into();
+        assert!(route(enabled, private_topic).is_none());
+    }
 
     #[test]
     fn parses_supported_commands_with_strict_arguments_and_bot_suffix() {

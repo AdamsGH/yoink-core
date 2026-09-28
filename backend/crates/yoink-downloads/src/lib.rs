@@ -1,4 +1,5 @@
 mod cache;
+mod chat_access;
 pub mod profile;
 mod progress;
 
@@ -10,7 +11,6 @@ use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use uuid::Uuid;
-use yoink_access::{AccessPolicy, AccessScope, Role};
 use yoink_domain::CachedMedia;
 use yoink_domain::{
     DeliveryTarget, DownloadParams, DownloadPreferenceOverrides, DownloadRequest,
@@ -119,6 +119,7 @@ pub struct DownloadService {
     config: DownloadConfig,
     profile: ProfileStore,
     network_config: DownloadNetworkConfig,
+    groups_enabled: bool,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -246,6 +247,7 @@ impl DownloadService {
             config,
             profile,
             network_config,
+            groups_enabled: false,
         })
     }
 
@@ -436,61 +438,6 @@ impl DownloadService {
             no_cookie_domains: &self.network_config.no_cookie_domains,
             identity,
             system_proxy: self.network_config.system_proxy.as_deref(),
-        }
-    }
-
-    async fn authorize_target(
-        &self,
-        actor_id: u64,
-        target: Option<DeliveryTarget>,
-    ) -> Result<yoink_identity::IdentitySnapshot, DownloadError> {
-        if actor_id == 0 || actor_id > i64::MAX as u64 {
-            return Err(DownloadError::Denied);
-        }
-        if target.is_some_and(|target| target.bot_id() != self.delivery.bot_id()) {
-            return Err(DownloadError::Denied);
-        }
-        let group = target
-            .filter(|target| target.chat_id() < 0)
-            .map(|target| (target.chat_id(), target.thread_id()));
-        let snapshot = self
-            .identities
-            .snapshot(actor_id as i64, group)
-            .await
-            .map_err(|_| DownloadError::Database)?
-            .ok_or(DownloadError::Denied)?;
-        let scope = if group.is_some() {
-            AccessScope::Group
-        } else {
-            AccessScope::Private
-        };
-        let context = match snapshot.group.as_ref() {
-            Some(group) => yoink_access::AccessContext {
-                scope,
-                group_enabled: group.enabled,
-                thread_allowed: group.thread_allowed,
-                group_role_override: group.role_override,
-                group_auto_grant_role: Some(group.auto_grant_role),
-            },
-            None => yoink_access::AccessContext {
-                scope,
-                group_enabled: false,
-                thread_allowed: false,
-                group_role_override: None,
-                group_auto_grant_role: None,
-            },
-        };
-        let policy = AccessPolicy {
-            min_role: Role::User,
-            scopes: vec![AccessScope::Private, AccessScope::Group],
-            check_group_enabled: scope == AccessScope::Group,
-            check_thread_policy: scope == AccessScope::Group,
-        };
-        if yoink_access::check_access(&snapshot.principal, &policy, &context, snapshot.now).allowed
-        {
-            Ok(snapshot)
-        } else {
-            Err(DownloadError::Denied)
         }
     }
 

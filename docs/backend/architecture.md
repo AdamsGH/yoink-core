@@ -9,7 +9,7 @@ The server optionally starts diagnostics, Telegram, and database-backed services
 ```text
 yoink-server
   -> yoink-http             diagnostics
-  -> yoink-telegram         owner-private commands and media delivery
+  -> yoink-telegram         owner-private commands, opt-in groups/topics and media delivery
        -> yoink-i18n        embedded EN/RU TOML catalogs
   -> yoink-downloads        admission, authorization and worker lifecycle
        -> yoink-identity   read-only legacy-compatible identity snapshots

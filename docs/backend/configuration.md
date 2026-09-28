@@ -35,6 +35,7 @@ Telegram is disabled unless enabled explicitly.
 | Variable | Default | Supported value | Behavior |
 | --- | --- | --- | --- |
 | `YOINK_RUST_TELEGRAM_ENABLED` | `false` | Exact `true` or `false` | Controls Telegram adapter startup. |
+| `YOINK_RUST_TELEGRAM_GROUPS_ENABLED` | `false` | Exact `true` or `false` | Enables group/topic commands for known authorized users when media is enabled. Does not register users or groups. |
 | `YOINK_RUST_TELEGRAM_TOKEN` | unset | Required when enabled; non-empty, no whitespace | Bot token. Treat as a secret. |
 | `YOINK_RUST_OWNER_ID` | unset | Positive ID up to signed 64-bit maximum | Required configured owner identity. |
 | `YOINK_RUST_BOT_API_URL` | unset | HTTP(S) origin without credentials, path, query, or fragment | Optional Bot API endpoint override. |
@@ -42,7 +43,7 @@ Telegram is disabled unless enabled explicitly.
 | `YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS` | `2` | 1 through 60 seconds | Global progress tick. At most one status-message edit per tick, coalescing unchanged text. |
 | `YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS` | `10` | 1 through 60 seconds | Deadline for editing an already-confirmed status message. Ambiguous edits are safe to retry, unlike media sends. |
 
-The outer command gate remains restricted to the configured owner in a private chat. The media service separately uses an authorized identity snapshot for admission, execution, and delivery. Database files have no PostgreSQL-style column or role ACLs: the trusted server process can read every row, including credentials. Treat the process, its host, and the private state directory as the security boundary. Read snapshots must not expose credential contents through operator or user-facing APIs.
+Private commands and `/status` remain owner-only. Groups require the separate opt-in above, an identifiable non-bot sender, and current authorization for the original group/topic. The media service checks identity and destination at admission, execution, delivery and progress. Disabling group access prevents persisted group jobs from starting and retires their progress notices. See [access control](access-control.md) for role precedence and current limits. Database files have no PostgreSQL-style column or role ACLs: the trusted server process can read every row, including credentials. Treat the process, its host, and the private state directory as the security boundary. Read snapshots must not expose credential contents through operator or user-facing APIs.
 
 ## Optional media downloads
 

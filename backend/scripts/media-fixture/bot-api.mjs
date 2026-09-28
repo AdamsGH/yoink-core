@@ -60,8 +60,10 @@ export class BotApiFixture {
     this.#sendMode = 'hold';
     return () => { release(); this.#sendGate = undefined; };
   }
-  enqueue(actor, chat, text, id, language = 'en') {
-    const message = this.#message(actor, chat, text, id);
+  enqueue(actor, chat, text, id, language = 'en', { thread, senderChat, isBot = false } = {}) {
+    const message = this.#message(actor, chat, text, id, undefined, thread);
+    message.from.is_bot = isBot;
+    if (senderChat) message.sender_chat = senderChat;
     message.from.language_code = language;
     this.#updates.push({ update_id: this.#updateId++, message });
   }
@@ -106,7 +108,7 @@ export class BotApiFixture {
       res.end(JSON.stringify({ ok: true, result: batch }));
     } else if (method === 'sendmessage') {
       const data = JSON.parse(body.toString('utf8'));
-      const message = this.#message(123456, Number(data.chat_id), data.text, ++this.#nextMessageId);
+      const message = this.#message(123456, Number(data.chat_id), data.text, ++this.#nextMessageId, undefined, data.message_thread_id);
       this.#messages.set(`${message.chat.id}:${message.message_id}`, message);
       this.#calls.push({ method, data, messageId: message.message_id });
       res.end(JSON.stringify({ ok: true, result: message }));
@@ -198,7 +200,8 @@ export class BotApiFixture {
     const chat = Number(data.chat_id);
     assert(Number.isSafeInteger(chat), 'media payload must carry chat_id');
     const threadId = data.message_thread_id === undefined ? undefined : Number(data.message_thread_id);
-    this.#calls.push({ method, status: this.#sendMode, cached: !!cachedFileId, uploadLength: filePart?.value.length ?? 0, receivedAt: performance.now() });
+    const reply = typeof data.reply_parameters === 'string' ? JSON.parse(data.reply_parameters) : data.reply_parameters;
+    this.#calls.push({ method, status: this.#sendMode, cached: !!cachedFileId, uploadLength: filePart?.value.length ?? 0, chat_id: chat, message_thread_id: threadId, reply_to_message_id: reply?.message_id, receivedAt: performance.now() });
     if (this.#sendMode === 'invalid-file-id-once') {
       assert(cachedFileId, 'invalid-ID fixture must target a cached send');
       this.#sendMode = 'success';
@@ -239,7 +242,7 @@ export class BotApiFixture {
       : kind === 'audio'
         ? { kind, value: { file_id: fileId, file_unique_id: `fixture-audio-unique-${this.#sendCalls}`, duration: 1, performer: 'Fixture', title: 'Fixture audio', mime_type: uploadedMimeType ?? 'audio/mpeg', file_size: fileSize } }
         : { kind, value: { file_id: fileId, file_unique_id: `fixture-document-unique-${this.#sendCalls}`, file_name: 'media.mp4', mime_type: 'video/mp4', file_size: fileSize } };
-    res.end(JSON.stringify({ ok: true, result: this.#message(123456, chat, null, 9000 + this.#sendCalls, attachment, threadId) }));
+    res.end(JSON.stringify({ ok: true, result: this.#message(123456, chat, null, 9000 + this.#sendCalls, attachment, this.#sendMode === 'wrong-thread' ? (threadId ?? 0) + 1 : threadId) }));
   }
   async #handleGroup(req, res, body) {
     this.#sendCalls++;
@@ -293,7 +296,7 @@ export class BotApiFixture {
     });
     assert.equal(used.size, files.size, 'album must not contain unreferenced files');
     if (cached) this.#cachedCalls++; else this.#uploadCalls++;
-    this.#calls.push({ method: 'sendmediagroup', status: this.#sendMode, cached, uploadLength: this.#lastGroupBytes.reduce((n, b) => n + b.length, 0), itemCount: media.length, chat_id: chat, receivedAt: performance.now() });
+    this.#calls.push({ method: 'sendmediagroup', status: this.#sendMode, cached, uploadLength: this.#lastGroupBytes.reduce((n, b) => n + b.length, 0), itemCount: media.length, chat_id: chat, message_thread_id: threadId, receivedAt: performance.now() });
     if (this.#sendMode === 'socket-drop') { res.destroy(); return; }
     if (['api-error', 'api-ambiguous', 'rate-limit-once', 'invalid-file-id-once'].includes(this.#sendMode)) {
       const mode = this.#sendMode;
@@ -315,13 +318,13 @@ export class BotApiFixture {
     res.end(JSON.stringify({ ok: true, result: messages }));
   }
   #message(actor, chat, text, id = 1000, attachment, threadId) {
-    const type = chat > 0 ? 'private' : 'group';
+    const type = chat > 0 ? 'private' : threadId === undefined ? 'group' : 'supergroup';
     return {
       message_id: id, date: 1700000000,
       from: { id: actor, is_bot: false, first_name: 'Fixture', language_code: 'en' },
       chat: type === 'private' ? { id: chat, type } : { id: chat, type, title: 'Fixture group' },
       ...(text === null ? {} : { text }),
-      ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+      ...(threadId === undefined ? {} : { message_thread_id: threadId, is_topic_message: true }),
       ...(attachment ? { [attachment.kind]: attachment.value } : {}),
     };
   

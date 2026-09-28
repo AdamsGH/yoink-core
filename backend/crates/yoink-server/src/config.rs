@@ -48,6 +48,7 @@ pub struct TelegramConfig {
     pub api_url: Option<Url>,
     pub poll_timeout: Duration,
     pub progress: yoink_telegram::ProgressConfig,
+    pub groups_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -180,12 +181,21 @@ impl Config {
                         "invalid progress configuration",
                     )
                 })?;
+            let groups_enabled = match read("TELEGRAM_GROUPS_ENABLED")?
+                .as_deref()
+                .unwrap_or("false")
+            {
+                "true" => true,
+                "false" => false,
+                _ => return Err(invalid("TELEGRAM_GROUPS_ENABLED", "expected true or false")),
+            };
             Some(TelegramConfig {
                 token: SecretToken(token),
                 owner_id,
                 api_url,
                 poll_timeout,
                 progress,
+                groups_enabled,
             })
         } else {
             None
@@ -314,6 +324,29 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn group_access_is_separately_opted_in_with_strict_boolean_configuration() {
+        let base = [
+            ("YOINK_RUST_TELEGRAM_ENABLED", "true"),
+            ("YOINK_RUST_TELEGRAM_TOKEN", "fixture-token"),
+            ("YOINK_RUST_OWNER_ID", "42"),
+        ];
+        assert!(!config(&base).unwrap().telegram.unwrap().groups_enabled);
+        for (value, expected) in [("true", true), ("false", false)] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_TELEGRAM_GROUPS_ENABLED", value));
+            assert_eq!(
+                config(&values).unwrap().telegram.unwrap().groups_enabled,
+                expected
+            );
+        }
+        for value in ["yes", "1", "", "TRUE"] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_TELEGRAM_GROUPS_ENABLED", value));
+            assert!(config(&values).is_err());
+        }
     }
 
     #[test]

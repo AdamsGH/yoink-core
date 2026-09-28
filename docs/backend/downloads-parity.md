@@ -2,7 +2,7 @@
 
 ## Boundary
 
-The Rust Telegram adapter remains experimental, opt-in, owner-only and private-chat-only. Production Python services and PostgreSQL data are unchanged. Engine support, a Telegram command, and verified end-to-end behavior are separate milestones.
+The Rust Telegram adapter remains experimental and opt-in. Private commands are owner-only. A separate `YOINK_RUST_TELEGRAM_GROUPS_ENABLED=true` setting enables media commands for known, authorized users in registered groups and topics. Production Python services and PostgreSQL data are unchanged. Engine support, a Telegram command, and verified end-to-end behavior are separate milestones.
 
 The existing [media fixture](../../backend/scripts/test-media.mjs) already exercises real container processing, native video delivery, crash/retry/cancellation handling, file-ID cache reuse and recovery, versioned cookies/proxies, revocation and credential redaction. These are not missing merely because the legacy settings UI has not been ported.
 
@@ -18,7 +18,7 @@ The existing [media fixture](../../backend/scripts/test-media.mjs) already exerc
 | Cache | Actor, bot, request parameters and credential versions partition cache identity. Native acceptance verifies file-ID reuse, invalid-ID recovery, expiry and disabled-cache behavior. | User cache-management commands and any legacy policy/UI differences. |
 | Cookies/proxies | Read-only legacy profile resolution freezes versioned references at admission. Execution and delivery recheck authorization and current credentials. Acceptance covers authenticated fixture networking and revocation. | Cookie upload/delete/token/settings workflows and provider-specific authentication compatibility. |
 | Progress | Confirmed admission replies become durable EN/RU status messages. Worker percentages, stage and confirmed file counts are edited with restart recovery, rate-limit handling and terminal acknowledgement. `/job` uses the same rendering. | Legacy progress presentation and interactive controls. A lost initial send acknowledgement cannot be recovered safely and falls back to `/job`. |
-| Permissions | Owner-private command gate and private-scope identity checks apply at admission, execution and delivery. Group/non-owner commands are denied. | Group/topic authorization and delivery routing, and non-owner product access. No group parity is claimed. |
+| Permissions | Groups require a separate opt-in. Global bans, group enablement, topic policy and local roles apply at admission, execution, delivery and progress. Media and replies retain the original chat/topic. `/job` and `/cancel` also require the original actor, bot, chat and topic. | New-user/group registration, non-owner private commands, private-delivery redirects, forwarding and legacy group settings workflows. |
 | Subtitles | No Rust request/worker option or command yet. | Saved preferences, language selection, automatic subtitles and standalone subtitle delivery. |
 
 ## Command contract
@@ -48,6 +48,14 @@ Absent flags inherit relevant saved settings. Explicit `best` and `false` overri
 
 For example, `/video --height best --send-as-file false URL` overrides a saved height limit and document delivery. `/audio --audio-codec aac URL` overrides the saved audio codec. Settings changes after admission do not alter queued processing, cache identity or same-message replay. Changing flags or other request intent under the same message ID is a conflict, not a second operation. Replay still requires current access authorization. Execution and delivery also revalidate network credentials.
 
+## Group and topic boundary
+
+Groups stay disabled by default. Opting in does not create users or groups, change roles, or open private commands to non-owners. Identity and group records must already exist. Bot senders, anonymous `sender_chat` messages and channel posts are ignored. `/status` remains owner-private. Unauthorized group commands are silent and create no operation.
+
+Global bans take precedence over local grants. Group enablement and topic rules apply even to the owner. An explicit group role override wins over an auto-grant. Auto-grants can elevate the effective group role without writing the global user role. Authorization is read again before execution, delivery and progress edits. Disabling groups also blocks persisted group jobs from starting after restart.
+
+The admission reply, individual uploads, albums and cached sends retain the source chat and topic. There is no fallback into the actor's private chat or the group's General topic. A media receipt naming another topic is unconfirmed and becomes `delivery_unknown`, with no automatic resend. `/job` and `/cancel` from another topic cannot expose or change the operation, even for its original actor. Reply-message IDs may differ on subsequent commands, but the actor, bot, chat and topic must match.
+
 ## Progress-message lifecycle
 
 Migration v5 adds one progress notice per operation. The first confirmed admission-reply message ID wins, including command replay. Startup resumes edits of known messages only. An initial `sendMessage` whose acknowledgement is lost, or a crash before its ID is persisted, cannot be retried without risking duplicate messages. That operation remains accessible through `/job`; no replacement status message is sent automatically.
@@ -61,6 +69,8 @@ Edits have a bounded deadline. Network ambiguity and unknown API failures retry 
 Worker tests run only in Docker via `just test-worker`. The real command scenarios live in [command-scenarios.mjs](../../backend/scripts/media-fixture/command-scenarios.mjs) and run through `just verify-media`, not a mocked Rust submission service. They inspect uploaded video/audio/clip streams and duration, immutable request parameters, replay behavior and denied/malformed requests. The command-only playlist and gallery cases cover admission and persisted parameters. Separate [batch scenarios](../../backend/scripts/media-fixture/batch-scenarios.mjs) exercise real generic HTML playlists and gallery-dl direct images through the unchanged production worker. They verify ordered album bytes, two-message receipts, whole-album cache reuse and invalid-ID recovery, incomplete API receipts, source-batch failure before sending, and an 11-item batch whose confirmed ten-item prefix survives a rejected final send, restart and replay. No live external provider is contacted. The [preference scenarios](../../backend/scripts/media-fixture/preference-scenarios.mjs) assert actual encoded height, audio codec and native/document sending, explicit `best`/`false`, admission snapshots surviving later settings changes, replay conflicts and cache-key separation.
 
 The [progress scenarios](../../backend/scripts/media-fixture/progress-scenarios.mjs) hold a real HTTP download mid-body and observe worker percentages in actual Telegram edits. They cover unchanged-text coalescing, `429` delay, a lost terminal-edit acknowledgement followed by process restart and `message is not modified`, no duplicate media or status messages, deleted-message retirement, EN/RU and authorization revocation. The test database and Bot API are disposable fixtures.
+
+The [group scenarios](../../backend/scripts/media-fixture/group-scenarios.mjs) verify opt-in and silent denials, group-local roles without global mutation, original reply/topic routing, cached delivery to another authorized topic, albums, scoped job/cancel commands, topic revocation during a real download, and restart/replay after a wrong-topic media receipt. Native service tests also revoke group, topic or configuration access while a job is queued and assert that no worker starts.
 
 The immediate-command slice is verified by `just verify`, `just test-worker` and `just verify-media` in `backend`, plus the root `just verify` gate. Production deployment, live provider coverage, adaptive-streaming compatibility and cutover remain outside this slice.
 

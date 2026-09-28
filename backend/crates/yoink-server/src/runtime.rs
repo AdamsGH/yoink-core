@@ -97,6 +97,10 @@ async fn run_impl(
     });
     tracing::info!(%address, "HTTP diagnostics listening");
     let owner_id = config.telegram.as_ref().map(|telegram| telegram.owner_id);
+    let groups_enabled = config
+        .telegram
+        .as_ref()
+        .is_some_and(|telegram| telegram.groups_enabled);
     let database_timings = config
         .database
         .as_ref()
@@ -131,7 +135,8 @@ async fn run_impl(
                 )
                 .await
                 .map_err(|_| ServerError::TelegramStartup)?
-                .with_progress(telegram.progress),
+                .with_progress(telegram.progress)
+                .with_group_access(telegram.groups_enabled),
             ),
             None => None,
         };
@@ -170,7 +175,8 @@ async fn run_impl(
                 media.downloads,
             )
             .map_err(|_| ServerError::MediaStartup)?
-            .with_network_config(media.network);
+            .with_network_config(media.network)
+            .with_group_access(groups_enabled);
             service
                 .check_profile_schema()
                 .await
