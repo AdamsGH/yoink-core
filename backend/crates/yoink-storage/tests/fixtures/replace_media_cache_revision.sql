@@ -1,1 +1,1 @@
-UPDATE yoink_runtime.media_cache SET revision = $3 WHERE actor_id = $1 AND bot_id = $2;
+UPDATE runtime_media_cache SET revision = ?3 WHERE actor_id = ?1 AND bot_id = ?2;

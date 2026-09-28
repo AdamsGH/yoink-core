@@ -1,1 +1,1 @@
-SET default_transaction_read_only = on;
+PRAGMA query_only = 1;

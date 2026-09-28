@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use sqlx::Row;
+use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
+use yoink_db::query;
 use yoink_domain::{CachedMedia, CachedMediaKind, DownloadRequest};
 
 use crate::{Store, StoreError, cache_key::media_cache_key, model::Claim};
@@ -24,11 +25,11 @@ impl Store {
     ) -> Result<Option<CachedBatch>, StoreError> {
         let target = request.target().ok_or(StoreError::InvalidInput)?;
         let key = media_cache_key(request)?;
-        let row = sqlx::query(include_str!("../sql/lookup_media_cache.sql"))
+        let row = query(include_str!("../sql/lookup_media_cache.sql"))
             .bind(i64::try_from(request.actor_id()).map_err(|_| StoreError::InvalidInput)?)
             .bind(target.bot_id())
             .bind(key.as_str())
-            .fetch_optional(self.pool())
+            .fetch_optional(self.database())
             .await
             .map_err(|_| StoreError::Database)?;
         let Some(row) = row else {
@@ -62,21 +63,75 @@ impl Store {
         let key = media_cache_key(&claim.request)?;
         let items = encode_media(media)?;
         let request_json = crate::codec::encode(&claim.request)?;
-        let row = sqlx::query(include_str!("../sql/publish_media_cache.sql"))
+        let attempt = i32::try_from(claim.attempt).map_err(|_| StoreError::InvalidInput)?;
+        let item_count = i32::try_from(media.len()).map_err(|_| StoreError::InvalidInput)?;
+        let revision = Uuid::new_v4();
+
+        let mut connection = self
+            .database()
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+
+        let eligible = query(include_str!("../sql/publish_media_cache_eligible.sql"))
             .bind(claim.operation_id)
-            .bind(i32::try_from(claim.attempt).map_err(|_| StoreError::InvalidInput)?)
+            .bind(attempt)
             .bind(actor_id)
             .bind(target.bot_id())
             .bind(key.as_str())
-            .bind(media.len() as i32)
-            .bind(Uuid::new_v4())
-            .bind(items)
-            .bind(ttl_seconds as i64)
-            .bind(request_json)
-            .fetch_one(self.pool())
+            .bind(item_count)
+            .bind(revision)
+            .bind(items.clone())
+            .bind(i64::try_from(ttl_seconds).map_err(|_| StoreError::InvalidInput)?)
+            .bind(request_json.clone())
+            .fetch_optional(&*tx)
             .await
             .map_err(|_| StoreError::Database)?;
-        row.try_get("published").map_err(|_| StoreError::Database)
+        if eligible.is_none() {
+            tx.rollback().await.map_err(|_| StoreError::Database)?;
+            return Ok(false);
+        }
+
+        let expired = query(include_str!("../sql/publish_media_cache_prune_select.sql"))
+            .bind(actor_id)
+            .bind(target.bot_id())
+            .bind(key.as_str())
+            .fetch_all(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        for row in expired {
+            let expired_actor: i64 = row.try_get("actor_id").map_err(|_| StoreError::Database)?;
+            let expired_bot: i64 = row.try_get("bot_id").map_err(|_| StoreError::Database)?;
+            let expired_key: String = row.try_get("cache_key").map_err(|_| StoreError::Database)?;
+            query(include_str!("../sql/publish_media_cache_prune_delete.sql"))
+                .bind(expired_actor)
+                .bind(expired_bot)
+                .bind(expired_key)
+                .execute(&*tx)
+                .await
+                .map_err(|_| StoreError::Database)?;
+        }
+
+        let published = query(include_str!("../sql/publish_media_cache.sql"))
+            .bind(claim.operation_id)
+            .bind(attempt)
+            .bind(actor_id)
+            .bind(target.bot_id())
+            .bind(key.as_str())
+            .bind(item_count)
+            .bind(revision)
+            .bind(items)
+            .bind(i64::try_from(ttl_seconds).map_err(|_| StoreError::InvalidInput)?)
+            .bind(request_json)
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?
+            .is_some();
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(published)
     }
 
     /// Drop a known-invalid revision without restarting any operation or touching
@@ -88,15 +143,29 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let target = request.target().ok_or(StoreError::InvalidInput)?;
         let key = media_cache_key(request)?;
-        let result = sqlx::query(include_str!("../sql/invalidate_media_cache.sql"))
+        let mut connection = self
+            .database()
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        query(include_str!("../sql/invalidate_media_cache.sql"))
             .bind(i64::try_from(request.actor_id()).map_err(|_| StoreError::InvalidInput)?)
             .bind(target.bot_id())
             .bind(key.as_str())
             .bind(revision)
-            .execute(self.pool())
+            .execute(&*tx)
             .await
             .map_err(|_| StoreError::Database)?;
-        Ok(result.rows_affected() == 1)
+        let row = query("SELECT changes() AS affected")
+            .fetch_one(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let affected: i64 = row.try_get("affected").map_err(|_| StoreError::Database)?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(affected == 1)
     }
 
     pub async fn requeue_invalid_cache(
@@ -111,18 +180,71 @@ impl Store {
         }
         let target = claim.request.target().ok_or(StoreError::InvalidInput)?;
         let key = media_cache_key(&claim.request)?;
-        let row = sqlx::query(include_str!("../sql/requeue_invalid_cache.sql"))
+        let attempt = i32::try_from(claim.attempt).map_err(|_| StoreError::InvalidInput)?;
+        let mut connection = self
+            .database()
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+
+        query(include_str!("../sql/requeue_invalid_cache_mark.sql"))
             .bind(claim.operation_id)
-            .bind(i32::try_from(claim.attempt).map_err(|_| StoreError::InvalidInput)?)
+            .bind(attempt)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
             .bind(key.as_str())
             .bind(revision)
             .bind(target.bot_id())
-            .fetch_one(self.pool())
+            .execute(&*tx)
             .await
             .map_err(|_| StoreError::Database)?;
-        row.try_get("requeued").map_err(|_| StoreError::Database)
+        let marked = query("SELECT changes() AS affected")
+            .fetch_one(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let affected: i64 = marked
+            .try_get("affected")
+            .map_err(|_| StoreError::Database)?;
+        if affected != 1 {
+            tx.rollback().await.map_err(|_| StoreError::Database)?;
+            return Ok(false);
+        }
+
+        query(include_str!("../sql/requeue_invalid_cache_operation.sql"))
+            .bind(claim.operation_id)
+            .bind(attempt)
+            .bind(claim.lease_token)
+            .bind(&claim.worker_id)
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let updated = query("SELECT changes() AS affected")
+            .fetch_one(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let affected: i64 = updated
+            .try_get("affected")
+            .map_err(|_| StoreError::Database)?;
+        if affected != 1 {
+            tx.rollback().await.map_err(|_| StoreError::Database)?;
+            return Ok(false);
+        }
+
+        query(include_str!("../sql/requeue_invalid_cache_evict.sql"))
+            .bind(claim.operation_id)
+            .bind(attempt)
+            .bind(claim.lease_token)
+            .bind(&claim.worker_id)
+            .bind(key.as_str())
+            .bind(revision)
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(true)
     }
 }
 

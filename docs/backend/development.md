@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Use the Rust toolchain required by [backend/Cargo.toml](../../backend/Cargo.toml) (declared MSRV 1.88), Node.js 22+, `just`, Docker, and the required local images. The experimental media image is built with Rust 1.88 and Python 3.12, and pins yt-dlp 2026.8.19 and gallery-dl 1.32.13. The media launcher requires Linux Landlock ABI 6 or newer. Python commands run inside Docker only. Do not run host `uv`, `pip`, `python`, or `pytest`.
+Use the Rust toolchain declared by [backend/Cargo.toml](../../backend/Cargo.toml), Node.js 22+, `just`, and Docker where a container check is specified. All Python commands run inside Docker only. Never run host `uv`, `pip`, `python`, or `pytest`.
 
 ## Commands
 
@@ -14,41 +14,34 @@ Run Rust workspace commands from the repository root:
 | `cd backend && just fmt` | Check Rust formatting. |
 | `cd backend && just lint` | Clippy all workspace targets with warnings denied. |
 | `cd backend && just test` | Workspace tests. |
-| `cd backend && just verify` | Formatting, lint, unit tests, non-database smoke checks, script syntax checks, and documentation link checks. It does not require Docker. |
-| `cd backend && just verify-turso` | Format, Clippy and transactional fixtures for the standalone native Turso experiment. It is not linked into the server. |
-| `cd backend && just verify-turso-container` | Run the Turso fixtures with the server's pinned Rust 1.88 compiler. Execution has no network access. |
-| `cd backend && just test-profile-db` | Disposable Alembic-migrated PostgreSQL profile and credential contracts without rebuilding transport adapters. |
-| `cd backend && just test-db` | Disposable PostgreSQL/Alembic integration fixture and database process checks. |
-| `cd backend && just verify-db` | `verify` plus the database fixture. Uses disposable PostgreSQL and the legacy image for Alembic. |
-| `cd backend && just build-media` | Builds the opt-in experimental image; does not alter the existing Compose deployment. |
-| `cd backend && just verify-media` | Builds the image, runs the Python engine/security suites in a network-disabled container, checks the default launcher under deployment hardening, then runs the real media fixture with disposable PostgreSQL and a mock Bot API. |
+| `cd backend && just verify` | Formatting, lint, Rust and fixture unit tests, smoke checks, recursive script syntax checks, canonical schema generation checks, and documentation link checks. |
+| `cd backend && just test-storage-db` | Native storage contracts using private temporary file databases. No PostgreSQL or Docker required. |
+| `cd backend && just test-profile-db` | Native profile and credential contracts using private temporary databases. No PostgreSQL or Docker required. |
+| `cd backend && just test-db` | Build the Rust server and run native database/process lifecycle contracts: private files, idempotent production CLI migration, exclusive owner refusal, SIGTERM, SIGKILL reopen, file-detach health failure, and shutdown. No PostgreSQL or Docker required. |
+| `cd backend && just test-media-fixtures` | Deterministic Node transport and fixture lifecycle contracts without Docker. |
+| `cd backend && just check-docs` | Validate the backend documentation links and documented commands. |
+| `cd backend && just build-media` | Build the normal opt-in runtime image. |
+| `cd backend && just build-media-fixture` | Build a separate fixture image containing test-only controller code. It is not the default production image. |
+| `cd backend && just verify-media` | Build both media images, run worker/security checks, check the production worker launcher, then run the full media fixture with an isolated native database volume. |
 
-The media fixture includes a cookie-protected origin reached through an authenticated, origin-constrained proxy, verifies frozen-reference invalidation while queued, and rejects an enabled-but-missing proxy without direct fallback. Enabling proxy after direct-route admission blocks both queued source access and delivery of an already running direct result. Credentials must be absent from stored operation JSON and application logs.
+The media fixture uses native queries throughout and exercises admission, worker execution, durable delivery, restart recovery, cancellation, retries, quotas, access revocation, frozen credential references, cache recovery/expiry and redaction. The source, Bot API, proxy, database controller and container lifecycle helpers live under `backend/scripts/media-fixture/`. Failed scenarios and cleanup failures preserve redacted diagnostics in private files under `backend/target/media-reports/`, independently of disposable fixture cleanup.
 
-The media fixture verifies real worker download and native Telegram multipart upload under read-only/noexec and Landlock confinement. It checks bounded MP4 framing and unchanged media payload across remuxing, replay idempotency, actor isolation, cancellation and cleanup, three persisted HTTP 503 attempts with retry delay, terminal API rejection, a durable Telegram 429 retry respecting `retry_after`, API 500 and dropped-response ambiguity, crash recovery without resend, admission quotas, access revocation before execution and delivery, and secret redaction. Telegram is a local fixture API, not a live service or a platform-compatibility test.
+## Native persistence operation
 
-`just build yoink` builds the legacy `yoink/yoink:latest` image used for the Alembic fixture; it does not start services. All Python work remains inside containers.
+The runtime uses native Turso 0.7.2 and one serialized connection. It supports one owning server process per database file, enforced with an advisory sidecar lock. Use a private persistent state directory, not a PostgreSQL URL. Create the directory before container startup and make it writable only by the runtime UID (10001 in the image). For example, use a separately provisioned named volume or a host directory owned by UID 10001 with mode `0700`, mounted at `/var/lib/yoink`. Set `YOINK_RUST_DATABASE_PATH=/var/lib/yoink/fixture.db`.
 
-## Isolated Turso evaluation
+Normal `serve` and `check-schema` do not create a database or run migrations. Run the explicit `migrate` command first. It creates the database with private permissions if missing and applies pending checksummed migrations transactionally. Repeating it on a valid current schema is safe. `check-schema` validates current history without changing it.
 
-See [decision 0002](../decisions/0002-turso-evaluation.md) and the [experiment report](../../backend/experiments/turso/README.md). This is not a database switch: the existing PostgreSQL repositories, environment contract, migrations and deployment remain unchanged. Tests create temporary files with synthetic data only. `just fetch-turso` resolves the separate experiment lockfile, while `just format-turso` formats only its Rust sources. Normal server verification does not silently add the experimental engine to its dependencies.
+A disposable native fixture never accepts a caller-supplied database path or reads `.env`. It creates a private temporary directory, exercises the actual production CLI, and removes its own fixture. `test-storage-db` and `test-profile-db` avoid PostgreSQL and Docker. No PostgreSQL fixture or host Python is part of these commands.
 
-## What the database fixture does
+## Media fixture
 
-`backend/scripts/test-db.mjs` uses only already-present images (`--pull never`). It creates a randomly named PostgreSQL container with a generated password, PostgreSQL data on tmpfs, and a random host port bound only to loopback. It does not read `.env` or accept a caller database URL. It applies the real Alembic chain from a read-only bind mount using `yoink/yoink:latest`, then checks that schema inspection rejects a database before explicit Rust migration.
+The media fixture uses the normal runtime image plus a distinct `media-fixture` image. The latter carries the test-only token-protected loopback controller, shares the native database file with the runtime under test, and is not included in the default production image. The fixture controller binds only to loopback and is not an operator interface. The full media fixture uses its own named native volume; it must not reuse an operator's state. It is opt-in and does not change Compose deployment.
 
-It serially runs the ignored SQLx storage, identity, and profile database test suites. Profile checks include enforced read-only transactions, credential/grant revocation, proxy fallback and invalidation, domain aliases, unsupported authentication, and capacity bounds. The full fixture then runs `migrate` twice and `check-schema`, starts the diagnostic server, and confirms it exits unsuccessfully when the database is stopped. Cleanup removes only the named fixture container and its volumes. Do not run concurrent database fixtures against the same instance.
+Run `cd backend && just verify-media` to invoke the supported sequence. It builds both images, runs the worker test/security checks, verifies the hardened default launcher, and then runs the complete fixture. The worker tests alone do not establish successful native runtime queue queries. Media behavior, including delivery fencing and retries, must be reported only when the full fixture passes.
 
-## Media fixture scope and schema lifecycle
+## Migration and outstanding gates
 
-`backend/scripts/test-media.mjs` uses a disposable PostgreSQL database, legacy Alembic migrations and fixtures, a fixture Bot API, a local progressive-video HTTP source, and the real experimental worker container. It does not use a live bot, production credentials, or the application database. See the [media slice guide](media-slice.md) for limits and isolation guidance.
+The legacy Alembic chain remains offline legacy-catalog tooling and does not run in the native Rust process. [The source schema guide](../../backend/schema/README.md) describes the historical PostgreSQL source catalog. PostgreSQL data import, Stats full-text behavior, backup/restore, and production cutover are pending separate tasks. No data import, restore rehearsal, or production cutover is claimed.
 
-The public schema is migrated by Alembic. SQLx migration history and runtime operations belong to `yoink_runtime`. Run database commands only against a deliberately isolated database URL:
-
-```sh
-cd backend
-YOINK_RUST_DATABASE_URL='postgresql://user:password@127.0.0.1:5432/isolated' just migrate
-YOINK_RUST_DATABASE_URL='postgresql://user:password@127.0.0.1:5432/isolated' just check-schema
-```
-
-`migrate` explicitly creates the Rust schema and applies embedded SQLx migrations. `check-schema` and normal startup are read-only: they reject absent, dirty, unexpected, or checksum-mismatched histories rather than repairing them. There is no automatic rollback or drop. Never point these commands or fixtures at a production database.
+Never copy a live database file and WAL files as a backup. A consistent backup requires an explicitly designed and verified quiesced/engine-aware process. Production backup/restore and cutover procedures remain unapproved and unverified.

@@ -1,4 +1,1 @@
-UPDATE yoink_runtime.operations
-SET status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
-    cancel_requested = TRUE, updated_at = clock_timestamp()
-WHERE actor_id = $1 AND id = $2 AND status IN ('queued', 'running', 'delivering');
+UPDATE runtime_operations SET status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,cancel_requested=1,updated_at=CAST(unixepoch('subsec') * 1000000 AS INTEGER) WHERE actor_id=?1 AND id=?2 AND status IN ('queued','running','delivering');

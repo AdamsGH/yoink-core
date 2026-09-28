@@ -1,1 +1,1 @@
-UPDATE yoink_runtime._sqlx_migrations SET success = TRUE WHERE version = $1;
+UPDATE runtime_migrations SET success = 1 WHERE version = ?1;

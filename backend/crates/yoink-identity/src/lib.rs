@@ -1,11 +1,10 @@
 use chrono::{DateTime, Utc};
-use sqlx::{Row, postgres::PgPool};
 use thiserror::Error;
 use yoink_access::{
-    AccessContext, AccessDecision, AccessPolicy, AccessScope, GrantSource, check_access,
-    effective_grant,
+    AccessContext, AccessDecision, AccessPolicy, AccessScope, FeatureSpec, Grant, GrantSource,
+    Principal, ProviderGrant, Role, check_access, effective_grant,
 };
-use yoink_access::{FeatureSpec, Grant, Principal, ProviderGrant, Role};
+use yoink_db::{Database, query};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroupContext {
@@ -36,22 +35,22 @@ pub enum IdentityError {
     Database,
 }
 
-impl From<sqlx::Error> for IdentityError {
-    fn from(_: sqlx::Error) -> Self {
+impl From<yoink_db::Error> for IdentityError {
+    fn from(_: yoink_db::Error) -> Self {
         Self::Database
     }
 }
 
 pub struct IdentityStore {
-    pool: PgPool,
+    database: Database,
     owner_id: Option<i64>,
     insight_enabled: bool,
 }
 
 impl IdentityStore {
-    pub fn new(pool: PgPool, owner_id: Option<i64>, insight_enabled: bool) -> Self {
+    pub fn new(database: Database, owner_id: Option<i64>, insight_enabled: bool) -> Self {
         Self {
-            pool,
+            database,
             owner_id,
             insight_enabled,
         }
@@ -69,30 +68,64 @@ impl IdentityStore {
             return Err(IdentityError::InvalidId);
         }
 
-        let mut tx = self.pool.begin().await?;
-        sqlx::query(include_str!("sql/begin_read_only.sql"))
-            .execute(&mut *tx)
-            .await?;
-        let now: DateTime<Utc> = sqlx::query(include_str!("sql/database_now.sql"))
-            .fetch_one(&mut *tx)
+        // Hold the connection guard for the full transaction lifetime so all reads
+        // observe one consistent database snapshot.
+        let mut connection = self.database.connection().await?;
+        let transaction = turso::transaction::Transaction::new(
+            &mut connection,
+            turso::transaction::TransactionBehavior::Deferred,
+        )
+        .await
+        .map_err(|_| IdentityError::Database)?;
+
+        let result = self.read_snapshot(&transaction, user_id, group).await;
+        match result {
+            Ok(Some(snapshot)) => {
+                transaction
+                    .commit()
+                    .await
+                    .map_err(|_| IdentityError::Database)?;
+                Ok(Some(snapshot))
+            }
+            Ok(None) => {
+                transaction
+                    .rollback()
+                    .await
+                    .map_err(|_| IdentityError::Database)?;
+                Ok(None)
+            }
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn read_snapshot(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        user_id: i64,
+        group: Option<(i64, Option<i64>)>,
+    ) -> Result<Option<IdentitySnapshot>, IdentityError> {
+        let now = query(include_str!("sql/database_now.sql"))
+            .fetch_one(&**transaction)
             .await?
-            .try_get("now")
+            .try_get::<DateTime<Utc>, _>(0)
             .map_err(|_| IdentityError::Database)?;
 
-        let row = sqlx::query(include_str!("sql/user.sql"))
+        let Some(row) = query(include_str!("sql/user.sql"))
             .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let Some(row) = row else {
-            tx.rollback().await?;
+            .fetch_optional(&**transaction)
+            .await?
+        else {
             return Ok(None);
         };
         let role = parse_role(
-            row.try_get::<String, _>("role")
+            row.try_get::<String, _>(1)
                 .map_err(|_| IdentityError::Database)?,
         )?;
         let ban_until = row
-            .try_get::<Option<DateTime<Utc>>, _>("ban_until")
+            .try_get::<Option<DateTime<Utc>>, _>(3)
             .map_err(|_| IdentityError::Database)?;
         let mut principal = Principal {
             user_id,
@@ -100,7 +133,7 @@ impl IdentityStore {
             ban_until,
         };
         let language = row
-            .try_get::<String, _>("language")
+            .try_get::<String, _>(2)
             .map_err(|_| IdentityError::Database)?;
 
         // A configured owner is elevated only after global blocking has been checked.
@@ -108,32 +141,26 @@ impl IdentityStore {
             principal.role = Role::Owner;
         }
 
-        let grant_rows = sqlx::query(include_str!("sql/grants.sql"))
+        let grant_rows = query(include_str!("sql/grants.sql"))
             .bind(user_id)
-            .fetch_all(&mut *tx)
+            .fetch_all(&**transaction)
             .await?;
         let mut grants = Vec::with_capacity(grant_rows.len());
-        for grant in grant_rows {
+        for row in grant_rows {
             grants.push(Grant {
-                plugin: grant
-                    .try_get("plugin")
-                    .map_err(|_| IdentityError::Database)?,
-                feature: grant
-                    .try_get("feature")
-                    .map_err(|_| IdentityError::Database)?,
-                expires_at: grant
-                    .try_get("expires_at")
-                    .map_err(|_| IdentityError::Database)?,
+                plugin: row.try_get(0).map_err(|_| IdentityError::Database)?,
+                feature: row.try_get(1).map_err(|_| IdentityError::Database)?,
+                expires_at: row.try_get(2).map_err(|_| IdentityError::Database)?,
             });
         }
 
         let mut providers = Vec::new();
         if self.insight_enabled {
-            let setting_row = sqlx::query(include_str!("sql/byok_enabled.sql"))
-                .fetch_optional(&mut *tx)
+            let setting_row = query(include_str!("sql/byok_enabled.sql"))
+                .fetch_optional(&**transaction)
                 .await?;
             let setting_value = setting_row
-                .map(|row| row.try_get::<Option<String>, _>("value"))
+                .map(|row| row.try_get::<Option<String>, _>(0))
                 .transpose()
                 .map_err(|_| IdentityError::Database)?
                 .flatten();
@@ -141,11 +168,11 @@ impl IdentityStore {
                 matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on")
             });
             if setting {
-                let ready = sqlx::query(include_str!("sql/byok_ready.sql"))
+                let ready = query(include_str!("sql/byok_ready.sql"))
                     .bind(user_id)
-                    .fetch_one(&mut *tx)
+                    .fetch_one(&**transaction)
                     .await?
-                    .try_get::<bool, _>("ready")
+                    .try_get::<bool, _>(0)
                     .map_err(|_| IdentityError::Database)?;
                 if ready {
                     providers.push(ProviderGrant {
@@ -157,47 +184,42 @@ impl IdentityStore {
         }
 
         let group_context = if let Some((group_id, thread_id)) = group {
-            let row = sqlx::query(include_str!("sql/group_context.sql"))
+            let row = query(include_str!("sql/group_context.sql"))
                 .bind(user_id)
                 .bind(group_id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&**transaction)
                 .await?
                 .ok_or(IdentityError::Database)?;
-            let enabled: bool = row
-                .try_get("enabled")
-                .map_err(|_| IdentityError::Database)?;
+            let enabled = row.try_get(0).map_err(|_| IdentityError::Database)?;
+            let auto_grant_role = parse_role(
+                row.try_get::<String, _>(1)
+                    .map_err(|_| IdentityError::Database)?,
+            )?;
             let role_override = row
-                .try_get::<Option<String>, _>("role_override")
+                .try_get::<Option<String>, _>(2)
                 .map_err(|_| IdentityError::Database)?
                 .map(parse_role)
                 .transpose()?;
-            let auto_grant_role = parse_role(
-                row.try_get::<String, _>("auto_grant_role")
-                    .map_err(|_| IdentityError::Database)?,
-            )?;
-            let threads = sqlx::query(include_str!("sql/thread_context.sql"))
+            let threads = query(include_str!("sql/thread_context.sql"))
                 .bind(group_id)
                 .bind(thread_id)
-                .fetch_one(&mut *tx)
+                .fetch_one(&**transaction)
                 .await?;
             let matching = threads
-                .try_get::<Option<bool>, _>("matching_enabled")
+                .try_get::<Option<bool>, _>(0)
                 .map_err(|_| IdentityError::Database)?;
-            let has_enabled: bool = threads
-                .try_get("has_enabled_policy")
-                .map_err(|_| IdentityError::Database)?;
-            let thread_allowed = matching.unwrap_or(!has_enabled);
+            let has_enabled: bool = threads.try_get(1).map_err(|_| IdentityError::Database)?;
             Some(GroupContext {
                 group_id,
                 enabled,
                 role_override,
                 auto_grant_role,
-                thread_allowed,
+                thread_allowed: matching.unwrap_or(!has_enabled),
             })
         } else {
             None
         };
-        tx.commit().await?;
+
         Ok(Some(IdentitySnapshot {
             principal,
             language,
@@ -306,6 +328,222 @@ impl IdentitySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use yoink_db::raw_sql;
+
+    async fn store(
+        insight_enabled: bool,
+        owner_id: Option<i64>,
+    ) -> (TempDir, Database, IdentityStore) {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = dir.path().join("identity.db");
+        let db = Database::open(&path, true, Duration::from_secs(2))
+            .await
+            .unwrap();
+        raw_sql(include_str!("sql/test_schema.sql"))
+            .execute(&db)
+            .await
+            .unwrap();
+        let identity = IdentityStore::new(db.clone(), owner_id, insight_enabled);
+        (dir, db, identity)
+    }
+
+    async fn exec(db: &Database, sql: &str) {
+        query(sql).execute(db).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reads_identity_grants_ban_and_owner_rules() {
+        let (_dir, db, identity) = store(false, Some(1)).await;
+        exec(&db, "INSERT INTO users (id, role, language, ban_until) VALUES (1, 'user', 'en', NULL), (2, 'banned', 'ru', 1700000000000000), (3, 'user', 'en', NULL), (4, 'user', 'en', 4102444800000000), (5, 'user', 'en', 1700000000000000)").await;
+        exec(&db, "INSERT INTO user_permissions (user_id, plugin, feature, expires_at) VALUES (1, 'dl', 'inline', NULL), (3, 'dl', 'inline', 4102444800000000)").await;
+
+        let owner = identity.snapshot(1, None).await.unwrap().unwrap();
+        assert_eq!(owner.principal.role, Role::Owner);
+        assert_eq!(owner.grants.len(), 1);
+        assert_eq!(owner.grants[0].plugin, "dl");
+
+        let blocked_owner = identity.snapshot(2, None).await.unwrap().unwrap();
+        assert_eq!(blocked_owner.principal.role, Role::Banned);
+        assert!(blocked_owner.principal.is_blocked(blocked_owner.now));
+
+        let grant = identity.snapshot(3, None).await.unwrap().unwrap();
+        assert_eq!(
+            grant.grants[0].expires_at,
+            Some(DateTime::from_timestamp_micros(4102444800000000).unwrap())
+        );
+        let currently_banned = identity.snapshot(4, None).await.unwrap().unwrap();
+        assert!(currently_banned.principal.is_blocked(currently_banned.now));
+        let expired_ban = identity.snapshot(5, None).await.unwrap().unwrap();
+        assert!(!expired_ban.principal.is_blocked(expired_ban.now));
+    }
+
+    #[tokio::test]
+    async fn loads_byok_only_when_globally_enabled_and_ready() {
+        let (_dir, db, identity) = store(true, None).await;
+        exec(
+            &db,
+            "INSERT INTO users (id, role, language) VALUES (9, 'user', 'en')",
+        )
+        .await;
+        exec(
+            &db,
+            "INSERT INTO bot_settings (key, value) VALUES ('insight_byok_enabled', 'yes')",
+        )
+        .await;
+        exec(&db, "INSERT INTO insight_user_byok (user_id, tested_at, test_error) VALUES (9, 1700000000000000, NULL)").await;
+
+        let snapshot = identity.snapshot(9, None).await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.providers,
+            vec![ProviderGrant {
+                plugin: "insight".into(),
+                feature: "tldr".into()
+            }]
+        );
+        let (_dir, db, disabled) = store(false, None).await;
+        exec(
+            &db,
+            "INSERT INTO users (id, role, language) VALUES (9, 'user', 'en')",
+        )
+        .await;
+        exec(
+            &db,
+            "INSERT INTO bot_settings (key, value) VALUES ('insight_byok_enabled', 'yes')",
+        )
+        .await;
+        exec(&db, "INSERT INTO insight_user_byok (user_id, tested_at, test_error) VALUES (9, 1700000000000000, NULL)").await;
+        assert!(
+            disabled
+                .snapshot(9, None)
+                .await
+                .unwrap()
+                .unwrap()
+                .providers
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_group_override_auto_grant_and_thread_policy() {
+        let (_dir, db, identity) = store(false, None).await;
+        exec(
+            &db,
+            "INSERT INTO users (id, role, language) VALUES (7, 'restricted', 'en')",
+        )
+        .await;
+        exec(
+            &db,
+            "INSERT INTO groups (id, enabled, auto_grant_role) VALUES (-10, 1, 'user')",
+        )
+        .await;
+        exec(&db, "INSERT INTO user_group_policies (group_id, user_id, role_override) VALUES (-10, 7, 'moderator')").await;
+        exec(&db, "INSERT INTO thread_policies (group_id, thread_id, enabled) VALUES (-10, NULL, 1), (-10, 55, 0), (-10, 88, 1)").await;
+
+        let group = identity
+            .snapshot(7, Some((-10, Some(55))))
+            .await
+            .unwrap()
+            .unwrap()
+            .group
+            .unwrap();
+        assert!(group.enabled);
+        assert_eq!(group.role_override, Some(Role::Moderator));
+        assert_eq!(group.auto_grant_role, Role::User);
+        assert!(!group.thread_allowed);
+        let inherited = identity
+            .snapshot(7, Some((-10, Some(66))))
+            .await
+            .unwrap()
+            .unwrap()
+            .group
+            .unwrap();
+        assert!(!inherited.thread_allowed);
+        let unrestricted = identity
+            .snapshot(7, Some((-10, Some(77))))
+            .await
+            .unwrap()
+            .unwrap()
+            .group
+            .unwrap();
+        assert!(!unrestricted.thread_allowed);
+        let allowed = identity
+            .snapshot(7, Some((-10, Some(88))))
+            .await
+            .unwrap()
+            .unwrap()
+            .group
+            .unwrap();
+        assert!(allowed.thread_allowed);
+    }
+
+    #[tokio::test]
+    async fn group_without_specific_thread_policy_inherits_default_behavior() {
+        let (_dir, db, identity) = store(false, None).await;
+        exec(
+            &db,
+            "INSERT INTO users (id, role, language) VALUES (7, 'user', 'en')",
+        )
+        .await;
+        exec(
+            &db,
+            "INSERT INTO groups (id, enabled, auto_grant_role) VALUES (-10, 1, 'user')",
+        )
+        .await;
+        assert!(
+            identity
+                .snapshot(7, Some((-10, Some(4))))
+                .await
+                .unwrap()
+                .unwrap()
+                .group
+                .unwrap()
+                .thread_allowed
+        );
+        exec(
+            &db,
+            "INSERT INTO thread_policies (group_id, thread_id, enabled) VALUES (-10, NULL, 0)",
+        )
+        .await;
+        assert!(
+            identity
+                .snapshot(7, Some((-10, Some(4))))
+                .await
+                .unwrap()
+                .unwrap()
+                .group
+                .unwrap()
+                .thread_allowed
+        );
+    }
+
+    #[tokio::test]
+    async fn validates_ids_and_missing_user() {
+        let (_dir, _db, identity) = store(false, None).await;
+        assert!(matches!(
+            identity.snapshot(0, None).await,
+            Err(IdentityError::InvalidId)
+        ));
+        assert!(matches!(
+            identity.snapshot(1, Some((10, None))).await,
+            Err(IdentityError::InvalidId)
+        ));
+        assert!(identity.snapshot(123, None).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn byok_queries_project_only_non_secret_fields() {
+        let sql = include_str!("sql/byok_ready.sql").to_lowercase();
+        assert!(sql.contains("select exists"));
+        assert!(!sql.contains("api_key"));
+        assert!(!sql.contains("secret"));
+    }
 
     #[test]
     fn catalog_matches_declared_plugin_features_and_minimums() {
@@ -342,11 +580,7 @@ mod tests {
         assert!("made_up".parse::<Role>().is_err());
         assert_eq!("restricted".parse::<Role>().unwrap(), Role::Restricted);
     }
-}
 
-#[cfg(test)]
-mod authorization_tests {
-    use super::*;
     fn fixture(role: Role) -> IdentitySnapshot {
         IdentitySnapshot {
             principal: Principal {

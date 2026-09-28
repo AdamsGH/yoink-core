@@ -1,1 +1,1 @@
-SELECT count(*) AS count FROM yoink_runtime.media_cache WHERE revision = $1;
+SELECT count(*) AS count FROM runtime_media_cache WHERE revision = ?1;

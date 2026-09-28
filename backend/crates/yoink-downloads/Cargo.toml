@@ -10,7 +10,8 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
-sqlx.workspace = true
+yoink-db.workspace = true
+turso = "=0.7.2"
 url.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -23,6 +24,9 @@ yoink-worker-protocol.workspace = true
 yoink-executor = { path = "../yoink-executor" }
 thiserror.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

@@ -8,6 +8,17 @@ default:
 fetch:
     cargo fetch
 
+# Inspect the actual legacy Alembic schema in a disposable container, never production.
+inspect-legacy-schema:
+    node scripts/inspect-legacy-schema.mjs
+
+# Regenerate the reviewed native application schema, then inspect its diff.
+generate-schema:
+    node scripts/native-schema.mjs
+
+check-schema-source:
+    node scripts/native-schema.mjs --check
+
 # Resolve the isolated Turso experiment, without changing server dependencies.
 fetch-turso:
     cargo fetch --manifest-path experiments/turso/Cargo.toml
@@ -37,10 +48,10 @@ fmt:
     cargo fmt --all -- --check
 
 lint:
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 test:
-    cargo test --workspace --locked
+    cargo test --workspace --all-features --locked
 
 # Focused contracts or adapter verification while other crates are being integrated.
 test-crate crate:
@@ -68,46 +79,50 @@ inspect-worker-symbol module symbol='':
 test-storage-db:
     node scripts/test-db.mjs --storage-only
 
-# Read-only legacy profile/credential contracts without rebuilding transport adapters.
+# Native profile/credential contracts without rebuilding transport adapters.
 test-profile-db:
     node scripts/test-db.mjs --profiles-only
 
-# Requires local postgres:16-alpine and yoink/yoink:latest images. Owns its test DB.
+# Native disk databases and production process lifecycle, all in private temporary directories.
 test-db: build
     node scripts/test-db.mjs
 
 # Opt-in image only, never changes the existing Compose deployment.
 build-media:
-    docker build -t yoink/rust-backend:experimental .
+    docker build --target runtime -t yoink/rust-backend:experimental .
+
+# Isolated fixture controller is absent from the default production image.
+build-media-fixture:
+    docker build --target media-fixture -t yoink/rust-backend-fixture:experimental .
 
 # Exact default launcher in the deployment's hardened, network-isolated profile.
 test-worker-launcher:
     node scripts/test-worker-launcher.mjs
 
-# Disposable PostgreSQL, fixture Bot API and real container Python worker.
+# Disposable native DB, fixture Bot API and real container Python worker.
 test-media:
     node scripts/test-media.mjs
 
-verify-media: build-media test-worker test-worker-launcher test-media
+verify-media: build-media build-media-fixture test-worker test-worker-launcher test-media
 
 check-docs:
     node scripts/check-docs.mjs
 
 check-scripts:
-    node --check scripts/smoke.mjs
-    node --check scripts/test-db.mjs
-    node --check scripts/test-media.mjs
-    node --check scripts/test-worker-launcher.mjs
-    node --check scripts/check-docs.mjs
+    node scripts/check-scripts.mjs
 
-verify: fmt lint test smoke check-scripts check-docs
+# Deterministic transport/lifecycle fixture contracts without Docker.
+test-media-fixtures:
+    node --test scripts/media-fixture/*.test.mjs
+
+verify: fmt lint test smoke check-scripts check-schema-source test-media-fixtures check-docs
 
 verify-db: verify test-db
 
 run:
     cargo run --locked -p yoink-server
 
-# Explicitly mutating. Requires a deliberately supplied isolated database URL.
+# Explicitly mutating. Requires a deliberately supplied private database path.
 migrate:
     cargo run --locked -p yoink-server -- migrate
 

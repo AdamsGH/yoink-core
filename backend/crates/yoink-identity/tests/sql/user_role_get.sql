@@ -1,1 +1,1 @@
-SELECT role::text AS role FROM public.users WHERE id = $1;
+SELECT role AS role FROM users WHERE id = ?1;

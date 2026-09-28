@@ -20,6 +20,8 @@ pub enum ServerError {
     DatabaseStartup,
     #[error("database health check failed; adapters have been stopped")]
     DatabaseUnavailable,
+    #[error("database shutdown failed")]
+    DatabaseShutdown,
     #[error("dependency initialization exceeded the configured deadline")]
     StartupTimeout,
     #[error("HTTP adapter failed")]
@@ -40,9 +42,43 @@ pub enum ServerError {
     Media,
 }
 
+#[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 pub async fn run(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
+) -> Result<(), ServerError> {
+    run_impl(config, shutdown_signal, None).await
+}
+
+#[cfg(feature = "test-fixtures")]
+#[allow(
+    dead_code,
+    reason = "Only the isolated fixture binary calls this entry point"
+)]
+pub async fn run_with_store(
+    config: Config,
+    shutdown_signal: impl Future<Output = io::Result<()>>,
+    store: Arc<yoink_storage::Store>,
+) -> Result<(), ServerError> {
+    let database = config
+        .database
+        .as_ref()
+        .ok_or(ServerError::DatabaseStartup)?;
+    let configured = database
+        .path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .map(|parent| parent.join(database.path.file_name().unwrap_or_default()));
+    if configured.as_deref() != Some(store.database().path()) {
+        return Err(ServerError::DatabaseStartup);
+    }
+    run_impl(config, shutdown_signal, Some(store)).await
+}
+
+async fn run_impl(
+    config: Config,
+    shutdown_signal: impl Future<Output = io::Result<()>>,
+    provided_store: Option<Arc<yoink_storage::Store>>,
 ) -> Result<(), ServerError> {
     let system = SystemService::new(env!("CARGO_PKG_VERSION"));
     let cancel = CancellationToken::new();
@@ -69,12 +105,15 @@ pub async fn run(
     let mut downloads = None;
     let prepare = async {
         if let Some(database_config) = &config.database {
-            let store = Arc::new(
-                database_config
-                    .connect()
-                    .await
-                    .map_err(|_| ServerError::DatabaseStartup)?,
-            );
+            let store = match provided_store.clone() {
+                Some(store) => store,
+                None => Arc::new(
+                    database_config
+                        .open(false)
+                        .await
+                        .map_err(|_| ServerError::DatabaseStartup)?,
+                ),
+            };
             database = Some(store.clone());
             store
                 .verify_schema()
@@ -99,7 +138,7 @@ pub async fn run(
             let store = database.as_ref().ok_or(ServerError::MediaStartup)?;
             let adapter = telegram.take().ok_or(ServerError::MediaStartup)?;
             let identities = Arc::new(yoink_identity::IdentityStore::new(
-                store.pool().clone(),
+                store.database().clone(),
                 owner_id.map(|id| id as i64),
                 false,
             ));
@@ -190,10 +229,10 @@ pub async fn run(
     if let Some(downloads) = downloads {
         let media_cancel = cancel.clone();
         tasks.spawn(async move {
-            downloads
-                .run(media_cancel)
-                .await
-                .map_err(|_| ServerError::Media)
+            downloads.run(media_cancel).await.map_err(|error| {
+                tracing::error!(error = %error, "media execution service stopped");
+                ServerError::Media
+            })
         });
         system.set_downloads_enabled(true);
     }
@@ -287,11 +326,12 @@ async fn finish_database(
     let closed = if let Some(database) = database {
         timeout(deadline, database.close())
             .await
-            .map_err(|_| ServerError::ShutdownTimeout)
+            .map_err(|_| ServerError::ShutdownTimeout)?
+            .map_err(|_| ServerError::DatabaseShutdown)
     } else {
         Ok(())
     };
-    result.and(closed)
+    closed.and(result)
 }
 
 #[cfg(test)]

@@ -1,5 +1,1 @@
-UPDATE yoink_runtime.operations
-SET status = 'delivering', planned_artifact_count = $5, delivered_artifact_count = 0,
-    delivery_started_at = clock_timestamp(), updated_at = clock_timestamp()
-WHERE id = $1 AND attempt = $2 AND lease_token = $3 AND worker_id = $4
-  AND status = 'running' AND NOT cancel_requested AND lease_expires_at > clock_timestamp();
+UPDATE runtime_operations SET status='delivering',planned_artifact_count=?5,delivered_artifact_count=0,delivery_started_at=CAST(unixepoch('subsec') * 1000000 AS INTEGER),updated_at=CAST(unixepoch('subsec') * 1000000 AS INTEGER) WHERE id=?1 AND attempt=?2 AND lease_token=?3 AND worker_id=?4 AND status='running' AND cancel_requested=0 AND lease_expires_at>CAST(unixepoch('subsec') * 1000000 AS INTEGER);

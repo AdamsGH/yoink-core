@@ -1,1 +1,1 @@
-SELECT version, checksum, success FROM yoink_runtime._sqlx_migrations ORDER BY version;
+SELECT version, checksum, schema_hash, success FROM runtime_migrations ORDER BY version;

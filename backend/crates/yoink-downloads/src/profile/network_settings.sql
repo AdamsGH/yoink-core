@@ -1,4 +1,4 @@
-SELECT COALESCE(proxy_enabled, false) AS proxy_enabled, proxy_url,
-       COALESCE(use_pool_cookies, true) AS use_pool_cookies,
+SELECT COALESCE(proxy_enabled, 0) AS proxy_enabled, proxy_url,
+       COALESCE(use_pool_cookies, 1) AS use_pool_cookies,
        COALESCE(youtube_auth_mode, 'cookies') AS youtube_auth_mode
-FROM public.dl_user_settings WHERE user_id = $1
+FROM dl_user_settings WHERE user_id = ?1;

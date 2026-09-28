@@ -4,7 +4,9 @@ use yoink_domain::{
     CookieReference, CredentialVersion, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode,
     NetworkSelection,
 };
-use yoink_storage::{AdmissionPolicy, Store, StoreError};
+use yoink_storage::{AdmissionPolicy, StoreError};
+
+mod common;
 
 const ACTOR: u64 = 8_000_000_000_501;
 const BOT: i64 = 8_000_000_000_502;
@@ -35,14 +37,8 @@ fn prepared(raw: &DownloadRequest, version: &str) -> DownloadRequest {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable PostgreSQL migrated through Alembic and runtime bootstrap"]
 async fn first_network_snapshot_survives_replay_rotation_and_admission_races() {
-    let url =
-        std::env::var("YOINK_TEST_DATABASE_URL").expect("requires disposable database fixture");
-    let store = Store::connect(&url, 4, Duration::from_secs(5))
-        .await
-        .unwrap();
-    store.verify_schema().await.unwrap();
+    let store = common::store().await;
     let raw = request("https://example.com/media", DownloadParams::default());
     let first = prepared(&raw, "a");
     let rotated = prepared(&raw, "b");

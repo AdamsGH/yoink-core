@@ -1,1 +1,1 @@
-SELECT id FROM public.users LIMIT 0;
+SELECT id FROM users LIMIT 0;

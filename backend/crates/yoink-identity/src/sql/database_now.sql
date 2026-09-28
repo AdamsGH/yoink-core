@@ -1,1 +1,1 @@
-SELECT transaction_timestamp() AS now;
+SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000000 AS now;

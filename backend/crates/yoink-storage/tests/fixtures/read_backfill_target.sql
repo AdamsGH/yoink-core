@@ -1,1 +1,1 @@
-SELECT request->'target' FROM yoink_runtime.operations WHERE idempotency_key = $1;
+SELECT json_extract(request, '$.target') FROM runtime_operations WHERE ?1 = idempotency_key;

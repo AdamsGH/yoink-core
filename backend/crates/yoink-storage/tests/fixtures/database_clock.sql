@@ -1,1 +1,1 @@
-SELECT clock_timestamp();
+SELECT CAST(unixepoch('subsec') * 1000000 AS INTEGER);

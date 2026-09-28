@@ -10,6 +10,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release -p yoink-server -p yoink-worker-launcher \
     && cp target/release/yoink-server target/release/yoink-worker-launcher /
 
+# Fixture controls are built separately and never copied into the default runtime.
+FROM rust-build AS fixture-build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --locked --release -p yoink-server --features test-fixtures --bin yoink-fixture-server \
+    && cp target/release/yoink-fixture-server /
+
 FROM python:3.12-slim-bookworm AS worker-runtime
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
@@ -25,7 +33,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 10001:10001
 WORKDIR /tmp/yoink-work
 
-FROM worker-runtime AS runtime
+FROM worker-runtime AS runtime-base
 COPY --from=rust-build /yoink-server /yoink-worker-launcher /usr/local/bin/
 EXPOSE 8088
 ENTRYPOINT ["/usr/local/bin/yoink-server"]
+
+# Explicit opt-in test image. This is not the default Docker target.
+FROM runtime-base AS media-fixture
+COPY --from=fixture-build /yoink-fixture-server /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/yoink-fixture-server"]
+
+FROM runtime-base AS runtime

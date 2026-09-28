@@ -1,3 +1,3 @@
-SELECT id, role::text AS role, language, ban_until
-FROM public.users
-WHERE id = $1;
+SELECT id, role AS role, language, ban_until
+FROM users
+WHERE id = ?1;

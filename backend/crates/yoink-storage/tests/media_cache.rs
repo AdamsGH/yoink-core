@@ -1,28 +1,12 @@
+mod common;
+use common::store;
 use std::time::Duration;
 
-use sqlx::Row;
 use uuid::Uuid;
 use yoink_domain::{
     CachedMedia, CachedMediaKind, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode,
 };
 use yoink_storage::{Store, StoreError};
-
-fn database_url() -> String {
-    std::env::var("YOINK_TEST_DATABASE_URL")
-        .expect("YOINK_TEST_DATABASE_URL must point to a disposable PostgreSQL database")
-}
-
-async fn store() -> Store {
-    let store = Store::connect(&database_url(), 8, Duration::from_secs(5))
-        .await
-        .expect("connect to disposable test database");
-    store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
-        .await
-        .unwrap();
-    store
-}
 
 fn request(actor: u64, bot: i64, url: &str) -> DownloadRequest {
     DownloadRequest::new(
@@ -65,16 +49,15 @@ async fn delivered_claim(store: &Store, request: &DownloadRequest) -> yoink_stor
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn cache_cleanup_and_revision_invalidation_contract() {
     let store = store().await;
     let request = request(73_010, 821, "https://example.com/cache-cleanup");
     let claim = delivered_claim(&store, &request).await;
     let media = CachedMedia::new(CachedMediaKind::Video, "fresh-upload-id".into(), 1024).unwrap();
     let expired_revision = Uuid::new_v4();
-    sqlx::query(include_str!("fixtures/seed_expired_media_cache.sql"))
+    yoink_db::query(include_str!("fixtures/seed_expired_media_cache.sql"))
         .bind(expired_revision)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -87,9 +70,9 @@ async fn cache_cleanup_and_revision_invalidation_contract() {
             .await
             .unwrap()
     );
-    let remaining: i64 = sqlx::query(include_str!("fixtures/count_media_cache_revision.sql"))
+    let remaining: i64 = yoink_db::query(include_str!("fixtures/count_media_cache_revision.sql"))
         .bind(expired_revision)
-        .fetch_one(store.pool())
+        .fetch_one(store.database())
         .await
         .unwrap()
         .try_get("count")
@@ -137,11 +120,10 @@ async fn cache_cleanup_and_revision_invalidation_contract() {
             .unwrap()
     );
     assert!(store.lookup_media_cache(&request).await.unwrap().is_none());
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
     let store = store().await;
     let base_request = request(73_001, 811, "https://example.com/cache-a");
@@ -168,13 +150,14 @@ async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
     );
 
     let claim = delivered_claim(&store, &base_request).await;
-    let stored_key: String = sqlx::query(include_str!("fixtures/operation_cache_key.sql"))
-        .bind(claim.operation_id)
-        .fetch_one(store.pool())
-        .await
-        .unwrap()
-        .try_get("cache_key")
-        .unwrap();
+    let stored_key: String =
+        yoink_db::query(include_str!("fixtures/select_operation_cache_key.sql"))
+            .bind(claim.operation_id)
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get("cache_key")
+            .unwrap();
     assert_eq!(
         stored_key,
         yoink_storage::media_cache_key(&base_request)
@@ -215,9 +198,9 @@ async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
             .unwrap()
             .is_none()
     );
-    sqlx::query(include_str!("fixtures/expire_media_cache.sql"))
+    yoink_db::query(include_str!("fixtures/expire_media_cache.sql"))
         .bind(cached.revision)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -252,13 +235,13 @@ async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
             .unwrap()
     );
     let recovery_key = yoink_storage::media_cache_key(&recovery_request).unwrap();
-    sqlx::query(include_str!("fixtures/insert_media_cache.sql"))
+    yoink_db::query(include_str!("fixtures/insert_media_cache.sql"))
         .bind(73_003_i64)
         .bind(813_i64)
         .bind(recovery_key.as_str())
         .bind(cached.revision)
         .bind(serde_json::json!([{"kind":"video","file_id":"seed-cache-id","size_bytes":88}]))
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     let mut foreign = recovery_claim.clone();
@@ -284,11 +267,11 @@ async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
             .unwrap()
     );
     let replacement = Uuid::new_v4();
-    sqlx::query(include_str!("fixtures/replace_media_cache_revision.sql"))
+    yoink_db::query(include_str!("fixtures/replace_media_cache_revision.sql"))
         .bind(73_003_i64)
         .bind(813_i64)
         .bind(replacement)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -305,9 +288,9 @@ async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
     assert_eq!(record.max_attempts, 2);
     assert!(record.cache_bypassed);
     assert_eq!(
-        sqlx::query(include_str!("fixtures/count_media_cache_revision.sql"))
+        yoink_db::query(include_str!("fixtures/count_media_cache_revision.sql"))
             .bind(replacement)
-            .fetch_one(store.pool())
+            .fetch_one(store.database())
             .await
             .unwrap()
             .try_get::<i64, _>("count")
@@ -363,11 +346,10 @@ async fn cache_publication_partition_expiry_and_invalid_recovery_contract() {
             .unwrap()
     );
 
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn cache_refuses_confirmed_prefix_and_cancelled_recovery() {
     let store = store().await;
     let no_recovery_request = request(73_101, 821, "https://example.com/no-recovery");
@@ -424,11 +406,10 @@ async fn cache_refuses_confirmed_prefix_and_cancelled_recovery() {
             .await
             .unwrap()
     );
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn cache_lookup_rejects_corrupt_bounded_payload_as_a_whole() {
     let store = store().await;
     let request = request(73_201, 831, "https://example.com/corruption");
@@ -441,16 +422,16 @@ async fn cache_lookup_rejects_corrupt_bounded_payload_as_a_whole() {
             .unwrap()
     );
     let key = yoink_storage::media_cache_key(&request).unwrap();
-    sqlx::query(include_str!("fixtures/corrupt_media_cache.sql"))
+    yoink_db::query(include_str!("fixtures/corrupt_media_cache.sql"))
         .bind(request.actor_id() as i64)
         .bind(831_i64)
         .bind(key.as_str())
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert_eq!(
         store.lookup_media_cache(&request).await.unwrap_err(),
         StoreError::InvalidStoredData
     );
-    store.close().await;
+    store.close().await.unwrap();
 }

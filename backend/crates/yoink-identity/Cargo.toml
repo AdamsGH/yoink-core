@@ -7,13 +7,16 @@ publish.workspace = true
 
 [dependencies]
 chrono.workspace = true
-sqlx.workspace = true
+yoink-db.workspace = true
+turso = "=0.7.2"
 thiserror.workspace = true
 yoink-access.workspace = true
 
 [dev-dependencies]
+yoink-storage.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

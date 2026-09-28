@@ -1,38 +1,41 @@
 # Architecture
 
-The Rust workspace in [backend/Cargo.toml](../../backend/Cargo.toml) is a parallel implementation, not a production replacement. The opt-in media path connects Telegram commands to identity authorization, PostgreSQL queueing, a confined container Python worker, and durable Telegram delivery. Existing public tables remain read-only. No production cutover has occurred.
+The Rust backend is a modular application with distinct server, HTTP, Telegram, identity, storage, download, execution, and localization crates. Use cases coordinate these modules; the database engine does not collapse their responsibilities into a monolith. This is a parallel implementation, not a completed production replacement or cutover.
 
 ## Runtime path
 
-The server binds HTTP diagnostics first and reports readiness only after configured dependencies initialize. PostgreSQL and Telegram are optional unless downloads are enabled. Startup verifies schema compatibility without migrating, checks the experimental container and fixed worker launcher, validates embedded translations, then starts the configured adapters and queue workers.
+The server optionally starts diagnostics, Telegram, and database-backed services from explicit configuration. Native Turso 0.7.2 is used directly via the `turso` crate. There is no PostgreSQL or SQLx runtime path. Startup opens an existing database, verifies schema compatibility without migration, checks configured worker requirements, and starts adapters. Only explicit `migrate` creates and upgrades database files.
 
 ```text
 yoink-server
   -> yoink-http             diagnostics
-  -> yoink-telegram         owner-private commands and native media delivery
+  -> yoink-telegram         owner-private commands and media delivery
        -> yoink-i18n        embedded EN/RU TOML catalogs
-  -> yoink-downloads        admission, reauthorization, profiles and worker lifecycle
-       -> yoink-identity   read-only legacy identity and grants
-       -> ProfileStore     read-only legacy settings and cookie/proxy selection
-       -> yoink-storage    durable queue, leases, quotas and delivery journal
+  -> yoink-downloads        admission, authorization and worker lifecycle
+       -> yoink-identity   read-only legacy-compatible identity snapshots
+       -> yoink-storage    durable queue, leases, quotas, cache and delivery journal
        -> yoink-executor   fixed worker process and artifact validation
   -> Python worker          yt-dlp, gallery-dl and bounded ffmpeg processing
 ```
 
-The available media commands are `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The outer Telegram gate admits only the configured owner in a private chat. The media service independently checks current identity and grants at admission, before execution, and before each delivery unit.
+The media commands are `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The outer Telegram gate admits only the configured owner in a private chat. The media use case independently checks current identity and grants at admission, before execution, and before each delivery unit.
 
-## Credentials and request snapshots
+## Database ownership and lifecycle
 
-Admission loads supported stored user preferences and freezes opaque credential references. Personal cookies are separate from shared pool cookies, which require a current grant even when uploaded by the requesting actor. Proxy use follows the stored enable flag, preferring a personal proxy over the configured system fallback. Enabled-but-missing proxy configuration is rejected rather than silently using direct access.
+One Rust server process owns one local database file at a time. It holds an advisory exclusive lock in a `.yoink-lock` sidecar and serializes operations through one connection. Writes use immediate transactions; read snapshots use deferred transactions. The database parent must already exist and have Unix mode `0700`. Explicit migration creates a missing database with mode `0600`; ordinary startup and schema verification never create or migrate. Unix health checks verify file and lock inode identities as well as parent permissions.
 
-The queue stores identifiers, ownership metadata and credential versions, not cookie content or proxy passwords. Idempotent replays retain the first admitted snapshot. Resolution rereads current credentials and access before execution and delivery. Changed, deleted or revoked references fail rather than selecting replacement credentials. Actual credentials enter the worker through its bounded stdin protocol.
+Migration v1 defines three runtime data tables plus the migration ledger. Migration v2 adds the canonical application schema (41 tables) and the latest Stats name-search view. The current database has 45 tables total, including the ledger, plus the Stats view. Migrations are ordered and checksummed. Fingerprints include the schema objects and migration ledger, whose exact DDL is validated. Normal schema verification is read-only and rejects incomplete or drifted state.
 
-Cache identity includes actor, bot, media parameters and selected credential versions. Complete confirmed batches retain bounded Telegram file IDs in `yoink_runtime.media_cache`. A valid hit skips the worker but still checks current access, credentials and artifact limits, then uses the same fenced delivery journal as an upload. Hits do not extend TTL. A definitive invalid ID before any confirmed unit permits one cache-bypassing worker attempt. A failure after a confirmed prefix invalidates that cache revision without replaying the prefix. Ambiguous outcomes never trigger fallback.
+## Credentials and security boundary
 
-## Ownership boundaries and limitations
+Identity and settings are consumed as read-only snapshots. Snapshot APIs must not return credential contents. A local embedded database has no PostgreSQL column grants or role ACLs: the trusted server process can read all database contents. The operating-system account and private directory are the security boundary, not per-table privilege isolation. Do not describe this as equivalent to separate PostgreSQL runtime/migration roles.
 
-- Alembic owns existing `public` tables. Rust reads identity, settings and credentials without modifying them.
-- SQLx migrations own only `yoink_runtime`, including operations, attempts, leases and delivery outcomes. Startup checks compatibility and never migrates.
-- The fixed Python worker runs under container read-only/noexec controls and Landlock, with process-group termination, network policy and resource budgets. See the [media slice guide](media-slice.md).
-- Worker engines support video/audio processing, playlists, clips and galleries. Transport options and settings are not yet at full Python parity. Interactive menus, group/topic routing, unsupported provider authentication and other product modules remain unfinished.
-- This is neither a production cutover nor a performance claim. See [database ownership](../decisions/0001-database-ownership.md).
+Admission freezes opaque credential references and versions, not cookie contents or proxy passwords. Execution and each delivery unit recheck current authorization and resolve current valid references. Personal cookies remain distinct from shared pool cookies, which require a current grant. Proxy enablement and current references are checked without silently falling back to direct access. Cache identity includes actor, bot, request parameters, and credential versions. Only complete acknowledged batches are cached as opaque file IDs; cache hits still recheck authorization, credentials, limits, and fenced delivery.
+
+## Guarantees and limitations
+
+- Durable admission, uniqueness/idempotency, queue quotas, bounded retry, expiring worker leases, fencing tokens, heartbeat, cancellation, and cache revision behavior remain storage/use-case contracts.
+- Fencing protects database state transitions, not external Telegram effects. Confirmed delivery receipts are retained. Unknown or ambiguous outcomes are terminal and are not automatically resent; exactly-once Telegram delivery is not claimed.
+- The fixed worker runs under container read-only/noexec controls and Landlock, with process-group termination, network restrictions, and resource budgets. See [media slice](media-slice.md).
+- Worker engines support video/audio processing, playlists, clips, and galleries, but full Python command/settings parity is not complete.
+- PostgreSQL data import, Stats full-text compatibility, verified backup/restore, and production cutover remain pending. No existing PostgreSQL data has been imported.

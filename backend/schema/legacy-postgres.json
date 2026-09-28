@@ -1,0 +1,4828 @@
+{
+  "revision": "0054_restore_stats_latest_view",
+  "tables": [
+    {
+      "name": "alembic_version",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "version_num",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "alembic_version_pkc",
+          "kind": "p",
+          "definition": "PRIMARY KEY (version_num)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX alembic_version_pkc ON public.alembic_version USING btree (version_num)"
+      ]
+    },
+    {
+      "name": "api_keys",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('api_keys_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.api_keys_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "key_hash",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "prefix",
+          "type": "character varying(12)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "scopes",
+          "type": "json",
+          "udt": "json",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'[]'::json",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "created_by",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "last_used_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "revoked",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "api_keys_key_hash_key",
+          "kind": "u",
+          "definition": "UNIQUE (key_hash)"
+        },
+        {
+          "name": "api_keys_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX api_keys_pkey ON public.api_keys USING btree (id)",
+        "CREATE UNIQUE INDEX api_keys_key_hash_key ON public.api_keys USING btree (key_hash)"
+      ]
+    },
+    {
+      "name": "bot_settings",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "key",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "value",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "bot_settings_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (key)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX bot_settings_pkey ON public.bot_settings USING btree (key)"
+      ]
+    },
+    {
+      "name": "cookies",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('cookies_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.cookies_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "domain",
+          "type": "character varying(253)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "content",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "is_valid",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "true",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "validated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "is_pool",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "label",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "avatar_url",
+          "type": "character varying(512)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "content_hash",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 13,
+          "name": "session_key",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "cookies_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "cookies_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX cookies_pkey ON public.cookies USING btree (id)",
+        "CREATE INDEX ix_cookies_is_pool_domain ON public.cookies USING btree (is_pool, domain)",
+        "CREATE UNIQUE INDEX cookies_personal_unique ON public.cookies USING btree (user_id, domain) WHERE (is_pool = false)",
+        "CREATE INDEX ix_cookies_content_hash ON public.cookies USING btree (content_hash)",
+        "CREATE INDEX ix_cookies_session_key ON public.cookies USING btree (session_key)"
+      ]
+    },
+    {
+      "name": "dl_user_settings",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "quality",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'best'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "codec",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'avc1'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "container",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'mp4'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "proxy_enabled",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "proxy_url",
+          "type": "character varying(512)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "keyboard",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'2x3'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "subs_enabled",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "subs_auto",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "subs_always_ask",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "subs_lang",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'en'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "split_size",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'2043000000'::bigint",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 13,
+          "name": "nsfw_blur",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "true",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 14,
+          "name": "mediainfo",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 15,
+          "name": "send_as_file",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 16,
+          "name": "args_json",
+          "type": "json",
+          "udt": "json",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'{}'::json",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 17,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 18,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 19,
+          "name": "dm_topic_thread_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 20,
+          "name": "gallery_zip",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 21,
+          "name": "use_pool_cookies",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "true",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 22,
+          "name": "youtube_auth_mode",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'cookies'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 23,
+          "name": "audio_codec",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'best'::character varying",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "dl_user_settings_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id)"
+        },
+        {
+          "name": "dl_user_settings_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX dl_user_settings_pkey ON public.dl_user_settings USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "download_log",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('download_log_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.download_log_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "url",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "domain",
+          "type": "character varying(253)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "title",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "quality",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "file_size",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "duration",
+          "type": "double precision",
+          "udt": "float8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "status",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'ok'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "error_msg",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "group_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "thread_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 13,
+          "name": "message_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 14,
+          "name": "clip_start",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 15,
+          "name": "clip_end",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 16,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 17,
+          "name": "file_count",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "download_log_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "download_log_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX download_log_pkey ON public.download_log USING btree (id)",
+        "CREATE INDEX idx_download_log_user ON public.download_log USING btree (user_id, created_at)"
+      ]
+    },
+    {
+      "name": "events",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('events_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.events_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "plugin",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "event_type",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "group_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "thread_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "payload",
+          "type": "json",
+          "udt": "json",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "events_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX events_pkey ON public.events USING btree (id)",
+        "CREATE INDEX idx_events_user_created ON public.events USING btree (user_id, created_at)",
+        "CREATE INDEX idx_events_type_created ON public.events USING btree (event_type, created_at)"
+      ]
+    },
+    {
+      "name": "file_cache",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "cache_key",
+          "type": "character varying(80)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "file_id",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "file_type",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "title",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "duration",
+          "type": "double precision",
+          "udt": "float8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "width",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "height",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "file_size",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "file_cache_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (cache_key)"
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_file_cache_expires ON public.file_cache USING btree (expires_at)",
+        "CREATE INDEX idx_file_cache_file_id ON public.file_cache USING btree (file_id)",
+        "CREATE UNIQUE INDEX file_cache_pkey ON public.file_cache USING btree (cache_key)"
+      ]
+    },
+    {
+      "name": "groups",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('groups_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.groups_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "title",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "enabled",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "auto_grant_role",
+          "type": "userrole",
+          "udt": "userrole",
+          "kind": "e",
+          "not_null": true,
+          "default_value": "'user'::userrole",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "allow_pm",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "true",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "nsfw_allowed",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "storage_chat_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "storage_thread_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "photo_url",
+          "type": "character varying(512)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "groups_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)"
+      ]
+    },
+    {
+      "name": "inbox_admin_settings",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "key",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "value",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_admin_settings_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (key)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_admin_settings_pkey ON public.inbox_admin_settings USING btree (key)"
+      ]
+    },
+    {
+      "name": "inbox_categories",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('inbox_categories_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.inbox_categories_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "owner_user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "shared_with_team_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "normalized_name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "lower(regexp_replace((name)::text, '[ _-]'::text, ''::text, 'g'::text))",
+          "generated": "s",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "slug",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "icon",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "color",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "kind",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'user'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "parent_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "description",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_categories_owner_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_categories_parent_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (parent_id) REFERENCES inbox_categories(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "inbox_categories_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "inbox_categories_shared_with_team_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (shared_with_team_id) REFERENCES inbox_teams(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "uq_inbox_categories_owner_normalized",
+          "kind": "u",
+          "definition": "UNIQUE (owner_user_id, normalized_name)"
+        },
+        {
+          "name": "uq_inbox_categories_owner_slug",
+          "kind": "u",
+          "definition": "UNIQUE (owner_user_id, slug)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_categories_pkey ON public.inbox_categories USING btree (id)",
+        "CREATE UNIQUE INDEX uq_inbox_categories_owner_normalized ON public.inbox_categories USING btree (owner_user_id, normalized_name)",
+        "CREATE UNIQUE INDEX uq_inbox_categories_owner_slug ON public.inbox_categories USING btree (owner_user_id, slug)",
+        "CREATE INDEX ix_inbox_categories_shared_team ON public.inbox_categories USING btree (shared_with_team_id) WHERE (shared_with_team_id IS NOT NULL)"
+      ]
+    },
+    {
+      "name": "inbox_gh_folder_members",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "folder_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "gh_star_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "added_by",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "added_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_gh_folder_members_folder_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (folder_id) REFERENCES inbox_gh_folders(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_gh_folder_members_gh_star_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (gh_star_id) REFERENCES inbox_gh_stars(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_gh_folder_members_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (folder_id, gh_star_id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_gh_folder_members_pkey ON public.inbox_gh_folder_members USING btree (folder_id, gh_star_id)",
+        "CREATE INDEX ix_inbox_gh_folder_members_star ON public.inbox_gh_folder_members USING btree (gh_star_id)"
+      ]
+    },
+    {
+      "name": "inbox_gh_folders",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('inbox_gh_folders_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.inbox_gh_folders_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "slug",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "description",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "icon",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "parent_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "gh_list_id",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "gh_list_slug",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "is_pinned",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "sort_order",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "0",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_gh_folders_parent_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (parent_id) REFERENCES inbox_gh_folders(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "inbox_gh_folders_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "inbox_gh_folders_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "uq_inbox_gh_folders_user_slug",
+          "kind": "u",
+          "definition": "UNIQUE (user_id, slug)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_gh_folders_pkey ON public.inbox_gh_folders USING btree (id)",
+        "CREATE UNIQUE INDEX uq_inbox_gh_folders_user_slug ON public.inbox_gh_folders USING btree (user_id, slug)",
+        "CREATE INDEX ix_inbox_gh_folders_gh_list_id ON public.inbox_gh_folders USING btree (user_id, gh_list_id)"
+      ]
+    },
+    {
+      "name": "inbox_gh_stars",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('inbox_gh_stars_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.inbox_gh_stars_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "gh_repo_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "full_name",
+          "type": "character varying(255)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "owner_login",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "owner_avatar_url",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "description",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "language",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "topics",
+          "type": "jsonb",
+          "udt": "jsonb",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "stargazers_count",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "0",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "html_url",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "homepage",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 13,
+          "name": "archived",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 14,
+          "name": "fork",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 15,
+          "name": "starred_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 16,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 17,
+          "name": "ai_labels",
+          "type": "jsonb",
+          "udt": "jsonb",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 18,
+          "name": "ai_summary",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 19,
+          "name": "can_unstar",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 20,
+          "name": "last_synced_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 21,
+          "name": "gh_node_id",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_gh_stars_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "inbox_gh_stars_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "uq_inbox_gh_stars_user_repo",
+          "kind": "u",
+          "definition": "UNIQUE (user_id, gh_repo_id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_gh_stars_pkey ON public.inbox_gh_stars USING btree (id)",
+        "CREATE UNIQUE INDEX uq_inbox_gh_stars_user_repo ON public.inbox_gh_stars USING btree (user_id, gh_repo_id)",
+        "CREATE INDEX ix_inbox_gh_stars_user_lang ON public.inbox_gh_stars USING btree (user_id, language)",
+        "CREATE INDEX ix_inbox_gh_stars_user_starred ON public.inbox_gh_stars USING btree (user_id, starred_at)"
+      ]
+    },
+    {
+      "name": "inbox_gh_sync_state",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "etag",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "last_synced_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "last_status",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "last_error",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "stars_count",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "0",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_gh_sync_state_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id)"
+        },
+        {
+          "name": "inbox_gh_sync_state_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_gh_sync_state_pkey ON public.inbox_gh_sync_state USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "inbox_item_categories",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "item_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "category_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "attached_by",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "attached_by_user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "confidence",
+          "type": "double precision",
+          "udt": "float8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "attached_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_item_categories_attached_by_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (attached_by_user_id) REFERENCES users(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "inbox_item_categories_category_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (category_id) REFERENCES inbox_categories(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_item_categories_item_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (item_id) REFERENCES inbox_items(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_item_categories_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (item_id, category_id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_item_categories_pkey ON public.inbox_item_categories USING btree (item_id, category_id)",
+        "CREATE INDEX ix_inbox_item_categories_category ON public.inbox_item_categories USING btree (category_id)"
+      ]
+    },
+    {
+      "name": "inbox_item_to_star",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "item_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "gh_star_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "folder_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "synced_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_item_to_star_folder_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (folder_id) REFERENCES inbox_gh_folders(id) ON DELETE SET NULL"
+        },
+        {
+          "name": "inbox_item_to_star_gh_star_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (gh_star_id) REFERENCES inbox_gh_stars(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_item_to_star_item_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (item_id) REFERENCES inbox_items(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_item_to_star_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (item_id, gh_star_id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_item_to_star_pkey ON public.inbox_item_to_star USING btree (item_id, gh_star_id)"
+      ]
+    },
+    {
+      "name": "inbox_items",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('inbox_items_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.inbox_items_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "url",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "normalized_url",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "title",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "summary",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "kind",
+          "type": "character varying(24)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'link'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "source",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'bot'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "status",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'pending'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "crawl_status",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "llm_status",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "content_text",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 13,
+          "name": "content_html_asset_id",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 14,
+          "name": "og_image_url",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 15,
+          "name": "favicon_url",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 16,
+          "name": "author",
+          "type": "character varying(255)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 17,
+          "name": "publisher",
+          "type": "character varying(255)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 18,
+          "name": "published_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 19,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 20,
+          "name": "modified_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 21,
+          "name": "archived_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 22,
+          "name": "tg_chat_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 23,
+          "name": "tg_reply_message_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_items_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "inbox_items_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "uq_inbox_items_user_url",
+          "kind": "u",
+          "definition": "UNIQUE (user_id, normalized_url)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_items_pkey ON public.inbox_items USING btree (id)",
+        "CREATE UNIQUE INDEX uq_inbox_items_user_url ON public.inbox_items USING btree (user_id, normalized_url)",
+        "CREATE INDEX ix_inbox_items_user_status_created ON public.inbox_items USING btree (user_id, status, created_at, id)",
+        "CREATE INDEX ix_inbox_items_user_kind ON public.inbox_items USING btree (user_id, kind)"
+      ]
+    },
+    {
+      "name": "inbox_rules",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('inbox_rules_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.inbox_rules_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "enabled",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "true",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "priority",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "100",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "trigger",
+          "type": "character varying(24)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "conditions",
+          "type": "json",
+          "udt": "json",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "actions",
+          "type": "json",
+          "udt": "json",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "modified_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_rules_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "inbox_rules_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_rules_pkey ON public.inbox_rules USING btree (id)",
+        "CREATE INDEX ix_inbox_rules_user_enabled_priority ON public.inbox_rules USING btree (user_id, enabled, priority)"
+      ]
+    },
+    {
+      "name": "inbox_team_members",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "team_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "role",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'member'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "joined_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_team_members_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (team_id, user_id)"
+        },
+        {
+          "name": "inbox_team_members_team_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (team_id) REFERENCES inbox_teams(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_team_members_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_team_members_pkey ON public.inbox_team_members USING btree (team_id, user_id)",
+        "CREATE INDEX ix_inbox_team_members_user ON public.inbox_team_members USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "inbox_teams",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('inbox_teams_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.inbox_teams_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "slug",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "description",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "owner_user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_teams_owner_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "inbox_teams_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "uq_inbox_teams_owner_slug",
+          "kind": "u",
+          "definition": "UNIQUE (owner_user_id, slug)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_teams_pkey ON public.inbox_teams USING btree (id)",
+        "CREATE UNIQUE INDEX uq_inbox_teams_owner_slug ON public.inbox_teams USING btree (owner_user_id, slug)",
+        "CREATE INDEX ix_inbox_teams_owner_user_id ON public.inbox_teams USING btree (owner_user_id)"
+      ]
+    },
+    {
+      "name": "inbox_user_settings",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "classify_user_hint",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "inbox_user_settings_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id)"
+        },
+        {
+          "name": "inbox_user_settings_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX inbox_user_settings_pkey ON public.inbox_user_settings USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "insight_access",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "lang",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'en'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "granted_by",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "granted_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "insight_access_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id)"
+        },
+        {
+          "name": "insight_access_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX insight_access_pkey ON public.insight_access USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "insight_summary_cache",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('insight_summary_cache_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.insight_summary_cache_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "content_key",
+          "type": "character varying(512)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "lang",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "command",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "result",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "insight_summary_cache_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "uq_insight_cache_key",
+          "kind": "u",
+          "definition": "UNIQUE (content_key, lang, command)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX insight_summary_cache_pkey ON public.insight_summary_cache USING btree (id)",
+        "CREATE INDEX idx_insight_cache_expires ON public.insight_summary_cache USING btree (expires_at)",
+        "CREATE UNIQUE INDEX uq_insight_cache_key ON public.insight_summary_cache USING btree (content_key, lang, command)"
+      ]
+    },
+    {
+      "name": "insight_tldr_aliases",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('insight_tldr_aliases_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.insight_tldr_aliases_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "aliases",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "prompt",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "domains",
+          "type": "character varying(512)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "target_alias",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "ck_insight_tldr_alias_shape",
+          "kind": "c",
+          "definition": "CHECK ((((aliases IS NOT NULL) AND (prompt IS NOT NULL)) OR (target_alias IS NOT NULL) OR (domains IS NOT NULL)))"
+        },
+        {
+          "name": "insight_tldr_aliases_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "insight_tldr_aliases_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX insight_tldr_aliases_pkey ON public.insight_tldr_aliases USING btree (id)",
+        "CREATE INDEX idx_insight_tldr_alias_user ON public.insight_tldr_aliases USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "insight_usage_log",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('insight_usage_log_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.insight_usage_log_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "command",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "video_id",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "lang",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "status",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "error_code",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "content_chars",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "video_seconds",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "alias_key",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "route",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'gateway'::character varying",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "insight_usage_log_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "insight_usage_log_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX insight_usage_log_pkey ON public.insight_usage_log USING btree (id)",
+        "CREATE INDEX idx_insight_usage_user_date ON public.insight_usage_log USING btree (user_id, created_at)"
+      ]
+    },
+    {
+      "name": "insight_user_byok",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "provider",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "base_url",
+          "type": "character varying(512)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "api_key",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "model",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "models_json",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "models_fetched_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "tested_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "test_error",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "insight_user_byok_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id)"
+        },
+        {
+          "name": "insight_user_byok_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX insight_user_byok_pkey ON public.insight_user_byok USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "insight_user_prompts",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "command",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "prompt",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "insight_user_prompts_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id, command)"
+        },
+        {
+          "name": "insight_user_prompts_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX insight_user_prompts_pkey ON public.insight_user_prompts USING btree (user_id, command)"
+      ]
+    },
+    {
+      "name": "insight_user_settings",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "lang",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'en'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "tldr_model",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "github_token",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "use_search",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "github_token_public_repo",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "insight_user_settings_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id)"
+        },
+        {
+          "name": "insight_user_settings_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX insight_user_settings_pkey ON public.insight_user_settings USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "nsfw_domains",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('nsfw_domains_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.nsfw_domains_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "domain",
+          "type": "character varying(253)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "note",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "nsfw_domains_domain_key",
+          "kind": "u",
+          "definition": "UNIQUE (domain)"
+        },
+        {
+          "name": "nsfw_domains_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX nsfw_domains_pkey ON public.nsfw_domains USING btree (id)",
+        "CREATE UNIQUE INDEX nsfw_domains_domain_key ON public.nsfw_domains USING btree (domain)"
+      ]
+    },
+    {
+      "name": "nsfw_keywords",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('nsfw_keywords_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.nsfw_keywords_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "keyword",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "note",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "nsfw_keywords_keyword_key",
+          "kind": "u",
+          "definition": "UNIQUE (keyword)"
+        },
+        {
+          "name": "nsfw_keywords_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX nsfw_keywords_pkey ON public.nsfw_keywords USING btree (id)",
+        "CREATE UNIQUE INDEX nsfw_keywords_keyword_key ON public.nsfw_keywords USING btree (keyword)"
+      ]
+    },
+    {
+      "name": "rate_limits",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "window",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "count",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "0",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "reset_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "rate_limits_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id, \"window\")"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX rate_limits_pkey ON public.rate_limits USING btree (user_id, \"window\")"
+      ]
+    },
+    {
+      "name": "stats_chat_admins",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 2,
+          "name": "chat_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "status",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "synced_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "pk_stats_chat_admins",
+          "kind": "p",
+          "definition": "PRIMARY KEY (user_id, chat_id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX pk_stats_chat_admins ON public.stats_chat_admins USING btree (user_id, chat_id)",
+        "CREATE INDEX idx_sca_chat_id ON public.stats_chat_admins USING btree (chat_id)"
+      ]
+    },
+    {
+      "name": "stats_group_members",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('stats_group_members_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.stats_group_members_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "chat_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "in_chat",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "status",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "joined_date",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "synced_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "stats_group_members_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "uq_sgm_chat_user",
+          "kind": "u",
+          "definition": "UNIQUE (chat_id, user_id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX stats_group_members_pkey ON public.stats_group_members USING btree (id)",
+        "CREATE INDEX idx_sgm_chat_user ON public.stats_group_members USING btree (chat_id, user_id)",
+        "CREATE UNIQUE INDEX uq_sgm_chat_user ON public.stats_group_members USING btree (chat_id, user_id)"
+      ]
+    },
+    {
+      "name": "stats_messages",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('stats_messages_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.stats_messages_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "message_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "chat_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "date",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "from_user",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "reply_to_message",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "forward_from",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "forward_from_chat",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "text",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "caption",
+          "type": "text",
+          "udt": "text",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "msg_type",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'text'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 12,
+          "name": "sticker_set_name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 13,
+          "name": "new_chat_title",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 14,
+          "name": "file_id",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 15,
+          "name": "is_edited",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 16,
+          "name": "text_search",
+          "type": "tsvector",
+          "udt": "tsvector",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 17,
+          "name": "sender_tag",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 18,
+          "name": "message_thread_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "stats_messages_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX stats_messages_pkey ON public.stats_messages USING btree (id)",
+        "CREATE INDEX idx_stats_msg_chat_date ON public.stats_messages USING btree (chat_id, date)",
+        "CREATE INDEX idx_stats_msg_user_date ON public.stats_messages USING btree (from_user, date)",
+        "CREATE INDEX idx_stats_msg_type ON public.stats_messages USING btree (msg_type)",
+        "CREATE INDEX idx_stats_msg_chat ON public.stats_messages USING btree (chat_id)",
+        "CREATE INDEX idx_stats_msg_fts ON public.stats_messages USING gin (text_search)",
+        "CREATE INDEX idx_stats_msg_chat_msgid ON public.stats_messages USING btree (chat_id, message_id)",
+        "CREATE INDEX idx_stats_msg_thread ON public.stats_messages USING btree (chat_id, message_thread_id) WHERE (message_thread_id IS NOT NULL)"
+      ]
+    },
+    {
+      "name": "stats_reactions",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('stats_reactions_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.stats_reactions_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "chat_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "message_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "reaction_key",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "reaction_type",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "date",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "stats_reactions_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "uq_stats_reactions_user_msg_key",
+          "kind": "u",
+          "definition": "UNIQUE (user_id, chat_id, message_id, reaction_key)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX stats_reactions_pkey ON public.stats_reactions USING btree (id)",
+        "CREATE INDEX idx_stats_reactions_user_chat ON public.stats_reactions USING btree (user_id, chat_id)",
+        "CREATE INDEX idx_stats_reactions_chat_date ON public.stats_reactions USING btree (chat_id, date)",
+        "CREATE UNIQUE INDEX uq_stats_reactions_user_msg_key ON public.stats_reactions USING btree (user_id, chat_id, message_id, reaction_key)"
+      ]
+    },
+    {
+      "name": "stats_user_events",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('stats_user_events_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.stats_user_events_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "message_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "chat_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "date",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "event",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "stats_user_events_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX stats_user_events_pkey ON public.stats_user_events USING btree (id)",
+        "CREATE INDEX idx_stats_ue_chat_date ON public.stats_user_events USING btree (chat_id, date)"
+      ]
+    },
+    {
+      "name": "stats_user_names",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('stats_user_names_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.stats_user_names_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "date",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "username",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "display_name",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "stats_user_names_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "stats_user_names_user_id_date_key",
+          "kind": "u",
+          "definition": "UNIQUE (user_id, date)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX stats_user_names_pkey ON public.stats_user_names USING btree (id)",
+        "CREATE UNIQUE INDEX stats_user_names_user_id_date_key ON public.stats_user_names USING btree (user_id, date)",
+        "CREATE INDEX idx_stats_un_user_date ON public.stats_user_names USING btree (user_id, date)"
+      ]
+    },
+    {
+      "name": "thread_policies",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('thread_policies_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.thread_policies_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "group_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "thread_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "name",
+          "type": "character varying(256)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "enabled",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "true",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "thread_policies_group_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "thread_policies_group_id_thread_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (group_id, thread_id)"
+        },
+        {
+          "name": "thread_policies_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX thread_policies_pkey ON public.thread_policies USING btree (id)",
+        "CREATE UNIQUE INDEX thread_policies_group_id_thread_id_key ON public.thread_policies USING btree (group_id, thread_id)"
+      ]
+    },
+    {
+      "name": "user_group_policies",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('user_group_policies_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.user_group_policies_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "group_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "role_override",
+          "type": "userrole",
+          "udt": "userrole",
+          "kind": "e",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "allow_pm_override",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "user_group_policies_group_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "user_group_policies_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "user_group_policies_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "user_group_policies_user_id_group_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (user_id, group_id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX user_group_policies_pkey ON public.user_group_policies USING btree (id)",
+        "CREATE UNIQUE INDEX user_group_policies_user_id_group_id_key ON public.user_group_policies USING btree (user_id, group_id)"
+      ]
+    },
+    {
+      "name": "user_permissions",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "integer",
+          "udt": "int4",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('user_permissions_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.user_permissions_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "user_id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "plugin",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "feature",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "granted_by",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "granted_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "now()",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "grant_source",
+          "type": "character varying(16)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'manual'::character varying",
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "user_permissions_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "user_permissions_user_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        },
+        {
+          "name": "user_permissions_user_id_plugin_feature_key",
+          "kind": "u",
+          "definition": "UNIQUE (user_id, plugin, feature)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX user_permissions_pkey ON public.user_permissions USING btree (id)",
+        "CREATE UNIQUE INDEX user_permissions_user_id_plugin_feature_key ON public.user_permissions USING btree (user_id, plugin, feature)",
+        "CREATE INDEX idx_user_permissions_user ON public.user_permissions USING btree (user_id)"
+      ]
+    },
+    {
+      "name": "users",
+      "columns": [
+        {
+          "ordinal": 1,
+          "name": "id",
+          "type": "bigint",
+          "udt": "int8",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "nextval('users_id_seq'::regclass)",
+          "generated": "",
+          "sequence": "public.users_id_seq"
+        },
+        {
+          "ordinal": 2,
+          "name": "username",
+          "type": "character varying(64)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 3,
+          "name": "first_name",
+          "type": "character varying(128)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 4,
+          "name": "role",
+          "type": "userrole",
+          "udt": "userrole",
+          "kind": "e",
+          "not_null": true,
+          "default_value": "'user'::userrole",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 5,
+          "name": "language",
+          "type": "character varying(8)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'en'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 6,
+          "name": "theme",
+          "type": "character varying(32)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "'macchiato'::character varying",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 7,
+          "name": "ban_until",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 8,
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 9,
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "udt": "timestamptz",
+          "kind": "b",
+          "not_null": true,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 10,
+          "name": "is_premium",
+          "type": "boolean",
+          "udt": "bool",
+          "kind": "b",
+          "not_null": true,
+          "default_value": "false",
+          "generated": "",
+          "sequence": null
+        },
+        {
+          "ordinal": 11,
+          "name": "photo_url",
+          "type": "character varying(512)",
+          "udt": "varchar",
+          "kind": "b",
+          "not_null": false,
+          "default_value": null,
+          "generated": "",
+          "sequence": null
+        }
+      ],
+      "constraints": [
+        {
+          "name": "users_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "stats_user_latest_name",
+      "definition": " SELECT DISTINCT ON (user_id) user_id,\n    username,\n    display_name,\n    date\n   FROM stats_user_names\n  ORDER BY user_id, date DESC;"
+    }
+  ],
+  "triggers": [
+    {
+      "table": "stats_messages",
+      "name": "stats_messages_tsvector_trigger",
+      "definition": "CREATE TRIGGER stats_messages_tsvector_trigger BEFORE INSERT OR UPDATE ON stats_messages FOR EACH ROW EXECUTE FUNCTION stats_messages_tsvector_update()",
+      "function": "CREATE OR REPLACE FUNCTION public.stats_messages_tsvector_update()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\n        BEGIN\n            NEW.text_search := to_tsvector(\n                'simple',\n                COALESCE(NEW.text, '') || ' ' || COALESCE(NEW.caption, '')\n            );\n            RETURN NEW;\n        END;\n        $function$\n"
+    }
+  ],
+  "enums": {
+    "userrole": [
+      "owner",
+      "admin",
+      "moderator",
+      "user",
+      "restricted",
+      "banned"
+    ]
+  }
+}

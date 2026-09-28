@@ -1,0 +1,1 @@
+DELETE FROM runtime_media_cache WHERE actor_id=?1 AND bot_id=?2 AND cache_key=?3 AND expires_at<=CAST(unixepoch('subsec') * 1000000 AS INTEGER);

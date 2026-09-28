@@ -1,11 +1,21 @@
 [package]
 name = "yoink-server"
+default-run = "yoink-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+test-fixtures = ["dep:turso"]
+
+[[bin]]
+name = "yoink-fixture-server"
+path = "src/fixture_main.rs"
+required-features = ["test-fixtures"]
+
 [dependencies]
+turso = { version = "=0.7.2", optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

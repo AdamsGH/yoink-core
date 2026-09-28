@@ -1,1 +1,1 @@
-SELECT id FROM yoink_runtime.operations WHERE id = $1 FOR UPDATE;
+SELECT id FROM runtime_operations WHERE id = ?1;

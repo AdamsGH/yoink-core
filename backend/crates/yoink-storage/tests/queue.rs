@@ -1,29 +1,20 @@
 use std::time::Duration;
 
-use sqlx::Row;
+mod common;
+use common::unmigrated_store as store;
+use turso::transaction::{Transaction, TransactionBehavior};
 use yoink_domain::{DownloadParams, DownloadRequest, MediaMode};
 use yoink_storage::{Store, StoreError};
-
-fn database_url() -> String {
-    std::env::var("YOINK_TEST_DATABASE_URL")
-        .expect("YOINK_TEST_DATABASE_URL must point to a disposable PostgreSQL database")
-}
-
-async fn store() -> Store {
-    Store::connect(&database_url(), 8, Duration::from_secs(5))
-        .await
-        .expect("connect to disposable test database")
-}
 
 async fn batch_units(
     store: &Store,
     operation_id: uuid::Uuid,
     attempt: i32,
 ) -> Vec<(i32, String, i32, Option<Vec<i32>>)> {
-    sqlx::query(include_str!("fixtures/delivery_units.sql"))
+    yoink_db::query(include_str!("fixtures/delivery_units.sql"))
         .bind(operation_id)
         .bind(attempt)
-        .fetch_all(store.pool())
+        .fetch_all(store.database())
         .await
         .unwrap()
         .into_iter()
@@ -50,39 +41,26 @@ fn request(actor: u64, url: &str) -> DownloadRequest {
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn queue_persistence_contract() {
-    assert_eq!(
-        Store::connect("invalid", 0, Duration::from_secs(1))
-            .await
-            .err()
-            .unwrap(),
-        StoreError::InvalidInput
-    );
-    assert_eq!(
-        Store::connect("invalid", 33, Duration::from_secs(1))
-            .await
-            .err()
-            .unwrap(),
-        StoreError::InvalidInput
-    );
-    assert_eq!(
-        Store::connect("invalid", 1, Duration::from_secs(301))
-            .await
-            .err()
-            .unwrap(),
-        StoreError::InvalidInput
-    );
+    for timeout in [Duration::ZERO, Duration::from_secs(301)] {
+        assert_eq!(
+            Store::open(std::path::Path::new("/not-opened.db"), true, timeout)
+                .await
+                .err()
+                .unwrap(),
+            StoreError::InvalidInput
+        );
+    }
     let store = store().await;
     assert_eq!(store.verify_schema().await.unwrap_err(), StoreError::Schema);
     store.migrate().await.unwrap();
     store.migrate().await.unwrap();
     store.verify_schema().await.unwrap();
-    let history = sqlx::query(include_str!("fixtures/migration_history.sql"))
-        .fetch_all(store.pool())
+    let history = yoink_db::query(include_str!("fixtures/migration_history.sql"))
+        .fetch_all(store.database())
         .await
         .unwrap();
-    let (version, checksum): (i64, Vec<u8>) = (
+    let (version, checksum): (i64, String) = (
         history[0].try_get("version").unwrap(),
         history[0].try_get("checksum").unwrap(),
     );
@@ -92,43 +70,43 @@ async fn queue_persistence_contract() {
         .try_get::<i64, _>("version")
         .unwrap()
         + 1;
-    sqlx::query(include_str!("fixtures/migration_corrupt_checksum.sql"))
+    yoink_db::query(include_str!("fixtures/migration_corrupt_checksum.sql"))
         .bind(version)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert_eq!(store.verify_schema().await.unwrap_err(), StoreError::Schema);
-    sqlx::query(include_str!("fixtures/migration_restore_checksum.sql"))
+    yoink_db::query(include_str!("fixtures/migration_restore_checksum.sql"))
         .bind(version)
         .bind(&checksum)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
-    sqlx::query(include_str!("fixtures/migration_mark_failed.sql"))
+    yoink_db::query(include_str!("fixtures/migration_mark_failed.sql"))
         .bind(version)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert_eq!(store.verify_schema().await.unwrap_err(), StoreError::Schema);
-    sqlx::query(include_str!("fixtures/migration_mark_success.sql"))
+    yoink_db::query(include_str!("fixtures/migration_mark_success.sql"))
         .bind(version)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
-    sqlx::query(include_str!("fixtures/migration_insert_unknown.sql"))
+    yoink_db::query(include_str!("fixtures/migration_insert_unknown.sql"))
         .bind(unknown_version)
         .bind(&checksum)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert_eq!(store.verify_schema().await.unwrap_err(), StoreError::Schema);
-    sqlx::query(include_str!("fixtures/migration_delete_unknown.sql"))
+    yoink_db::query(include_str!("fixtures/migration_delete_unknown.sql"))
         .bind(unknown_version)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
-    let history_after = sqlx::query(include_str!("fixtures/migration_history.sql"))
-        .fetch_all(store.pool())
+    let history_after = yoink_db::query(include_str!("fixtures/migration_history.sql"))
+        .fetch_all(store.database())
         .await
         .unwrap();
     assert_eq!(history_after.len(), history.len());
@@ -138,8 +116,8 @@ async fn queue_persistence_contract() {
             expected.try_get::<i64, _>("version").unwrap()
         );
         assert_eq!(
-            actual.try_get::<Vec<u8>, _>("checksum").unwrap(),
-            expected.try_get::<Vec<u8>, _>("checksum").unwrap()
+            actual.try_get::<String, _>("checksum").unwrap(),
+            expected.try_get::<String, _>("checksum").unwrap()
         );
         assert_eq!(
             actual.try_get::<bool, _>("success").unwrap(),
@@ -147,8 +125,8 @@ async fn queue_persistence_contract() {
         );
     }
     let public_migration_table: i64 =
-        sqlx::query(include_str!("fixtures/count_public_migrations.sql"))
-            .fetch_one(store.pool())
+        yoink_db::query(include_str!("fixtures/count_public_migrations.sql"))
+            .fetch_one(store.database())
             .await
             .unwrap()
             .try_get(0)
@@ -191,22 +169,29 @@ async fn queue_persistence_contract() {
     assert_eq!(fail_rollback.unwrap_err(), StoreError::InvalidInput);
     let valid_after_rollback = store.admit(&first, "rollback-key", 1).await.unwrap();
     assert!(valid_after_rollback.created);
-    let mut rollback_tx = store.pool().begin().await.unwrap();
-    sqlx::query(include_str!("../sql/admit_insert.sql"))
+    let mut rollback_guard = store.database().connection().await.unwrap();
+    let rollback_tx = Transaction::new(&mut rollback_guard, TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    yoink_db::query(include_str!("../sql/admit_insert.sql"))
         .bind(10009_i64)
         .bind("rolled-back")
         .bind(serde_json::json!({"probe": true}))
         .bind(1_i32)
         .bind(0_i32)
         .bind(None::<&str>)
-        .execute(&mut *rollback_tx)
+        .bind(uuid::Uuid::new_v4())
+        .fetch_one(&*rollback_tx)
         .await
         .unwrap();
     rollback_tx.rollback().await.unwrap();
+    drop(rollback_guard);
     let rolled_back: i64 =
-        sqlx::query_scalar(include_str!("fixtures/count_rolled_back_operation.sql"))
-            .fetch_one(store.pool())
+        yoink_db::query(include_str!("fixtures/count_rolled_back_operation.sql"))
+            .fetch_one(store.database())
             .await
+            .unwrap()
+            .try_get(0)
             .unwrap();
     assert_eq!(rolled_back, 0);
     assert!(store.request_cancel(10001, a.operation_id).await.unwrap());
@@ -407,9 +392,9 @@ async fn queue_persistence_contract() {
         }
         store.fail(&candidate, true).await.unwrap();
     };
-    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_operation.sql"))
         .bind(expiring.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     let recovered = store
@@ -463,9 +448,9 @@ async fn queue_persistence_contract() {
         .unwrap()
         .unwrap();
     assert_eq!(final_claim.operation_id, final_expiry.operation_id);
-    sqlx::query(include_str!("fixtures/expire_final_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_final_operation.sql"))
         .bind(final_expiry.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -510,9 +495,9 @@ async fn queue_persistence_contract() {
             .await
             .unwrap()
     );
-    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_operation.sql"))
         .bind(cancelled_expiry.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -562,24 +547,29 @@ async fn queue_persistence_contract() {
         )
         .await
         .unwrap();
-    let mut lock_tx = store.pool().begin().await.unwrap();
-    let locked_id: uuid::Uuid = sqlx::query(include_str!("fixtures/lock_operation.sql"))
+    let mut lock_guard = store.database().connection().await.unwrap();
+    let lock_tx = Transaction::new(&mut lock_guard, TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let locked_id: uuid::Uuid = yoink_db::query(include_str!("fixtures/lock_operation.sql"))
         .bind(contention.operation_id)
-        .fetch_one(&mut *lock_tx)
+        .fetch_one(&*lock_tx)
         .await
         .unwrap()
         .try_get("id")
         .unwrap();
     assert_eq!(locked_id, contention.operation_id);
-    let skipped = tokio::time::timeout(
-        Duration::from_secs(1),
-        store.claim("skip-locked-worker", Duration::from_secs(5)),
+    let blocked = tokio::time::timeout(
+        Duration::from_millis(100),
+        store.claim("blocked-worker", Duration::from_secs(5)),
     )
-    .await
-    .expect("claim must not wait on a locked queue row")
-    .unwrap();
-    assert!(skipped.is_none());
+    .await;
+    assert!(
+        blocked.is_err(),
+        "a concurrent claim must wait for the active transaction"
+    );
     lock_tx.rollback().await.unwrap();
+    drop(lock_guard);
     let unlocked = store
         .claim("unlocked-worker", Duration::from_secs(5))
         .await
@@ -596,14 +586,18 @@ async fn queue_persistence_contract() {
         )
         .await
         .unwrap();
-    let replacement = Store::connect(&database_url(), 2, Duration::from_secs(5))
-        .await
-        .unwrap();
     let original_record = store
         .get(10013, persisted.operation_id)
         .await
         .unwrap()
         .unwrap();
+    let path = store.path().to_path_buf();
+    store.close().await.unwrap();
+    let replacement = Store::open(&path, false, Duration::from_secs(5))
+        .await
+        .unwrap();
+    replacement.migrate().await.unwrap();
+    replacement.verify_schema().await.unwrap();
     let restarted_record = replacement
         .get(10013, persisted.operation_id)
         .await
@@ -632,9 +626,8 @@ async fn queue_persistence_contract() {
             .status,
         yoink_storage::OperationStatus::Succeeded
     );
-    replacement.close().await;
 
-    let malicious = store
+    let malicious = replacement
         .admit(
             &request(10011, "https://example.com/malicious"),
             "malicious",
@@ -642,32 +635,31 @@ async fn queue_persistence_contract() {
         )
         .await
         .unwrap();
-    sqlx::query(include_str!("fixtures/poison_operation_request.sql"))
+    yoink_db::query(include_str!("fixtures/poison_operation_request.sql"))
         .bind(malicious.operation_id)
-        .execute(store.pool())
+        .execute(replacement.database())
         .await
         .unwrap();
     assert_eq!(
-        store
+        replacement
             .claim("malicious-worker", Duration::from_secs(5))
             .await
             .unwrap_err(),
         StoreError::InvalidStoredData
     );
 
-    store.close().await;
+    replacement.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn bot_scope_progress_and_legacy_replay_contract() {
     use yoink_domain::DeliveryTarget;
     use yoink_storage::ProgressStage;
 
     let store = store().await;
     store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
+    yoink_db::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.database())
         .await
         .unwrap();
 
@@ -677,10 +669,10 @@ async fn bot_scope_progress_and_legacy_replay_contract() {
         "actor_id": 22901, "source_url": "https://example.com/legacy-replay",
         "media_mode": "video", "clip_range": null, "max_height": null
     });
-    sqlx::query(include_str!("fixtures/set_legacy_request.sql"))
+    yoink_db::query(include_str!("fixtures/set_legacy_request.sql"))
         .bind(admitted.operation_id)
         .bind(legacy)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -770,9 +762,9 @@ async fn bot_scope_progress_and_legacy_replay_contract() {
         .update_progress(&retry_a, 40, ProgressStage::Fetching)
         .await
         .unwrap();
-    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_operation.sql"))
         .bind(bot_a.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     let recovered_a = store
@@ -810,46 +802,36 @@ async fn bot_scope_progress_and_legacy_replay_contract() {
         .unwrap()
         .unwrap();
     assert_eq!(generic.operation_id, unscoped.operation_id);
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
-async fn migration_0003_backfill_regression() {
+async fn native_legacy_target_backfill_regression() {
     let store = store().await;
     store.migrate().await.unwrap();
 
-    let mut tx = store.pool().begin().await.unwrap();
-    sqlx::query("ALTER SCHEMA yoink_runtime RENAME TO fixture_saved_runtime")
-        .execute(&mut *tx)
+    let mut guard = store.database().connection().await.unwrap();
+    let tx = Transaction::new(&mut guard, TransactionBehavior::Immediate)
         .await
         .unwrap();
-    sqlx::query("CREATE SCHEMA yoink_runtime")
-        .execute(&mut *tx)
+    yoink_db::query(include_str!("fixtures/legacy_backfill_cases.sql"))
+        .execute(&*tx)
         .await
         .unwrap();
-    sqlx::raw_sql(include_str!("../migrations/0001_operations.sql"))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::raw_sql(include_str!("../migrations/0002_media_delivery.sql"))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::query(include_str!("fixtures/legacy_backfill_cases.sql"))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::raw_sql(include_str!("../migrations/0003_bot_progress.sql"))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    for _ in 0..2 {
+        yoink_db::raw_sql(include_str!("../sql/backfill_legacy_targets.sql"))
+            .execute(&*tx)
+            .await
+            .unwrap();
+    }
 
     let valid: serde_json::Value =
-        sqlx::query_scalar(include_str!("fixtures/read_backfill_target.sql"))
+        yoink_db::query(include_str!("fixtures/read_backfill_target.sql"))
             .bind("tg:71:23101:9")
-            .fetch_one(&mut *tx)
+            .fetch_one(&*tx)
             .await
+            .unwrap()
+            .try_get(0)
             .unwrap();
     assert_eq!(valid["bot_id"], 71);
     assert_eq!(valid["chat_id"], 23101);
@@ -862,10 +844,12 @@ async fn migration_0003_backfill_regression() {
         "tg:71:99999:9",
     ] {
         let target: Option<serde_json::Value> =
-            sqlx::query_scalar(include_str!("fixtures/read_backfill_target.sql"))
+            yoink_db::query(include_str!("fixtures/read_backfill_target.sql"))
                 .bind(invalid_key)
-                .fetch_one(&mut *tx)
+                .fetch_one(&*tx)
                 .await
+                .unwrap()
+                .try_get(0)
                 .unwrap();
         assert!(
             target.is_none() || target == Some(serde_json::Value::Null),
@@ -873,26 +857,28 @@ async fn migration_0003_backfill_regression() {
         );
     }
     let preserved: serde_json::Value =
-        sqlx::query_scalar(include_str!("fixtures/read_backfill_target.sql"))
+        yoink_db::query(include_str!("fixtures/read_backfill_target.sql"))
             .bind("tg:77:23107:9")
-            .fetch_one(&mut *tx)
+            .fetch_one(&*tx)
             .await
+            .unwrap()
+            .try_get(0)
             .unwrap();
     assert_eq!(preserved["bot_id"], 88);
     assert_eq!(preserved["chat_id"], 23107);
     assert_eq!(preserved["reply_to_message_id"], 17);
     tx.rollback().await.unwrap();
-    store.close().await;
+    drop(guard);
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn durable_batch_delivery_contract() {
     use yoink_storage::OperationStatus;
     let store = store().await;
     store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
+    yoink_db::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.database())
         .await
         .unwrap();
     let admitted = store
@@ -943,17 +929,16 @@ async fn durable_batch_delivery_contract() {
     assert_eq!(record.planned_artifact_count, Some(3));
     assert_eq!(record.delivered_artifact_count, 3);
     assert_eq!(record.delivered_message_id, Some(81003));
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn media_delivery_and_bounded_admission_contract() {
     use yoink_storage::{AdmissionPolicy, OperationStatus};
     let store = store().await;
     store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
+    yoink_db::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.database())
         .await
         .unwrap();
     let policy = AdmissionPolicy {
@@ -1229,9 +1214,9 @@ async fn media_delivery_and_bounded_admission_contract() {
             .await
             .unwrap()
     );
-    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_operation.sql"))
         .bind(expiry.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -1308,9 +1293,9 @@ async fn media_delivery_and_bounded_admission_contract() {
         .unwrap()
         .unwrap();
     assert_eq!(first_expiring_claim.operation_id, expiry_retry.operation_id);
-    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_operation.sql"))
         .bind(expiry_retry.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -1369,17 +1354,16 @@ async fn media_delivery_and_bounded_admission_contract() {
             .unwrap()
             .created
     );
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn durable_batch_cancel_and_rejection_prefix_contract() {
     use yoink_storage::OperationStatus;
     let store = store().await;
     store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
+    yoink_db::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.database())
         .await
         .unwrap();
 
@@ -1560,9 +1544,11 @@ async fn durable_batch_cancel_and_rejection_prefix_contract() {
             .unwrap()
     );
     let before_retry: chrono::DateTime<chrono::Utc> =
-        sqlx::query_scalar(include_str!("fixtures/database_clock.sql"))
-            .fetch_one(store.pool())
+        yoink_db::query(include_str!("fixtures/database_clock.sql"))
+            .fetch_one(store.database())
             .await
+            .unwrap()
+            .try_get(0)
             .unwrap();
     assert!(
         store
@@ -1578,9 +1564,11 @@ async fn durable_batch_cancel_and_rejection_prefix_contract() {
     assert_eq!(rate_record.status, OperationStatus::Queued);
     assert!(rate_record.available_at >= before_retry + chrono::Duration::seconds(6));
     let after_retry: chrono::DateTime<chrono::Utc> =
-        sqlx::query_scalar(include_str!("fixtures/database_clock.sql"))
-            .fetch_one(store.pool())
+        yoink_db::query(include_str!("fixtures/database_clock.sql"))
+            .fetch_one(store.database())
             .await
+            .unwrap()
+            .try_get(0)
             .unwrap();
     // PostgreSQL may evaluate updated_at before available_at. Bound the retry
     // against database clocks outside the statement, not assignment order.
@@ -1861,17 +1849,16 @@ async fn durable_batch_cancel_and_rejection_prefix_contract() {
         OperationStatus::Queued
     );
 
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn durable_batch_unknown_persistence_and_expiry_contract() {
     use yoink_storage::OperationStatus;
     let store = store().await;
     store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
+    yoink_db::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.database())
         .await
         .unwrap();
 
@@ -1892,7 +1879,9 @@ async fn durable_batch_unknown_persistence_and_expiry_contract() {
     assert!(store.begin_delivery_batch(&claim, 2).await.unwrap());
     assert!(store.begin_delivery_unit(&claim, 0, 1).await.unwrap());
     assert!(store.unknown_delivery_unit(&claim, 0).await.unwrap());
-    let reopened = Store::connect(&database_url(), 2, Duration::from_secs(5))
+    let path = store.path().to_path_buf();
+    store.close().await.unwrap();
+    let reopened = Store::open(&path, false, Duration::from_secs(5))
         .await
         .unwrap();
     let record = reopened
@@ -1914,7 +1903,10 @@ async fn durable_batch_unknown_persistence_and_expiry_contract() {
             .unwrap()
             .is_none()
     );
-    reopened.close().await;
+    reopened.close().await.unwrap();
+    let store = Store::open(&path, false, Duration::from_secs(5))
+        .await
+        .unwrap();
 
     let expired = store
         .admit(
@@ -1937,9 +1929,9 @@ async fn durable_batch_unknown_persistence_and_expiry_contract() {
             .await
             .unwrap()
     );
-    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_operation.sql"))
         .bind(expired.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -2014,17 +2006,16 @@ async fn durable_batch_unknown_persistence_and_expiry_contract() {
             .status,
         OperationStatus::DeliveryUnknown
     );
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn durable_batch_expiry_prefix_and_retry_fencing_contract() {
     use yoink_storage::OperationStatus;
     let store = store().await;
     store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
+    yoink_db::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.database())
         .await
         .unwrap();
 
@@ -2050,9 +2041,9 @@ async fn durable_batch_expiry_prefix_and_retry_fencing_contract() {
             .await
             .unwrap()
     );
-    sqlx::query(include_str!("fixtures/expire_operation.sql"))
+    yoink_db::query(include_str!("fixtures/expire_operation.sql"))
         .bind(partial.operation_id)
-        .execute(store.pool())
+        .execute(store.database())
         .await
         .unwrap();
     assert!(
@@ -2165,17 +2156,16 @@ async fn durable_batch_expiry_prefix_and_retry_fencing_contract() {
         batch_units(&store, retry.operation_id, 2).await,
         vec![(0, "sent".to_owned(), 1, Some(vec![93004]))]
     );
-    store.close().await;
+    store.close().await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires a fresh disposable PostgreSQL database"]
 async fn durable_batch_receipt_validation_contract() {
     use yoink_storage::OperationStatus;
     let store = store().await;
     store.migrate().await.unwrap();
-    sqlx::query(include_str!("fixtures/reset_operations.sql"))
-        .execute(store.pool())
+    yoink_db::query(include_str!("fixtures/reset_operations.sql"))
+        .execute(store.database())
         .await
         .unwrap();
     let admitted = store
@@ -2265,5 +2255,5 @@ async fn durable_batch_receipt_validation_contract() {
             (1, "sent".to_owned(), 1, Some(vec![94003])),
         ]
     );
-    store.close().await;
+    store.close().await.unwrap();
 }

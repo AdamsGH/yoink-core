@@ -1,5 +1,85 @@
-INSERT INTO yoink_runtime.media_cache (actor_id, bot_id, cache_key, revision, media, expires_at)
-SELECT 79000, 899, 'v1:' || lpad(n::text, 64, '0'), $1,
-       '[{"kind":"photo","file_id":"expired-id","size_bytes":1}]'::jsonb,
-       clock_timestamp() - INTERVAL '1 day'
-FROM generate_series(1, 40) n;
+INSERT INTO runtime_media_cache(actor_id, bot_id, cache_key, revision, media, expires_at)
+SELECT 79000, 899, 'v1:' || printf('%064d', n), ?1,
+       json('[{"kind":"photo","file_id":"expired-id","size_bytes":1}]'),
+       CAST(unixepoch('subsec') * 1000000 AS INTEGER) - 86400000000
+FROM (
+SELECT 1 AS n
+UNION ALL
+SELECT 2
+UNION ALL
+SELECT 3
+UNION ALL
+SELECT 4
+UNION ALL
+SELECT 5
+UNION ALL
+SELECT 6
+UNION ALL
+SELECT 7
+UNION ALL
+SELECT 8
+UNION ALL
+SELECT 9
+UNION ALL
+SELECT 10
+UNION ALL
+SELECT 11
+UNION ALL
+SELECT 12
+UNION ALL
+SELECT 13
+UNION ALL
+SELECT 14
+UNION ALL
+SELECT 15
+UNION ALL
+SELECT 16
+UNION ALL
+SELECT 17
+UNION ALL
+SELECT 18
+UNION ALL
+SELECT 19
+UNION ALL
+SELECT 20
+UNION ALL
+SELECT 21
+UNION ALL
+SELECT 22
+UNION ALL
+SELECT 23
+UNION ALL
+SELECT 24
+UNION ALL
+SELECT 25
+UNION ALL
+SELECT 26
+UNION ALL
+SELECT 27
+UNION ALL
+SELECT 28
+UNION ALL
+SELECT 29
+UNION ALL
+SELECT 30
+UNION ALL
+SELECT 31
+UNION ALL
+SELECT 32
+UNION ALL
+SELECT 33
+UNION ALL
+SELECT 34
+UNION ALL
+SELECT 35
+UNION ALL
+SELECT 36
+UNION ALL
+SELECT 37
+UNION ALL
+SELECT 38
+UNION ALL
+SELECT 39
+UNION ALL
+SELECT 40
+) AS expired_keys;

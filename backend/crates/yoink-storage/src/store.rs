@@ -1,11 +1,9 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
-use sqlx::{
-    ConnectOptions, PgPool, Row,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
+use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
+use yoink_db::{Database, query};
 use yoink_domain::{DownloadRequest, NetworkSelection};
 
 use crate::{
@@ -17,110 +15,54 @@ use crate::{
     },
 };
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
 pub struct Store {
-    pool: PgPool,
+    database: Database,
 }
 
 impl Store {
-    pub async fn connect(
-        database_url: &str,
-        max_connections: u32,
+    pub async fn open(
+        path: &Path,
+        create: bool,
         acquire_timeout: Duration,
     ) -> Result<Self, StoreError> {
-        if max_connections == 0
-            || max_connections > 32
-            || acquire_timeout.is_zero()
-            || acquire_timeout > Duration::from_secs(300)
-        {
+        if acquire_timeout.is_zero() || acquire_timeout > Duration::from_secs(300) {
             return Err(StoreError::InvalidInput);
         }
-        let options: PgConnectOptions = database_url.parse().map_err(|_| StoreError::Database)?;
-        let options = options
-            .options([("search_path", "yoink_runtime,public")])
-            .disable_statement_logging();
-        let pool = PgPoolOptions::new()
-            .max_connections(max_connections)
-            .acquire_timeout(acquire_timeout)
-            .connect_with(options)
+        let database = Database::open(path, create, acquire_timeout)
             .await
             .map_err(|_| StoreError::Database)?;
-        Ok(Self { pool })
+        Ok(Self { database })
+    }
+
+    pub fn from_database(database: Database) -> Self {
+        Self { database }
     }
 
     pub async fn migrate(&self) -> Result<(), StoreError> {
-        sqlx::raw_sql(include_str!("../sql/create_schema.sql"))
-            .execute(&self.pool)
+        self.database
+            .verify_files()
             .await
             .map_err(|_| StoreError::Database)?;
-        MIGRATOR
-            .run(&self.pool)
-            .await
-            .map_err(|_| StoreError::Schema)
+        crate::schema::migrate(&self.database).await
     }
 
     pub async fn verify_schema(&self) -> Result<(), StoreError> {
-        let relations = sqlx::query(include_str!("../sql/verify_schema.sql"))
-            .fetch_one(&self.pool)
+        self.database
+            .verify_files()
             .await
-            .map_err(|_| StoreError::Schema)?;
-        let has_migrations: bool = relations
-            .try_get("has_migrations")
-            .map_err(|_| StoreError::Schema)?;
-        let has_operations: bool = relations
-            .try_get("has_operations")
-            .map_err(|_| StoreError::Schema)?;
-        let has_bot_progress: bool = relations
-            .try_get("has_bot_progress")
-            .map_err(|_| StoreError::Schema)?;
-        let has_delivery_units: bool = relations
-            .try_get("has_delivery_units")
-            .map_err(|_| StoreError::Schema)?;
-        let has_delivery_batch_state: bool = relations
-            .try_get("has_delivery_batch_state")
-            .map_err(|_| StoreError::Schema)?;
-        let has_media_cache: bool = relations
-            .try_get("has_media_cache")
-            .map_err(|_| StoreError::Schema)?;
-        if !has_migrations
-            || !has_operations
-            || !has_bot_progress
-            || !has_delivery_units
-            || !has_delivery_batch_state
-            || !has_media_cache
-        {
-            return Err(StoreError::Schema);
-        }
-
-        let applied = sqlx::query(include_str!("../sql/verify_migration_history.sql"))
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|_| StoreError::Schema)?;
-        let expected = MIGRATOR.iter().collect::<Vec<_>>();
-        if applied.len() != expected.len() {
-            return Err(StoreError::Schema);
-        }
-        for (row, migration) in applied.iter().zip(expected) {
-            let version: i64 = row.try_get("version").map_err(|_| StoreError::Schema)?;
-            let checksum: Vec<u8> = row.try_get("checksum").map_err(|_| StoreError::Schema)?;
-            let success: bool = row.try_get("success").map_err(|_| StoreError::Schema)?;
-            if !success
-                || version != migration.version
-                || checksum.as_slice() != migration.checksum.as_ref()
-            {
-                return Err(StoreError::Schema);
-            }
-        }
-        Ok(())
+            .map_err(|_| StoreError::Database)?;
+        crate::schema::verify(&self.database).await
     }
 
-    pub async fn close(&self) {
-        self.pool.close().await;
+    pub async fn close(&self) -> Result<(), StoreError> {
+        self.database
+            .close()
+            .await
+            .map_err(|_| StoreError::Database)
     }
 
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
+    pub fn database(&self) -> &Database {
+        &self.database
     }
 
     pub async fn admit(
@@ -153,10 +95,10 @@ impl Store {
         if request.network() != &NetworkSelection::NONE {
             return Err(StoreError::InvalidInput);
         }
-        let row = sqlx::query(include_str!("../sql/admit_existing.sql"))
+        let row = query(include_str!("../sql/admit_existing.sql"))
             .bind(request.actor_id() as i64)
             .bind(idempotency_key)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         let Some(row) = row else {
@@ -208,15 +150,18 @@ impl Store {
             .target()
             .map(|_| crate::cache_key::media_cache_key(request))
             .transpose()?;
-        let mut tx = self.pool.begin().await.map_err(|_| StoreError::Database)?;
-        sqlx::query(include_str!("../sql/admit_lock.sql"))
-            .execute(&mut *tx)
+        let mut connection = self
+            .database
+            .connection()
             .await
             .map_err(|_| StoreError::Database)?;
-        let existing = sqlx::query(include_str!("../sql/admit_existing.sql"))
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let existing = query(include_str!("../sql/admit_existing.sql"))
             .bind(request.actor_id() as i64)
             .bind(idempotency_key)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&*tx)
             .await
             .map_err(|_| StoreError::Database)?;
         if let Some(row) = existing {
@@ -238,9 +183,9 @@ impl Store {
             tx.commit().await.map_err(|_| StoreError::Database)?;
             return Ok(admission);
         }
-        let counts = sqlx::query(include_str!("../sql/admit_counts.sql"))
+        let counts = query(include_str!("../sql/admit_counts.sql"))
             .bind(request.actor_id() as i64)
-            .fetch_one(&mut *tx)
+            .fetch_one(&*tx)
             .await
             .map_err(|_| StoreError::Database)?;
         let global: i64 = counts
@@ -252,14 +197,15 @@ impl Store {
         if global >= policy.max_pending_global as i64 || actor >= policy.max_pending_actor as i64 {
             return Err(StoreError::Capacity);
         }
-        let id = sqlx::query(include_str!("../sql/admit_insert.sql"))
+        let id = query(include_str!("../sql/admit_insert.sql"))
             .bind(request.actor_id() as i64)
             .bind(idempotency_key)
             .bind(&request_json)
             .bind(policy.max_attempts as i32)
             .bind(policy.retry_delay.as_secs() as i32)
             .bind(cache_key.as_ref().map(|key| key.as_str()))
-            .fetch_one(&mut *tx)
+            .bind(Uuid::new_v4())
+            .fetch_one(&*tx)
             .await
             .map_err(|_| StoreError::Database)?
             .try_get("id")
@@ -299,51 +245,103 @@ impl Store {
     ) -> Result<Option<Claim>, StoreError> {
         validate_worker(worker_id)?;
         validate_lease(lease)?;
-        sqlx::query(include_str!("../sql/expire_leases.sql"))
-            .execute(&self.pool)
+        let mut connection = self
+            .database
+            .connection()
             .await
             .map_err(|_| StoreError::Database)?;
-        let row = if let Some(bot_id) = bot_id {
-            sqlx::query(include_str!("../sql/claim_for_bot.sql"))
-                .bind(worker_id)
-                .bind(lease.as_secs() as i64)
-                .bind(bot_id.to_string())
-                .fetch_optional(&self.pool)
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let expired = query(include_str!("../sql/expire_leases_select.sql"))
+            .fetch_all(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        for row in expired {
+            let id: Uuid = row.try_get("id").map_err(|_| StoreError::Database)?;
+            let attempt: i32 = row.try_get("attempt").map_err(|_| StoreError::Database)?;
+            query(include_str!("../sql/expire_lease_units.sql"))
+                .bind(id)
+                .bind(attempt)
+                .execute(&*tx)
                 .await
-                .map_err(|_| StoreError::Database)?
-        } else {
-            sqlx::query(include_str!("../sql/claim.sql"))
-                .bind(worker_id)
-                .bind(lease.as_secs() as i64)
-                .fetch_optional(&self.pool)
+                .map_err(|_| StoreError::Database)?;
+            let updated = query(include_str!("../sql/expire_lease_operation.sql"))
+                .bind(id)
+                .bind(attempt)
+                .execute(&*tx)
                 .await
-                .map_err(|_| StoreError::Database)?
+                .map_err(|_| StoreError::Database)?;
+            if updated.rows_affected() != 1 {
+                return Err(StoreError::NotFoundOrStale);
+            }
+        }
+        let selected = match bot_id {
+            Some(bot_id) => {
+                query(include_str!("../sql/claim_for_bot_select.sql"))
+                    .bind(bot_id.to_string())
+                    .fetch_optional(&*tx)
+                    .await
+            }
+            None => {
+                query(include_str!("../sql/claim_select.sql"))
+                    .fetch_optional(&*tx)
+                    .await
+            }
+        }
+        .map_err(|_| StoreError::Database)?;
+        let Some(selected) = selected else {
+            tx.commit().await.map_err(|_| StoreError::Database)?;
+            return Ok(None);
         };
-        row.map(|row| {
-            let request: serde_json::Value =
-                row.try_get("request").map_err(|_| StoreError::Database)?;
-            Ok(Claim {
-                operation_id: row.try_get("id").map_err(|_| StoreError::Database)?,
-                attempt: row
-                    .try_get::<i32, _>("attempt")
-                    .map_err(|_| StoreError::Database)? as u32,
-                lease_token: row
-                    .try_get("lease_token")
-                    .map_err(|_| StoreError::Database)?,
-                worker_id: row.try_get("worker_id").map_err(|_| StoreError::Database)?,
-                request: codec::decode(request)?,
-                cancel_requested: row
-                    .try_get("cancel_requested")
-                    .map_err(|_| StoreError::Database)?,
-                cache_bypassed: row
-                    .try_get("cache_bypassed")
-                    .map_err(|_| StoreError::Database)?,
-                lease_expires_at: row
-                    .try_get::<DateTime<Utc>, _>("lease_expires_at")
-                    .map_err(|_| StoreError::Database)?,
-            })
-        })
-        .transpose()
+        let id: Uuid = selected.try_get("id").map_err(|_| StoreError::Database)?;
+        let token = Uuid::new_v4();
+        let row = match bot_id {
+            Some(bot_id) => {
+                query(include_str!("../sql/claim_for_bot_update.sql"))
+                    .bind(worker_id)
+                    .bind(lease.as_secs() as i64)
+                    .bind(bot_id.to_string())
+                    .bind(token)
+                    .bind(id)
+                    .fetch_one(&*tx)
+                    .await
+            }
+            None => {
+                query(include_str!("../sql/claim_update.sql"))
+                    .bind(worker_id)
+                    .bind(lease.as_secs() as i64)
+                    .bind(token)
+                    .bind(id)
+                    .fetch_one(&*tx)
+                    .await
+            }
+        }
+        .map_err(|_| StoreError::Database)?;
+        let request: serde_json::Value =
+            row.try_get("request").map_err(|_| StoreError::Database)?;
+        let claim = Claim {
+            operation_id: row.try_get("id").map_err(|_| StoreError::Database)?,
+            attempt: row
+                .try_get::<i32, _>("attempt")
+                .map_err(|_| StoreError::Database)? as u32,
+            lease_token: row
+                .try_get("lease_token")
+                .map_err(|_| StoreError::Database)?,
+            worker_id: row.try_get("worker_id").map_err(|_| StoreError::Database)?,
+            request: codec::decode(request)?,
+            cancel_requested: row
+                .try_get("cancel_requested")
+                .map_err(|_| StoreError::Database)?,
+            cache_bypassed: row
+                .try_get("cache_bypassed")
+                .map_err(|_| StoreError::Database)?,
+            lease_expires_at: row
+                .try_get("lease_expires_at")
+                .map_err(|_| StoreError::Database)?,
+        };
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(Some(claim))
     }
 
     pub async fn update_progress(
@@ -356,14 +354,14 @@ impl Store {
         if percent > 100 {
             return Err(StoreError::InvalidInput);
         }
-        let result = sqlx::query(include_str!("../sql/update_progress.sql"))
+        let result = query(include_str!("../sql/update_progress.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
             .bind(i16::from(percent))
             .bind(stage.as_str())
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if result.rows_affected() == 0 {
@@ -387,13 +385,13 @@ impl Store {
     ) -> Result<LeaseHeartbeat, StoreError> {
         validate_claim(claim)?;
         validate_lease(lease)?;
-        let row = sqlx::query(include_str!("../sql/heartbeat.sql"))
+        let row = query(include_str!("../sql/heartbeat.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
             .bind(lease.as_secs() as i64)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.database)
             .await
             .map_err(|_| StoreError::Database)?
             .ok_or(StoreError::NotFoundOrStale)?;
@@ -409,12 +407,12 @@ impl Store {
 
     pub async fn complete(&self, claim: &Claim) -> Result<(), StoreError> {
         validate_claim(claim)?;
-        let result = sqlx::query(include_str!("../sql/complete.sql"))
+        let result = query(include_str!("../sql/complete.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if result.rows_affected() == 0 {
@@ -425,13 +423,13 @@ impl Store {
 
     pub async fn fail(&self, claim: &Claim, retryable: bool) -> Result<(), StoreError> {
         validate_claim(claim)?;
-        let row = sqlx::query(include_str!("../sql/fail.sql"))
+        let row = query(include_str!("../sql/fail.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
             .bind(retryable)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if row.rows_affected() == 0 {
@@ -448,10 +446,10 @@ impl Store {
         if actor_id == 0 || actor_id > i64::MAX as u64 {
             return Err(StoreError::InvalidInput);
         }
-        let row = sqlx::query(include_str!("../sql/cancel.sql"))
+        let row = query(include_str!("../sql/cancel.sql"))
             .bind(actor_id as i64)
             .bind(operation_id)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         Ok(row.rows_affected() > 0)
@@ -459,12 +457,12 @@ impl Store {
 
     pub async fn acknowledge_cancel(&self, claim: &Claim) -> Result<(), StoreError> {
         validate_claim(claim)?;
-        let row = sqlx::query(include_str!("../sql/ack_cancel.sql"))
+        let row = query(include_str!("../sql/ack_cancel.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if row.rows_affected() == 0 {
@@ -481,10 +479,10 @@ impl Store {
         if actor_id == 0 || actor_id > i64::MAX as u64 {
             return Err(StoreError::InvalidInput);
         }
-        let row = sqlx::query(include_str!("../sql/get_operation.sql"))
+        let row = query(include_str!("../sql/get_operation.sql"))
             .bind(actor_id as i64)
             .bind(operation_id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         row.map(|row| {
@@ -567,12 +565,12 @@ impl Store {
 
     pub async fn begin_delivery(&self, claim: &Claim) -> Result<(), StoreError> {
         validate_claim(claim)?;
-        let result = sqlx::query(include_str!("../sql/begin_delivery.sql"))
+        let result = query(include_str!("../sql/begin_delivery.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if result.rows_affected() == 0 {
@@ -590,13 +588,13 @@ impl Store {
         if message_id <= 0 {
             return Err(StoreError::InvalidInput);
         }
-        let result = sqlx::query(include_str!("../sql/complete_delivery.sql"))
+        let result = query(include_str!("../sql/complete_delivery.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
             .bind(message_id)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if result.rows_affected() == 0 {
@@ -607,12 +605,12 @@ impl Store {
 
     pub async fn delivery_unknown(&self, claim: &Claim) -> Result<(), StoreError> {
         validate_claim(claim)?;
-        let result = sqlx::query(include_str!("../sql/delivery_unknown.sql"))
+        let result = query(include_str!("../sql/delivery_unknown.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if result.rows_affected() == 0 {
@@ -623,12 +621,8 @@ impl Store {
 
     pub async fn reject_delivery(&self, claim: &Claim) -> Result<(), StoreError> {
         validate_claim(claim)?;
-        let result = sqlx::query(include_str!("../sql/reject_delivery.sql"))
-            .bind(claim.operation_id)
-            .bind(claim.attempt as i32)
-            .bind(claim.lease_token)
-            .bind(&claim.worker_id)
-            .execute(&self.pool)
+        let result = fenced_query(include_str!("../sql/reject_delivery.sql"), claim)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         if result.rows_affected() == 0 {
@@ -646,13 +640,9 @@ impl Store {
         if !(1..=100).contains(&total) {
             return Err(StoreError::InvalidInput);
         }
-        let result = sqlx::query(include_str!("../sql/begin_delivery_batch.sql"))
-            .bind(claim.operation_id)
-            .bind(claim.attempt as i32)
-            .bind(claim.lease_token)
-            .bind(&claim.worker_id)
+        let result = fenced_query(include_str!("../sql/begin_delivery_batch.sql"), claim)
             .bind(total as i32)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         Ok(result.rows_affected() == 1)
@@ -668,14 +658,10 @@ impl Store {
         if ordinal > 99 || !(1..=10).contains(&count) {
             return Err(StoreError::InvalidInput);
         }
-        let result = sqlx::query(include_str!("../sql/begin_delivery_unit.sql"))
-            .bind(claim.operation_id)
-            .bind(claim.attempt as i32)
-            .bind(claim.lease_token)
-            .bind(&claim.worker_id)
+        let result = fenced_query(include_str!("../sql/begin_delivery_unit.sql"), claim)
             .bind(ordinal as i32)
             .bind(count as i32)
-            .execute(&self.pool)
+            .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
         Ok(result.rows_affected() == 1)
@@ -703,18 +689,17 @@ impl Store {
         }
         let ids: Vec<i32> = message_ids.iter().map(|id| *id as i32).collect();
         let last_id = *ids.last().ok_or(StoreError::InvalidInput)?;
-        let result = sqlx::query(include_str!("../sql/complete_delivery_unit.sql"))
-            .bind(claim.operation_id)
-            .bind(claim.attempt as i32)
-            .bind(claim.lease_token)
-            .bind(&claim.worker_id)
+        let unit = fenced_query(include_str!("../sql/complete_delivery_unit.sql"), claim)
             .bind(ordinal as i32)
-            .bind(&ids)
-            .bind(last_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|_| StoreError::Database)?;
-        Ok(result.rows_affected() == 1)
+            .bind(&ids);
+        let operation = fenced_query(
+            include_str!("../sql/complete_delivery_unit_operation.sql"),
+            claim,
+        )
+        .bind(ordinal as i32)
+        .bind(&ids)
+        .bind(last_id);
+        self.update_delivery_unit(unit, operation).await
     }
 
     pub async fn reject_delivery_unit(
@@ -728,17 +713,15 @@ impl Store {
             return Err(StoreError::InvalidInput);
         }
         let retry_after_secs = retry_after.map(retry_after_seconds).transpose()?;
-        let result = sqlx::query(include_str!("../sql/reject_delivery_unit.sql"))
-            .bind(claim.operation_id)
-            .bind(claim.attempt as i32)
-            .bind(claim.lease_token)
-            .bind(&claim.worker_id)
-            .bind(ordinal as i32)
-            .bind(retry_after_secs)
-            .execute(&self.pool)
-            .await
-            .map_err(|_| StoreError::Database)?;
-        Ok(result.rows_affected() == 1)
+        let unit = fenced_query(include_str!("../sql/reject_delivery_unit.sql"), claim)
+            .bind(ordinal as i32);
+        let operation = fenced_query(
+            include_str!("../sql/reject_delivery_unit_operation.sql"),
+            claim,
+        )
+        .bind(ordinal as i32)
+        .bind(retry_after_secs);
+        self.update_delivery_unit(unit, operation).await
     }
 
     pub async fn unknown_delivery_unit(
@@ -750,16 +733,49 @@ impl Store {
         if ordinal > 99 {
             return Err(StoreError::InvalidInput);
         }
-        let result = sqlx::query(include_str!("../sql/unknown_delivery_unit.sql"))
-            .bind(claim.operation_id)
-            .bind(claim.attempt as i32)
-            .bind(claim.lease_token)
-            .bind(&claim.worker_id)
-            .bind(ordinal as i32)
-            .execute(&self.pool)
+        let unit = fenced_query(include_str!("../sql/unknown_delivery_unit.sql"), claim)
+            .bind(ordinal as i32);
+        let operation = fenced_query(
+            include_str!("../sql/unknown_delivery_unit_operation.sql"),
+            claim,
+        )
+        .bind(ordinal as i32);
+        self.update_delivery_unit(unit, operation).await
+    }
+
+    async fn update_delivery_unit(
+        &self,
+        unit: yoink_db::Query,
+        operation: yoink_db::Query,
+    ) -> Result<bool, StoreError> {
+        let mut connection = self
+            .database
+            .connection()
             .await
             .map_err(|_| StoreError::Database)?;
-        Ok(result.rows_affected() == 1)
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        if unit
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?
+            .rows_affected()
+            != 1
+        {
+            return Ok(false);
+        }
+        if operation
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?
+            .rows_affected()
+            != 1
+        {
+            return Ok(false);
+        }
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(true)
     }
 
     pub async fn stop_delivery_batch(
@@ -768,21 +784,43 @@ impl Store {
         reason: StopDeliveryReason,
     ) -> Result<bool, StoreError> {
         validate_claim(claim)?;
-        let result = sqlx::query(include_str!("../sql/stop_delivery_batch.sql"))
-            .bind(claim.operation_id)
-            .bind(claim.attempt as i32)
-            .bind(claim.lease_token)
-            .bind(&claim.worker_id)
-            .bind(match reason {
-                StopDeliveryReason::Cancel => "cancel",
-                StopDeliveryReason::Denied => "denied",
-                StopDeliveryReason::Shutdown => "shutdown",
-            })
-            .execute(&self.pool)
+        let reason = match reason {
+            StopDeliveryReason::Cancel => "cancel",
+            StopDeliveryReason::Denied => "denied",
+            StopDeliveryReason::Shutdown => "shutdown",
+        };
+        let mut connection = self
+            .database
+            .connection()
             .await
             .map_err(|_| StoreError::Database)?;
-        Ok(result.rows_affected() == 1)
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        fenced_query(include_str!("../sql/stop_delivery_batch_mark.sql"), claim)
+            .bind(reason)
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let updated = fenced_query(include_str!("../sql/stop_delivery_batch.sql"), claim)
+            .bind(reason)
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        if updated.rows_affected() != 1 {
+            return Ok(false);
+        }
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(true)
     }
+}
+
+fn fenced_query(sql: &str, claim: &Claim) -> yoink_db::Query {
+    query(sql)
+        .bind(claim.operation_id)
+        .bind(claim.attempt as i32)
+        .bind(claim.lease_token)
+        .bind(&claim.worker_id)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

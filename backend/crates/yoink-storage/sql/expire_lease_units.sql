@@ -1,0 +1,1 @@
+UPDATE runtime_delivery_units SET status='unknown',updated_at=CAST(unixepoch('subsec') * 1000000 AS INTEGER) WHERE operation_id=?1 AND attempt=?2 AND status='sending';

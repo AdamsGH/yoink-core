@@ -1,1 +1,1 @@
-DELETE FROM public.cookies WHERE id = $1;
+DELETE FROM cookies WHERE id = ?1;

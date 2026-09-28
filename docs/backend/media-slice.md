@@ -1,41 +1,36 @@
 # Experimental media slice
 
-This page covers an isolated evaluation of the first implemented media path. It is not a production deployment guide or a production cutover plan. For exact setting defaults, ranges, and cross-field checks, see [configuration](configuration.md).
+This page describes the implemented Rust media architecture and its isolated verification route. It is not a production deployment guide or cutover plan. For detailed setting limits, see [configuration](configuration.md).
 
-## What is implemented
+## Runtime and guarantees
 
-With downloads explicitly enabled in the experimental container, the configured Telegram bot accepts `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The Telegram adapter's outer gate remains only the configured owner in a private chat. The service also checks the legacy identity store and requires an unblocked private-scope user-role identity at admission, before claim execution, and before delivery. This does not open Telegram commands to all users.
+With downloads enabled, the configured Telegram bot accepts `/download <http(s) URL>`, `/job <UUID>`, and `/cancel <UUID>`. The outer command gate admits only the configured owner in a private chat. The media use case also requires a currently authorized private-scope identity at admission, execution, and delivery.
 
-The Rust server admits work to a durable PostgreSQL queue, applies attempt, delay, global and per-user pending limits, claims leased work, and starts the fixed isolated Python worker. Protocol v2 returns a bounded batch of validated artifacts with typed progress and failures. The worker implements yt-dlp video/audio processing, playlists and clips, plus gallery-dl image batches and ZIP output. Delivery uses Telegram video/photo/audio methods where supported and documents otherwise, with compatible batches grouped into albums of at most ten items. Job lookup and cancellation are actor-scoped. These engine capabilities do not yet expose the complete legacy command and settings surface.
+Operations, leases, quotas, cache and delivery journals persist in the native Turso 0.7.2 database. One process owns the file through an advisory sidecar lock, and all calls use one serialized connection. No PostgreSQL, SQLx, or PostgreSQL privilege model participates in this runtime. The trusted server process owns access to all database contents, so filesystem ownership and private directory permissions protect credentials at rest. Access snapshots must not return credential values.
 
-## Isolated operator run
+The service freezes credential references and versions, never credential contents. It rechecks grants and references before work and each delivery unit. Queue claims use expiring leases and fencing tokens; stale workers cannot transition durable state. Retries are bounded. Cancellation stops and reaps a running worker. Delivery state is journaled before sending, confirmed units survive recovery, and uncertain outcomes are terminal rather than automatically resent. Exactly-once external delivery is not promised.
 
-Build only the experimental image and supply synthetic fixture credentials and an isolated database. Never reuse the Python service's live bot credential. Competing long-polling consumers can compete for updates, and admission idempotency includes bot ID, chat ID, and Telegram message ID.
+The fixed Python worker performs media processing in a constrained container. The documented engine capabilities include video/audio processing, playlists, clips, and galleries, but not full legacy command or settings parity. The native media acceptance fixture covers real worker execution, persistent delivery state and recovery, access changes, retry/cancellation/quota behavior, file-ID cache recovery/expiry and credential redaction.
 
-This concrete container invocation uses example-only values, host networking for an isolated local PostgreSQL and fixture Bot API, and the recommended container boundary. Set `YOINK_RUST_TELEGRAM_TOKEN` in the shell to a disposable fixture credential before running; no live credential is shown here:
+## Isolated container layout
+
+The default production runtime image does not contain the fixture controller. `backend/Dockerfile` has a separate opt-in `media-fixture` target that includes a test-only token-protected controller. The fixture controller only binds to loopback, is bounded, and shares the runtime's native DB path so tests can inspect and seed the same database. Never expose this image/controller as an operator API.
+
+The runtime image runs as UID/GID 10001. Mount a private, writable persistent state volume owned by UID 10001 at `/var/lib/yoink`; use an isolated fixture path such as `/var/lib/yoink/media-fixture.db`. The parent must already exist and be mode `0700`. A separate work directory is still required and must be writable by UID 10001. Use synthetic fixture bot credentials and the fixture's loopback-only controller settings. Do not use a host PostgreSQL URL, real credentials, or production data.
+
+Run the supported sequence from `backend`:
 
 ```sh
-cd backend
-just build-media
-docker run --rm --network host --read-only \
-  --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 512m \
-  --tmpfs /tmp/yoink-work:rw,noexec,nosuid,size=256m,uid=10001,gid=10001,mode=0700 \
-  -e YOINK_RUST_DOWNLOADS_ENABLED=true \
-  -e YOINK_RUST_TELEGRAM_ENABLED=true \
-  -e YOINK_RUST_TELEGRAM_TOKEN \
-  -e YOINK_RUST_OWNER_ID=42 \
-  -e YOINK_RUST_BOT_API_URL=http://127.0.0.1:8081 \
-  -e YOINK_RUST_DATABASE_URL='postgresql://fixture-user:fixture-password@127.0.0.1:5432/isolated' \
-  yoink/rust-backend:experimental
+just verify-media
 ```
 
-The example's 256 MiB tmpfs covers the default 100 MiB workspace budget times the default concurrency of two, plus margin. Recalculate it if either setting changes. The database must be explicitly migrated before startup; the fixture Bot API, database, source endpoint, and network access must be arranged separately. Do not run against production credentials or data. The actual end-to-end fixture is `cd backend && just verify-media`; its recipe and current verification status are described in [development](development.md).
+This builds both the normal runtime image and the separate fixture image, then runs worker/security checks, validates the default hardened worker launcher, and invokes the full media fixture using its own named native volume. Do not share that volume with an operator database. Worker unit/security tests alone do not prove the native database queries or complete media workflow work.
 
-## Container boundary and hardening
+## Worker boundary
 
-The worker applies destination-address checks for requests and redirects, blocking private, loopback, link-local, multicast, reserved, and IPv4-mapped private targets by default. yt-dlp plugins, ambient configuration and external downloaders are disabled. Protocol credentials arrive only on stdin, never in process arguments or diagnostic fields. Proxy endpoints require a separate explicit origin allowlist. Destination checks remain active when using a proxy, including CONNECT handling. The service resolves authorized, versioned cookie/proxy references against current legacy settings before execution and each delivery unit. A changed proxy enablement policy invalidates frozen direct routes instead of allowing direct fallback or selecting a replacement proxy. ffprobe and ffmpeg use protocol/demuxer allowlists and bounded processing deadlines. Per-artifact, aggregate workspace, item count, output, socket and process budgets are enforced by the Rust executor and worker.
+The worker applies destination-address checks to requests and redirects, blocking private and otherwise prohibited destinations by default. Plugins, ambient configuration, and external downloaders are disabled. Credentials travel only through the bounded stdin protocol, not process arguments or diagnostic fields. Proxy endpoints require a separate explicit origin allowlist, and destination checks remain active through proxies. ffprobe and ffmpeg use protocol/demuxer allowlists and bounded deadlines. Artifact, aggregate workspace, item, output, socket, and process limits are enforced.
 
-The launcher adds Landlock filesystem and process-access restrictions, with an owner-only workspace and no inherited application secrets. Startup fails when required confinement is unavailable. Process-group termination and reaping handle lifecycle management but do not replace confinement. Keep the container read-only, its workspace non-executable, and sensitive mounts absent:
+The launcher adds Landlock filesystem and process restrictions, uses an owner-only workspace, and does not inherit application secrets. Startup fails when required confinement is unavailable. Keep the container read-only, its workspace non-executable, and sensitive mounts absent:
 
 ```text
 --read-only
@@ -43,23 +38,16 @@ The launcher adds Landlock filesystem and process-access restrictions, with an o
 --security-opt no-new-privileges
 --pids-limit 128
 --memory 512m
---tmpfs /tmp/yoink-work:rw,noexec,nosuid,size=<budget>,uid=10001,gid=10001,mode=0700
+--tmpfs /tmp/yoink-work:rw,noexec,nosuid,size=<worker-budget>,uid=10001,gid=10001,mode=0700
+--tmpfs /tmp/yoink-db:rw,noexec,nosuid,nodev,size=<database-scratch-budget>,uid=10001,gid=10001,mode=0700
+--env TMPDIR=/tmp/yoink-db
+--env TURSO_TMPDIR=/tmp/yoink-db
 ```
 
-Set tmpfs size to cover at least `DOWNLOAD_WORKSPACE_MAX_BYTES * DOWNLOAD_CONCURRENCY` plus margin for process and filesystem overhead. The image runs as UID/GID 10001 and the workspace needs to be writable by that identity. The private-origin allowlist is only for a trusted operator's isolated local fixture, not production destinations. Network egress controls and other container boundaries remain the operator's responsibility.
+Keep the database scratch tmpfs separate from the Landlock-accessible worker workspace. Turso creates temporary files during query execution, even when the persistent database volume is writable. The fixture uses a 64 MiB scratch budget; larger datasets need a separately chosen and tested bound. Removing the container removes this scratch state without affecting the persistent database.
 
-## Delivery ambiguity, retries, and cancellation
+Size temporary workspace storage for at least `DOWNLOAD_WORKSPACE_MAX_BYTES * DOWNLOAD_CONCURRENCY` plus process overhead. The private-origin exception is only for a trusted isolated fixture, not production destinations. Network egress controls remain the operator's responsibility.
 
-Before upload, the queue records the batch delivery plan and journals each delivery unit before its request. Valid Telegram message IDs confirm a unit. All units confirmed records `succeeded`. A known rejection before any confirmation records `failed`, while confirmed earlier units followed by a known failure record `partial`. Unrecognized API errors (including server-side errors), a dropped/ambiguous response, timeout, crash, heartbeat loss, or stale in-flight delivery lease produce terminal `delivery_unknown`, with no automatic resend. Recorded receipts preserve already confirmed units across recovery. Exactly-once Telegram delivery is not claimed.
+## Current limitations and pending gates
 
-If `/job <UUID>` reports `delivery_unknown`, check the chat before submitting another request. A new request can duplicate a delivery that Telegram accepted while its response was lost. Cancellation before upload stops and reaps the worker. Once upload starts, delivery outcome takes precedence over cancellation to avoid an uncertain cancel-and-retry send. Queue retries apply to retryable worker failures and definitively unsent Telegram rate limits while attempts remain. A rate-limited first unit waits at least both the configured delay and Telegram's `retry_after`. A batch with a confirmed prefix is not restarted. Permission revocation stops unsent work promptly without marking it as user cancellation. Shutdown can requeue a batch only before any send and within the attempt budget.
-
-## Telegram file-ID cache
-
-A complete acknowledged upload can be reused by a new request from the same actor and bot with identical output parameters and credential versions. The cache stores opaque file IDs and media kind/size metadata, not source bytes or credentials. Hits bypass the worker, not current authorization or delivery fencing. IDs that look like URLs or local attachments are rejected. The TTL defaults to 30 days and does not slide on a hit. Set `YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=0` to disable reads and publication. Successful publication also prunes up to 32 expired entries using an expiry index and skips locked rows. Disabling cache does not delete existing entries.
-
-A definitive invalid cached ID on the first unit evicts only the observed cache revision and requeues once with cache bypass, including when the configured attempt budget is one. After a confirmed prefix, the operation remains partial and no prefix is replayed. Unknown API errors, timeouts and transport failures remain `delivery_unknown`, even when only cached IDs were sent.
-
-## Not implemented
-
-Full downloader parity is still in progress. Supported settings and authorized cookie/proxy snapshots are wired into the service, but legacy interactive commands/callbacks, remaining settings and subtitle compatibility, group/topic access, tdlight and HTTP product routes are unfinished. Other product plugins are not implemented. This is not a production cutover and makes no performance claim.
+Legacy command/settings parity, group/topic access, unsupported provider authentication, and other product modules remain unfinished. Stats full-text search compatibility, PostgreSQL data import, backup/restore, and production cutover are pending separate tasks. No data import or production cutover is claimed. A live database file plus its WAL must not be copied as a backup.

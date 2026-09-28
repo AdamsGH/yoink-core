@@ -9,7 +9,9 @@ async fn main() -> ExitCode {
     // Restrict logs to our own sanitized events. HTTP client diagnostics can
     // otherwise contain Telegram credentials embedded in request URLs.
     if tracing_subscriber::fmt()
-        .with_env_filter("off,yoink_server=info,yoink_telegram=info,yoink_downloads=info")
+        .with_env_filter(
+            "off,yoink_server=info,yoink_telegram=info,yoink_downloads=info,yoink_db=warn",
+        )
         .with_target(false)
         .try_init()
         .is_err()
@@ -33,7 +35,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         [arg] if matches!(arg.as_str(), "serve" | "migrate" | "check-schema") => arg.as_str(),
         [arg] if matches!(arg.as_str(), "--help" | "-h") => {
             println!(
-                "Usage: yoink-server [serve|migrate|check-schema]\nDatabase commands require YOINK_RUST_DATABASE_URL. Normal startup never migrates."
+                "Usage: yoink-server [serve|migrate|check-schema]\nDatabase commands require YOINK_RUST_DATABASE_PATH. migrate may create the database. Normal startup never creates or migrates."
             );
             return Ok(());
         }
@@ -44,10 +46,11 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         let database = config
             .database
             .as_ref()
-            .ok_or("YOINK_RUST_DATABASE_URL is required for database commands")?;
-        let store = tokio::time::timeout(config.startup_timeout, database.connect())
-            .await
-            .map_err(|_| "database connection deadline exceeded")??;
+            .ok_or("YOINK_RUST_DATABASE_PATH is required for database commands")?;
+        let store =
+            tokio::time::timeout(config.startup_timeout, database.open(command == "migrate"))
+                .await
+                .map_err(|_| "database open deadline exceeded")??;
         let result = tokio::time::timeout(config.startup_timeout, async {
             if command == "migrate" {
                 store.migrate().await
@@ -58,7 +61,7 @@ async fn execute() -> Result<(), Box<dyn std::error::Error>> {
         .await;
         tokio::time::timeout(config.shutdown_timeout, store.close())
             .await
-            .map_err(|_| "database shutdown deadline exceeded")?;
+            .map_err(|_| "database shutdown deadline exceeded")??;
         result.map_err(|_| "database command deadline exceeded")??;
         println!("database schema ready");
         return Ok(());

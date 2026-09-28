@@ -1,1 +1,1 @@
-UPDATE public.cookies SET content = '# Netscape HTTP Cookie File' WHERE id = $1;
+UPDATE cookies SET content = '# Netscape HTTP Cookie File' WHERE id = ?1;

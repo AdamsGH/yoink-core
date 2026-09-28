@@ -4,10 +4,11 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::{Row, postgres::PgPool};
 use thiserror::Error;
+use turso::transaction::{Transaction, TransactionBehavior};
 use url::Url;
 use yoink_access::{FeatureSpec, Role, effective_grant};
+use yoink_db::{Database, query};
 use yoink_domain::{
     CookieReference, CredentialVersion, NetworkSelection, ProxyReference, ProxySource,
 };
@@ -27,7 +28,7 @@ pub struct NetworkContext<'a> {
 
 #[derive(Clone)]
 pub struct ProfileStore {
-    pool: PgPool,
+    database: Database,
 }
 
 #[derive(Clone, PartialEq)]
@@ -105,12 +106,16 @@ pub enum ProfileError {
     #[error("cookie candidate set exceeds the supported capacity")]
     CandidateCapacityExceeded,
 }
-impl From<sqlx::Error> for ProfileError {
-    fn from(_: sqlx::Error) -> Self {
+impl From<yoink_db::Error> for ProfileError {
+    fn from(_: yoink_db::Error) -> Self {
         Self::Database
     }
 }
-
+impl From<turso::Error> for ProfileError {
+    fn from(_: turso::Error) -> Self {
+        Self::Database
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Candidate {
     id: i32,
@@ -120,18 +125,18 @@ struct Candidate {
 }
 
 impl ProfileStore {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(database: Database) -> Self {
+        Self { database }
     }
 
-    /// Checks all required legacy read-table/column privileges without reading rows.
+    /// Checks required native tables and columns with zero-row reads.
     pub async fn check_schema(&self) -> Result<(), ProfileError> {
-        for query in [
+        for sql in [
             include_str!("schema_users.sql"),
             include_str!("schema_preferences.sql"),
             include_str!("schema_cookies.sql"),
         ] {
-            sqlx::query(query).execute(&self.pool).await?;
+            query(sql).execute(&self.database).await?;
         }
         Ok(())
     }
@@ -141,9 +146,9 @@ impl ProfileStore {
         actor_id: u64,
     ) -> Result<Option<DownloadPreferences>, ProfileError> {
         let id = valid_actor(actor_id)?;
-        let row = sqlx::query(include_str!("preferences.sql"))
+        let row = query(include_str!("preferences.sql"))
             .bind(id)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&self.database)
             .await?;
         let Some(row) = row else { return Ok(None) };
         if row
@@ -233,9 +238,11 @@ impl ProfileStore {
         let actor = valid_actor(actor_id)?;
         validate_identity(identity, actor)?;
         let target = normalize_domain(requested_domain)?;
-        let settings = sqlx::query(include_str!("network_settings.sql"))
+        let mut connection = self.database.connection().await?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Deferred).await?;
+        let settings = query(include_str!("network_settings.sql"))
             .bind(actor)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&*tx)
             .await?;
         let (proxy_enabled, personal_proxy, use_pool, youtube_auth_mode) = match settings {
             Some(r) => (
@@ -271,14 +278,14 @@ impl ProfileStore {
         } else {
             let shared_allowed = pool_allowed(identity, use_pool);
             let candidates = self
-                .cookie_candidates(actor, &target, shared_allowed)
+                .cookie_candidates(&tx, actor, &target, shared_allowed)
                 .await?;
             let selected = select_candidate(&candidates, selection_seed);
             if let Some(c) = selected {
-                let row = sqlx::query(include_str!("cookie_by_id.sql"))
+                let row = query(include_str!("cookie_by_id.sql"))
                     .bind(c.id)
                     .bind(MAX_COOKIE_JAR_BYTES as i64)
-                    .fetch_optional(&self.pool)
+                    .fetch_optional(&*tx)
                     .await?;
                 match row {
                     Some(row) => {
@@ -337,6 +344,7 @@ impl ProfileStore {
                 None
             }
         };
+        tx.commit().await?;
         Ok(NetworkSelection::new(cookie_ref, proxy_ref))
     }
 
@@ -356,6 +364,8 @@ impl ProfileStore {
         let actor = valid_actor(actor_id)?;
         validate_identity(identity, actor)?;
         let target = normalize_domain(requested_domain)?;
+        let mut connection = self.database.connection().await?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Deferred).await?;
         let bypass = matches_no_cookie_domain(&target, no_cookie_domains)?;
         selection
             .validate_actor(actor_id)
@@ -363,9 +373,9 @@ impl ProfileStore {
         if identity.principal.is_blocked(identity.now) {
             return Err(ProfileError::SharedAccessDenied);
         }
-        let settings = sqlx::query(include_str!("network_settings.sql"))
+        let settings = query(include_str!("network_settings.sql"))
             .bind(actor)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&*tx)
             .await?;
         let proxy_enabled = settings
             .as_ref()
@@ -401,10 +411,10 @@ impl ProfileStore {
             if reference.is_pool() && !pool_allowed(identity, use_pool) {
                 return Err(ProfileError::SharedAccessDenied);
             }
-            let row = sqlx::query(include_str!("cookie_by_id.sql"))
+            let row = query(include_str!("cookie_by_id.sql"))
                 .bind(reference.id())
                 .bind(MAX_COOKIE_JAR_BYTES as i64)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&*tx)
                 .await?
                 .ok_or(ProfileError::StaleReference)?;
             let id: i32 = row.try_get("id").map_err(|_| ProfileError::Database)?;
@@ -442,9 +452,9 @@ impl ProfileStore {
         let proxy_url = if let Some(reference) = selection.proxy() {
             let (candidate, expected_source) = match reference.source() {
                 ProxySource::Personal { actor_id: owner } if owner == actor_id => {
-                    let r = sqlx::query(include_str!("network_settings.sql"))
+                    let r = query(include_str!("network_settings.sql"))
                         .bind(actor)
-                        .fetch_optional(&self.pool)
+                        .fetch_optional(&*tx)
                         .await?
                         .ok_or(ProfileError::StaleReference)?;
                     if !r
@@ -462,9 +472,9 @@ impl ProfileStore {
                     )
                 }
                 ProxySource::System => {
-                    let r = sqlx::query(include_str!("network_settings.sql"))
+                    let r = query(include_str!("network_settings.sql"))
                         .bind(actor)
-                        .fetch_optional(&self.pool)
+                        .fetch_optional(&*tx)
                         .await?
                         .ok_or(ProfileError::StaleReference)?;
                     if !r
@@ -494,6 +504,7 @@ impl ProfileStore {
         } else {
             None
         };
+        tx.commit().await?;
         Ok(NetworkCredentials {
             proxy_url,
             cookie_jar,
@@ -502,20 +513,16 @@ impl ProfileStore {
 
     async fn cookie_candidates(
         &self,
+        connection: &turso::Connection,
         actor: i64,
         domain: &str,
         shared_allowed: bool,
     ) -> Result<Vec<Candidate>, ProfileError> {
-        let rows = sqlx::query(include_str!("cookie_candidates.sql"))
+        let rows = query(include_str!("cookie_candidates.sql"))
             .bind(actor)
-            .bind(domain)
             .bind(shared_allowed)
-            .bind(MAX_CANDIDATES + 1)
-            .fetch_all(&self.pool)
+            .fetch_all(connection)
             .await?;
-        if rows.len() > MAX_CANDIDATES as usize {
-            return Err(ProfileError::CandidateCapacityExceeded);
-        }
         let mut out = Vec::new();
         for row in rows {
             let raw: String = row.try_get("domain").map_err(|_| ProfileError::Database)?;
@@ -529,6 +536,9 @@ impl ProfileStore {
                 domain: normalized,
                 is_pool: row.try_get("is_pool").map_err(|_| ProfileError::Database)?,
             });
+            if out.len() > MAX_CANDIDATES as usize {
+                return Err(ProfileError::CandidateCapacityExceeded);
+            }
         }
         Ok(out)
     }

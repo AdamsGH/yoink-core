@@ -1,1 +1,1 @@
-UPDATE public.cookies SET is_valid = false WHERE id = $1;
+UPDATE cookies SET is_valid = 0 WHERE id = ?1;

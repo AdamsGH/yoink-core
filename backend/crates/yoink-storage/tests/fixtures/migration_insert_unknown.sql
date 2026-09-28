@@ -1,1 +1,2 @@
-INSERT INTO yoink_runtime._sqlx_migrations (version, description, installed_on, success, checksum, execution_time) VALUES ($1, 'unknown', clock_timestamp(), TRUE, $2, 0);
+INSERT INTO runtime_migrations (version, checksum, schema_hash, success, installed_at)
+SELECT ?1, ?2, schema_hash, 1, installed_at FROM runtime_migrations ORDER BY version DESC LIMIT 1;

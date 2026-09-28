@@ -1,6 +1,7 @@
-//! Read-only profile contracts against the disposable Alembic-migrated PostgreSQL fixture.
-use sqlx::{Row, postgres::PgPoolOptions};
+//! Read-only profile contracts against a disposable migrated native database.
+use std::time::Duration;
 use yoink_access::Role;
+use yoink_db::{Database, query, raw_sql};
 use yoink_downloads::profile::{NetworkContext, ProfileError, ProfileStore};
 use yoink_identity::IdentityStore;
 
@@ -12,7 +13,7 @@ const SECRET: &str = "# Netscape HTTP Cookie File\n#HttpOnly_.youtube.com\tTRUE\
 const TWITTER_COOKIE: &str =
     "# Netscape HTTP Cookie File\n.twitter.com\tTRUE\t/\tFALSE\t\tsid\tfake-twitter-value\n";
 
-async fn identity(pool: &sqlx::PgPool, actor: i64) -> yoink_identity::IdentitySnapshot {
+async fn identity(pool: &Database, actor: i64) -> yoink_identity::IdentitySnapshot {
     IdentityStore::new(pool.clone(), None, false)
         .snapshot(actor, None)
         .await
@@ -35,14 +36,14 @@ fn context<'a>(
     }
 }
 async fn insert_cookie(
-    pool: &sqlx::PgPool,
+    pool: &Database,
     owner: i64,
     domain: &str,
     content: &str,
     valid: bool,
     is_pool: bool,
 ) -> i32 {
-    sqlx::query(include_str!("sql/cookie_insert.sql"))
+    query(include_str!("sql/cookie_insert.sql"))
         .bind(owner)
         .bind(domain)
         .bind(content)
@@ -51,41 +52,46 @@ async fn insert_cookie(
         .fetch_one(pool)
         .await
         .unwrap()
-        .get("id")
+        .try_get("id")
+        .unwrap()
 }
-async fn set_setting(pool: &sqlx::PgPool, actor: i64, column: &str, value: &str) {
+async fn set_setting(pool: &Database, actor: i64, column: &str, value: &str) {
     // Keep SQL static and parameterized; only enumerate fixture-controlled known columns.
-    let query = match column {
+    let statement = match column {
         "proxy_enabled" => include_str!("sql/set_proxy_enabled.sql"),
         "proxy_url" => include_str!("sql/set_proxy_url.sql"),
         "use_pool_cookies" => include_str!("sql/set_pool_enabled.sql"),
         "youtube_auth_mode" => include_str!("sql/set_auth_mode.sql"),
         _ => unreachable!(),
     };
-    sqlx::query(query)
-        .bind(value)
-        .bind(actor)
-        .execute(pool)
-        .await
-        .unwrap();
+    let setting = query(statement);
+    let setting = if matches!(column, "proxy_enabled" | "use_pool_cookies") {
+        setting.bind(match value {
+            "true" => true,
+            "false" => false,
+            _ => panic!("fixture boolean setting must be true or false"),
+        })
+    } else {
+        setting.bind(value)
+    };
+    setting.bind(actor).execute(pool).await.unwrap();
 }
 
 #[tokio::test]
-#[ignore = "requires disposable PostgreSQL migrated through Alembic"]
-async fn postgres_profile_contracts_serial() {
-    let url = std::env::var("YOINK_TEST_DATABASE_URL").expect(
-        "YOINK_TEST_DATABASE_URL must point to the migrated disposable PostgreSQL database",
-    );
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&url)
-        .await
-        .expect("connect to YOINK_TEST_DATABASE_URL");
-    sqlx::raw_sql(include_str!("sql/cleanup.sql"))
-        .execute(&pool)
+async fn native_profile_contracts_serial() {
+    let directory = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = directory.path().join("profile.db");
+    let storage = yoink_storage::Store::open(&path, true, Duration::from_secs(2))
         .await
         .unwrap();
-    sqlx::raw_sql(include_str!("fixtures.sql"))
+    storage.migrate().await.unwrap();
+    let pool = storage.database().clone();
+    raw_sql(include_str!("fixtures.sql"))
         .execute(&pool)
         .await
         .unwrap();
@@ -128,24 +134,23 @@ async fn postgres_profile_contracts_serial() {
     assert_eq!(resolved.cookie_jar.as_deref(), Some(SECRET));
     assert!(format!("{prepared:?}").find("fake-cookie-value").is_none());
 
-    // Prove these boundaries work when every transaction is enforced read-only.
-    let read_only_pool = PgPoolOptions::new()
-        .max_connections(1)
-        .after_connect(|connection, _| {
-            Box::pin(async move {
-                sqlx::query(include_str!("sql/read_only_session.sql"))
-                    .execute(connection)
-                    .await?;
-                Ok(())
-            })
-        })
-        .connect(&url)
+    // Enforce read-only operations on the shared connection for this isolated section.
+    raw_sql(include_str!("sql/read_only_session.sql"))
+        .execute(&pool)
         .await
         .unwrap();
-    let read_only = ProfileStore::new(read_only_pool.clone());
+    assert!(
+        query(include_str!("sql/set_proxy_enabled.sql"))
+            .bind(true)
+            .bind(USER)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    let read_only = ProfileStore::new(pool.clone());
     read_only.check_schema().await.unwrap();
     assert!(read_only.preferences(USER as u64).await.unwrap().is_some());
-    let read_identity = identity(&read_only_pool, USER).await;
+    let read_identity = identity(&pool, USER).await;
     let read_selection = read_only
         .prepare_network(
             context(USER as u64, "youtube.com", &read_identity, &none, None),
@@ -166,20 +171,11 @@ async fn postgres_profile_contracts_serial() {
             .as_deref(),
         Some(SECRET)
     );
-    let write_error = sqlx::query(include_str!("sql/set_auth_mode.sql"))
-        .bind("oauth2")
-        .bind(USER)
-        .execute(&read_only_pool)
+
+    raw_sql("PRAGMA query_only = 0;")
+        .execute(&pool)
         .await
-        .expect_err("read-only fixture must reject writes");
-    assert_eq!(
-        write_error
-            .as_database_error()
-            .and_then(|error| error.code())
-            .as_deref(),
-        Some("25006")
-    );
-    read_only_pool.close().await;
+        .unwrap();
 
     // The database query itself handles aliases and suffix matching, while excluding lookalike hosts.
     let twitter_selection = store
@@ -256,7 +252,7 @@ async fn postgres_profile_contracts_serial() {
         matches!(store.prepare_network(context(USER as u64, "youtube.com", &base, &none, None), 1).await.unwrap().cookie(),
         Some(c) if !c.is_pool())
     );
-    sqlx::query(include_str!("sql/grant_shared.sql"))
+    query(include_str!("sql/grant_shared.sql"))
         .bind(USER)
         .execute(&pool)
         .await
@@ -282,7 +278,7 @@ async fn postgres_profile_contracts_serial() {
             .as_deref(),
         Some(SECRET)
     );
-    sqlx::query(include_str!("sql/revoke_shared.sql"))
+    query(include_str!("sql/revoke_shared.sql"))
         .bind(USER)
         .execute(&pool)
         .await
@@ -323,7 +319,7 @@ async fn postgres_profile_contracts_serial() {
         )
         .await
         .unwrap();
-    sqlx::query(include_str!("sql/set_banned.sql"))
+    query(include_str!("sql/set_banned.sql"))
         .bind(BAN_USER)
         .execute(&pool)
         .await
@@ -566,7 +562,7 @@ async fn postgres_profile_contracts_serial() {
     set_setting(&pool, USER, "proxy_enabled", "false").await;
 
     // Current cookie content invalidation and deletion are stale, never replacement credentials.
-    sqlx::query(include_str!("sql/cookie_update.sql"))
+    query(include_str!("sql/cookie_update.sql"))
         .bind(personal)
         .execute(&pool)
         .await
@@ -580,7 +576,8 @@ async fn postgres_profile_contracts_serial() {
             .await,
         Err(ProfileError::StaleReference)
     ));
-    sqlx::query(include_str!("sql/cookie_restore.sql"))
+    query(include_str!("sql/cookie_restore.sql"))
+        .bind("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tFALSE\t\tsid\trestored-fake-value\n")
         .bind(personal)
         .execute(&pool)
         .await
@@ -589,7 +586,7 @@ async fn postgres_profile_contracts_serial() {
         .prepare_network(context(USER as u64, "youtube.com", &base, &none, None), 0)
         .await
         .unwrap();
-    sqlx::query(include_str!("sql/cookie_invalidate.sql"))
+    query(include_str!("sql/cookie_invalidate.sql"))
         .bind(personal)
         .execute(&pool)
         .await
@@ -603,7 +600,7 @@ async fn postgres_profile_contracts_serial() {
             .await,
         Err(ProfileError::StaleReference)
     ));
-    sqlx::query(include_str!("sql/cookie_delete.sql"))
+    query(include_str!("sql/cookie_delete.sql"))
         .bind(personal)
         .execute(&pool)
         .await
@@ -619,13 +616,13 @@ async fn postgres_profile_contracts_serial() {
     ));
 
     // Capacity is explicit, and oversized JSON is reported without returning the large value.
-    sqlx::query(include_str!("sql/grant_shared.sql"))
+    query(include_str!("sql/grant_shared.sql"))
         .bind(USER)
         .execute(&pool)
         .await
         .unwrap();
     let capacity_identity = identity(&pool, USER).await;
-    sqlx::query(include_str!("sql/cookie_overflow.sql"))
+    query(include_str!("sql/cookie_overflow.sql"))
         .bind(POOL_OWNER)
         .execute(&pool)
         .await
@@ -645,7 +642,7 @@ async fn postgres_profile_contracts_serial() {
             .await,
         Err(ProfileError::CandidateCapacityExceeded)
     ));
-    sqlx::query(include_str!("sql/args_oversize.sql"))
+    query(include_str!("sql/args_oversize.sql"))
         .bind(USER)
         .execute(&pool)
         .await
@@ -657,9 +654,9 @@ async fn postgres_profile_contracts_serial() {
 
     // check_schema uses metadata-free zero-row reads. All fixtures are removed by bounded IDs.
     store.check_schema().await.unwrap();
-    sqlx::raw_sql(include_str!("sql/cleanup.sql"))
+    raw_sql(include_str!("sql/cleanup.sql"))
         .execute(&pool)
         .await
         .unwrap();
-    pool.close().await;
+    storage.close().await.unwrap();
 }

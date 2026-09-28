@@ -1,0 +1,1 @@
+SELECT actor_id,bot_id,cache_key FROM runtime_media_cache WHERE expires_at<=CAST(unixepoch('subsec') * 1000000 AS INTEGER) AND NOT(actor_id=?3 AND bot_id=?4 AND cache_key=?5) ORDER BY expires_at LIMIT 32;

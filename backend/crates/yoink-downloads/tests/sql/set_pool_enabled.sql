@@ -1,1 +1,1 @@
-UPDATE public.dl_user_settings SET use_pool_cookies = $1::boolean WHERE user_id = $2;
+UPDATE dl_user_settings SET use_pool_cookies = ?1 WHERE user_id = ?2;

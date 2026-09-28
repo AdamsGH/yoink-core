@@ -1,0 +1,1 @@
+SELECT id,attempt,status,delivered_artifact_count,planned_artifact_count,cancel_requested,max_attempts,retry_delay_secs FROM runtime_operations WHERE status IN ('running','delivering') AND lease_expires_at <= CAST(unixepoch('subsec') * 1000000 AS INTEGER) ORDER BY lease_expires_at,id LIMIT 100;

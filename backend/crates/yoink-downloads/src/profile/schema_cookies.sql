@@ -1,1 +1,1 @@
-SELECT id, user_id, domain, content, is_valid, is_pool, updated_at FROM public.cookies LIMIT 0;
+SELECT id, user_id, domain, content, is_valid, is_pool, updated_at FROM cookies LIMIT 0;

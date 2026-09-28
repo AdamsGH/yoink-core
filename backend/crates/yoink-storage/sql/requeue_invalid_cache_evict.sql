@@ -1,0 +1,1 @@
+DELETE FROM runtime_media_cache WHERE cache_key=?5 AND revision=?6 AND EXISTS(SELECT 1 FROM runtime_operations op WHERE op.id=?1 AND op.attempt=?2 AND CAST(json_extract(op.request,'$.target.bot_id') AS TEXT)=CAST(runtime_media_cache.bot_id AS TEXT) AND op.actor_id=runtime_media_cache.actor_id);

@@ -1,3 +1,1 @@
-SELECT id, actor_id, request, status, attempt, max_attempts, cancel_requested, cache_bypassed, available_at, delivered_message_id,
-       planned_artifact_count, delivered_artifact_count, delivery_started_at, progress_percent, progress_stage, created_at, updated_at
-FROM yoink_runtime.operations WHERE actor_id = $1 AND id = $2;
+SELECT id,actor_id,request,status,attempt,max_attempts,cancel_requested,cache_bypassed,available_at,delivered_message_id,planned_artifact_count,delivered_artifact_count,delivery_started_at,progress_percent,progress_stage,created_at,updated_at FROM runtime_operations WHERE actor_id=?1 AND id=?2;

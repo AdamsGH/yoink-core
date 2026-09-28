@@ -235,7 +235,7 @@ impl DownloadService {
         if delivery.bot_id() <= 0 {
             return Err(DownloadError::InvalidConfig);
         }
-        let profile = ProfileStore::new(store.pool().clone());
+        let profile = ProfileStore::new(store.database().clone());
         Ok(Self {
             store,
             identities,

@@ -1,1 +1,1 @@
-SELECT pg_advisory_xact_lock(1936748117, 1);
+-- Begin the admission transaction with BEGIN IMMEDIATE in the caller.

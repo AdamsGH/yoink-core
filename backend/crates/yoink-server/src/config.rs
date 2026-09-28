@@ -1,4 +1,4 @@
-use std::{fmt, net::SocketAddr, time::Duration};
+use std::{fmt, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 use url::Url;
@@ -12,9 +12,6 @@ impl SecretToken {
     pub fn into_inner(self) -> String {
         self.0
     }
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl fmt::Debug for SecretToken {
@@ -25,20 +22,22 @@ impl fmt::Debug for SecretToken {
 
 #[derive(Debug)]
 pub struct DatabaseConfig {
-    pub url: SecretToken,
-    pub max_connections: u32,
+    pub path: PathBuf,
     pub acquire_timeout: Duration,
     pub health_interval: Duration,
 }
 
 impl DatabaseConfig {
-    pub async fn connect(&self) -> Result<yoink_storage::Store, yoink_storage::StoreError> {
-        yoink_storage::Store::connect(
-            self.url.as_str(),
-            self.max_connections,
-            self.acquire_timeout,
-        )
-        .await
+    pub async fn open(
+        &self,
+        create_if_missing: bool,
+    ) -> Result<yoink_storage::Store, yoink_storage::StoreError> {
+        let create = create_if_missing
+            && !self
+                .path
+                .try_exists()
+                .map_err(|_| yoink_storage::StoreError::Database)?;
+        yoink_storage::Store::open(&self.path, create, self.acquire_timeout).await
     }
 }
 
@@ -90,6 +89,17 @@ impl Config {
     fn from_lookup(
         mut lookup: impl FnMut(&str) -> Result<Option<String>, ConfigError>,
     ) -> Result<Self, ConfigError> {
+        if lookup("DATABASE_URL")?.is_some()
+            || lookup("MAX_CONNECTIONS")?.is_some()
+            || lookup("YOINK_RUST_DATABASE_URL")?.is_some()
+            || lookup("YOINK_RUST_DATABASE_MAX_CONNECTIONS")?.is_some()
+            || lookup("YOINK_RUST_MAX_CONNECTIONS")?.is_some()
+        {
+            return Err(invalid(
+                "DATABASE_PATH",
+                "legacy DATABASE_URL and MAX_CONNECTIONS are unsupported; use YOINK_RUST_DATABASE_PATH",
+            ));
+        }
         let mut read = |key: &str| lookup(&format!("{PREFIX}{key}"));
         let http_bind = read("HTTP_BIND")?
             .unwrap_or_else(|| "127.0.0.1:8088".into())
@@ -153,42 +163,16 @@ impl Config {
         } else {
             None
         };
-        let database = if let Some(value) = read("DATABASE_URL")? {
-            let url = Url::parse(&value).map_err(|_| {
-                invalid(
-                    "DATABASE_URL",
-                    "expected a PostgreSQL URL with host and database",
-                )
-            })?;
-            if !matches!(url.scheme(), "postgres" | "postgresql")
-                || url.host_str().is_none()
-                || url.path().trim_matches('/').is_empty()
-                || url.fragment().is_some()
-                || value.chars().any(char::is_whitespace)
-            {
+        let database = if let Some(value) = read("DATABASE_PATH")? {
+            let path = PathBuf::from(&value);
+            if value.trim().is_empty() || !path.is_absolute() {
                 return Err(invalid(
-                    "DATABASE_URL",
-                    "expected a PostgreSQL URL with host and database",
-                ));
-            }
-            let max_connections = read("DATABASE_MAX_CONNECTIONS")?
-                .unwrap_or_else(|| "5".into())
-                .parse::<u32>()
-                .map_err(|_| {
-                    invalid(
-                        "DATABASE_MAX_CONNECTIONS",
-                        "expected an integer in range 1..=32",
-                    )
-                })?;
-            if !(1..=32).contains(&max_connections) {
-                return Err(invalid(
-                    "DATABASE_MAX_CONNECTIONS",
-                    "expected an integer in range 1..=32",
+                    "DATABASE_PATH",
+                    "expected a nonempty absolute local file path",
                 ));
             }
             Some(DatabaseConfig {
-                url: SecretToken(value),
-                max_connections,
+                path,
                 acquire_timeout: timeout(
                     read("DATABASE_ACQUIRE_TIMEOUT_SECS")?,
                     "DATABASE_ACQUIRE_TIMEOUT_SECS",
@@ -342,43 +326,38 @@ mod tests {
     }
 
     #[test]
-    fn database_is_opt_in_and_redacted() {
-        assert!(
-            config(&[("database_url", "postgresql://legacy:secret@localhost/live")])
-                .unwrap()
-                .database
-                .is_none()
-        );
-        let parsed = config(&[(
-            "YOINK_RUST_DATABASE_URL",
-            "postgresql://user:db-sensitive@localhost/isolated",
-        )])
-        .unwrap();
-        assert!(!format!("{parsed:?}").contains("db-sensitive"));
+    fn database_path_is_opt_in() {
+        assert!(config(&[]).unwrap().database.is_none());
+        let parsed = config(&[("YOINK_RUST_DATABASE_PATH", "/tmp/yoink-test.db")]).unwrap();
         let db = parsed.database.unwrap();
-        assert_eq!(db.max_connections, 5);
+        assert_eq!(db.path, PathBuf::from("/tmp/yoink-test.db"));
         assert_eq!(db.acquire_timeout, Duration::from_secs(5));
+        assert_eq!(db.health_interval, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn legacy_database_configuration_is_rejected_without_echoing_values() {
+        for (key, value) in [
+            ("DATABASE_URL", "postgresql://user:secret@host/db"),
+            ("MAX_CONNECTIONS", "secret-value"),
+            (
+                "YOINK_RUST_DATABASE_URL",
+                "postgresql://user:secret@host/db",
+            ),
+            ("YOINK_RUST_DATABASE_MAX_CONNECTIONS", "secret-value"),
+        ] {
+            let error = config(&[(key, value)]).unwrap_err();
+            let printed = format!("{error:?} {error}");
+            assert!(printed.contains("legacy DATABASE_URL and MAX_CONNECTIONS are unsupported"));
+            assert!(!printed.contains("secret"));
+        }
     }
 
     #[test]
     fn invalid_database_configuration_is_rejected() {
-        for value in [
-            "",
-            "sqlite://localhost/test",
-            "postgresql://localhost/",
-            "postgresql://localhost/db#secret",
-            "postgresql://localhost/db name",
-        ] {
-            assert!(config(&[("YOINK_RUST_DATABASE_URL", value)]).is_err());
+        for value in ["", "relative.db", "   "] {
+            assert!(config(&[("YOINK_RUST_DATABASE_PATH", value)]).is_err());
         }
-        for value in ["0", "33", "invalid"] {
-            assert!(
-                config(&[
-                    ("YOINK_RUST_DATABASE_URL", "postgresql://localhost/test"),
-                    ("YOINK_RUST_DATABASE_MAX_CONNECTIONS", value)
-                ])
-                .is_err()
-            );
-        }
+        assert!(config(&[("YOINK_RUST_DATABASE_PATH", "/tmp/yoink.db")]).is_ok());
     }
 }
