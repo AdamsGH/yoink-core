@@ -8,6 +8,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { BotApiFixture } from './media-fixture/bot-api.mjs';
 import { runCommandMediaScenarios } from './media-fixture/command-scenarios.mjs';
 import { runPreferenceScenarios } from './media-fixture/preference-scenarios.mjs';
+import { runBatchScenarios } from './media-fixture/batch-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,6 +48,7 @@ let sourcePort;
 let proxyPort;
 let volumeCreated = false;
 let downloadMaxAttempts;
+let downloadTimeoutSeconds = 3;
 let cacheTtlSeconds;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
 const { capture: spawnCapture, docker } = processRunner;
@@ -98,7 +100,7 @@ function redact(value) {
 }
 function assertNoSecret(output, where) {
   for (const secret of [secretMarker, token, fixtureToken, cookieSecret, proxyPassword, proxyUser, proxyAuth]) assert(!output.includes(secret), `${where} leaked fixture credentials`);
-  assert(!/fixture-(video|document|audio)-\d+/.test(output), `${where} leaked a Telegram file ID`);
+  assert(!/fixture-(video|document|audio|photo)-\d+/.test(output), `${where} leaked a Telegram file ID`);
 }
 function safeTelegramSummary() { return botApi.calls.map(({method,data,status,uploadLength,cached}) => ({method,status,uploadLength,cached,chat_id:data?.chat_id,text:data?.text})); }
 async function fixtureDiagnostics() {
@@ -137,7 +139,7 @@ async function launchApp() {
     '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=["http://127.0.0.1:${sourcePort}"]`,
     '--env',`YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=["http://127.0.0.1:${proxyPort}"]`,
     '--env','YOINK_RUST_DOWNLOAD_LEASE_SECS=6','--env','YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1','--env','YOINK_RUST_DELIVERY_TIMEOUT_SECS=2',
-    '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env','YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=3','--env','YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=1',
+    '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env','YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=1',
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
@@ -190,8 +192,15 @@ try {
     '-map','0:v:0','-map','1:a:0','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-movflags','+faststart','/fixture/sample.mp4'],20000);
   mediaBytes=await readFile(path.join(fixtureDir,'sample.mp4'));
   assert(mediaBytes.length>100); assert(isoBmffMdatPayloads(mediaBytes).length>0);
+  await helperContainer(['--network','none','--entrypoint','ffmpeg','--mount',`type=bind,source=${fixtureDir},target=/fixture`,image,
+    '-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=red:s=160x120:d=1','-f','lavfi','-i','sine=frequency=880:sample_rate=44100:duration=1',
+    '-map','0:v:0','-map','1:a:0','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-movflags','+faststart','/fixture/red.mp4'],20000);
+  await helperContainer(['--network','none','--entrypoint','ffmpeg','--mount',`type=bind,source=${fixtureDir},target=/fixture`,image,
+    '-hide_banner','-loglevel','error','-i','/fixture/sample.mp4','-frames:v','1','/fixture/image.png'],15000);
+  const playlistMedia = [mediaBytes, await readFile(path.join(fixtureDir,'red.mp4'))];
+  const imageBytes = await readFile(path.join(fixtureDir,'image.png'));
   botApi=new BotApiFixture({mediaBytes}); apiPort=await botApi.start();
-  sourceFixture=new SourceHttpFixture({mediaBytes,cookieSecret}); sourcePort=await sourceFixture.start();
+  sourceFixture=new SourceHttpFixture({mediaBytes,cookieSecret,playlistMedia,imageBytes}); sourcePort=await sourceFixture.start();
   proxyFixture=new AuthenticatedProxyFixture({originPort:sourcePort,authorization:proxyAuth}); proxyPort=await proxyFixture.start();
   appHttpPort=await freeLoopbackPort(); fixturePort=await freeLoopbackPort();
   await launchApp();
@@ -563,9 +572,13 @@ try {
   };
   const commandScenarioSummary = await runCommandMediaScenarios(commandContext);
   const preferenceSummary = await runPreferenceScenarios(commandContext);
+  downloadTimeoutSeconds = 30;
+  cacheTtlSeconds = 3600;
+  await restartApp();
+  const batchSummary = await runBatchScenarios({ ...commandContext, playlistMedia, imageBytes, restartApp });
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
-  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary} ${preferenceSummary}.`);
+  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary} ${preferenceSummary}. ${batchSummary}.`);
 } catch (error) {
   await reportFailure(error, 'scenario');
   process.exitCode=1;

@@ -416,7 +416,8 @@ def download_media(request: dict[str, Any], settings: Any,
             if indices:
                 index_selection = ",".join(str(index) for index in indices)
             opts = {
-                "outtmpl": "source-%(playlist_index)05d-%(id)s.%(ext)s", "noplaylist": indices is None,
+                # autonumber follows extraction order, unlike playlist_index for reverse selections.
+                "outtmpl": "source-%(autonumber)05d-%(playlist_index)05d-%(id)s.%(ext)s", "noplaylist": indices is None,
                 "playlist_items": index_selection, "retries": 0, "fragment_retries": 0,
                 "socket_timeout": socket_timeout, "format": _format_expression(mode, options),
                 "logger": SilentLogger(), "quiet": True, "no_warnings": True,

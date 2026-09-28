@@ -12,9 +12,11 @@ export class SourceHttpFixture {
   #revokedQueued = 0;
   #lateProxyQueued = 0;
   #gateOpen = false;
-  constructor({ mediaBytes, cookieSecret }) {
+  constructor({ mediaBytes, cookieSecret, playlistMedia = [mediaBytes], imageBytes }) {
     this.mediaBytes = mediaBytes;
     this.cookieSecret = cookieSecret;
+    this.playlistMedia = playlistMedia;
+    this.imageBytes = imageBytes;
   }
   get error() { return this.#error; }
   get mediaRequests() { return this.#mediaRequests; }
@@ -40,6 +42,30 @@ export class SourceHttpFixture {
       this.#requestTimes.push(Date.now());
       if (req.url.includes('case=revoked-queued')) this.#revokedQueued++;
       if (req.url.includes('case=late-proxy-queued')) this.#lateProxyQueued++;
+      const url = new URL(req.url, 'http://fixture.invalid');
+      if (url.pathname === '/playlist.html') {
+        const count = Number(url.searchParams.get('count') ?? 2);
+        if (!Number.isInteger(count) || count < 1 || count > 21) { res.writeHead(400); res.end(); return; }
+        const broken = Number(url.searchParams.get('broken'));
+        const videos = Array.from({ length: count }, (_, i) => `<video controls src="/${i + 1 === broken ? 'missing' : 'entry'}-${i + 1}.mp4"></video>`).join('\n');
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(`<html><head><title>Fixture playlist</title></head><body>${videos}</body></html>`);
+        return;
+      }
+      const entry = url.pathname.match(/^\/entry-(\d+)\.mp4$/);
+      if (entry) {
+        const index = Number(entry[1]);
+        if (!Number.isSafeInteger(index) || index < 1 || index > 21) { res.writeHead(404); res.end(); return; }
+        const bytes = this.playlistMedia[(index - 1) % this.playlistMedia.length];
+        res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': bytes.length });
+        res.end(bytes);
+        return;
+      }
+      if (url.pathname === '/image.png' && this.imageBytes) {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': this.imageBytes.length });
+        res.end(this.imageBytes);
+        return;
+      }
       if (req.url.startsWith('/gated')) {
         if (!this.#gateOpen) {
           this.#gated.add(res);
