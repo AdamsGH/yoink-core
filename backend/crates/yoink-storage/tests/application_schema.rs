@@ -52,11 +52,11 @@ async fn migration_is_idempotent_and_verification_is_read_only() {
         .unwrap()
         .try_get("count")
         .unwrap();
-    assert_eq!(version_count, 2);
+    assert_eq!(version_count, 3);
     let table_count: i64 = query(
         "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB '__turso_internal_*' AND name <> 'runtime_migrations'",
     ).fetch_one(fixture.database()).await.unwrap().try_get("count").unwrap();
-    assert_eq!(table_count, 44);
+    assert_eq!(table_count, 46);
 
     exec(&fixture, "CREATE TABLE schema_drift (id INTEGER)")
         .await
@@ -101,7 +101,7 @@ async fn migration_and_verification_reject_runtime_ledger_drift_without_mutation
         .try_get("count")
         .unwrap();
     assert_eq!(unexpected_columns, 1);
-    assert_eq!(versions, 2);
+    assert_eq!(versions, 3);
 }
 
 #[tokio::test]
@@ -153,6 +153,48 @@ async fn malformed_empty_ledger_and_extra_object_are_rejected_atomically() {
     .unwrap();
     assert_eq!(bootstrapped_ledger, 0);
     assert_eq!(app_tables, 0);
+}
+
+#[tokio::test]
+async fn stats_search_triggers_track_raw_writes_tombstones_and_rollback() {
+    let fixture = new_store().await;
+    fixture.migrate().await.unwrap();
+    exec(&fixture, "INSERT INTO stats_messages (id, message_id, chat_id, date, text) VALUES (1, 1, -1, 1, 'first')")
+        .await.unwrap();
+    exec(
+        &fixture,
+        "UPDATE stats_messages SET id = 2, message_id = 2, text = 'second' WHERE id = 1",
+    )
+    .await
+    .unwrap();
+    exec(&fixture, "DELETE FROM stats_messages WHERE id = 2")
+        .await
+        .unwrap();
+    let dirty_ids = query("SELECT id FROM stats_search_dirty ORDER BY id")
+        .fetch_all(fixture.database())
+        .await
+        .unwrap();
+    assert_eq!(dirty_ids.len(), 2);
+    assert_eq!(dirty_ids[0].try_get::<i64, _>("id").unwrap(), 1);
+    assert_eq!(dirty_ids[1].try_get::<i64, _>("id").unwrap(), 2);
+    let revision: i64 = query("SELECT source_revision FROM stats_search_state WHERE singleton = 1")
+        .fetch_one(fixture.database())
+        .await
+        .unwrap()
+        .try_get("source_revision")
+        .unwrap();
+    assert_eq!(revision, 3);
+
+    exec(&fixture, "BEGIN IMMEDIATE; INSERT INTO stats_messages (id, message_id, chat_id, date, text) VALUES (3, 3, -1, 3, 'rolled back'); ROLLBACK;")
+        .await.unwrap();
+    let revision_after_rollback: i64 =
+        query("SELECT source_revision FROM stats_search_state WHERE singleton = 1")
+            .fetch_one(fixture.database())
+            .await
+            .unwrap()
+            .try_get("source_revision")
+            .unwrap();
+    assert_eq!(revision_after_rollback, 3);
 }
 
 #[tokio::test]

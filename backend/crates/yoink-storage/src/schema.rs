@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 2] = [
+const MIGRATIONS: [Migration; 3] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -20,6 +20,11 @@ const MIGRATIONS: [Migration; 2] = [
         version: 2,
         sql: include_str!("../migrations-turso/0002_application.sql"),
         expected_tables: 45,
+    },
+    Migration {
+        version: 3,
+        sql: include_str!("../migrations-turso/0003_stats_search.sql"),
+        expected_tables: 47,
     },
 ];
 
@@ -219,6 +224,10 @@ async fn schema_hash(
 }
 
 #[cfg(test)]
+#[path = "schema_search_tests.rs"]
+mod search_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -272,9 +281,10 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 2);
+        assert_eq!(versions.len(), 3);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
+        assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
     }
 
     #[tokio::test]

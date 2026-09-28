@@ -87,6 +87,15 @@ test-profile-db:
 test-db: build
     node scripts/test-db.mjs
 
+# Compare the approved search contract with the actual legacy FTS trigger on disposable data.
+test-stats-search-oracle:
+    node scripts/test-stats-search.mjs
+
+test-stats-search: (test-crate "yoink-stats-search") test-stats-search-oracle
+
+verify-stats-search-container:
+    docker build --target stats-search-tests -t yoink/rust-stats-search-tests:experimental .
+
 # Offline import utility. PostgreSQL client dependencies stay outside yoink-server.
 build-import:
     cargo build --locked -p yoink-import

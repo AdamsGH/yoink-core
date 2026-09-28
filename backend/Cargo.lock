@@ -4918,6 +4918,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "yoink-stats-search"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "turso",
+ "yoink-db",
+ "yoink-storage",
+]
+
+[[package]]
 name = "yoink-storage"
 version = "0.1.0"
 dependencies = [

@@ -24,6 +24,8 @@ For the real media path and its delivery-uncertainty rules, see [the media slice
 
 For native database tests, see [development prerequisites and verification](../docs/backend/development.md). `just test-db` uses private temporary files and the real server binary without Docker or a PostgreSQL server. Media tests and all Python work remain inside containers. The separate [PostgreSQL importer](../docs/backend/import.md) is verified against disposable Alembic fixtures, including a real TLS import through its pinned-compiler container. Native backup/restore and production cutover remain unfinished. No production data has been imported.
 
+The [Stats search component](../docs/backend/stats-search.md) uses a separate Tantivy index with durable native change tracking. Its approved tokenizer contract and explicit PostgreSQL differences are covered by a shared corpus. Full Stats commands and analytics remain separate product work.
+
 The standalone [Turso evaluation](experiments/turso/README.md) and [decision 0002](../docs/decisions/0002-turso-evaluation.md) retain the original feasibility checks. The Rust runtime now uses native Turso. The running Python deployment and its PostgreSQL database are unchanged.
 
 Do not share the production bot token with this poller. Competing `getUpdates` consumers can consume updates and interrupt the Python service.

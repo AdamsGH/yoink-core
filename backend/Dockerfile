@@ -28,6 +28,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release -p yoink-import \
     && cp target/release/yoink-import /
 
+# Test the separate search component with the pinned compiler and synthetic data.
+FROM rust-build AS stats-search-tests
+COPY scripts/stats-search-fixture/ ./scripts/stats-search-fixture/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo test --locked -p yoink-stats-search
+
 FROM python:3.12-slim-bookworm AS worker-runtime
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
