@@ -1,5 +1,7 @@
 mod cache;
 mod chat_access;
+mod cut;
+pub use cut::{CutSession, CutStage};
 pub mod profile;
 mod progress;
 mod settings;

@@ -45,6 +45,21 @@ macro_rules! define_keys {
 
 define_keys! {
     SettingsStale => "telegram.settings_stale";
+    CutUsage => "telegram.cut_usage";
+    CutAskStart => "telegram.cut_ask_start";
+    CutAskEnd => "telegram.cut_ask_end";
+    CutSummary => "telegram.cut_summary", ["start", "end"];
+    CutConfirming => "telegram.cut_confirming";
+    CutSubmitted => "telegram.cut_submitted", ["id"];
+    CutCancelled => "telegram.cut_cancelled";
+    CutTimeHint => "telegram.cut_time_hint";
+    CutInvalidTime => "telegram.cut_invalid_time";
+    CutStale => "telegram.cut_stale";
+    CutRetry => "telegram.cut_retry";
+    CutNothingToCancel => "telegram.cut_nothing_to_cancel";
+    CutGo => "telegram.cut_go";
+    CutEdit => "telegram.cut_edit";
+    CutCancel => "telegram.cut_cancel";
     SettingsUsage => "telegram.settings_usage";
     SettingsTitle => "telegram.settings_title", ["values"];
     SettingsQuality => "telegram.settings_quality";

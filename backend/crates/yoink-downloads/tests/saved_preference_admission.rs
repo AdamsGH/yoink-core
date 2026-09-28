@@ -1,4 +1,4 @@
-//! Saved-preference admission regressions through the public download service.
+//! Saved-preference and interactive clip admission through the public download service.
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use yoink_domain::{
@@ -88,6 +88,179 @@ async fn setup() -> (tempfile::TempDir, Arc<Store>, DownloadService) {
     )
     .unwrap();
     (directory, store, service)
+}
+
+#[tokio::test]
+async fn cut_confirmation_replays_frozen_preferences_and_checks_authorization() {
+    use yoink_downloads::CutStage;
+    let (_directory, store, service) = setup().await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2100)).unwrap();
+    let callback_target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(9999)).unwrap();
+    let draft = service
+        .cut_begin(ACTOR, target, 2100, URL, None)
+        .await
+        .unwrap();
+    assert_eq!(draft.stage, CutStage::Start);
+    let end = service
+        .cut_input(ACTOR, target, 2101, 0.2, true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(end.stage, CutStage::End);
+    let ready = service
+        .cut_input(ACTOR, target, 2102, 0.7, true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ready.stage, CutStage::Ready);
+    let admitted = service
+        .cut_confirm(ACTOR, callback_target, ready.id, ready.revision)
+        .await
+        .unwrap();
+    assert!(admitted.created);
+    let frozen = persisted_request(&store, &admitted.operation_id).await;
+    assert_eq!(
+        frozen["clip_range"],
+        serde_json::json!({"start_seconds": 0.2, "end_seconds": 0.7})
+    );
+    assert_eq!(frozen["target"]["reply_to_message_id"], 2100);
+    assert_eq!(frozen["params"]["send_as_file"], true);
+    // A valid new preference must not replace the already-admitted snapshot.
+    let settings = service.settings(ACTOR, target).await.unwrap();
+    let change =
+        yoink_downloads::SettingChange::new(yoink_downloads::SettingField::SendAsFile, "false")
+            .unwrap();
+    service
+        .change_setting(ACTOR, target, change, Some(settings.revision))
+        .await
+        .unwrap();
+    let replay = service
+        .cut_confirm(ACTOR, callback_target, ready.id, ready.revision)
+        .await
+        .unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.operation_id, admitted.operation_id);
+    assert_eq!(
+        persisted_request(&store, &admitted.operation_id).await,
+        frozen
+    );
+    yoink_db::query(include_str!("sql/set_banned.sql"))
+        .bind(ACTOR as i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .cut_confirm(ACTOR, callback_target, ready.id, ready.revision)
+            .await,
+        Err(DownloadError::Denied)
+    );
+    assert_eq!(
+        service.cut_current(ACTOR, target).await.unwrap_err(),
+        DownloadError::Denied
+    );
+}
+
+#[tokio::test]
+async fn cut_recovers_admission_before_session_completion_without_a_second_job() {
+    use yoink_domain::ClipRange;
+    use yoink_downloads::CutStage;
+    let (_directory, store, service) = setup().await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2200)).unwrap();
+    service
+        .cut_begin(ACTOR, target, 2200, URL, Some(0.2))
+        .await
+        .unwrap();
+    let ready = service
+        .cut_input(ACTOR, target, 2201, 0.7, true)
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .cut_claim(ACTOR, target, ready.id, ready.revision)
+        .await
+        .unwrap();
+    let request = DownloadRequest::new(
+        ACTOR,
+        URL,
+        MediaMode::Video,
+        Some(ClipRange::new(0.2, 0.7).unwrap()),
+        DownloadParams::default(),
+    )
+    .unwrap()
+    .with_target(target)
+    .unwrap();
+    let key = format!("cut:{}:{}:{}", BOT, ACTOR, ready.id.simple());
+    let admitted = service
+        .submit_preferred_request(&request, &key, DownloadPreferenceOverrides::default())
+        .await
+        .unwrap();
+    // Fault boundary: durable operation exists, but no cut_submitted write occurred.
+    assert_eq!(
+        service
+            .cut_current(ACTOR, target)
+            .await
+            .unwrap()
+            .unwrap()
+            .stage,
+        CutStage::Confirming
+    );
+    assert!(
+        service
+            .cut_cancel(ACTOR, target, ready.id, ready.revision, None)
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .cut_edit(ACTOR, target, ready.id, ready.revision)
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .cut_begin(ACTOR, target, 2202, URL, None)
+            .await
+            .is_err()
+    );
+    let recovered = service
+        .cut_confirm(ACTOR, target, ready.id, ready.revision)
+        .await
+        .unwrap();
+    assert!(!recovered.created);
+    assert_eq!(recovered.operation_id, admitted.operation_id);
+    let session = service.cut_current(ACTOR, target).await.unwrap().unwrap();
+    assert_eq!(session.stage, CutStage::Submitted);
+    assert_eq!(session.operation_id, Some(admitted.operation_id));
+}
+
+#[tokio::test]
+async fn cut_state_is_denied_outside_the_actors_own_private_delivery_target() {
+    let (_directory, _store, service) = setup().await;
+    for target in [
+        DeliveryTarget::new(BOT, 99, None, None).unwrap(),
+        DeliveryTarget::new(BOT, -100, None, None).unwrap(),
+        DeliveryTarget::new(BOT + 1, ACTOR as i64, None, None).unwrap(),
+    ] {
+        assert_eq!(
+            service
+                .cut_begin(ACTOR, target, 2300, URL, None)
+                .await
+                .unwrap_err(),
+            DownloadError::Denied
+        );
+        assert_eq!(
+            service.cut_current(ACTOR, target).await.unwrap_err(),
+            DownloadError::Denied
+        );
+        assert_eq!(
+            service
+                .cut_input(ACTOR, target, 2301, 0.2, true)
+                .await
+                .unwrap_err(),
+            DownloadError::Denied
+        );
+    }
 }
 
 fn request() -> DownloadRequest {

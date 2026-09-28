@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub struct Store {
-    database: Database,
+    pub(crate) database: Database,
 }
 
 impl Store {

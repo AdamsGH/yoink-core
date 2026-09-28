@@ -452,7 +452,7 @@ fn parse_seconds(value: &str) -> Result<f64, ()> {
     }
 }
 
-fn parse_time(value: &str) -> Result<f64, ()> {
+pub(super) fn parse_time(value: &str) -> Result<f64, ()> {
     if !value.contains(':') {
         return parse_seconds(value);
     }

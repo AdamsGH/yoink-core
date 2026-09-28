@@ -14,7 +14,7 @@ use std::{
 use teloxide::{
     Bot,
     prelude::*,
-    types::Message,
+    types::{CallbackQuery, Message},
     update_listeners::{Polling, UpdateListener},
 };
 use tokio_util::sync::CancellationToken;
@@ -31,6 +31,7 @@ use yoink_downloads::{DownloadError, DownloadService};
 use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for};
 use yoink_storage::{Admission, OperationStatus};
 
+mod cut;
 mod media_command;
 mod progress;
 mod sender;
@@ -172,7 +173,7 @@ impl TelegramAdapter {
         let progress = progress::run(self.bot.clone(), self.downloads.clone(), self.progress);
         let handler = dptree::entry()
             .branch(Update::filter_message().endpoint(handle_message))
-            .branch(Update::filter_callback_query().endpoint(settings::handle_callback));
+            .branch(Update::filter_callback_query().endpoint(handle_callback));
         let mut dispatcher = Dispatcher::builder(self.bot.clone(), handler)
             .dependencies(dptree::deps![
                 TelegramIdentity {
@@ -410,14 +411,20 @@ fn translate(language: Language, key: Key, parameters: &[(&str, &str)]) -> Strin
 }
 
 fn response(command: Command, language: Language, system: &SystemService, enabled: bool) -> String {
-    match command {
+    let show_cut = enabled && matches!(&command, Command::Start | Command::Help);
+    let mut text = match command {
         Command::Start | Command::Help if enabled => translate(language, Key::HelpEnabled, &[]),
         Command::Start | Command::Help => translate(language, Key::HelpBasic, &[]),
         Command::Status => format_status(system, language),
         Command::Invalid if enabled => translate(language, Key::UsageDownload, &[]),
         Command::Invalid => translate(language, Key::DownloadsUnavailable, &[]),
         _ => String::new(),
+    };
+    if show_cut {
+        text.push('\n');
+        text.push_str(&translate(language, Key::CutUsage, &[]));
     }
+    text
 }
 
 fn media_unavailable_response(language: Language) -> String {
@@ -545,15 +552,28 @@ async fn handle_message(
     let Some(text) = message.text() else {
         return Ok(());
     };
-    let Some(command) = parse_command(text, &bot_username) else {
-        return Ok(());
-    };
     let language = language_for(
         message
             .from
             .as_ref()
             .and_then(|user| user.language_code.as_deref()),
     );
+    if cut::try_handle_message(
+        &bot,
+        &message,
+        &bot_username,
+        actor_id,
+        target,
+        downloads.as_ref(),
+        language,
+    )
+    .await
+    {
+        return Ok(());
+    }
+    let Some(command) = parse_command(text, &bot_username) else {
+        return Ok(());
+    };
 
     if let Command::Settings(action) = command {
         if target.chat_id() > 0 {
@@ -719,6 +739,23 @@ async fn handle_message(
     Ok(())
 }
 
+async fn handle_callback(
+    bot: Bot,
+    query: CallbackQuery,
+    identity: TelegramIdentity,
+    downloads: DownloadsDependency,
+) -> Result<(), Infallible> {
+    if query
+        .data
+        .as_deref()
+        .is_some_and(|data| data.starts_with("cut:"))
+    {
+        cut::handle_callback(bot, query, identity, downloads).await
+    } else {
+        settings::handle_callback(bot, query, identity, downloads).await
+    }
+}
+
 fn unknown_operation(language: Language) -> String {
     translate(language, Key::OperationNotFound, &[])
 }
@@ -871,8 +908,13 @@ mod tests {
         .unwrap();
         assert!(matches!(parsed, Command::Media(_)));
         assert!(!format!("{parsed:?}").contains("secret"));
+        let cut = parse_command(
+            "/cut@YOINK_BOT https://example.test/watch 00:01 00:03",
+            "yoink_bot",
+        )
+        .unwrap();
         assert!(
-            parse_command("/cut https://example.test/watch 00:01 00:03", "yoink_bot").is_some()
+            matches!(cut, Command::Media(media) if media.clip.is_some_and(|clip| clip.start_seconds() == 1.0 && clip.end_seconds() == 3.0))
         );
         assert!(parse_command("/image https://example.test/photo", "yoink_bot")
             .is_some_and(|command| matches!(command, Command::Media(media) if media.engine == Some(Engine::Gallery))));
