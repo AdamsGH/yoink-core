@@ -42,6 +42,6 @@ Run `cd backend && just verify-media` to invoke the supported sequence. It build
 
 ## Migration and outstanding gates
 
-The legacy Alembic chain remains offline legacy-catalog tooling and does not run in the native Rust process. [The source schema guide](../../backend/schema/README.md) describes the historical PostgreSQL source catalog. PostgreSQL data import, Stats full-text behavior, backup/restore, and production cutover are pending separate tasks. No data import, restore rehearsal, or production cutover is claimed.
+The legacy Alembic chain remains offline legacy-catalog tooling and does not run in the native Rust process. [The source schema guide](../../backend/schema/README.md) describes the historical PostgreSQL source catalog. The [PostgreSQL import guide](import.md) documents `just verify-import`, which uses disposable real-Alembic fixtures and a separate importer image. Stats full-text behavior, backup/restore, and production cutover are pending separate tasks. No production import, restore rehearsal, or cutover is claimed.
 
 Never copy a live database file and WAL files as a backup. A consistent backup requires an explicitly designed and verified quiesced/engine-aware process. Production backup/restore and cutover procedures remain unapproved and unverified.

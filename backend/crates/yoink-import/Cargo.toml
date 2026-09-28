@@ -1,0 +1,31 @@
+[package]
+name = "yoink-import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "yoink-import"
+path = "src/main.rs"
+
+[dependencies]
+fs2 = "0.4"
+futures-util = "0.3"
+rustix = { version = "1", features = ["fs", "process"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+serde_json.workspace = true
+sha2 = "0.10"
+tempfile = "3"
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+tokio-postgres-rustls = "0.13"
+turso = { version = "=0.7.2", default-features = false }
+yoink-db.workspace = true
+yoink-storage = { path = "../yoink-storage" }
+
+[lints]
+workspace = true

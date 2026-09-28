@@ -7,7 +7,8 @@ The Rust backend lives in `backend/`. It runs alongside the Python implementatio
 - [Development](development.md): prerequisites, verification commands, isolated database fixture, and schema lifecycle.
 - [Configuration](configuration.md): opt-in adapters, environment variables, deadlines, and database behavior.
 - [Media slice guide](media-slice.md): isolated run guidance, restrictions, delivery ambiguity, and container hardening.
-- [Database ownership decision](../decisions/0001-database-ownership.md): the boundary between Alembic and SQLx.
+- [Native database ownership](../decisions/0003-native-turso-runtime.md): single-process file ownership, schema verification, and security boundaries.
+- [PostgreSQL import](import.md): explicit source selection, atomic publication, verification, and cutover/rollback limits.
 
 ## Understand the implementation
 

@@ -87,6 +87,27 @@ test-profile-db:
 test-db: build
     node scripts/test-db.mjs
 
+# Offline import utility. PostgreSQL client dependencies stay outside yoink-server.
+build-import:
+    cargo build --locked -p yoink-import
+
+# Requires explicit YOINK_IMPORT_SOURCE_URL and a new destination in a private directory.
+import-postgres destination: build-import
+    target/debug/yoink-import --destination {{quote(destination)}}
+
+# Actual Alembic source, read-only import and native value/safety assertions.
+test-import image='': build-import
+    node --test scripts/import-fixture/process.test.mjs
+    cargo build --locked -p yoink-server --features test-fixtures --bin yoink-fixture-server
+    node scripts/import-fixture/test-import.mjs {{quote(image)}}
+
+# Build and check the operator CLI against the pinned deployment compiler.
+build-import-image:
+    docker build --target importer -t yoink/rust-importer:experimental .
+    docker run --rm --pull never --network none --read-only yoink/rust-importer:experimental --help
+
+verify-import: verify build-import-image (test-import "yoink/rust-importer:experimental")
+
 # Opt-in image only, never changes the existing Compose deployment.
 build-media:
     docker build --target runtime -t yoink/rust-backend:experimental .

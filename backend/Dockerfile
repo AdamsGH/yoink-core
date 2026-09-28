@@ -18,6 +18,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release -p yoink-server --features test-fixtures --bin yoink-fixture-server \
     && cp target/release/yoink-fixture-server /
 
+# Operator-only PostgreSQL import utility, not a dependency of yoink-server.
+FROM rust-build AS importer-build
+COPY schema/ ./schema/
+COPY scripts/sql/legacy-catalog.sql ./scripts/sql/legacy-catalog.sql
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --locked --release -p yoink-import \
+    && cp target/release/yoink-import /
+
 FROM python:3.12-slim-bookworm AS worker-runtime
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
@@ -42,5 +52,21 @@ ENTRYPOINT ["/usr/local/bin/yoink-server"]
 FROM runtime-base AS media-fixture
 COPY --from=fixture-build /yoink-fixture-server /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/yoink-fixture-server"]
+
+# Operator CLI has no Python interpreter, media tools or server entrypoint.
+FROM debian:bookworm-slim AS importer
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 yoink \
+    && useradd --uid 10001 --gid yoink --no-create-home yoink \
+    && mkdir -p /tmp/yoink-work \
+    && chown yoink:yoink /tmp/yoink-work \
+    && chmod 0700 /tmp/yoink-work
+COPY --from=importer-build /yoink-import /usr/local/bin/
+ENV TMPDIR=/tmp/yoink-work TURSO_TMPDIR=/tmp/yoink-work
+USER 10001:10001
+WORKDIR /tmp/yoink-work
+ENTRYPOINT ["/usr/local/bin/yoink-import"]
 
 FROM runtime-base AS runtime

@@ -22,7 +22,7 @@ curl http://127.0.0.1:8088/api/v1/system
 
 For the real media path and its delivery-uncertainty rules, see [the media slice guide](../docs/backend/media-slice.md). `just verify-media` builds separate runtime and test-controller images, then tests the Python worker and full download-to-upload path against a disposable native database volume and a fixture Bot API.
 
-For native database tests, see [development prerequisites and verification](../docs/backend/development.md). `just test-db` uses private temporary files and the real server binary without Docker or a PostgreSQL server. Media tests and all Python work remain inside containers. PostgreSQL data import, backup/restore and production cutover remain separate, unfinished work.
+For native database tests, see [development prerequisites and verification](../docs/backend/development.md). `just test-db` uses private temporary files and the real server binary without Docker or a PostgreSQL server. Media tests and all Python work remain inside containers. The separate [PostgreSQL importer](../docs/backend/import.md) is verified against disposable Alembic fixtures, including a real TLS import through its pinned-compiler container. Native backup/restore and production cutover remain unfinished. No production data has been imported.
 
 The standalone [Turso evaluation](experiments/turso/README.md) and [decision 0002](../docs/decisions/0002-turso-evaluation.md) retain the original feasibility checks. The Rust runtime now uses native Turso. The running Python deployment and its PostgreSQL database are unchanged.
 

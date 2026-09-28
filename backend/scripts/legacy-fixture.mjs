@@ -60,7 +60,7 @@ export async function withLegacyFixture(body) {
     if (!port || interrupted) throw new Error('legacy fixture unavailable');
     const url = `postgresql://yoink_test:${password}@127.0.0.1:${port}/yoink_test`;
     const query = async sql => (await command('docker', ['exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1',
-      '-U', 'yoink_test', '-d', 'yoink_test', '-Atc', sql])).stdout.trim();
+      '-U', 'yoink_test', '-d', 'yoink_test', '-qAtc', sql])).stdout.trim();
     return await body({ query, url, command, name });
   } finally {
     for (const [signal, handler] of handlers) process.removeListener(signal, handler);

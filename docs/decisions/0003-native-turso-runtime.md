@@ -20,7 +20,7 @@ Durable admission/idempotency, quotas, queue leases and fencing, cancellation, b
 
 The default production image excludes the test-only fixture controller. The separate opt-in fixture image contains a bounded, token-protected loopback controller used only by isolated media tests. Database state must be mounted as private writable persistent storage owned by runtime UID 10001. Do not share a live DB file across processes or copy its file and WAL files as a live backup.
 
-Legacy Alembic tooling is retained only as offline legacy-catalog support. The historical PostgreSQL SQL files under `backend/crates/yoink-storage/migrations/` are not loaded by the native runtime, which uses `migrations-turso/`. PostgreSQL data import, Stats full-text compatibility, backup/restore, and production cutover remain pending separate tasks. No data import or cutover is claimed.
+Legacy Alembic tooling is retained only as offline legacy-catalog support. The historical PostgreSQL SQL files under `backend/crates/yoink-storage/migrations/` are not loaded by the native runtime, which uses `migrations-turso/`. The separate [PostgreSQL importer](../backend/import.md) is now verified against disposable real-Alembic fixtures and does not add a PostgreSQL dependency to the server. Stats full-text compatibility, native backup/restore, and production cutover remain pending separate tasks. No production data import or cutover is claimed.
 
 ## References
 

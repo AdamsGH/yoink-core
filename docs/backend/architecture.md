@@ -38,4 +38,4 @@ Admission freezes opaque credential references and versions, not cookie contents
 - Fencing protects database state transitions, not external Telegram effects. Confirmed delivery receipts are retained. Unknown or ambiguous outcomes are terminal and are not automatically resent; exactly-once Telegram delivery is not claimed.
 - The fixed worker runs under container read-only/noexec controls and Landlock, with process-group termination, network restrictions, and resource budgets. See [media slice](media-slice.md).
 - Worker engines support video/audio processing, playlists, clips, and galleries, but full Python command/settings parity is not complete.
-- PostgreSQL data import, Stats full-text compatibility, verified backup/restore, and production cutover remain pending. No existing PostgreSQL data has been imported.
+- The operator-only [PostgreSQL importer](import.md) is verified on disposable Alembic fixtures. Stats full-text compatibility, verified backup/restore, and production cutover remain pending. No production PostgreSQL data has been imported.

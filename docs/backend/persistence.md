@@ -30,4 +30,4 @@ When `/job <UUID>` reports `delivery_unknown`, check the chat before submitting 
 
 The persistent file preserves admitted operations across process restarts. Queued work and expired leases can be reconciled by later claims. Download execution retries only within configured limits; uncertain delivery is terminal. There is no automatic rollback or drop. Unix health checks detect database or lock-file replacement/removal and parent permission drift, causing the service to fail health rather than silently create a replacement.
 
-Never copy the database file and WAL files while the database is live and treat that as a backup. PostgreSQL data import, full-text compatibility, and a consistent backup/restore procedure are pending separate work. No data import or production cutover has occurred.
+Never copy the database file and WAL files while the database is live and treat that as a backup. The separate [PostgreSQL importer](import.md) creates and verifies a new database using a read-only source snapshot. Full-text compatibility and a consistent native backup/restore procedure remain pending. No production data import or cutover has occurred.
