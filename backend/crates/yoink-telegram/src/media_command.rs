@@ -1,7 +1,10 @@
 use std::fmt;
 
 use url::Url;
-use yoink_domain::{ClipRange, Engine, MediaMode, PlaylistRange};
+use yoink_domain::{
+    AudioCodec, ClipRange, Container, DownloadPreferenceOverrides, Engine, MediaMode,
+    PlaylistRange, VideoCodec,
+};
 
 #[derive(Clone, PartialEq)]
 pub(super) struct ParsedMedia {
@@ -10,6 +13,7 @@ pub(super) struct ParsedMedia {
     pub(super) playlist: Option<PlaylistRange>,
     pub(super) clip: Option<ClipRange>,
     pub(super) engine: Option<Engine>,
+    pub(super) overrides: DownloadPreferenceOverrides,
 }
 
 impl fmt::Debug for ParsedMedia {
@@ -21,6 +25,7 @@ impl fmt::Debug for ParsedMedia {
             .field("playlist", &self.playlist)
             .field("clip", &self.clip)
             .field("engine", &self.engine)
+            .field("overrides", &self.overrides)
             .finish()
     }
 }
@@ -37,7 +42,8 @@ pub(super) fn parse(name: &str, args: &[&str]) -> Option<Result<ParsedMedia, ()>
 }
 
 fn parse_inner(name: &str, args: &[&str], mode: MediaMode) -> Result<ParsedMedia, ()> {
-    let (url_index, url) = exactly_one_url(args)?;
+    let (args, overrides) = parse_overrides(name, args)?;
+    let (url_index, url) = exactly_one_url(&args)?;
     let url_value = Url::parse(url).map_err(|_| ())?;
     if !matches!(url_value.scheme(), "http" | "https")
         || url_value.host_str().is_none()
@@ -107,7 +113,106 @@ fn parse_inner(name: &str, args: &[&str], mode: MediaMode) -> Result<ParsedMedia
         playlist,
         clip,
         engine,
+        overrides,
     })
+}
+
+fn parse_overrides<'a>(
+    name: &str,
+    args: &[&'a str],
+) -> Result<(Vec<&'a str>, DownloadPreferenceOverrides), ()> {
+    let mut positional = Vec::with_capacity(args.len());
+    let mut overrides = DownloadPreferenceOverrides::default();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut index = 0;
+    while index < args.len() {
+        let token = args[index];
+        if !token.starts_with("--") {
+            positional.push(token);
+            index += 1;
+            continue;
+        }
+        if !seen.insert(token) {
+            return Err(());
+        }
+        let value = *args.get(index + 1).ok_or(())?;
+        if value.starts_with("--") {
+            return Err(());
+        }
+        match token {
+            "--height" => {
+                if name == "audio" || name == "image" {
+                    return Err(());
+                }
+                overrides.max_height = Some(if value == "best" {
+                    None
+                } else {
+                    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                        return Err(());
+                    }
+                    let height = value.parse::<u32>().map_err(|_| ())?;
+                    if !(1..=100_000).contains(&height) {
+                        return Err(());
+                    }
+                    Some(height)
+                });
+            }
+            "--video-codec" => {
+                if name == "audio" || name == "image" {
+                    return Err(());
+                }
+                overrides.video_codec = Some(match value {
+                    "h264" => VideoCodec::H264,
+                    "h265" => VideoCodec::H265,
+                    "av1" => VideoCodec::Av1,
+                    "vp9" => VideoCodec::Vp9,
+                    "any" => VideoCodec::Any,
+                    _ => return Err(()),
+                });
+            }
+            "--audio-codec" => {
+                if name == "image" {
+                    return Err(());
+                }
+                overrides.audio_codec = Some(match value {
+                    "best" => AudioCodec::Best,
+                    "aac" => AudioCodec::Aac,
+                    "mp3" => AudioCodec::Mp3,
+                    "opus" => AudioCodec::Opus,
+                    _ => return Err(()),
+                });
+            }
+            "--container" => {
+                if name == "audio" || name == "image" {
+                    return Err(());
+                }
+                overrides.container = Some(match value {
+                    "mp4" => Container::Mp4,
+                    "mkv" => Container::Mkv,
+                    "webm" => Container::Webm,
+                    _ => return Err(()),
+                });
+            }
+            "--send-as-file" => overrides.send_as_file = Some(parse_bool(value)?),
+            "--gallery-zip" => {
+                if name != "image" {
+                    return Err(());
+                }
+                overrides.gallery_zip = Some(parse_bool(value)?);
+            }
+            _ => return Err(()),
+        }
+        index += 2;
+    }
+    Ok((positional, overrides))
+}
+
+fn parse_bool(value: &str) -> Result<bool, ()> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(()),
+    }
 }
 
 fn exactly_one_url<'a>(args: &'a [&'a str]) -> Result<(usize, &'a str), ()> {
@@ -509,6 +614,135 @@ mod tests {
         rejects("playlist", &[URL, "1", "2"]);
         let overlong = format!("https://example.test/{}", "x".repeat(4080));
         rejects("video", &[&overlong]);
+    }
+
+    #[test]
+    fn override_flags_are_typed_strict_and_preserve_absence() {
+        rejects("playlist", &[URL, "--gallery-zip", "true"]);
+        rejects("cut", &[URL, "0", "1", "--gallery-zip", "false"]);
+        let media = parsed(
+            "video",
+            &[
+                URL,
+                "--height",
+                "best",
+                "--video-codec",
+                "any",
+                "--audio-codec",
+                "best",
+                "--container",
+                "mkv",
+                "--send-as-file",
+                "false",
+            ],
+        );
+        assert_eq!(media.overrides.max_height, Some(None));
+        assert_eq!(media.overrides.video_codec, Some(VideoCodec::Any));
+        assert_eq!(media.overrides.audio_codec, Some(AudioCodec::Best));
+        assert_eq!(media.overrides.container, Some(Container::Mkv));
+        assert_eq!(media.overrides.send_as_file, Some(false));
+        assert_eq!(media.overrides.gallery_zip, None);
+        assert_eq!(
+            parsed("video", &[URL]).overrides,
+            DownloadPreferenceOverrides::default()
+        );
+        for value in ["0", "100001", "-1", "+1", "1.5", "BEST"] {
+            rejects("video", &[URL, "--height", value]);
+        }
+        assert_eq!(
+            parsed("video", &[URL, "--height", "1"])
+                .overrides
+                .max_height,
+            Some(Some(1))
+        );
+        assert_eq!(
+            parsed("video", &[URL, "--height", "100000"])
+                .overrides
+                .max_height,
+            Some(Some(100000))
+        );
+        for value in ["h264", "h265", "av1", "vp9", "any"] {
+            assert!(
+                parsed("video", &[URL, "--video-codec", value])
+                    .overrides
+                    .video_codec
+                    .is_some()
+            );
+        }
+        for value in ["best", "aac", "mp3", "opus"] {
+            assert!(
+                parsed("video", &[URL, "--audio-codec", value])
+                    .overrides
+                    .audio_codec
+                    .is_some()
+            );
+        }
+        for value in ["mp4", "mkv", "webm"] {
+            assert!(
+                parsed("video", &[URL, "--container", value])
+                    .overrides
+                    .container
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            parsed("video", &[URL, "--send-as-file", "true"])
+                .overrides
+                .send_as_file,
+            Some(true)
+        );
+        assert_eq!(
+            parsed("image", &[URL, "--gallery-zip", "true"])
+                .overrides
+                .gallery_zip,
+            Some(true)
+        );
+        for args in [
+            &[URL, "--video-codec", "bad"][..],
+            &[URL, "--audio-codec", "bad"],
+            &[URL, "--container", "bad"],
+            &[URL, "--send-as-file", "yes"],
+            &[URL, "--gallery-zip", "1"],
+            &[URL, "--height"],
+            &[URL, "--container"],
+            &[URL, "--unknown", "x"],
+            &[URL, "--height", "1", "--height", "2"],
+            &[URL, "--height", "1", "--height"],
+            &[URL, "--send-as-file", "false", "--send-as-file", "true"],
+        ] {
+            rejects("video", args);
+        }
+        assert_eq!(
+            parsed(
+                "image",
+                &[URL, "--gallery-zip", "false", "--send-as-file", "true"]
+            )
+            .overrides
+            .gallery_zip,
+            Some(false)
+        );
+        assert_eq!(
+            parsed("playlist", &["2-4", URL, "--height", "720"])
+                .playlist
+                .unwrap()
+                .start(),
+            2
+        );
+        let cut = parsed("cut", &[URL, "00:01", "00:03", "--video-codec", "h264"]);
+        assert_eq!(cut.clip.unwrap().end_seconds(), 3.0);
+        for (name, flag) in [
+            ("audio", "--height"),
+            ("audio", "--video-codec"),
+            ("audio", "--container"),
+            ("audio", "--gallery-zip"),
+            ("image", "--height"),
+            ("image", "--video-codec"),
+            ("image", "--audio-codec"),
+            ("image", "--container"),
+            ("video", "--gallery-zip"),
+        ] {
+            rejects(name, &[URL, flag, "true"]);
+        }
     }
 
     #[test]

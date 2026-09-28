@@ -28,6 +28,7 @@ pub fn media_cache_key(request: &DownloadRequest) -> Result<MediaCacheKey, Store
     let object = material
         .as_object_mut()
         .ok_or(StoreError::InvalidStoredData)?;
+    object.remove("preference_overrides");
     object.insert(
         "target".to_owned(),
         serde_json::json!({ "bot_id": target.bot_id() }),
@@ -131,6 +132,41 @@ mod tests {
         .with_target(*base.target().unwrap())
         .unwrap();
         assert_ne!(key, media_cache_key(&different_url).unwrap());
+    }
+
+    #[test]
+    fn preference_intent_is_excluded_from_cache_identity() {
+        use yoink_domain::DownloadPreferenceOverrides;
+        let inherited = request(42, 700, MediaMode::Video, DownloadParams::default());
+        let explicit = inherited
+            .clone()
+            .with_preference_overrides(DownloadPreferenceOverrides::default());
+        let explicit_best =
+            inherited
+                .clone()
+                .with_preference_overrides(DownloadPreferenceOverrides {
+                    max_height: Some(None),
+                    ..Default::default()
+                });
+        assert_eq!(
+            media_cache_key(&inherited).unwrap(),
+            media_cache_key(&explicit).unwrap()
+        );
+        assert_eq!(
+            media_cache_key(&inherited).unwrap(),
+            media_cache_key(&explicit_best).unwrap()
+        );
+
+        let changed = request(
+            42,
+            700,
+            MediaMode::Video,
+            DownloadParams::new(Some(720)).unwrap(),
+        );
+        assert_ne!(
+            media_cache_key(&inherited).unwrap(),
+            media_cache_key(&changed).unwrap()
+        );
     }
 
     #[test]

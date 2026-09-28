@@ -7,6 +7,7 @@ import { isoBmffMdatPayloads } from './media-fixture/media-format.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { BotApiFixture } from './media-fixture/bot-api.mjs';
 import { runCommandMediaScenarios } from './media-fixture/command-scenarios.mjs';
+import { runPreferenceScenarios } from './media-fixture/preference-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -557,12 +558,14 @@ try {
   assert.equal(await cacheRevision(refreshedCache), beforeDisabled, 'disabled cache must not publish or refresh entries');
   await assertWorkspaceClean();
 
-  const commandScenarioSummary = await runCommandMediaScenarios({
+  const commandContext = {
     botApi, sourcePort, sourceFixture, fixtureSql, queryJob, waitFor, helperContainer, image, assertWorkspaceClean,
-  });
+  };
+  const commandScenarioSummary = await runCommandMediaScenarios(commandContext);
+  const preferenceSummary = await runPreferenceScenarios(commandContext);
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
-  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary}`);
+  console.log(`Media slice acceptance passed real-worker, durable-delivery, file-ID cache/recovery/expiry, access, retry, cancellation, quota, restart and redaction scenarios. ${commandScenarioSummary} ${preferenceSummary}.`);
 } catch (error) {
   await reportFailure(error, 'scenario');
   process.exitCode=1;

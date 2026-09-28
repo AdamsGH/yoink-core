@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use yoink_domain::{
-    AudioCodec, ClipRange, Container, DeliveryTarget, DownloadParams, DownloadRequest, Engine,
-    MediaMode, PlaylistRange, VideoCodec,
+    AudioCodec, ClipRange, Container, DeliveryTarget, DownloadParams, DownloadPreferenceOverrides,
+    DownloadRequest, Engine, MediaMode, PlaylistRange, VideoCodec,
 };
 
 use crate::StoreError;
@@ -26,6 +26,36 @@ struct RequestData {
     // Rows persisted by migration 0001 used this top-level field.
     #[serde(default)]
     max_height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preference_overrides: Option<PreferenceOverridesData>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreferenceOverridesData {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_override_height"
+    )]
+    max_height: Option<Option<u32>>,
+    #[serde(default)]
+    video_codec: Option<VideoCodecData>,
+    #[serde(default)]
+    audio_codec: Option<AudioCodecData>,
+    #[serde(default)]
+    container: Option<ContainerData>,
+    #[serde(default)]
+    send_as_file: Option<bool>,
+    #[serde(default)]
+    gallery_zip: Option<bool>,
+}
+
+fn deserialize_override_height<'de, D>(deserializer: D) -> Result<Option<Option<u32>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u32>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -204,6 +234,31 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
         }),
         network: request.network().into(),
         max_height: None,
+        preference_overrides: request
+            .preference_overrides()
+            .map(|o| PreferenceOverridesData {
+                max_height: o.max_height,
+                video_codec: o.video_codec.map(|v| match v {
+                    VideoCodec::H264 => VideoCodecData::H264,
+                    VideoCodec::H265 => VideoCodecData::H265,
+                    VideoCodec::Av1 => VideoCodecData::Av1,
+                    VideoCodec::Vp9 => VideoCodecData::Vp9,
+                    VideoCodec::Any => VideoCodecData::Any,
+                }),
+                audio_codec: o.audio_codec.map(|v| match v {
+                    AudioCodec::Best => AudioCodecData::Best,
+                    AudioCodec::Aac => AudioCodecData::Aac,
+                    AudioCodec::Mp3 => AudioCodecData::Mp3,
+                    AudioCodec::Opus => AudioCodecData::Opus,
+                }),
+                container: o.container.map(|v| match v {
+                    Container::Mp4 => ContainerData::Mp4,
+                    Container::Mkv => ContainerData::Mkv,
+                    Container::Webm => ContainerData::Webm,
+                }),
+                send_as_file: o.send_as_file,
+                gallery_zip: o.gallery_zip,
+            }),
     };
     serde_json::to_value(data).map_err(|_| StoreError::InvalidStoredData)
 }
@@ -279,6 +334,37 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
             .with_target(target)
             .map_err(|_| StoreError::InvalidStoredData)?;
     }
+    if let Some(o) = data.preference_overrides {
+        if o.max_height
+            .flatten()
+            .is_some_and(|height| height == 0 || height > 100_000)
+        {
+            return Err(StoreError::InvalidStoredData);
+        }
+        request = request.with_preference_overrides(DownloadPreferenceOverrides {
+            max_height: o.max_height,
+            video_codec: o.video_codec.map(|v| match v {
+                VideoCodecData::H264 => VideoCodec::H264,
+                VideoCodecData::H265 => VideoCodec::H265,
+                VideoCodecData::Av1 => VideoCodec::Av1,
+                VideoCodecData::Vp9 => VideoCodec::Vp9,
+                VideoCodecData::Any => VideoCodec::Any,
+            }),
+            audio_codec: o.audio_codec.map(|v| match v {
+                AudioCodecData::Best => AudioCodec::Best,
+                AudioCodecData::Aac => AudioCodec::Aac,
+                AudioCodecData::Mp3 => AudioCodec::Mp3,
+                AudioCodecData::Opus => AudioCodec::Opus,
+            }),
+            container: o.container.map(|v| match v {
+                ContainerData::Mp4 => Container::Mp4,
+                ContainerData::Mkv => Container::Mkv,
+                ContainerData::Webm => Container::Webm,
+            }),
+            send_as_file: o.send_as_file,
+            gallery_zip: o.gallery_zip,
+        });
+    }
     request
         .with_network(data.network.try_into()?)
         .map_err(|_| StoreError::InvalidStoredData)
@@ -327,6 +413,57 @@ mod tests {
         assert_eq!(decoded.params().max_height(), Some(720));
         assert_eq!(decoded.params().video_codec(), VideoCodec::H264);
         assert_eq!(decoded.media_mode(), MediaMode::Video);
+    }
+
+    #[test]
+    fn preference_override_metadata_round_trips_absent_and_explicit_best() {
+        use yoink_domain::DownloadPreferenceOverrides;
+        let absent = request().with_preference_overrides(DownloadPreferenceOverrides::default());
+        let encoded_absent = encode(&absent).unwrap();
+        assert!(
+            encoded_absent["preference_overrides"]
+                .get("max_height")
+                .is_none()
+        );
+        assert_eq!(decode(encoded_absent).unwrap(), absent);
+
+        let explicit_best = request().with_preference_overrides(DownloadPreferenceOverrides {
+            max_height: Some(None),
+            ..Default::default()
+        });
+        let encoded_best = encode(&explicit_best).unwrap();
+        assert!(
+            encoded_best["preference_overrides"]
+                .get("max_height")
+                .unwrap()
+                .is_null()
+        );
+        assert_eq!(decode(encoded_best).unwrap(), explicit_best);
+
+        let plain = request();
+        let encoded = encode(&plain).unwrap();
+        assert!(encoded.get("preference_overrides").is_none());
+        assert_eq!(decode(encoded).unwrap(), plain);
+
+        let old = serde_json::json!({"actor_id":7,"source_url":"https://example.com/a","media_mode":"video"});
+        let decoded = decode(old).unwrap();
+        assert!(decoded.preference_overrides().is_none());
+    }
+
+    #[test]
+    fn malformed_preference_override_metadata_is_rejected() {
+        let base = serde_json::json!({"actor_id":7,"source_url":"https://example.com/a","media_mode":"video"});
+        for height in [serde_json::json!(0), serde_json::json!(100001)] {
+            let mut invalid = base.clone();
+            invalid["preference_overrides"] = serde_json::json!({"max_height":height});
+            assert_eq!(decode(invalid).unwrap_err(), StoreError::InvalidStoredData);
+        }
+        let mut unknown = base;
+        unknown["preference_overrides"] = serde_json::json!({"unexpected":true});
+        assert_eq!(decode(unknown).unwrap_err(), StoreError::InvalidStoredData);
+        let mut bad_type = serde_json::json!({"actor_id":7,"source_url":"https://example.com/a","media_mode":"video"});
+        bad_type["preference_overrides"] = serde_json::json!({"video_codec":"unsafe"});
+        assert_eq!(decode(bad_type).unwrap_err(), StoreError::InvalidStoredData);
     }
 
     #[test]

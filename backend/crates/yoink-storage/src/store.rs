@@ -105,7 +105,7 @@ impl Store {
             return Ok(None);
         };
         let current = codec::decode(row.try_get("request").map_err(|_| StoreError::Database)?)?;
-        if without_network(&current)? != *request {
+        if !same_request_intent(&current, request)? {
             return Err(StoreError::Conflict);
         }
         Ok(Some(Admission {
@@ -169,7 +169,7 @@ impl Store {
                 row.try_get("request").map_err(|_| StoreError::Database)?;
             let current = codec::decode(current)?;
             let same_intent = if preserve_first_network {
-                without_network(&current)? == without_network(request)?
+                same_request_intent(&current, request)?
             } else {
                 current == *request
             };
@@ -896,6 +896,37 @@ fn without_network(request: &DownloadRequest) -> Result<DownloadRequest, StoreEr
         .clone()
         .with_network(NetworkSelection::NONE)
         .map_err(|_| StoreError::InvalidInput)
+}
+
+fn same_request_intent(
+    current: &DownloadRequest,
+    requested: &DownloadRequest,
+) -> Result<bool, StoreError> {
+    let current = without_network(current)?;
+    let requested = without_network(requested)?;
+    if current.preference_overrides() != requested.preference_overrides() {
+        return Ok(false);
+    }
+    if current.preference_overrides().is_some() {
+        let normalize = |request: DownloadRequest| -> Result<DownloadRequest, StoreError> {
+            let p = request.params();
+            let defaults = yoink_domain::DownloadParams::default();
+            let params = p
+                .clone()
+                .with_max_height(defaults.max_height())
+                .map_err(|_| StoreError::InvalidInput)?
+                .with_video_codec(defaults.video_codec())
+                .with_audio_codec(defaults.audio_codec())
+                .with_container(defaults.container())
+                .with_send_as_file(defaults.send_as_file())
+                .with_gallery_zip(defaults.gallery_zip());
+            request
+                .with_params(params)
+                .map_err(|_| StoreError::InvalidInput)
+        };
+        return Ok(normalize(current)? == normalize(requested)?);
+    }
+    Ok(current == requested)
 }
 
 #[cfg(test)]

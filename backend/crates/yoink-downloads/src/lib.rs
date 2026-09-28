@@ -12,7 +12,8 @@ use uuid::Uuid;
 use yoink_access::{AccessPolicy, AccessScope, Role};
 use yoink_domain::CachedMedia;
 use yoink_domain::{
-    DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode, NetworkSelection,
+    DeliveryTarget, DownloadParams, DownloadPreferenceOverrides, DownloadRequest,
+    MediaMode as DomainMediaMode, NetworkSelection,
 };
 use yoink_executor::{Executor, ExecutorError, ValidatedArtifact};
 use yoink_identity::IdentityStore;
@@ -282,12 +283,64 @@ impl DownloadService {
         self.submit_request(&request, idempotency_key).await
     }
 
+    pub async fn submit_preferred_request(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+        overrides: DownloadPreferenceOverrides,
+    ) -> Result<Admission, DownloadError> {
+        if !request_format_defaults(request)
+            || request.preference_overrides().is_some()
+            || request.source_url().as_str().len() > 4096
+            || request
+                .target()
+                .is_none_or(|target| target.bot_id() != self.delivery.bot_id())
+            || request.network() != &NetworkSelection::NONE
+        {
+            return Err(DownloadError::InvalidInput);
+        }
+        let intent = request.clone().with_preference_overrides(overrides.clone());
+        let identity = self.authorize_request(request).await?;
+        if let Some(admission) = self
+            .store
+            .replay_network_admission(&intent, idempotency_key)
+            .await
+            .map_err(map_store)?
+        {
+            return Ok(admission);
+        }
+        let preferences = self
+            .profile
+            .format_preferences(request.actor_id())
+            .await
+            .map_err(map_profile)?;
+        let resolved =
+            profile::resolve_format_values(request.media_mode(), preferences.as_ref(), &overrides)
+                .map_err(map_profile)?;
+        let base = request.params();
+        let params = base
+            .clone()
+            .with_max_height(resolved.max_height())
+            .map_err(|_| DownloadError::InvalidPreferences)?
+            .with_video_codec(resolved.video_codec())
+            .with_audio_codec(resolved.audio_codec())
+            .with_container(resolved.container())
+            .with_send_as_file(resolved.send_as_file())
+            .with_gallery_zip(resolved.gallery_zip());
+        let prepared_intent = intent
+            .with_params(params)
+            .map_err(|_| DownloadError::InvalidInput)?;
+        self.admit_network_request(&prepared_intent, idempotency_key, &identity)
+            .await
+    }
+
     pub async fn submit_request(
         &self,
         request: &DownloadRequest,
         idempotency_key: &str,
     ) -> Result<Admission, DownloadError> {
-        if request.source_url().as_str().len() > 4096
+        if request.preference_overrides().is_some()
+            || request.source_url().as_str().len() > 4096
             || request
                 .target()
                 .is_none_or(|target| target.bot_id() != self.delivery.bot_id())
@@ -306,6 +359,16 @@ impl DownloadService {
         {
             return Ok(admission);
         }
+        self.admit_network_request(request, idempotency_key, &identity)
+            .await
+    }
+
+    async fn admit_network_request(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+        identity: &yoink_identity::IdentitySnapshot,
+    ) -> Result<Admission, DownloadError> {
         let domain = request
             .source_url()
             .host_str()
@@ -314,7 +377,7 @@ impl DownloadService {
         let selection = self
             .profile
             .prepare_network(
-                self.network_context(request.actor_id(), domain, &identity),
+                self.network_context(request.actor_id(), domain, identity),
                 seed,
             )
             .await
@@ -1179,6 +1242,16 @@ fn retryable_executor_error(error: ExecutorError) -> bool {
         | ExecutorError::ResourceLimit
         | ExecutorError::UnsafeArtifact => false,
     }
+}
+
+fn request_format_defaults(request: &DownloadRequest) -> bool {
+    let p = request.params();
+    p.max_height().is_none()
+        && p.video_codec() == yoink_domain::VideoCodec::H264
+        && p.audio_codec() == yoink_domain::AudioCodec::Best
+        && p.container() == yoink_domain::Container::Mp4
+        && !p.send_as_file()
+        && !p.gallery_zip()
 }
 
 fn validate_config(config: &DownloadConfig) -> Result<(), DownloadError> {

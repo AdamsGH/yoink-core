@@ -10,7 +10,9 @@ use url::Url;
 use yoink_access::{FeatureSpec, Role, effective_grant};
 use yoink_db::{Database, query};
 use yoink_domain::{
-    CookieReference, CredentialVersion, NetworkSelection, ProxyReference, ProxySource,
+    AudioCodec, Container, CookieReference, CredentialVersion, DownloadParams,
+    DownloadPreferenceOverrides, MediaMode, NetworkSelection, ProxyReference, ProxySource,
+    VideoCodec,
 };
 use yoink_identity::IdentitySnapshot;
 use yoink_worker_protocol::{MAX_COOKIE_JAR_BYTES, MAX_PROXY_URL_BYTES, NetworkCredentials};
@@ -29,6 +31,16 @@ pub struct NetworkContext<'a> {
 #[derive(Clone)]
 pub struct ProfileStore {
     database: Database,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct FormatPreferences {
+    quality: Option<String>,
+    codec: Option<String>,
+    container: Option<String>,
+    send_as_file: bool,
+    audio_codec: Option<String>,
+    gallery_zip: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -139,6 +151,34 @@ impl ProfileStore {
             query(sql).execute(&self.database).await?;
         }
         Ok(())
+    }
+
+    pub(super) async fn format_preferences(
+        &self,
+        actor_id: u64,
+    ) -> Result<Option<FormatPreferences>, ProfileError> {
+        let id = valid_actor(actor_id)?;
+        let row = query(include_str!("format_preferences.sql"))
+            .bind(id)
+            .fetch_optional(&self.database)
+            .await?;
+        let Some(row) = row else { return Ok(None) };
+        Ok(Some(FormatPreferences {
+            quality: row.try_get("quality").map_err(|_| ProfileError::Database)?,
+            codec: row.try_get("codec").map_err(|_| ProfileError::Database)?,
+            container: row
+                .try_get("container")
+                .map_err(|_| ProfileError::Database)?,
+            send_as_file: row
+                .try_get("send_as_file")
+                .map_err(|_| ProfileError::Database)?,
+            audio_codec: row
+                .try_get("audio_codec")
+                .map_err(|_| ProfileError::Database)?,
+            gallery_zip: row
+                .try_get("gallery_zip")
+                .map_err(|_| ProfileError::Database)?,
+        }))
     }
 
     pub async fn preferences(
@@ -588,6 +628,172 @@ fn select_candidate(candidates: &[Candidate], seed: u64) -> Option<Candidate> {
     }
 }
 
+pub fn resolve_format_preferences(
+    mode: MediaMode,
+    preferences: Option<&DownloadPreferences>,
+    overrides: &DownloadPreferenceOverrides,
+) -> Result<DownloadParams, ProfileError> {
+    let compact = preferences.map(|p| FormatPreferences {
+        quality: Some(p.quality.clone()),
+        codec: Some(p.codec.clone()),
+        container: Some(p.container.clone()),
+        send_as_file: p.send_as_file,
+        audio_codec: Some(p.audio_codec.clone()),
+        gallery_zip: p.gallery_zip,
+    });
+    resolve_format_values(mode, compact.as_ref(), overrides)
+}
+
+pub(super) fn resolve_format_values(
+    mode: MediaMode,
+    preferences: Option<&FormatPreferences>,
+    o: &DownloadPreferenceOverrides,
+) -> Result<DownloadParams, ProfileError> {
+    let irrelevant = match mode {
+        MediaMode::Video => o.gallery_zip.is_some(),
+        MediaMode::Audio => {
+            o.max_height.is_some()
+                || o.video_codec.is_some()
+                || o.gallery_zip.is_some()
+                || o.container.is_some()
+        }
+        MediaMode::Image => {
+            o.max_height.is_some()
+                || o.video_codec.is_some()
+                || o.audio_codec.is_some()
+                || o.container.is_some()
+        }
+    };
+    if irrelevant
+        || o.max_height
+            .flatten()
+            .is_some_and(|h| h == 0 || h > 100_000)
+    {
+        return Err(ProfileError::InvalidPreferences);
+    }
+    let defaults = FormatPreferences {
+        quality: Some("best".to_owned()),
+        codec: Some("avc1".to_owned()),
+        container: Some("mp4".to_owned()),
+        send_as_file: false,
+        audio_codec: Some("best".to_owned()),
+        gallery_zip: false,
+    };
+    let p = Some(preferences.unwrap_or(&defaults));
+    let mut params = DownloadParams::default();
+    match mode {
+        MediaMode::Video => {
+            let height = match o.max_height {
+                Some(height) => height,
+                None => {
+                    let quality = p
+                        .and_then(|p| p.quality.as_deref())
+                        .ok_or(ProfileError::InvalidPreferences)?
+                        .to_ascii_lowercase();
+                    match quality.as_str() {
+                        "best" => None,
+                        "4k" => Some(2160),
+                        "8k" => Some(4320),
+                        value => {
+                            let numeric = value.strip_suffix('p').unwrap_or(value);
+                            Some(
+                                numeric
+                                    .parse::<u32>()
+                                    .ok()
+                                    .filter(|v| *v > 0 && *v <= 100_000)
+                                    .ok_or(ProfileError::InvalidPreferences)?,
+                            )
+                        }
+                    }
+                }
+            };
+            params = params
+                .with_max_height(height)
+                .map_err(|_| ProfileError::InvalidPreferences)?;
+            let codec = match o.video_codec {
+                Some(v) => v,
+                None => match p
+                    .and_then(|p| p.codec.as_deref())
+                    .ok_or(ProfileError::InvalidPreferences)?
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "avc1" | "h264" => VideoCodec::H264,
+                    "h265" | "hevc" => VideoCodec::H265,
+                    "av01" | "av1" => VideoCodec::Av1,
+                    "vp09" | "vp9" => VideoCodec::Vp9,
+                    "any" => VideoCodec::Any,
+                    _ => return Err(ProfileError::InvalidPreferences),
+                },
+            };
+            let container = match o.container {
+                Some(v) => v,
+                None => parse_container(
+                    p.and_then(|p| p.container.as_deref())
+                        .ok_or(ProfileError::InvalidPreferences)?,
+                )?,
+            };
+            if container == Container::Webm {
+                if !matches!(codec, VideoCodec::Vp9 | VideoCodec::Av1)
+                    || o.audio_codec != Some(AudioCodec::Opus)
+                {
+                    return Err(ProfileError::InvalidPreferences);
+                }
+                params = params.with_audio_codec(AudioCodec::Opus);
+            } else {
+                params = params.with_audio_codec(o.audio_codec.unwrap_or(AudioCodec::Best));
+            }
+            params = params
+                .with_video_codec(codec)
+                .with_container(container)
+                .with_send_as_file(
+                    o.send_as_file
+                        .unwrap_or(p.map(|p| p.send_as_file).unwrap_or(false)),
+                );
+        }
+        MediaMode::Audio => {
+            let audio = match o.audio_codec {
+                Some(v) => v,
+                None => match p
+                    .and_then(|p| p.audio_codec.as_deref())
+                    .ok_or(ProfileError::InvalidPreferences)?
+                {
+                    "best" => AudioCodec::Best,
+                    "aac" | "mp4a" => AudioCodec::Aac,
+                    "mp3" => AudioCodec::Mp3,
+                    "opus" => AudioCodec::Opus,
+                    _ => return Err(ProfileError::InvalidPreferences),
+                },
+            };
+            params = params.with_audio_codec(audio).with_send_as_file(
+                o.send_as_file
+                    .unwrap_or(p.map(|p| p.send_as_file).unwrap_or(false)),
+            );
+        }
+        MediaMode::Image => {
+            params = params
+                .with_gallery_zip(
+                    o.gallery_zip
+                        .unwrap_or(p.map(|p| p.gallery_zip).unwrap_or(false)),
+                )
+                .with_send_as_file(
+                    o.send_as_file
+                        .unwrap_or(p.map(|p| p.send_as_file).unwrap_or(false)),
+                );
+        }
+    }
+    Ok(params)
+}
+
+fn parse_container(value: &str) -> Result<Container, ProfileError> {
+    match value {
+        "mp4" => Ok(Container::Mp4),
+        "mkv" => Ok(Container::Mkv),
+        "webm" => Ok(Container::Webm),
+        _ => Err(ProfileError::InvalidPreferences),
+    }
+}
+
 fn validate_preferences(p: &DownloadPreferences) -> Result<(), ProfileError> {
     let bounded = |value: &str, max: usize| {
         !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
@@ -809,6 +1015,207 @@ fn matches_no_cookie_domain(target: &str, patterns: &[String]) -> Result<bool, P
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn format_prefs(quality: &str, codec: &str, container: &str, audio: &str) -> FormatPreferences {
+        FormatPreferences {
+            quality: Some(quality.to_owned()),
+            codec: Some(codec.to_owned()),
+            container: Some(container.to_owned()),
+            send_as_file: false,
+            audio_codec: Some(audio.to_owned()),
+            gallery_zip: false,
+        }
+    }
+
+    #[test]
+    fn format_preference_aliases_and_modes_are_resolved_safely() {
+        let prefs = format_prefs("4K", "AV01", "mp4", "not-a-video-setting");
+        let params = resolve_format_values(
+            MediaMode::Video,
+            Some(&prefs),
+            &DownloadPreferenceOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(params.max_height(), Some(2160));
+        assert_eq!(params.video_codec(), VideoCodec::Av1);
+        assert_eq!(params.audio_codec(), AudioCodec::Best);
+
+        for (quality, height) in [("720", 720), ("720P", 720), ("8k", 4320), ("best", 0)] {
+            let prefs = format_prefs(quality, "vp09", "mkv", "malformed legacy audio codec");
+            let params = resolve_format_values(
+                MediaMode::Video,
+                Some(&prefs),
+                &DownloadPreferenceOverrides::default(),
+            )
+            .unwrap();
+            assert_eq!(params.max_height(), (height != 0).then_some(height));
+            assert_eq!(params.video_codec(), VideoCodec::Vp9);
+            assert_eq!(params.audio_codec(), AudioCodec::Best);
+        }
+
+        assert!(
+            resolve_format_values(
+                MediaMode::Video,
+                None,
+                &DownloadPreferenceOverrides::default()
+            )
+            .is_ok()
+        );
+        let audio = format_prefs("ignored", "ignored", "ignored", "mp4a");
+        assert_eq!(
+            resolve_format_values(
+                MediaMode::Audio,
+                Some(&audio),
+                &DownloadPreferenceOverrides::default()
+            )
+            .unwrap()
+            .audio_codec(),
+            AudioCodec::Aac
+        );
+        let image = FormatPreferences {
+            gallery_zip: true,
+            ..format_prefs("ignored", "ignored", "ignored", "ignored")
+        };
+        assert!(
+            resolve_format_values(
+                MediaMode::Image,
+                Some(&image),
+                &DownloadPreferenceOverrides::default()
+            )
+            .unwrap()
+            .gallery_zip()
+        );
+        assert!(
+            resolve_format_values(
+                MediaMode::Image,
+                None,
+                &DownloadPreferenceOverrides::default()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn overrides_validate_bounds_relevance_webm_and_rescue_bad_stored_values() {
+        for height in [0, 100_001] {
+            let overrides = DownloadPreferenceOverrides {
+                max_height: Some(Some(height)),
+                ..Default::default()
+            };
+            assert_eq!(
+                resolve_format_values(MediaMode::Video, None, &overrides),
+                Err(ProfileError::InvalidPreferences)
+            );
+        }
+        let min = DownloadPreferenceOverrides {
+            max_height: Some(Some(1)),
+            ..Default::default()
+        };
+        let max = DownloadPreferenceOverrides {
+            max_height: Some(Some(100_000)),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_format_values(MediaMode::Video, None, &min)
+                .unwrap()
+                .max_height(),
+            Some(1)
+        );
+        assert_eq!(
+            resolve_format_values(MediaMode::Video, None, &max)
+                .unwrap()
+                .max_height(),
+            Some(100_000)
+        );
+
+        let invalid = format_prefs(
+            "ask",
+            "malicious-quality-codec",
+            "malicious-container",
+            "malicious-audio",
+        );
+        let rescue = DownloadPreferenceOverrides {
+            max_height: Some(None),
+            video_codec: Some(VideoCodec::H264),
+            container: Some(Container::Mp4),
+            audio_codec: Some(AudioCodec::Opus),
+            ..Default::default()
+        };
+        let resolved = resolve_format_values(MediaMode::Video, Some(&invalid), &rescue).unwrap();
+        assert_eq!(resolved.max_height(), None);
+        assert_eq!(resolved.video_codec(), VideoCodec::H264);
+        assert_eq!(resolved.audio_codec(), AudioCodec::Opus);
+
+        let webm = format_prefs("best", "vp9", "webm", "malformed ignored legacy audio");
+        assert_eq!(
+            resolve_format_values(
+                MediaMode::Video,
+                Some(&webm),
+                &DownloadPreferenceOverrides::default()
+            ),
+            Err(ProfileError::InvalidPreferences)
+        );
+        let webm_override = DownloadPreferenceOverrides {
+            audio_codec: Some(AudioCodec::Opus),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_format_values(MediaMode::Video, Some(&webm), &webm_override)
+                .unwrap()
+                .audio_codec(),
+            AudioCodec::Opus
+        );
+
+        for (mode, overrides) in [
+            (
+                MediaMode::Audio,
+                DownloadPreferenceOverrides {
+                    container: Some(Container::Mkv),
+                    ..Default::default()
+                },
+            ),
+            (
+                MediaMode::Video,
+                DownloadPreferenceOverrides {
+                    gallery_zip: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                MediaMode::Audio,
+                DownloadPreferenceOverrides {
+                    video_codec: Some(VideoCodec::Vp9),
+                    ..Default::default()
+                },
+            ),
+            (
+                MediaMode::Image,
+                DownloadPreferenceOverrides {
+                    audio_codec: Some(AudioCodec::Opus),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                resolve_format_values(mode, None, &overrides),
+                Err(ProfileError::InvalidPreferences)
+            );
+        }
+        let bad = format_prefs(
+            "99999999999999999999999999999999",
+            "unsafe",
+            "bad",
+            "unsafe",
+        );
+        assert_eq!(
+            resolve_format_values(
+                MediaMode::Video,
+                Some(&bad),
+                &DownloadPreferenceOverrides::default()
+            ),
+            Err(ProfileError::InvalidPreferences)
+        );
+    }
     use yoink_access::{Grant, Principal};
     use yoink_identity::IdentitySnapshot;
 

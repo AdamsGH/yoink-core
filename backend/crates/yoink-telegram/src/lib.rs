@@ -23,7 +23,10 @@ use uuid::Uuid;
 use yoink_application::{ModuleStatus, SystemService};
 #[cfg(test)]
 use yoink_domain::Engine;
-use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode as DomainMediaMode};
+use yoink_domain::{
+    DeliveryTarget, DownloadParams, DownloadPreferenceOverrides, DownloadRequest,
+    MediaMode as DomainMediaMode,
+};
 use yoink_downloads::{DownloadError, DownloadService};
 use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for};
 use yoink_storage::{Admission, OperationStatus};
@@ -523,7 +526,14 @@ async fn handle_message(
                 .map_err(|_| DownloadError::InvalidInput)
             });
             match request {
-                Ok(request) => match service.submit_request(&request, &key).await {
+                Ok(request) => match service
+                    .submit_preferred_request(
+                        &request,
+                        &key,
+                        DownloadPreferenceOverrides::default(),
+                    )
+                    .await
+                {
                     Ok(admission) => admitted_response(admission, language),
                     Err(error) => download_error_response(error, language).to_owned(),
                 },
@@ -549,7 +559,10 @@ async fn handle_message(
                     .map_err(|_| DownloadError::InvalidInput)
             });
             match request {
-                Ok(request) => match service.submit_request(&request, &key).await {
+                Ok(request) => match service
+                    .submit_preferred_request(&request, &key, media.overrides)
+                    .await
+                {
                     Ok(admission) => admitted_response(admission, language),
                     Err(error) => download_error_response(error, language).to_owned(),
                 },
@@ -620,6 +633,13 @@ mod tests {
             Some(Command::Download("https://example.test/video".into()))
         );
         assert_eq!(
+            parse_command(
+                "/download https://example.test/video --height 720",
+                "yoink_bot"
+            ),
+            Some(Command::Invalid)
+        );
+        assert_eq!(
             parse_command("/download https://example.test/a b", "yoink_bot"),
             Some(Command::Invalid)
         );
@@ -663,7 +683,7 @@ mod tests {
     #[test]
     fn media_commands_accept_suffixes_and_keep_urls_out_of_debug_output() {
         let parsed = parse_command(
-            "/AUDIO@YOINK_BOT https://example.test/watch?token=secret 3",
+            "/AUDIO@YOINK_BOT https://example.test/watch?token=secret 3 --audio-codec best",
             "yoink_bot",
         )
         .unwrap();

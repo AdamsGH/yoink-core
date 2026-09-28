@@ -188,6 +188,17 @@ impl ClipRange {
     }
 }
 
+/// Caller-selected format overrides used to freeze saved preferences at admission.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct DownloadPreferenceOverrides {
+    pub max_height: Option<Option<u32>>,
+    pub video_codec: Option<VideoCodec>,
+    pub audio_codec: Option<AudioCodec>,
+    pub container: Option<Container>,
+    pub send_as_file: Option<bool>,
+    pub gallery_zip: Option<bool>,
+}
+
 /// Per-operation download options. These values are never stored as shared user state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DownloadParams {
@@ -316,6 +327,7 @@ pub struct DownloadRequest {
     params: DownloadParams,
     target: Option<DeliveryTarget>,
     network: NetworkSelection,
+    preference_overrides: Option<DownloadPreferenceOverrides>,
 }
 
 impl DownloadRequest {
@@ -352,6 +364,7 @@ impl DownloadRequest {
             params,
             target: None,
             network: NetworkSelection::NONE,
+            preference_overrides: None,
         })
     }
 
@@ -382,6 +395,23 @@ impl DownloadRequest {
 
     pub const fn network(&self) -> &NetworkSelection {
         &self.network
+    }
+
+    pub fn preference_overrides(&self) -> Option<&DownloadPreferenceOverrides> {
+        self.preference_overrides.as_ref()
+    }
+
+    pub fn with_preference_overrides(mut self, overrides: DownloadPreferenceOverrides) -> Self {
+        self.preference_overrides = Some(overrides);
+        self
+    }
+
+    pub fn with_params(mut self, params: DownloadParams) -> Result<Self, RequestValidationError> {
+        if self.clip_range.is_some() && !params.clips().is_empty() {
+            return Err(RequestValidationError::InvalidParameters);
+        }
+        self.params = params;
+        Ok(self)
     }
 
     pub fn with_network(
