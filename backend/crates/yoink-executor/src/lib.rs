@@ -35,6 +35,55 @@ pub struct Executor {
     config: ExecutorConfig,
 }
 
+#[cfg(test)]
+mod formats_report_tests {
+    use super::{load_artifact, valid_formats_report};
+    use std::io::Read;
+
+    const HEADER: &str =
+        "Yoink source formats v1\nID\tEXT\tWIDTH\tHEIGHT\tFPS\tVIDEO\tAUDIO\tPROTOCOL\n";
+
+    #[test]
+    fn accepts_fixed_bounded_tsv_and_rejects_untrusted_text() {
+        assert!(valid_formats_report(
+            format!("{HEADER}137\tmp4\t1920\t1080\t29.970\th264\taac\thttps\n").as_bytes()
+        ));
+        for bad in [
+            format!("{HEADER}137\tmp4\t1920\t1080\t29.970\th264\taac\thttps"),
+            format!("{HEADER}137\t../x\t1920\t1080\t30\th264\taac\thttps\n"),
+            format!("{HEADER}137\tmp4\t1920\t1080\t1000.001\th264\taac\thttps\n"),
+            format!("{HEADER}137\tmp4\t1920\t1080\t30\th264\taac\thttps\textra\n"),
+            format!("{HEADER}\tmp4\t1920\t1080\t30\th264\taac\thttps\n"),
+            "arbitrary text\n".to_owned(),
+        ] {
+            assert!(!valid_formats_report(bad.as_bytes()));
+        }
+        let row = "1\tmp4\t0\t16384\t0\th264\taac\tdash\n";
+        assert!(valid_formats_report(
+            format!("{HEADER}{}", row.repeat(100)).as_bytes()
+        ));
+        assert!(!valid_formats_report(
+            format!("{HEADER}{}", row.repeat(101)).as_bytes()
+        ));
+    }
+
+    #[test]
+    fn validated_formats_artifact_is_rewound_and_delivers_all_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let bytes = format!("{HEADER}137\tmp4\t1920\t1080\t29.970\th264\taac\thttps\n");
+        std::fs::write(temp.path().join("formats.txt"), bytes.as_bytes()).unwrap();
+        let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+            path: yoink_worker_protocol::ArtifactPath::parse("formats.txt").unwrap(),
+            size_bytes: bytes.len() as u64,
+            media_type: "text/plain".into(),
+        };
+        let mut artifact = load_artifact(temp.path(), &descriptor, 64 * 1024, true).unwrap();
+        let mut delivered = Vec::new();
+        artifact.file.read_to_end(&mut delivered).unwrap();
+        assert_eq!(delivered, bytes.as_bytes());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArtifactLimits {
     pub max_artifact_bytes: u64,
@@ -388,11 +437,20 @@ impl Executor {
         }
         let limit = self.config.max_artifact_bytes;
         let workspace_limit = self.config.max_workspace_bytes;
+        let formats_report = matches!(
+            &request.task,
+            yoink_worker_protocol::TaskKind::Download {
+                media_mode: yoink_worker_protocol::MediaMode::Formats
+            }
+        );
         let artifact_task = tokio::task::spawn_blocking(move || {
             let mut validated = Vec::with_capacity(artifacts.len());
             let mut total = 0u64;
             for descriptor in &artifacts {
-                let artifact = load_artifact(&workspace, descriptor, limit)?;
+                if formats_report && artifacts.len() != 1 {
+                    return Err(ExecutorError::UnsafeArtifact);
+                }
+                let artifact = load_artifact(&workspace, descriptor, limit, formats_report)?;
                 total = total.checked_add(artifact.size_bytes).ok_or(ExecutorError::ResourceLimit)?;
                 if total > workspace_limit {
                     return Err(ExecutorError::ResourceLimit);
@@ -589,6 +647,7 @@ fn load_artifact(
     root: &Path,
     descriptor: &yoink_worker_protocol::ArtifactDescriptor,
     limit: u64,
+    formats_report: bool,
 ) -> Result<ValidatedArtifact, ExecutorError> {
     let path = Path::new(descriptor.path.as_str());
     let components: Vec<_> = path.components().collect();
@@ -634,6 +693,31 @@ fn load_artifact(
         return Err(ExecutorError::UnsafeArtifact);
     }
     let mut file = File::from(fd);
+    if formats_report {
+        if descriptor.path.as_str() != "formats.txt"
+            || descriptor.media_type != "text/plain"
+            || descriptor.size_bytes > 64 * 1024
+        {
+            return Err(ExecutorError::UnsafeArtifact);
+        }
+        let mut bytes = Vec::with_capacity(descriptor.size_bytes as usize);
+        (&mut file)
+            .take(64 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ExecutorError::Io)?;
+        if bytes.len() as u64 != descriptor.size_bytes
+            || !valid_formats_report(&bytes)
+            || file.seek(std::io::SeekFrom::Start(0)).is_err()
+        {
+            return Err(ExecutorError::UnsafeArtifact);
+        }
+        return Ok(ValidatedArtifact {
+            file,
+            filename: "formats.txt".into(),
+            media_type: "text/plain".into(),
+            size_bytes: descriptor.size_bytes,
+        });
+    }
     let mut header = [0u8; MAX_SNIFF_BYTES];
     let read = file.read(&mut header).map_err(|_| ExecutorError::Io)?;
     file.seek(std::io::SeekFrom::Start(0))
@@ -739,6 +823,75 @@ fn load_artifact(
         media_type: media_type.into(),
         size_bytes: descriptor.size_bytes,
     })
+}
+
+fn valid_formats_report(bytes: &[u8]) -> bool {
+    if bytes.is_empty() || bytes.len() > 64 * 1024 || !bytes.ends_with(b"\n") {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mut lines = text.split_terminator('\n');
+    if lines.next() != Some("Yoink source formats v1")
+        || lines.next() != Some("ID\tEXT\tWIDTH\tHEIGHT\tFPS\tVIDEO\tAUDIO\tPROTOCOL")
+    {
+        return false;
+    }
+    let rows: Vec<_> = lines.collect();
+    if !(1..=100).contains(&rows.len()) {
+        return false;
+    }
+    rows.into_iter().all(|row| {
+        let cells: Vec<_> = row.split('\t').collect();
+        cells.len() == 8
+            && (cells[0] == "-"
+                || (!cells[0].is_empty()
+                    && cells[0].len() <= 10
+                    && cells[0].bytes().all(|b| b.is_ascii_digit())))
+            && matches!(
+                cells[1],
+                "mp4" | "webm" | "m4a" | "mp3" | "ogg" | "opus" | "flv" | "mkv" | "unknown"
+            )
+            && bounded_integer(cells[2], 16_384)
+            && bounded_integer(cells[3], 16_384)
+            && valid_fps(cells[4])
+            && matches!(
+                cells[5],
+                "h264" | "h265" | "av1" | "vp9" | "vp8" | "none" | "unknown"
+            )
+            && matches!(
+                cells[6],
+                "aac" | "mp3" | "opus" | "vorbis" | "flac" | "none" | "unknown"
+            )
+            && matches!(cells[7], "https" | "http" | "hls" | "dash" | "unknown")
+    })
+}
+
+fn bounded_integer(value: &str, max: u32) -> bool {
+    value == "-"
+        || (value.parse::<u32>().is_ok_and(|n| n <= max)
+            && !value.is_empty()
+            && value.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn valid_fps(value: &str) -> bool {
+    if value == "-" {
+        return true;
+    }
+    let Some((whole, fraction)) = value.split_once('.') else {
+        return value.parse::<u16>().is_ok_and(|n| n <= 1000)
+            && !value.is_empty()
+            && value.bytes().all(|b| b.is_ascii_digit());
+    };
+    !whole.is_empty()
+        && whole.bytes().all(|b| b.is_ascii_digit())
+        && !fraction.is_empty()
+        && fraction.len() <= 3
+        && fraction.bytes().all(|b| b.is_ascii_digit())
+        && value
+            .parse::<f32>()
+            .is_ok_and(|n| (0.0..=1000.0).contains(&n))
 }
 
 // Only sniff the signature here. The worker validates the complete bounded text,
@@ -896,14 +1049,14 @@ mod tests {
                 size_bytes: bytes.len() as u64,
                 media_type: "text/x-ssa".into(),
             };
-            let mut artifact = load_artifact(temp.path(), &descriptor, 4096).unwrap();
+            let mut artifact = load_artifact(temp.path(), &descriptor, 4096, false).unwrap();
             assert_eq!(artifact.filename, name);
             assert_eq!(artifact.media_type, "text/x-ssa");
             let mut actual = Vec::new();
             artifact.file.read_to_end(&mut actual).unwrap();
             assert_eq!(actual, bytes.as_bytes());
             assert!(matches!(
-                load_artifact(temp.path(), &descriptor, bytes.len() as u64 - 1),
+                load_artifact(temp.path(), &descriptor, bytes.len() as u64 - 1, false),
                 Err(ExecutorError::UnsafeArtifact)
             ));
         }
@@ -944,7 +1097,7 @@ mod tests {
             };
             assert!(
                 matches!(
-                    load_artifact(temp.path(), &descriptor, 4096),
+                    load_artifact(temp.path(), &descriptor, 4096, false),
                     Err(ExecutorError::UnsafeArtifact)
                 ),
                 "{name} / {mime}"
@@ -1086,7 +1239,8 @@ mod tests {
             size_bytes: 1024 * 1024 * 1024,
             media_type: "video/mp4".into(),
         };
-        let artifact = load_artifact(temp.path(), &descriptor, 2 * 1024 * 1024 * 1024).unwrap();
+        let artifact =
+            load_artifact(temp.path(), &descriptor, 2 * 1024 * 1024 * 1024, false).unwrap();
         assert_eq!(artifact.size_bytes, 1024 * 1024 * 1024);
         assert_eq!(
             artifact.file().metadata().unwrap().len(),

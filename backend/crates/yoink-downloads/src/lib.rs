@@ -306,6 +306,8 @@ impl DownloadService {
         overrides: DownloadPreferenceOverrides,
     ) -> Result<Admission, DownloadError> {
         if !request_format_defaults(request)
+            || (request.media_mode() == DomainMediaMode::Formats
+                && overrides != DownloadPreferenceOverrides::default())
             || request.preference_overrides().is_some()
             || request.source_url().as_str().len() > 4096
             || request
@@ -325,25 +327,31 @@ impl DownloadService {
         {
             return Ok(admission);
         }
-        let preferences = self
-            .profile
-            .format_preferences(request.actor_id())
-            .await
-            .map_err(map_profile)?;
-        let resolved =
-            profile::resolve_format_values(request.media_mode(), preferences.as_ref(), &overrides)
-                .map_err(map_profile)?;
         let base = request.params();
-        let params = base
-            .clone()
-            .with_max_height(resolved.max_height())
-            .map_err(|_| DownloadError::InvalidPreferences)?
-            .with_video_codec(resolved.video_codec())
-            .with_audio_codec(resolved.audio_codec())
-            .with_container(resolved.container())
-            .with_send_as_file(resolved.send_as_file())
-            .with_gallery_zip(resolved.gallery_zip())
-            .with_subtitles(resolved.subtitles().cloned());
+        let params = if request.media_mode() == DomainMediaMode::Formats {
+            base.clone().with_send_as_file(true)
+        } else {
+            let preferences = self
+                .profile
+                .format_preferences(request.actor_id())
+                .await
+                .map_err(map_profile)?;
+            let resolved = profile::resolve_format_values(
+                request.media_mode(),
+                preferences.as_ref(),
+                &overrides,
+            )
+            .map_err(map_profile)?;
+            base.clone()
+                .with_max_height(resolved.max_height())
+                .map_err(|_| DownloadError::InvalidPreferences)?
+                .with_video_codec(resolved.video_codec())
+                .with_audio_codec(resolved.audio_codec())
+                .with_container(resolved.container())
+                .with_send_as_file(resolved.send_as_file())
+                .with_gallery_zip(resolved.gallery_zip())
+                .with_subtitles(resolved.subtitles().cloned())
+        };
         let prepared_intent = intent
             .with_params(params)
             .map_err(|_| DownloadError::InvalidInput)?;
@@ -436,6 +444,18 @@ impl DownloadService {
         &self,
         request: &DownloadRequest,
     ) -> Result<yoink_identity::IdentitySnapshot, DownloadError> {
+        if request.media_mode() == DomainMediaMode::Formats
+            && (!self
+                .identities
+                .is_configured_owner(request.actor_id() as i64)
+                || request.target().is_none_or(|target| {
+                    target.bot_id() != self.delivery.bot_id()
+                        || target.chat_id() != request.actor_id() as i64
+                        || target.thread_id().is_some()
+                }))
+        {
+            return Err(DownloadError::Denied);
+        }
         self.authorize_target(request.actor_id(), request.target().copied())
             .await
     }
@@ -538,8 +558,11 @@ impl DownloadService {
             }
         };
         let send_as_file = claim.request.params().send_as_file();
+        let is_formats = claim.request.media_mode() == DomainMediaMode::Formats;
         let mut cached_revision = None;
-        let cache_hit = if cache::cache_read_enabled(self.config.cache_ttl, claim.cache_bypassed) {
+        let cache_hit = if !is_formats
+            && cache::cache_read_enabled(self.config.cache_ttl, claim.cache_bypassed)
+        {
             match self.store.lookup_media_cache(&claim.request).await {
                 Ok(Some(batch))
                     if cache::valid_cached_media(
@@ -722,10 +745,13 @@ impl DownloadService {
                 .await?;
                 break;
             }
-            let identity = match self
-                .authorize_target(claim.request.actor_id(), Some(target))
-                .await
-            {
+            let authorization = if is_formats {
+                self.authorize_request(&claim.request).await
+            } else {
+                self.authorize_target(claim.request.actor_id(), Some(target))
+                    .await
+            };
+            let identity = match authorization {
                 Ok(identity) => identity,
                 Err(DownloadError::Denied) => {
                     self.stop_delivery(&claim, yoink_storage::StopDeliveryReason::Denied)
@@ -918,7 +944,8 @@ impl DownloadService {
             | Err(mpsc::error::TryRecvError::Disconnected) => confirmed_file_ids.clear(),
             Err(mpsc::error::TryRecvError::Empty) => {}
         }
-        if cached_revision.is_none()
+        if !is_formats
+            && cached_revision.is_none()
             && !self.config.cache_ttl.is_zero()
             && !shutdown.is_cancelled()
             && !cancellation_seen
@@ -1177,6 +1204,7 @@ fn worker_request(claim: &Claim, credentials: NetworkCredentials) -> Result<Work
         DomainMediaMode::Audio => MediaMode::Audio,
         DomainMediaMode::Image => MediaMode::Image,
         DomainMediaMode::Subtitles => MediaMode::Subtitles,
+        DomainMediaMode::Formats => MediaMode::Formats,
     };
     Ok(WorkerRequest {
         version: PROTOCOL_VERSION,
@@ -1215,6 +1243,21 @@ fn retryable_executor_error(error: ExecutorError) -> bool {
 
 fn request_format_defaults(request: &DownloadRequest) -> bool {
     let p = request.params();
+    if request.media_mode() == DomainMediaMode::Formats {
+        return p.max_height().is_none()
+            && p.video_codec() == yoink_domain::VideoCodec::H264
+            && p.audio_codec() == yoink_domain::AudioCodec::Best
+            && p.container() == yoink_domain::Container::Mp4
+            && p.send_as_file()
+            && !p.gallery_zip()
+            && p.subtitles().is_none()
+            && p.playlist().is_none()
+            && p.clips().is_empty()
+            && matches!(
+                p.engine(),
+                yoink_domain::Engine::Auto | yoink_domain::Engine::YtDlp
+            );
+    }
     p.max_height().is_none()
         && p.video_codec() == yoink_domain::VideoCodec::H264
         && p.audio_codec() == yoink_domain::AudioCodec::Best

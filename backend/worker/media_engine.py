@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import tool_guard
 from failures import MediaFailure, classify_error
+from format_engine import download_format_report
 from subtitle_engine import download_subtitles
 
 
@@ -314,9 +315,19 @@ def download_media(request: dict[str, Any], settings: Any,
     if task.get("kind") != "download":
         raise MediaFailure("unsupported_source")
     mode = task.get("media_mode")
-    if mode not in ("best", "video", "audio", "image", "subtitles"):
+    if mode not in ("best", "video", "audio", "image", "subtitles", "formats"):
         raise MediaFailure("unsupported_source")
     engine = options.get("engine", "auto")
+    if mode == "formats" and (
+        options.get("max_height") is not None or options.get("playlist") is not None
+        or options.get("clips") or options.get("gallery_zip", False)
+        or options.get("video_codec", "h264") != "h264"
+        or options.get("audio_codec", "best") != "best"
+        or options.get("container", "mp4") != "mp4"
+        or options.get("engine", "auto") not in ("auto", "yt_dlp")
+        or options.get("subtitles") is not None
+    ):
+        raise MediaFailure("invalid_media")
     if mode == "image" and (
         options.get("max_height") is not None
         or options.get("video_codec", "h264") != "h264"
@@ -425,6 +436,8 @@ def download_media(request: dict[str, Any], settings: Any,
             try:
                 if mode == "subtitles":
                     return download_subtitles(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
+                if mode == "formats":
+                    return download_format_report(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
                 with yt_dlp.YoutubeDL(opts) as downloader:
                     return_code = downloader.download([request["source_url"]])
                     if return_code:

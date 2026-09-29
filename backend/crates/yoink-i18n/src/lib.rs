@@ -507,6 +507,7 @@ mod tests {
             let title = catalog.render(language, Key::QualityTitle, &[]).unwrap();
             let settings = catalog.render(language, Key::SettingsUsage, &[]).unwrap();
             let help = catalog.render(language, Key::HelpEnabled, &[]).unwrap();
+            let usage = catalog.render(language, Key::UsageDownload, &[]).unwrap();
             assert!(title.contains(if language == Language::English {
                 "not verified source formats"
             } else {
@@ -514,6 +515,13 @@ mod tests {
             }));
             assert!(settings.contains("ask"));
             assert!(help.contains("/quality"));
+            assert!(help.contains("/list URL"));
+            assert!(usage.contains("/list URL"));
+            assert!(help.contains(if language == Language::English {
+                "without downloading media"
+            } else {
+                "без загрузки медиа"
+            }));
         }
     }
 

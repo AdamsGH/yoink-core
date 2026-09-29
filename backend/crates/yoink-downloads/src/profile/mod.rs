@@ -686,6 +686,7 @@ pub(crate) fn resolve_format_values(
                 || o.audio_codec.is_some()
                 || o.container.is_some()
         }
+        MediaMode::Formats => true,
     };
     if irrelevant
         || o.max_height
@@ -820,6 +821,7 @@ pub(crate) fn resolve_format_values(
                         .unwrap_or(p.map(|p| p.send_as_file).unwrap_or(false)),
                 );
         }
+        MediaMode::Formats => return Err(ProfileError::InvalidPreferences),
     }
     Ok(params)
 }

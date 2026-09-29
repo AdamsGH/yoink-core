@@ -75,8 +75,10 @@ impl DownloadService {
         {
             return Err(DownloadError::InvalidInput);
         }
-        crate::profile::resolve_format_values(request.media_mode(), None, &overrides)
-            .map_err(map_profile)?;
+        if request.media_mode() != MediaMode::Formats {
+            crate::profile::resolve_format_values(request.media_mode(), None, &overrides)
+                .map_err(map_profile)?;
+        }
         let intent_key = format!("tg:{}:{}:{}", target.bot_id(), target.chat_id(), message_id);
         self.authorize_request(request).await?;
         let intent = request.clone().with_preference_overrides(overrides.clone());
@@ -85,6 +87,15 @@ impl DownloadService {
             .is_configured_owner(request.actor_id() as i64)
             && target.chat_id() == request.actor_id() as i64
             && target.thread_id().is_none();
+        if request.media_mode() == MediaMode::Formats {
+            if !private_owner || overrides != DownloadPreferenceOverrides::default() {
+                return Err(DownloadError::Denied);
+            }
+            return self
+                .submit_request(request, &intent_key)
+                .await
+                .map(TelegramSubmission::Admitted);
+        }
         let private_owner_video = private_owner && request.media_mode() == MediaMode::Video;
         // Quality state exists only for the owner-private interactive flow. Group submissions
         // retain the ordinary admission path and never query private quality state.

@@ -31,6 +31,9 @@ impl fmt::Debug for ParsedMedia {
 }
 
 pub(super) fn parse(name: &str, args: &[&str]) -> Option<Result<ParsedMedia, ()>> {
+    if name == "list" {
+        return Some(parse_list(args));
+    }
     let mode = match name {
         "video" => MediaMode::Video,
         "audio" => MediaMode::Audio,
@@ -40,6 +43,28 @@ pub(super) fn parse(name: &str, args: &[&str]) -> Option<Result<ParsedMedia, ()>
         _ => return None,
     };
     Some(parse_inner(name, args, mode))
+}
+
+fn parse_list(args: &[&str]) -> Result<ParsedMedia, ()> {
+    if args.len() != 1 || args[0].starts_with('-') || args[0].len() > 4096 {
+        return Err(());
+    }
+    let value = Url::parse(args[0]).map_err(|_| ())?;
+    if !matches!(value.scheme(), "http" | "https")
+        || value.host_str().is_none()
+        || !value.username().is_empty()
+        || value.password().is_some()
+    {
+        return Err(());
+    }
+    Ok(ParsedMedia {
+        url: args[0].to_owned(),
+        mode: MediaMode::Formats,
+        playlist: None,
+        clip: None,
+        engine: Some(Engine::YtDlp),
+        overrides: DownloadPreferenceOverrides::default(),
+    })
 }
 
 fn parse_inner(name: &str, args: &[&str], mode: MediaMode) -> Result<ParsedMedia, ()> {

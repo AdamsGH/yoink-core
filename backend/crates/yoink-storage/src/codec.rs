@@ -69,6 +69,7 @@ enum MediaModeData {
     Audio,
     Image,
     Subtitles,
+    Formats,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -197,6 +198,7 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
             MediaMode::Audio => MediaModeData::Audio,
             MediaMode::Image => MediaModeData::Image,
             MediaMode::Subtitles => MediaModeData::Subtitles,
+            MediaMode::Formats => MediaModeData::Formats,
         },
         clip_range: request.clip_range().map(|r| ClipRangeData {
             start_seconds: r.start_seconds(),
@@ -293,6 +295,7 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
         MediaModeData::Audio => MediaMode::Audio,
         MediaModeData::Image => MediaMode::Image,
         MediaModeData::Subtitles => MediaMode::Subtitles,
+        MediaModeData::Formats => MediaMode::Formats,
     };
     let range = data
         .clip_range
@@ -434,6 +437,21 @@ mod tests {
         let original = request();
         let json = encode(&original).unwrap();
         assert!(!json.to_string().contains("token"));
+        assert_eq!(decode(json).unwrap(), original);
+    }
+
+    #[test]
+    fn formats_media_mode_round_trips_with_legacy_encodings_untouched() {
+        let original = DownloadRequest::new(
+            7,
+            "https://example.com/a",
+            MediaMode::Formats,
+            None,
+            DownloadParams::default().with_send_as_file(true),
+        )
+        .unwrap();
+        let json = encode(&original).unwrap();
+        assert_eq!(json["media_mode"], "formats");
         assert_eq!(decode(json).unwrap(), original);
     }
 

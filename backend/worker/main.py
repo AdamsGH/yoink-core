@@ -20,6 +20,7 @@ logging.disable(logging.CRITICAL)
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 from failures import classify_error as _classify_error
+from format_engine import validate_options as validate_format_options
 from media_engine import MediaFailure, download_media
 from network_guard import configure_proxy, guard_context, validate_source_url
 from proxy_tunnel import proxy_route
@@ -127,7 +128,7 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     if not isinstance(task, dict) or task.get("kind") not in ("download", "extract_content"):
         raise ValueError("invalid request")
     if task["kind"] == "download":
-        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio", "image", "subtitles"):
+        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio", "image", "subtitles", "formats"):
             raise ValueError("invalid request")
     elif set(task) != {"kind"}:
         raise ValueError("invalid request")
@@ -168,6 +169,11 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
                 or defaults["audio_codec"] != "best" or defaults["container"] != "mp4"
                 or defaults["engine"] == "gallery" or playlist is not None or clips or defaults["gallery_zip"]):
             raise ValueError("invalid request")
+    if task.get("media_mode") == "formats":
+        try:
+            validate_format_options(defaults)
+        except ValueError as exc:
+            raise ValueError("invalid request") from exc
     request["options"] = defaults
     network = request.get("network")
     if network is not None:

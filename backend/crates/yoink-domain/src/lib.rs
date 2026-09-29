@@ -56,6 +56,7 @@ pub enum MediaMode {
     Audio,
     Image,
     Subtitles,
+    Formats,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -370,7 +371,22 @@ impl DownloadParams {
         mode: MediaMode,
         clip: Option<ClipRange>,
     ) -> Result<(), RequestValidationError> {
-        if mode == MediaMode::Subtitles {
+        if mode == MediaMode::Formats {
+            if clip.is_some()
+                || self.max_height.is_some()
+                || self.video_codec != VideoCodec::H264
+                || self.audio_codec != AudioCodec::Best
+                || self.container != Container::Mp4
+                || !self.send_as_file
+                || self.engine == Engine::Gallery
+                || self.playlist.is_some()
+                || !self.clips.is_empty()
+                || self.gallery_zip
+                || self.subtitles.is_some()
+            {
+                return Err(RequestValidationError::InvalidParameters);
+            }
+        } else if mode == MediaMode::Subtitles {
             if clip.is_some()
                 || self.max_height.is_some()
                 || self.video_codec != VideoCodec::H264
@@ -922,6 +938,54 @@ mod tests {
                 DownloadParams::new(Some(720)).unwrap(),
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn formats_mode_accepts_only_report_parameters() {
+        let defaults = DownloadParams::default().with_send_as_file(true);
+        assert!(
+            DownloadRequest::new(
+                42,
+                "https://example.com/a",
+                MediaMode::Formats,
+                None,
+                defaults
+            )
+            .is_ok()
+        );
+        assert!(
+            DownloadRequest::new(
+                42,
+                "https://example.com/a",
+                MediaMode::Formats,
+                Some(ClipRange::new(1.0, 2.0).unwrap()),
+                DownloadParams::default()
+            )
+            .is_err()
+        );
+        assert!(
+            DownloadRequest::new(
+                42,
+                "https://example.com/a",
+                MediaMode::Formats,
+                None,
+                DownloadParams::default()
+                    .with_max_height(Some(720))
+                    .unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            DownloadRequest::new(
+                42,
+                "https://example.com/a",
+                MediaMode::Formats,
+                None,
+                DownloadParams::default()
+                    .with_playlist(Some(PlaylistRange::new(1, Some(2)).unwrap()))
+            )
+            .is_err()
         );
     }
 

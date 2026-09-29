@@ -17,6 +17,8 @@ import { runSubtitleScenarios } from './media-fixture/subtitle-scenarios.mjs';
 import { runSubtitleSettingsScenarios } from './media-fixture/subtitle-settings-scenarios.mjs';
 import { createAdaptiveSource } from './media-fixture/adaptive-source.mjs';
 import { runAdaptiveScenarios } from './media-fixture/adaptive-scenarios.mjs';
+import { FormatSource } from './media-fixture/format-source.mjs';
+import { runFormatScenarios } from './media-fixture/format-scenarios.mjs';
 import { runSettingsScenarios } from './media-fixture/settings-scenarios.mjs';
 import { runLanguageScenarios } from './media-fixture/language-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
@@ -36,7 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'settings', 'language', 'cut', 'cut-quality', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|settings|language|cut|cut-quality|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'cut', 'cut-quality', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|cut|cut-quality|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -256,6 +258,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   botApi=new BotApiFixture({mediaBytes}); apiPort=await botApi.start();
   sourceFixture=new SourceHttpFixture({mediaBytes,cookieSecret,playlistMedia,imageBytes}); sourcePort=await sourceFixture.start();
   if (scenario === 'all' || scenario === 'adaptive') sourceFixture.adaptiveSource = await createAdaptiveSource({ fixtureDir, helperContainer, image });
+  if (scenario === 'all' || scenario === 'formats') sourceFixture.formatSource = new FormatSource(cookieSecret);
   proxyFixture=new AuthenticatedProxyFixture({originPort:sourcePort,authorization:proxyAuth}); proxyPort=await proxyFixture.start();
   appHttpPort=await freeLoopbackPort(); fixturePort=await freeLoopbackPort();
   await launchApp();
@@ -643,6 +646,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'subtitle-settings') summaries.push(await runSubtitleSettingsScenarios({ ...commandContext, restartApp,
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'adaptive') summaries.push(await runAdaptiveScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'formats') summaries.push(await runFormatScenarios({ ...commandContext, restartApp, cookieSecret, proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'settings') summaries.push(await runSettingsScenarios({ ...commandContext, restartApp }));
 if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));

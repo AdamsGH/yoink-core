@@ -89,6 +89,7 @@ export class SourceHttpFixture {
         } else send();
         return;
       }
+      if (this.formatSource?.respond(req, res, url)) return;
       if (this.adaptiveSource?.respond(req, res, url)) return;
       const subtitle = subtitleResponse(url);
       if (subtitle) {

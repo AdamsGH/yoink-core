@@ -27,6 +27,12 @@ impl Delivery for PanicDelivery {
 }
 
 async fn setup() -> (tempfile::TempDir, Arc<Store>, DownloadService) {
+    setup_with_owner(None).await
+}
+
+async fn setup_with_owner(
+    owner_id: Option<i64>,
+) -> (tempfile::TempDir, Arc<Store>, DownloadService) {
     let directory = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
@@ -56,7 +62,7 @@ async fn setup() -> (tempfile::TempDir, Arc<Store>, DownloadService) {
         .execute(&database)
         .await
         .unwrap();
-    let identities = Arc::new(IdentityStore::new(database, None, false));
+    let identities = Arc::new(IdentityStore::new(database, owner_id, false));
     let executor = Executor::new(ExecutorConfig {
         program: PathBuf::from("/bin/false"),
         args: Vec::new(),
@@ -157,6 +163,170 @@ async fn cut_confirmation_replays_frozen_preferences_and_checks_authorization() 
     );
     assert_eq!(
         service.cut_current(ACTOR, target).await.unwrap_err(),
+        DownloadError::Denied
+    );
+}
+
+#[tokio::test]
+async fn formats_submission_ignores_saved_quality_and_enforces_private_owner_target() {
+    use yoink_downloads::TelegramSubmission;
+
+    let (_directory, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
+    yoink_db::raw_sql(include_str!("sql/set_quality_ask.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2600)).unwrap();
+    let request = DownloadRequest::new(
+        ACTOR,
+        URL,
+        MediaMode::Formats,
+        None,
+        DownloadParams::default().with_send_as_file(true),
+    )
+    .unwrap()
+    .with_target(target)
+    .unwrap();
+    let admitted = service
+        .submit_telegram_request(&request, 2600, DownloadPreferenceOverrides::default())
+        .await
+        .unwrap();
+    let TelegramSubmission::Admitted(admission) = admitted else {
+        panic!("formats request must be admitted, not sent to quality selection");
+    };
+    assert!(admission.created);
+    let frozen = persisted_request(&store, &admission.operation_id).await;
+    assert_eq!(frozen["params"]["send_as_file"], true);
+    assert_eq!(frozen["media_mode"], "formats");
+    yoink_db::raw_sql(include_str!("sql/formats_invalid_preferences.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    let preferred = service
+        .submit_preferred_request(
+            &request,
+            "formats-preferred-admission",
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap();
+    assert!(preferred.created);
+    let preferred_frozen = persisted_request(&store, &preferred.operation_id).await;
+    assert_eq!(preferred_frozen["params"]["send_as_file"], true);
+    let direct = service
+        .submit_request(&request, "formats-direct-admission")
+        .await
+        .unwrap();
+    assert!(direct.created);
+    assert_eq!(
+        persisted_request(&store, &direct.operation_id).await["media_mode"],
+        "formats"
+    );
+    let network = persisted_request(&store, &direct.operation_id).await;
+    assert_eq!(network["network"]["cookie"], serde_json::Value::Null);
+    assert_eq!(network["network"]["proxy"], serde_json::Value::Null);
+    assert_eq!(
+        service
+            .submit_telegram_request(&request, 2600, DownloadPreferenceOverrides::default(),)
+            .await
+            .unwrap(),
+        TelegramSubmission::Admitted(yoink_storage::Admission {
+            operation_id: admission.operation_id,
+            created: false,
+        })
+    );
+
+    let group_target = DeliveryTarget::new(BOT, -100, None, Some(2601)).unwrap();
+    let group_request = DownloadRequest::new(
+        ACTOR,
+        URL,
+        MediaMode::Formats,
+        None,
+        DownloadParams::default().with_send_as_file(true),
+    )
+    .unwrap()
+    .with_target(group_target)
+    .unwrap();
+    assert_eq!(
+        service
+            .submit_telegram_request(&group_request, 2601, DownloadPreferenceOverrides::default(),)
+            .await
+            .unwrap_err(),
+        DownloadError::Denied
+    );
+    assert_eq!(
+        service
+            .submit_request(&group_request, "formats-direct-group")
+            .await
+            .unwrap_err(),
+        DownloadError::Denied
+    );
+    assert_eq!(
+        service
+            .submit_preferred_request(
+                &group_request,
+                "formats-preferred-group",
+                DownloadPreferenceOverrides::default()
+            )
+            .await
+            .unwrap_err(),
+        DownloadError::Denied
+    );
+    // A stored owner role does not open the experimental command without configured ownership.
+    let (_unconfigured_directory, _unconfigured_store, unconfigured_service) = setup().await;
+    assert_eq!(
+        unconfigured_service
+            .submit_request(&request, "formats-unconfigured-owner")
+            .await
+            .unwrap_err(),
+        DownloadError::Denied
+    );
+    let wrong_bot_request = DownloadRequest::new(
+        ACTOR,
+        URL,
+        MediaMode::Formats,
+        None,
+        DownloadParams::default().with_send_as_file(true),
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT + 1, ACTOR as i64, None, Some(2603)).unwrap())
+    .unwrap();
+    assert_eq!(
+        service
+            .submit_telegram_request(
+                &wrong_bot_request,
+                2603,
+                DownloadPreferenceOverrides::default(),
+            )
+            .await
+            .unwrap_err(),
+        DownloadError::InvalidInput
+    );
+
+    yoink_db::query(include_str!("sql/set_banned.sql"))
+        .bind(ACTOR as i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    let banned_request = DownloadRequest::new(
+        ACTOR,
+        URL,
+        MediaMode::Formats,
+        None,
+        DownloadParams::default().with_send_as_file(true),
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2602)).unwrap())
+    .unwrap();
+    assert_eq!(
+        service
+            .submit_telegram_request(
+                &banned_request,
+                2602,
+                DownloadPreferenceOverrides::default(),
+            )
+            .await
+            .unwrap_err(),
         DownloadError::Denied
     );
 }

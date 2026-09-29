@@ -929,6 +929,9 @@ async fn handle_message(
                 return Ok(());
             };
             let mut params = DownloadParams::default().with_playlist(media.playlist);
+            if media.mode == DomainMediaMode::Formats {
+                params = params.with_send_as_file(true);
+            }
             if let Some(engine) = media.engine {
                 params = params.with_engine(engine);
             }
@@ -1300,6 +1303,17 @@ mod tests {
             .is_some_and(|command| matches!(command, Command::Media(media) if media.playlist.is_some_and(|range| range.start() == 1 && range.end() == Some(20)))));
         assert!(parse_command("/subs https://example.test/subtitles", "yoink_bot")
             .is_some_and(|command| matches!(command, Command::Media(media) if media.mode == DomainMediaMode::Subtitles)));
+        assert!(parse_command("/list@yoink_bot https://example.test/video", "yoink_bot")
+            .is_some_and(|command| matches!(command, Command::Media(media) if media.mode == DomainMediaMode::Formats && media.engine == Some(Engine::YtDlp))));
+        for invalid in [
+            "/list",
+            "/list https://example.test/a extra",
+            "/list --format https://example.test/a",
+            "/list ftp://example.test/a",
+            "/list https://user@example.test/a",
+        ] {
+            assert_eq!(parse_command(invalid, "yoink_bot"), Some(Command::Invalid));
+        }
         assert_eq!(
             parse_command("/subs invalid", "yoink_bot"),
             Some(Command::Invalid)

@@ -75,6 +75,7 @@ pub enum MediaMode {
     Audio,
     Image,
     Subtitles,
+    Formats,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +321,27 @@ impl WorkerRequest {
         );
         if subtitles_mode != self.options.subtitles.is_some() {
             return Err(ProtocolError::InvalidRequest);
+        }
+        if matches!(
+            self.task,
+            TaskKind::Download {
+                media_mode: MediaMode::Formats
+            }
+        ) {
+            let o = &self.options;
+            if !matches!(self.source_url.as_url().scheme(), "http" | "https")
+                || o.max_height.is_some()
+                || o.video_codec != VideoCodec::H264
+                || o.audio_codec != AudioCodec::Best
+                || o.container != Container::Mp4
+                || o.engine == Engine::Gallery
+                || o.playlist.is_some()
+                || !o.clips.is_empty()
+                || o.gallery_zip
+                || o.subtitles.is_some()
+            {
+                return Err(ProtocolError::InvalidRequest);
+            }
         }
         if let Some(subtitles) = &self.options.subtitles {
             subtitles.validate()?;
@@ -584,6 +606,20 @@ mod tests {
         });
         let decoded = decode_event_frame(&encode_event(&source).unwrap()).unwrap();
         assert_eq!(decoded, source);
+    }
+
+    #[test]
+    fn formats_task_requires_unmodified_ytdlp_options() {
+        let mut req = request();
+        req.task = TaskKind::Download {
+            media_mode: MediaMode::Formats,
+        };
+        assert_eq!(req.validate(), Ok(()));
+        req.options.max_height = Some(720);
+        assert_eq!(req.validate(), Err(ProtocolError::InvalidRequest));
+        req.options.max_height = None;
+        req.options.engine = Engine::Gallery;
+        assert_eq!(req.validate(), Err(ProtocolError::InvalidRequest));
     }
 
     #[test]
