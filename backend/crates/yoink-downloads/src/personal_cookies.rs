@@ -103,6 +103,94 @@ impl DownloadService {
         }
     }
 
+    pub async fn personal_cookie_upload_allowed(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        message_id: i32,
+    ) -> Result<bool, DownloadError> {
+        self.authorize_cookie_control(actor, target).await?;
+        if message_id <= 0 {
+            return Err(DownloadError::InvalidInput);
+        }
+        let watermark = query(include_str!("personal_cookies_upload_preflight.sql"))
+            .bind(actor as i64)
+            .bind(message_id)
+            .fetch_optional(self.store.database())
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        Ok(watermark.is_some())
+    }
+
+    pub async fn store_personal_cookie(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        message_id: i32,
+        domain: &CookieDomain,
+        content: &str,
+    ) -> Result<Option<u64>, DownloadError> {
+        self.authorize_cookie_control(actor, target).await?;
+        if message_id <= 0
+            || content.len() > yoink_worker_protocol::MAX_COOKIE_JAR_BYTES
+            || !valid_cookie(content)
+        {
+            return Err(DownloadError::InvalidInput);
+        }
+        let entries = content
+            .lines()
+            .filter(|line| {
+                line.starts_with("#HttpOnly_") || (!line.starts_with('#') && !line.is_empty())
+            })
+            .count() as u64;
+        let mut conn = self
+            .store
+            .database()
+            .connection()
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        let authorized = query(include_str!("personal_cookies_auth.sql"))
+            .bind(actor as i64)
+            .bind(chrono::Utc::now())
+            .bind(self.identities.is_configured_owner(actor as i64))
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        if authorized.is_none() {
+            tx.rollback().await.map_err(|_| DownloadError::Database)?;
+            return Err(DownloadError::Denied);
+        }
+        let advanced = query(include_str!("personal_cookies_watermark.sql"))
+            .bind(actor as i64)
+            .bind(message_id)
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        if advanced.is_none() {
+            tx.commit().await.map_err(|_| DownloadError::Database)?;
+            return Ok(None);
+        }
+        query(include_str!("personal_cookies_upload_delete.sql"))
+            .bind(actor as i64)
+            .bind(domain.as_str())
+            .execute(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        query(include_str!("personal_cookies_upload_insert.sql"))
+            .bind(actor as i64)
+            .bind(domain.as_str())
+            .bind(content)
+            .bind(chrono::Utc::now())
+            .execute(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        tx.commit().await.map_err(|_| DownloadError::Database)?;
+        Ok(Some(entries))
+    }
+
     pub async fn personal_cookies(
         &self,
         actor: u64,

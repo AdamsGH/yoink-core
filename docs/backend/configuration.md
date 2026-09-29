@@ -40,6 +40,9 @@ Telegram is disabled unless enabled explicitly.
 | `YOINK_RUST_OWNER_ID` | unset | Positive ID up to signed 64-bit maximum | Required configured owner identity. |
 | `YOINK_RUST_BOT_API_URL` | unset | HTTP(S) origin without credentials, path, query, or fragment | Optional Bot API endpoint override. |
 | `YOINK_RUST_TELEGRAM_POLL_TIMEOUT_SECS` | `30` | 1 through 50 seconds | Long-poll timeout. |
+| `YOINK_RUST_TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS` | `30` | 1 through 60 seconds | Deadline for awaiting Bot API metadata and document content. The file limit is 512 KiB. Local kernel I/O cannot be cancelled, but only one such read can remain outstanding. |
+| `YOINK_RUST_BOT_API_FILE_ROOT` | unset | Absolute, non-root directory without traversal | Remote prefix returned by local Bot API `getFile`. Requires both the local root below and an explicit `BOT_API_URL`. |
+| `YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT` | unset | Absolute, non-root directory without traversal | Read-only mount corresponding to the remote prefix. Local file access is disabled unless both roots are set. Symlinks and non-regular files are rejected. |
 | `YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS` | `2` | 1 through 60 seconds | Global progress tick. At most one status-message edit per tick, coalescing unchanged text. |
 | `YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS` | `10` | 1 through 60 seconds | Deadline for editing an already-confirmed status message. Ambiguous edits are safe to retry, unlike media sends. |
 

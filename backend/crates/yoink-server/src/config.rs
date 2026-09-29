@@ -48,6 +48,7 @@ pub struct TelegramConfig {
     pub api_url: Option<Url>,
     pub poll_timeout: Duration,
     pub progress: yoink_telegram::ProgressConfig,
+    pub cookie_upload: yoink_telegram::CookieUploadConfig,
     pub groups_enabled: bool,
 }
 
@@ -181,6 +182,40 @@ impl Config {
                         "invalid progress configuration",
                     )
                 })?;
+            let cookie_upload_timeout = timeout(
+                read("TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS")?,
+                "TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS",
+                30,
+            )?;
+            let mut cookie_upload = yoink_telegram::CookieUploadConfig::new(cookie_upload_timeout)
+                .map_err(|_| {
+                    invalid(
+                        "TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS",
+                        "expected seconds in range 1..=60",
+                    )
+                })?;
+            match (
+                read("BOT_API_FILE_ROOT")?,
+                read("TELEGRAM_LOCAL_FILE_ROOT")?,
+            ) {
+                (None, None) => {}
+                (Some(remote), Some(local)) if api_url.is_some() => {
+                    cookie_upload = cookie_upload
+                        .with_local_files(PathBuf::from(remote), PathBuf::from(local))
+                        .map_err(|_| {
+                            invalid(
+                                "TELEGRAM_LOCAL_FILE_ROOT",
+                                "expected absolute, non-root directories without traversal",
+                            )
+                        })?;
+                }
+                _ => {
+                    return Err(invalid(
+                        "TELEGRAM_LOCAL_FILE_ROOT",
+                        "set both file roots and BOT_API_URL to enable local file reads",
+                    ));
+                }
+            }
             let groups_enabled = match read("TELEGRAM_GROUPS_ENABLED")?
                 .as_deref()
                 .unwrap_or("false")
@@ -195,6 +230,7 @@ impl Config {
                 api_url,
                 poll_timeout,
                 progress,
+                cookie_upload,
                 groups_enabled,
             })
         } else {
@@ -346,6 +382,68 @@ mod tests {
             let mut values = base.to_vec();
             values.push(("YOINK_RUST_TELEGRAM_GROUPS_ENABLED", value));
             assert!(config(&values).is_err());
+        }
+    }
+
+    #[test]
+    fn cookie_local_files_require_explicit_paired_roots_and_api_override() {
+        let base = [
+            ("YOINK_RUST_TELEGRAM_ENABLED", "true"),
+            ("YOINK_RUST_TELEGRAM_TOKEN", "fixture-token"),
+            ("YOINK_RUST_OWNER_ID", "42"),
+        ];
+        for extra in [
+            vec![("YOINK_RUST_BOT_API_FILE_ROOT", "/remote")],
+            vec![("YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT", "/local")],
+            vec![
+                ("YOINK_RUST_BOT_API_FILE_ROOT", "/remote"),
+                ("YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT", "/local"),
+            ],
+            vec![
+                ("YOINK_RUST_BOT_API_URL", "http://127.0.0.1:8082"),
+                ("YOINK_RUST_BOT_API_FILE_ROOT", "/"),
+                ("YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT", "/local"),
+            ],
+            vec![
+                ("YOINK_RUST_BOT_API_URL", "http://127.0.0.1:8082"),
+                ("YOINK_RUST_BOT_API_FILE_ROOT", "/remote"),
+                ("YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT", "relative"),
+            ],
+        ] {
+            let mut values = base.to_vec();
+            values.extend(extra);
+            assert!(config(&values).is_err());
+        }
+        let mut values = base.to_vec();
+        values.extend([
+            ("YOINK_RUST_BOT_API_URL", "http://127.0.0.1:8082"),
+            ("YOINK_RUST_BOT_API_FILE_ROOT", "/remote/credential-marker"),
+            (
+                "YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT",
+                "/local/credential-marker",
+            ),
+        ]);
+        let loaded = config(&values).unwrap();
+        assert!(!format!("{loaded:?}").contains("credential-marker"));
+    }
+
+    #[test]
+    fn cookie_upload_timeout_accepts_bounds_and_rejects_invalid_values() {
+        let base = [
+            ("YOINK_RUST_TELEGRAM_ENABLED", "true"),
+            ("YOINK_RUST_TELEGRAM_TOKEN", "fixture-token"),
+            ("YOINK_RUST_OWNER_ID", "42"),
+        ];
+        assert!(config(&base).is_ok());
+        for value in ["0", "61", "1.5", "invalid", "", "-1"] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS", value));
+            assert!(config(&values).is_err());
+        }
+        for value in ["1", "30", "60"] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS", value));
+            assert!(config(&values).is_ok());
         }
     }
 

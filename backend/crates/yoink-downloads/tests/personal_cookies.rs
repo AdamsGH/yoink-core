@@ -213,10 +213,28 @@ async fn authorization_denies_bans_roles_and_wrong_delivery_context_for_reads_an
         );
         assert_eq!(
             service
-                .remove_personal_cookies(OWNER, own, index as i32 + 1, None)
+                .remove_personal_cookies(OWNER, own, index as i32 * 3 + 1, None)
                 .await
                 .unwrap(),
             Some(0)
+        );
+        assert_eq!(
+            service
+                .personal_cookie_upload_allowed(OWNER, own, index as i32 * 3 + 2)
+                .await,
+            Ok(true)
+        );
+        assert_eq!(
+            service
+                .store_personal_cookie(OWNER, own, index as i32 * 3 + 2, &domain, jar())
+                .await,
+            Ok(Some(2))
+        );
+        assert_eq!(
+            service
+                .remove_personal_cookies(OWNER, own, index as i32 * 3 + 3, None)
+                .await,
+            Ok(Some(1))
         );
     }
     for mutation in [("banned", None), ("user", Some(i64::MAX))] {
@@ -233,6 +251,16 @@ async fn authorization_denies_bans_roles_and_wrong_delivery_context_for_reads_an
         );
         assert_eq!(
             service.remove_personal_cookies(OWNER, own, 2, None).await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service.personal_cookie_upload_allowed(OWNER, own, 2).await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service
+                .store_personal_cookie(OWNER, own, 2, &domain, jar())
+                .await,
             Err(DownloadError::Denied)
         );
     }
@@ -263,6 +291,18 @@ async fn authorization_denies_bans_roles_and_wrong_delivery_context_for_reads_an
         assert_eq!(
             service
                 .remove_personal_cookies(actor, destination, 3, None)
+                .await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service
+                .personal_cookie_upload_allowed(actor, destination, 3)
+                .await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service
+                .store_personal_cookie(actor, destination, 3, &domain, jar())
                 .await,
             Err(DownloadError::Denied)
         );
@@ -375,6 +415,181 @@ async fn invalid_delete_message_ids_do_not_mutate_state() {
         .try_get(0)
         .unwrap();
     assert_eq!(watermark, 0);
+}
+
+#[tokio::test]
+async fn upload_preflight_and_storage_validate_content_and_fence_replacements() {
+    let (_dir, store, service) = setup().await;
+    let own = target(OWNER as i64, None, BOT);
+    let domain = CookieDomain::parse(".ExAmPlE.com.").unwrap();
+    assert!(
+        service
+            .personal_cookie_upload_allowed(OWNER, own, 10)
+            .await
+            .unwrap()
+    );
+    let watermark: i64 = yoink_db::query(include_str!("sql/count_watermarks.sql"))
+        .bind(OWNER as i64)
+        .fetch_one(store.database())
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(watermark, 0);
+    for bad in [0, -1, i32::MIN] {
+        assert_eq!(
+            service
+                .personal_cookie_upload_allowed(OWNER, own, bad)
+                .await,
+            Err(DownloadError::InvalidInput)
+        );
+        assert_eq!(
+            service
+                .store_personal_cookie(OWNER, own, bad, &domain, jar())
+                .await,
+            Err(DownloadError::InvalidInput)
+        );
+    }
+    for bad in ["", "not a cookie"] {
+        assert_eq!(
+            service
+                .store_personal_cookie(OWNER, own, 11, &domain, bad)
+                .await,
+            Err(DownloadError::InvalidInput)
+        );
+    }
+    let unicode_over = format!(
+        "# Netscape HTTP Cookie File\nexample.com\tFALSE\t/\tFALSE\t0\tsid\t{}",
+        "é".repeat(yoink_worker_protocol::MAX_COOKIE_JAR_BYTES / 2)
+    );
+    assert!(unicode_over.len() > yoink_worker_protocol::MAX_COOKIE_JAR_BYTES);
+    assert_eq!(
+        service
+            .store_personal_cookie(OWNER, own, 11, &domain, &unicode_over)
+            .await,
+        Err(DownloadError::InvalidInput)
+    );
+    assert_eq!(
+        yoink_db::query(include_str!("sql/count_watermarks.sql"))
+            .bind(OWNER as i64)
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get::<i64, _>(0)
+            .unwrap(),
+        0
+    );
+
+    add_cookie(&store, 1, OWNER as i64, ".Example.com.", jar(), true, false).await;
+    add_cookie(&store, 2, OWNER as i64, "example.com", jar(), true, false).await;
+    add_cookie(&store, 3, OWNER as i64, "example.com", jar(), true, true).await;
+    add_cookie(&store, 4, FOREIGN as i64, "example.com", jar(), true, false).await;
+    add_cookie(&store, 5, OWNER as i64, "other.example", jar(), true, false).await;
+    yoink_db::query(include_str!("sql/insert_settings.sql"))
+        .bind(OWNER as i64)
+        .bind("invalid-quality")
+        .bind("avc1")
+        .bind("mp4")
+        .execute(store.database())
+        .await
+        .unwrap();
+    yoink_db::query(include_str!("sql/insert_history.sql"))
+        .bind(OWNER as i64)
+        .bind("https://example.com/video")
+        .bind("example.com")
+        .bind("ok")
+        .execute(store.database())
+        .await
+        .unwrap();
+    let first_id = service
+        .store_personal_cookie(OWNER, own, 20, &domain, jar())
+        .await
+        .unwrap();
+    assert_eq!(first_id, Some(2));
+    assert!(
+        !service
+            .personal_cookie_upload_allowed(OWNER, own, 20)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .store_personal_cookie(OWNER, own, 20, &domain, "# Netscape HTTP Cookie File\n")
+            .await,
+        Err(DownloadError::InvalidInput)
+    );
+    let second = service
+        .store_personal_cookie(OWNER, own, 21, &domain, jar())
+        .await
+        .unwrap();
+    assert_eq!(second, Some(2));
+    let rows = yoink_db::query(include_str!("sql/upload_cookie_rows.sql"))
+        .bind(OWNER as i64)
+        .bind(FOREIGN as i64)
+        .bind(domain.as_str())
+        .fetch_all(store.database())
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    let personal = rows
+        .iter()
+        .find(|row| {
+            row.try_get::<i64, _>("user_id").unwrap() == OWNER as i64
+                && row.try_get::<i64, _>("is_pool").unwrap() == 0
+        })
+        .unwrap();
+    assert!(personal.try_get::<i64, _>("id").unwrap() > 5);
+    assert_eq!(
+        personal.try_get::<String, _>("domain").unwrap(),
+        "example.com"
+    );
+    assert_eq!(personal.try_get::<String, _>("content").unwrap(), jar());
+    let other_domain: i64 = yoink_db::query(include_str!("sql/count_replacement.sql"))
+        .bind(5_i64)
+        .bind(OWNER as i64)
+        .bind("other.example")
+        .fetch_one(store.database())
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(other_domain, 1);
+    let preference: Option<String> = yoink_db::query(include_str!("sql/get_quality.sql"))
+        .bind(OWNER as i64)
+        .fetch_one(store.database())
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(preference.as_deref(), Some("invalid-quality"));
+    let history: i64 = yoink_db::query(include_str!("sql/count_download_history.sql"))
+        .bind(OWNER as i64)
+        .fetch_one(store.database())
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(history, 1);
+    assert_eq!(
+        service
+            .remove_personal_cookies(OWNER, own, 22, Some(&domain))
+            .await
+            .unwrap(),
+        Some(1)
+    );
+    assert!(
+        !service
+            .personal_cookie_upload_allowed(OWNER, own, 21)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .store_personal_cookie(OWNER, own, 21, &domain, jar())
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -533,6 +748,19 @@ async fn deletion_is_scoped_atomic_and_stale_replays_never_delete_replacements()
     assert_eq!(
         reopened_service
             .remove_personal_cookies(OWNER, own, 100, Some(&domain))
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        !reopened_service
+            .personal_cookie_upload_allowed(OWNER, own, 102)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        reopened_service
+            .store_personal_cookie(OWNER, own, 102, &domain, jar())
             .await
             .unwrap(),
         None

@@ -24,6 +24,8 @@ export class BotApiFixture {
   #messages = new Map();
   #editMode = 'success';
   #editFilter;
+  #documentFiles = new Map();
+  #downloadCalls = [];
 
   constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024 }) {
     this.mediaBytes = mediaBytes;
@@ -54,6 +56,41 @@ export class BotApiFixture {
   setSendMode(mode) { this.#sendMode = mode; }
   setEditMode(mode, textIncludes) { this.#editMode = mode; this.#editFilter = textIncludes; }
   get progressMessages() { return [...this.#messages.values()]; }
+  get downloadCalls() { return this.#downloadCalls; }
+  enqueueDocument(actor, chat, caption, messageId, fileId, { filename = 'cookies.txt', size, language = 'en', ...routeFlags } = {}) {
+    const message = this.#message(actor, chat, caption, messageId, undefined, routeFlags.thread);
+    delete message.text;
+    if (caption !== undefined) message.caption = caption;
+    message.from.is_bot = routeFlags.isBot ?? false;
+    message.from.language_code = language;
+    message.document = { file_id: fileId, file_unique_id: `unique-${fileId}`, file_name: filename, file_size: size ?? this.#documentFiles.get(fileId)?.bytes.length ?? 0 };
+    if (routeFlags.senderChat) message.sender_chat = routeFlags.senderChat;
+    if (routeFlags.viaBot) message.via_bot = { id: routeFlags.viaBot, is_bot: true, first_name: 'Inline bot' };
+    if (routeFlags.chatType) message.chat = { id: chat, type: routeFlags.chatType, title: routeFlags.chatType === 'private' ? undefined : 'Fixture group' };
+    if (routeFlags.fromBot) message.from = { id: routeFlags.fromBot, is_bot: true, first_name: 'Foreign bot', language_code: language };
+    if (routeFlags.topic) { message.message_thread_id = routeFlags.topic; message.is_topic_message = true; }
+    this.#updates.push({ update_id: this.#updateId++, message });
+  }
+  setDocumentFile(fileId, bytes, options = {}) {
+    assert(typeof fileId === 'string' && fileId.length > 0);
+    assert(Buffer.isBuffer(bytes) || bytes instanceof Uint8Array);
+    const config = { bytes: Buffer.from(bytes), filePath: options.filePath ?? `documents/${fileId}.txt`, declaredSize: options.declaredSize, getFileMode: options.getFileMode ?? 'success', fileMode: options.fileMode ?? 'success', delayMs: options.delayMs ?? 0, ...options };
+    this.#documentFiles.set(fileId, config);
+  }
+  setDocumentFileMode(fileId, mode, options = {}) {
+    const file = this.#documentFiles.get(fileId);
+    assert(file, 'document file must be registered before changing its response mode');
+    Object.assign(file, options);
+    if (mode === 'getFile') file.getFileMode = options.response ?? 'failure';
+    else file.fileMode = mode;
+  }
+  holdDocumentFile(fileId, endpoint = 'file') {
+    const file = this.#documentFiles.get(fileId);
+    assert(file, 'document file must be registered before holding its response');
+    let release;
+    file[endpoint === 'getFile' ? 'getFileGate' : 'fileGate'] = new Promise(resolve => { release = resolve; });
+    return () => { release(); delete file[endpoint === 'getFile' ? 'getFileGate' : 'fileGate']; };
+  }
   holdNextUpload() {
     let release;
     this.#sendGate = new Promise(resolve => { release = resolve; });
@@ -105,7 +142,9 @@ export class BotApiFixture {
     await new Promise((resolve, reject) => this.#server.close(error => error ? reject(error) : resolve()));
   }
   async #handle(req, res) {
-    const method = (req.url.split('/').at(-1) ?? '').toLowerCase();
+    const pathname = new URL(req.url, 'http://fixture.invalid').pathname;
+    const method = (pathname.split('/').at(-1) ?? '').toLowerCase();
+    if (pathname.includes('/file/')) return this.#handleDocumentDownload(req, res, pathname);
     const chunks = [];
     let requestLength = 0;
     for await (const chunk of req) {
@@ -125,6 +164,18 @@ export class BotApiFixture {
       const batch = this.#updates;
       this.#updates = [];
       res.end(JSON.stringify({ ok: true, result: batch }));
+    } else if (method === 'getfile') {
+      const data = JSON.parse(body.toString('utf8'));
+      const file = [...this.#documentFiles.entries()].find(([id]) => id === data.file_id)?.[1];
+      if (!file) { res.statusCode = 400; res.end(JSON.stringify({ ok: false, error_code: 400, description: 'Bad Request' })); return; }
+      this.#downloadCalls.push({ kind: 'getFile', fileId: data.file_id });
+      if (file.getFileGate) await file.getFileGate;
+      if (file.delayMs) await new Promise(resolve => setTimeout(resolve, file.delayMs));
+      if (file.getFileMode === 'network-error') { res.destroy(); return; }
+      if (file.getFileMode === 'failure') { res.statusCode = 500; res.end(JSON.stringify({ ok: false, error_code: 500, description: 'Internal Server Error' })); return; }
+      const filePath = file.getFileMode === 'invalid-path' ? '../unsafe.txt' : file.getFileMode === 'redirect' ? 'https://example.invalid/cookie' : file.filePath;
+      const fileSize = file.declaredSize ?? file.bytes.length;
+      res.end(JSON.stringify({ ok: true, result: { file_id: data.file_id, file_unique_id: `unique-${data.file_id}`, file_path: filePath, file_size: fileSize } }));
     } else if (method === 'sendmessage') {
       const data = JSON.parse(body.toString('utf8'));
       const message = this.#message(123456, Number(data.chat_id), data.text, ++this.#nextMessageId, undefined, data.message_thread_id);
@@ -161,6 +212,26 @@ export class BotApiFixture {
       res.writeHead(404);
       res.end(JSON.stringify({ ok: false, error_code: 404, description: 'unexpected fixture API method' }));
     }
+  }
+  async #handleDocumentDownload(req, res, pathname) {
+    const file = [...this.#documentFiles.values()].find(item => !item.filePath.startsWith('/') && pathname.endsWith(`/${item.filePath}`));
+    this.#downloadCalls.push({ kind: 'file', matched: !!file });
+    if (!file) { res.statusCode = 404; res.end(); return; }
+    if (file.fileGate) await file.fileGate;
+    if (file.delayMs) await new Promise(resolve => setTimeout(resolve, file.delayMs));
+    if (file.fileMode === 'redirect') { res.writeHead(302, { location: 'http://127.0.0.1/' }); res.end(); return; }
+    if (file.fileMode === 'network-error') { res.destroy(); return; }
+    if (file.fileMode === 'failure') { res.statusCode = 503; res.end(); return; }
+    if (file.fileMode === 'chunked-oversize') {
+      res.writeHead(200, { 'transfer-encoding': 'chunked' });
+      for (let i = 0; i < 9; i++) { if (!res.write(Buffer.alloc(65536, 65))) await new Promise(resolve => res.once('drain', resolve)); }
+      res.end(); return;
+    }
+    if (file.fileMode === 'hold') { await new Promise(resolve => { file.releaseFile = resolve; }); }
+    res.setHeader('content-type', 'application/octet-stream');
+    const bytes = file.bytes;
+    if (file.fileMode !== 'chunked') res.setHeader('content-length', String(file.responseSize ?? bytes.length));
+    res.end(bytes);
   }
   async #handleMedia(method, req, res, body) {
     this.#sendCalls++;

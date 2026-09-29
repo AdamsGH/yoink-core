@@ -32,6 +32,7 @@ use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for}
 use yoink_storage::{Admission, OperationStatus};
 
 mod cookie;
+mod cookie_upload;
 mod cut;
 mod media_command;
 mod plain_url;
@@ -40,6 +41,7 @@ mod proxy;
 mod sender;
 mod settings;
 mod uncache;
+pub use cookie_upload::{CookieUploadConfig, CookieUploadConfigError};
 pub use progress::ProgressConfig;
 
 /// Safe, fixed error categories. Underlying Telegram errors are deliberately discarded.
@@ -90,6 +92,9 @@ pub struct TelegramAdapter {
     poll_timeout: Duration,
     progress: ProgressConfig,
     groups_enabled: bool,
+    cookie_upload: Option<CookieUploadConfig>,
+    file_base: Url,
+    http_client: reqwest::Client,
 }
 
 impl TelegramAdapter {
@@ -110,7 +115,14 @@ impl TelegramAdapter {
         }
 
         catalog().map_err(|_| TelegramError::BotInitializationFailed)?;
-        let mut bot = Bot::new(token);
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| TelegramError::BotInitializationFailed)?;
+        let mut bot = Bot::with_client(token.clone(), http_client.clone());
+        let api_origin = api_url
+            .clone()
+            .unwrap_or_else(|| Url::parse("https://api.telegram.org/").expect("static URL"));
         if let Some(api_url) = api_url {
             bot = bot.set_api_url(api_url);
         }
@@ -135,12 +147,20 @@ impl TelegramAdapter {
             poll_timeout,
             progress: ProgressConfig::default(),
             groups_enabled: false,
+            cookie_upload: None,
+            file_base: cookie_upload::file_base(&api_origin, &token),
+            http_client,
         })
     }
 
     /// Enables the progressive video-download slice.
     pub fn with_downloads(mut self, service: DownloadService) -> Self {
         self.downloads = Some(service);
+        self
+    }
+
+    pub fn with_cookie_upload(mut self, config: CookieUploadConfig) -> Self {
+        self.cookie_upload = Some(config);
         self
     }
 
@@ -187,7 +207,12 @@ impl TelegramAdapter {
                 },
                 self.bot_username,
                 self.system,
-                DownloadsDependency(self.downloads)
+                DownloadsDependency(self.downloads),
+                CookieUploadDependency {
+                    config: self.cookie_upload,
+                    base: self.file_base,
+                    client: self.http_client
+                }
             ])
             .default_handler(|_| async {})
             .error_handler(teloxide::error_handlers::IgnoringErrorHandlerSafe::new())
@@ -230,6 +255,13 @@ impl TelegramAdapter {
 
 #[derive(Clone)]
 struct DownloadsDependency(Option<DownloadService>);
+
+#[derive(Clone)]
+struct CookieUploadDependency {
+    config: Option<CookieUploadConfig>,
+    base: Url,
+    client: reqwest::Client,
+}
 
 #[derive(Clone, PartialEq)]
 enum Command {
@@ -574,11 +606,30 @@ async fn handle_message(
     bot_username: String,
     system: SystemService,
     DownloadsDependency(downloads): DownloadsDependency,
+    upload: CookieUploadDependency,
 ) -> Result<(), Infallible> {
     let bot_id = identity.bot_id;
     let Some((actor_id, target)) = incoming_route(identity, &message) else {
         return Ok(());
     };
+
+    if message.document().is_some() && target.chat_id() > 0 {
+        cookie_upload::handle_document(
+            &bot,
+            &message,
+            &bot_username,
+            actor_id,
+            target,
+            cookie_upload::UploadDependencies {
+                downloads: downloads.as_ref(),
+                config: upload.config,
+                base: &upload.base,
+                client: &upload.client,
+            },
+        )
+        .await;
+        return Ok(());
+    }
 
     let Some(text) = message.text() else {
         return Ok(());

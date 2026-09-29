@@ -136,6 +136,7 @@ async fn run_impl(
                 .await
                 .map_err(|_| ServerError::TelegramStartup)?
                 .with_progress(telegram.progress)
+                .with_cookie_upload(telegram.cookie_upload)
                 .with_group_access(telegram.groups_enabled),
             ),
             None => None,
