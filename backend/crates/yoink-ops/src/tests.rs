@@ -75,6 +75,46 @@ async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
 }
 
 #[tokio::test]
+async fn snapshot_schema_survives_rebuild_migrations() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = prepared(&dir.path().join("source.db")).await;
+    store.verify_schema().await.unwrap();
+    async fn schema(store: &Store) -> std::collections::BTreeMap<String, Option<String>> {
+        query(include_str!("../../yoink-storage/sql/verify_schema.sql"))
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.try_get("name").unwrap(), row.try_get("sql").unwrap()))
+            .collect()
+    }
+    let before = schema(&store).await;
+    let destination = dir.path().join("snapshot.db");
+    let path = destination.to_str().unwrap();
+    assert!(!path.contains('\''));
+    exec(
+        &store,
+        &include_str!("../sql/test_snapshot_schema.sql").replace("{destination}", path),
+    )
+    .await;
+    let snapshot = Store::open(&destination, false, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let after = schema(&snapshot).await;
+    assert_eq!(before.len(), after.len(), "snapshot schema object count");
+    for (name, sql) in &before {
+        assert_eq!(
+            after.get(name),
+            Some(sql),
+            "snapshot schema changed for {name}"
+        );
+    }
+    snapshot.verify_schema().await.unwrap();
+    snapshot.close().await.unwrap();
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn snapshot_roundtrip_at_literal_paths_preserves_committed_state_and_source() {
     let dir = tempfile::Builder::new()
         .prefix("yoink ' quoted ")

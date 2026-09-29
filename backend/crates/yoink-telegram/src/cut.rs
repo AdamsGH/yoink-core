@@ -6,7 +6,9 @@ use teloxide::{
 };
 use uuid::Uuid;
 use yoink_domain::DeliveryTarget;
-use yoink_downloads::{CutSession, CutStage, DownloadError, DownloadService};
+use yoink_downloads::{
+    CutSession, CutStage, CutSubmission, DownloadError, DownloadService, QualityChoice,
+};
 use yoink_i18n::{Key, Language};
 
 use crate::{
@@ -17,6 +19,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 enum Callback {
     Go(Uuid, i64),
+    Quality(QualityChoice, Uuid, i64),
     Edit(Uuid, i64),
     Cancel(Uuid, i64),
 }
@@ -50,6 +53,15 @@ fn callback(data: &str) -> Result<Callback, CallbackError> {
     }
     match action {
         "go" => Ok(Callback::Go(id, revision)),
+        "qbest" => Ok(Callback::Quality(QualityChoice::Best, id, revision)),
+        "q144" => Ok(Callback::Quality(QualityChoice::Height(144), id, revision)),
+        "q240" => Ok(Callback::Quality(QualityChoice::Height(240), id, revision)),
+        "q360" => Ok(Callback::Quality(QualityChoice::Height(360), id, revision)),
+        "q480" => Ok(Callback::Quality(QualityChoice::Height(480), id, revision)),
+        "q720" => Ok(Callback::Quality(QualityChoice::Height(720), id, revision)),
+        "q1080" => Ok(Callback::Quality(QualityChoice::Height(1080), id, revision)),
+        "q1440" => Ok(Callback::Quality(QualityChoice::Height(1440), id, revision)),
+        "q2160" => Ok(Callback::Quality(QualityChoice::Height(2160), id, revision)),
         "edit" => Ok(Callback::Edit(id, revision)),
         "cancel" => Ok(Callback::Cancel(id, revision)),
         _ => Err(CallbackError::Syntax),
@@ -85,13 +97,44 @@ fn keyboard_values(
             translate(language, Key::CutGo, &[]),
             encode_values("go", id, revision),
         )]],
+        CutStage::Quality => {
+            let mut buttons = vec![InlineKeyboardButton::callback(
+                translate(language, Key::QualityBest, &[]),
+                format!("cut:qbest:{}:{revision}", id.simple()),
+            )];
+            for height in [144, 240, 360, 480, 720, 1080, 1440, 2160] {
+                buttons.push(InlineKeyboardButton::callback(
+                    translate(
+                        language,
+                        Key::QualityHeight,
+                        &[("height", &height.to_string())],
+                    ),
+                    format!("cut:q{height}:{}:{revision}", id.simple()),
+                ));
+            }
+            let mut rows = buttons
+                .chunks(3)
+                .map(|row| row.to_vec())
+                .collect::<Vec<_>>();
+            rows.push(vec![
+                InlineKeyboardButton::callback(
+                    translate(language, Key::CutEdit, &[]),
+                    encode_values("edit", id, revision),
+                ),
+                InlineKeyboardButton::callback(
+                    translate(language, Key::CutCancel, &[]),
+                    encode_values("cancel", id, revision),
+                ),
+            ]);
+            rows
+        }
         _ => Vec::new(),
     };
     InlineKeyboardMarkup::new(rows)
 }
 
 fn render(session: &CutSession, language: Language) -> (String, InlineKeyboardMarkup) {
-    render_values(
+    let (mut text, mut keyboard) = render_values(
         session.stage,
         session.start,
         session.end,
@@ -99,6 +142,43 @@ fn render(session: &CutSession, language: Language) -> (String, InlineKeyboardMa
         session.id,
         session.revision,
         language,
+    );
+    if session.stage == CutStage::Confirming
+        && let Some(choice) = session.selected
+    {
+        let (label, selected_keyboard) =
+            selected_confirmation_keyboard(choice, session.id, session.revision, language);
+        text.push('\n');
+        text.push_str(&label);
+        keyboard = selected_keyboard;
+    }
+    (text, keyboard)
+}
+
+fn selected_confirmation_keyboard(
+    choice: QualityChoice,
+    id: Uuid,
+    revision: i64,
+    language: Language,
+) -> (String, InlineKeyboardMarkup) {
+    let (action, label) = match choice {
+        QualityChoice::Best => (
+            "qbest".to_owned(),
+            translate(language, Key::QualityBest, &[]),
+        ),
+        QualityChoice::Height(height) => (
+            format!("q{height}"),
+            translate(
+                language,
+                Key::QualityHeight,
+                &[("height", &height.to_string())],
+            ),
+        ),
+    };
+    let callback = encode_values(&action, id, revision);
+    (
+        label.clone(),
+        InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(label, callback)]]),
     )
 }
 
@@ -119,6 +199,7 @@ fn render_values(
             Key::CutSummary,
             &[("start", &time_display(start)), ("end", &time_display(end))],
         ),
+        CutStage::Quality => translate(language, Key::QualityTitle, &[]),
         CutStage::Confirming => translate(language, Key::CutConfirming, &[]),
         CutStage::Submitted => translate(
             language,
@@ -328,7 +409,7 @@ pub(super) async fn try_handle_message(
     if text.eq_ignore_ascii_case("cancel") || text.to_lowercase() == "отмена" {
         if matches!(
             session.stage,
-            CutStage::Start | CutStage::End | CutStage::Ready
+            CutStage::Start | CutStage::End | CutStage::Ready | CutStage::Quality
         ) {
             match service
                 .cut_cancel(
@@ -391,7 +472,10 @@ pub(super) async fn send_session(
 ) {
     let (text, markup) = render(session, language);
     let send = bot.send_message(source.chat.id, text);
-    if matches!(session.stage, CutStage::Ready | CutStage::Confirming) {
+    if matches!(
+        session.stage,
+        CutStage::Ready | CutStage::Quality | CutStage::Confirming
+    ) {
         let _ = send.reply_markup(markup).await;
     } else {
         let _ = send.await;
@@ -460,20 +544,34 @@ pub(super) async fn handle_callback(
         Updated(CutSession),
         Admitted(yoink_storage::Admission),
     }
-    let operation = match action {
-        Callback::Edit(id, revision) => service
-            .cut_edit(actor, target, id, revision)
-            .await
-            .map(Outcome::Updated),
-        Callback::Cancel(id, revision) => service
-            .cut_cancel(actor, target, id, revision, None)
-            .await
-            .map(Outcome::Updated),
-        Callback::Go(id, revision) => service
-            .cut_confirm(actor, target, id, revision)
-            .await
-            .map(Outcome::Admitted),
-    };
+    let operation =
+        match action {
+            Callback::Edit(id, revision) => service
+                .cut_edit(actor, target, id, revision)
+                .await
+                .map(Outcome::Updated),
+            Callback::Cancel(id, revision) => service
+                .cut_cancel(actor, target, id, revision, None)
+                .await
+                .map(Outcome::Updated),
+            Callback::Go(id, revision) => service
+                .cut_submit(actor, target, id, revision)
+                .await
+                .map(|submission| match submission {
+                    CutSubmission::Admitted(admission) => Outcome::Admitted(admission),
+                    CutSubmission::Quality(session) => Outcome::Updated(session),
+                }),
+            Callback::Quality(choice, id, revision) => match service
+                .cut_choose(actor, target, id, revision, choice)
+                .await
+            {
+                Ok(session) => service
+                    .cut_confirm(actor, target, session.id, session.revision)
+                    .await
+                    .map(Outcome::Admitted),
+                Err(error) => Err(error),
+            },
+        };
     match operation {
         Ok(Outcome::Updated(session)) => {
             let (text, markup) = render(&session, language);
@@ -519,13 +617,6 @@ pub(super) async fn handle_callback(
                 other => download_error_response(other, language),
             };
             answer_alert(&bot, query.id, alert).await;
-            if let Ok(Some(session)) = service.cut_current(actor, target).await {
-                let (text, markup) = render(&session, language);
-                let _ = bot
-                    .edit_message_text(message.chat.id, message.id, text)
-                    .reply_markup(markup)
-                    .await;
-            }
         }
     }
     Ok(())
@@ -577,7 +668,10 @@ mod tests {
     #[test]
     fn callbacks_round_trip_are_bounded_and_closed() {
         let id = Uuid::parse_str("38e4f36a14da4f7b8d1d12d2191d8db1").unwrap();
-        for action in ["go", "edit", "cancel"] {
+        for action in [
+            "go", "edit", "cancel", "qbest", "q144", "q240", "q360", "q480", "q720", "q1080",
+            "q1440", "q2160",
+        ] {
             let data = encode_values(action, id, 7);
             assert!(data.len() <= 64);
             assert_eq!(
@@ -585,7 +679,13 @@ mod tests {
                 match action {
                     "go" => Callback::Go(id, 7),
                     "edit" => Callback::Edit(id, 7),
-                    _ => Callback::Cancel(id, 7),
+                    "cancel" => Callback::Cancel(id, 7),
+                    "qbest" => Callback::Quality(QualityChoice::Best, id, 7),
+                    height => Callback::Quality(
+                        QualityChoice::Height(height[1..].parse().unwrap()),
+                        id,
+                        7
+                    ),
                 }
             );
         }
@@ -594,10 +694,49 @@ mod tests {
             "cut:go:uuid:1",
             "cut:go:38e4f36a14da4f7b8d1d12d2191d8db1:-1",
             "cut:go:38e4f36a14da4f7b8d1d12d2191d8db1:1:extra",
+            "cut:q999:38e4f36a14da4f7b8d1d12d2191d8db1:1",
+            "cut:q720:38e4f36a14da4f7b8d1d12d2191d8db1:0",
             "prefs:menu",
             too_long.as_str(),
         ] {
             assert!(callback(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn chooser_has_localized_choices_and_selected_confirming_replays_same_callback() {
+        let id = Uuid::parse_str("38e4f36a14da4f7b8d1d12d2191d8db1").unwrap();
+        for language in [Language::English, Language::Russian] {
+            let markup = keyboard_values(CutStage::Quality, id, 11, language);
+            let value = serde_json::to_value(markup).unwrap();
+            let rows = value["inline_keyboard"].as_array().unwrap();
+            let callbacks = rows
+                .iter()
+                .flat_map(|row| row.as_array().unwrap())
+                .map(|button| button["callback_data"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(callbacks.len(), 11);
+            for data in callbacks {
+                assert!(data.len() <= 64);
+                assert!(matches!(
+                    callback(data),
+                    Ok(Callback::Quality(_, _, 11))
+                        | Ok(Callback::Edit(_, 11))
+                        | Ok(Callback::Cancel(_, 11))
+                ));
+            }
+            let (label, selected) =
+                selected_confirmation_keyboard(QualityChoice::Height(720), id, 12, language);
+            let row = serde_json::to_value(selected).unwrap();
+            let buttons = row["inline_keyboard"][0].as_array().unwrap();
+            assert_eq!(buttons.len(), 1);
+            assert_eq!(buttons[0]["text"], label);
+            let data = buttons[0]["callback_data"].as_str().unwrap();
+            assert!(data.starts_with("cut:q720:"));
+            assert_eq!(
+                callback(data).unwrap(),
+                Callback::Quality(QualityChoice::Height(720), id, 12)
+            );
         }
     }
 

@@ -6,7 +6,14 @@ use yoink_domain::{
 };
 use yoink_storage::Admission;
 
+pub use yoink_storage::QualityChoice;
 pub use yoink_storage::{CutSession, CutStage};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CutSubmission {
+    Admitted(Admission),
+    Quality(CutSession),
+}
 
 use crate::{DownloadError, DownloadService, map_store};
 
@@ -90,6 +97,68 @@ impl DownloadService {
             .map_err(map_store)
     }
 
+    async fn cut_quality_required(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+    ) -> Result<bool, DownloadError> {
+        self.authorize_cut(actor, target).await?;
+        let saved = self
+            .profile
+            .format_preferences(actor)
+            .await
+            .map_err(crate::map_profile)?;
+        Ok(crate::quality::quality_asks(
+            saved.as_ref().and_then(|p| p.quality.as_deref()),
+        ))
+    }
+
+    pub async fn cut_choose(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+        choice: QualityChoice,
+    ) -> Result<CutSession, DownloadError> {
+        self.authorize_cut(actor, target).await?;
+        self.store
+            .cut_choose(actor, target, id, revision, choice)
+            .await
+            .map_err(map_store)
+    }
+
+    /// Moves a Ready clip into its durable chooser for saved `ask`, otherwise admits it with the existing cut key.
+    pub async fn cut_submit(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<CutSubmission, DownloadError> {
+        self.authorize_cut(actor, target).await?;
+        let session = self
+            .store
+            .cut_current(actor, target)
+            .await
+            .map_err(map_store)?
+            .ok_or(DownloadError::Conflict)?;
+        if session.id != id || session.revision != revision {
+            return Err(DownloadError::Conflict);
+        }
+        if session.stage == CutStage::Ready && self.cut_quality_required(actor, target).await? {
+            return self
+                .store
+                .cut_quality(actor, target, id, revision)
+                .await
+                .map(CutSubmission::Quality)
+                .map_err(map_store);
+        }
+        self.cut_confirm(actor, target, id, revision)
+            .await
+            .map(CutSubmission::Admitted)
+    }
+
     pub async fn cut_confirm(
         &self,
         actor: u64,
@@ -121,8 +190,12 @@ impl DownloadService {
         // The identity belongs to the draft, not to the Telegram callback delivery.
         // A crash after admission leaves Confirming, whose retry finds the frozen request.
         let key = format!("cut:{}:{}:{}", target.bot_id(), actor, id.simple());
+        let mut overrides = DownloadPreferenceOverrides::default();
+        if let Some(choice) = session.selected {
+            overrides.max_height = Some(choice.max_height());
+        }
         let admission = self
-            .submit_preferred_request(&request, &key, DownloadPreferenceOverrides::default())
+            .submit_preferred_request(&request, &key, overrides)
             .await?;
         self.store
             .cut_submitted(actor, target, id, revision, admission.operation_id)

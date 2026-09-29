@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 use yoink_domain::DeliveryTarget;
-use yoink_storage::{CutStage, Store, StoreError};
+use yoink_storage::{CutStage, QualityChoice, Store, StoreError};
 
 mod common;
 
@@ -364,6 +364,228 @@ async fn cut_begin_and_cancel_respect_consumed_message_watermark() {
         ),
         (CutStage::Cancelled, 111, advanced.revision + 1)
     );
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cut_quality_is_durable_choice_replay_safe_and_submitted_can_be_replaced() {
+    let fixture = common::store().await;
+    let path = fixture.path();
+    let store = &fixture.store;
+    let draft = begin(store, 500, Some(3.0)).await;
+    let ready = store
+        .cut_input(ACTOR, target(BOT, ACTOR), 501, 8.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let choosing = store
+        .cut_quality(ACTOR, target(BOT, ACTOR), ready.id, ready.revision)
+        .await
+        .unwrap();
+    assert_eq!(choosing.stage, CutStage::Quality);
+    assert_eq!(choosing.revision, ready.revision + 1);
+    assert_eq!(
+        store
+            .cut_choose(
+                ACTOR,
+                target(BOT, ACTOR),
+                ready.id,
+                choosing.revision,
+                QualityChoice::Height(0)
+            )
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    assert_eq!(
+        store
+            .cut_choose(
+                ACTOR,
+                target(BOT, ACTOR),
+                ready.id,
+                ready.revision,
+                QualityChoice::Best
+            )
+            .await,
+        Err(StoreError::Conflict)
+    );
+    let selected = store
+        .cut_choose(
+            ACTOR,
+            target(BOT, ACTOR),
+            ready.id,
+            choosing.revision,
+            QualityChoice::Height(720),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (selected.stage, selected.selected),
+        (CutStage::Confirming, Some(QualityChoice::Height(720)))
+    );
+    assert_eq!(selected.revision, choosing.revision + 1);
+    assert_eq!(
+        store
+            .cut_choose(
+                ACTOR,
+                target(BOT, ACTOR),
+                ready.id,
+                choosing.revision,
+                QualityChoice::Height(720)
+            )
+            .await
+            .unwrap(),
+        selected
+    );
+    assert_eq!(
+        store
+            .cut_choose(
+                ACTOR,
+                target(BOT, ACTOR),
+                ready.id,
+                choosing.revision,
+                QualityChoice::Best
+            )
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        store
+            .cut_choose(
+                ACTOR,
+                target(BOT, ACTOR),
+                ready.id,
+                999,
+                QualityChoice::Height(720)
+            )
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        store
+            .cut_begin(
+                ACTOR,
+                target(BOT, ACTOR),
+                502,
+                "https://example.com/blocked",
+                None
+            )
+            .await,
+        Err(StoreError::Conflict)
+    );
+    let operation = Uuid::new_v4();
+    let submitted = store
+        .cut_submitted(
+            ACTOR,
+            target(BOT, ACTOR),
+            ready.id,
+            selected.revision,
+            operation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .cut_choose(
+                ACTOR,
+                target(BOT, ACTOR),
+                ready.id,
+                choosing.revision,
+                QualityChoice::Height(720)
+            )
+            .await
+            .unwrap(),
+        submitted
+    );
+    store.close().await.unwrap();
+    let reopened = Store::open(&path, false, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .cut_current(ACTOR, target(BOT, ACTOR))
+            .await
+            .unwrap(),
+        Some(submitted)
+    );
+    let replacement = reopened
+        .cut_begin(
+            ACTOR,
+            target(BOT, ACTOR),
+            503,
+            "https://example.com/replacement",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_ne!(replacement.id, draft.id);
+    assert_eq!(replacement.stage, CutStage::Start);
+    reopened.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unselected_cut_quality_can_be_edited_or_cancelled_and_then_replaced() {
+    let store = common::store().await;
+    store
+        .cut_begin(
+            ACTOR,
+            target(BOT, ACTOR),
+            600,
+            "https://example.com/edit",
+            Some(1.0),
+        )
+        .await
+        .unwrap();
+    let ready = store
+        .cut_input(ACTOR, target(BOT, ACTOR), 601, 2.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let choosing = store
+        .cut_quality(ACTOR, target(BOT, ACTOR), ready.id, ready.revision)
+        .await
+        .unwrap();
+    let edited = store
+        .cut_edit(ACTOR, target(BOT, ACTOR), choosing.id, choosing.revision)
+        .await
+        .unwrap();
+    assert_eq!(edited.stage, CutStage::Start);
+    let end = store
+        .cut_input(ACTOR, target(BOT, ACTOR), 602, 1.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(end.stage, CutStage::End);
+    let ready = store
+        .cut_input(ACTOR, target(BOT, ACTOR), 603, 2.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let choosing = store
+        .cut_quality(ACTOR, target(BOT, ACTOR), ready.id, ready.revision)
+        .await
+        .unwrap();
+    let cancelled = store
+        .cut_cancel(
+            ACTOR,
+            target(BOT, ACTOR),
+            choosing.id,
+            choosing.revision,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancelled.stage, CutStage::Cancelled);
+    let replacement = store
+        .cut_begin(
+            ACTOR,
+            target(BOT, ACTOR),
+            604,
+            "https://example.com/new",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replacement.stage, CutStage::Start);
     store.close().await.unwrap();
 }
 

@@ -1,3 +1,4 @@
+use crate::QualityChoice;
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 use yoink_db::{Row, query};
@@ -10,6 +11,7 @@ pub enum CutStage {
     Start,
     End,
     Ready,
+    Quality,
     Confirming,
     Submitted,
     Cancelled,
@@ -21,6 +23,7 @@ impl CutStage {
             Self::Start => "start",
             Self::End => "end",
             Self::Ready => "ready",
+            Self::Quality => "quality",
             Self::Confirming => "confirming",
             Self::Submitted => "submitted",
             Self::Cancelled => "cancelled",
@@ -31,6 +34,7 @@ impl CutStage {
             "start" => Ok(Self::Start),
             "end" => Ok(Self::End),
             "ready" => Ok(Self::Ready),
+            "quality" => Ok(Self::Quality),
             "confirming" => Ok(Self::Confirming),
             "submitted" => Ok(Self::Submitted),
             "cancelled" => Ok(Self::Cancelled),
@@ -51,6 +55,7 @@ pub struct CutSession {
     pub start: Option<f64>,
     pub end: Option<f64>,
     pub operation_id: Option<Uuid>,
+    pub selected: Option<QualityChoice>,
     begin_start: Option<f64>,
     url: Option<String>,
 }
@@ -75,6 +80,7 @@ impl std::fmt::Debug for CutSession {
             .field("start", &self.start)
             .field("end", &self.end)
             .field("operation_id", &self.operation_id)
+            .field("selected", &self.selected)
             .finish()
     }
 }
@@ -163,6 +169,7 @@ impl Store {
             start,
             end: None,
             operation_id: None,
+            selected: None,
             begin_start: start,
             url: Some(url.to_owned()),
         };
@@ -245,7 +252,7 @@ impl Store {
             .await
             .map_err(|_| StoreError::Database)?;
         let mut s = require(&tx, actor, target, id, revision).await?;
-        if s.stage != CutStage::Ready {
+        if !matches!(s.stage, CutStage::Ready | CutStage::Quality) {
             return Err(StoreError::Conflict);
         }
         s.revision = s.revision.checked_add(1).ok_or(StoreError::InvalidInput)?;
@@ -253,6 +260,7 @@ impl Store {
         s.start = None;
         s.end = None;
         s.operation_id = None;
+        s.selected = None;
         put(&tx, &s).await?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(s)
@@ -279,7 +287,10 @@ impl Store {
             tx.commit().await.map_err(|_| StoreError::Database)?;
             return Ok(s);
         }
-        if !matches!(s.stage, CutStage::Start | CutStage::End | CutStage::Ready) {
+        if !matches!(
+            s.stage,
+            CutStage::Start | CutStage::End | CutStage::Ready | CutStage::Quality
+        ) {
             return Err(StoreError::Conflict);
         }
         if let Some(mid) = message_id {
@@ -295,6 +306,7 @@ impl Store {
         s.stage = CutStage::Cancelled;
         s.start = None;
         s.end = None;
+        s.selected = None;
         put(&tx, &s).await?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(s)
@@ -318,12 +330,77 @@ impl Store {
         let mut s = require(&tx, actor, target, id, revision).await?;
         match s.stage {
             CutStage::Ready => s.stage = CutStage::Confirming,
+            CutStage::Quality if s.selected.is_some() => s.stage = CutStage::Confirming,
             CutStage::Confirming | CutStage::Submitted => {
                 tx.commit().await.map_err(|_| StoreError::Database)?;
                 return Ok(s);
             }
             _ => return Err(StoreError::Conflict),
         }
+        put(&tx, &s).await?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(s)
+    }
+
+    pub async fn cut_quality(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<CutSession, StoreError> {
+        let mut conn = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let mut s = require(&tx, actor, target, id, revision).await?;
+        if s.stage != CutStage::Ready {
+            return Err(StoreError::Conflict);
+        }
+        s.stage = CutStage::Quality;
+        s.revision = s.revision.checked_add(1).ok_or(StoreError::InvalidInput)?;
+        put(&tx, &s).await?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(s)
+    }
+
+    pub async fn cut_choose(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+        choice: QualityChoice,
+    ) -> Result<CutSession, StoreError> {
+        if QualityChoice::parse(choice.as_str()).is_err() {
+            return Err(StoreError::InvalidInput);
+        }
+        let mut conn = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let mut s = require_choice_replay(&tx, actor, target, id, revision).await?;
+        if matches!(s.stage, CutStage::Confirming | CutStage::Submitted)
+            && s.selected == Some(choice)
+            && (revision == s.revision || revision == s.revision - 1)
+        {
+            tx.commit().await.map_err(|_| StoreError::Database)?;
+            return Ok(s);
+        }
+        if s.stage != CutStage::Quality {
+            return Err(StoreError::Conflict);
+        }
+        s.stage = CutStage::Confirming;
+        s.selected = Some(choice);
+        s.revision = s.revision.checked_add(1).ok_or(StoreError::InvalidInput)?;
         put(&tx, &s).await?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(s)
@@ -362,6 +439,29 @@ impl Store {
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(s)
     }
+}
+
+async fn require_choice_replay(
+    tx: &Transaction<'_>,
+    actor: u64,
+    target: DeliveryTarget,
+    id: Uuid,
+    revision: i64,
+) -> Result<CutSession, StoreError> {
+    // Unlike ordinary revision-bound edits, a delivered choice callback may be replayed
+    // after its transition committed. Decode the current row, then validate exact revision below.
+    validate_scope(actor, target)?;
+    let s = get(tx, actor, target)
+        .await?
+        .map(decode)
+        .transpose()?
+        .ok_or(StoreError::Conflict)?;
+    let replay =
+        matches!(s.stage, CutStage::Confirming | CutStage::Submitted) && revision == s.revision - 1;
+    if s.id != id || (s.revision != revision && !replay) {
+        return Err(StoreError::Conflict);
+    }
+    Ok(s)
 }
 
 fn validate_scope(actor: u64, target: DeliveryTarget) -> Result<(), StoreError> {
@@ -430,6 +530,7 @@ async fn put(tx: &turso::transaction::Transaction<'_>, s: &CutSession) -> Result
         .bind(s.start)
         .bind(s.end)
         .bind(s.operation_id)
+        .bind(s.selected.map(QualityChoice::as_str))
         .execute(&**tx)
         .await
         .map_err(|_| StoreError::Database)?;
@@ -479,6 +580,11 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
         operation_id: row
             .try_get("operation_id")
             .map_err(|_| StoreError::InvalidStoredData)?,
+        selected: row
+            .try_get::<Option<String>, _>("selected")
+            .map_err(|_| StoreError::InvalidStoredData)?
+            .map(|v| QualityChoice::parse(&v))
+            .transpose()?,
         url: row
             .try_get("source_url")
             .map_err(|_| StoreError::InvalidStoredData)?,

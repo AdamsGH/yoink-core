@@ -176,10 +176,6 @@ async fn cut_recovers_admission_before_session_completion_without_a_second_job()
         .await
         .unwrap()
         .unwrap();
-    store
-        .cut_claim(ACTOR, target, ready.id, ready.revision)
-        .await
-        .unwrap();
     let request = DownloadRequest::new(
         ACTOR,
         URL,
@@ -195,7 +191,11 @@ async fn cut_recovers_admission_before_session_completion_without_a_second_job()
         .submit_preferred_request(&request, &key, DownloadPreferenceOverrides::default())
         .await
         .unwrap();
-    // Fault boundary: durable operation exists, but no cut_submitted write occurred.
+    yoink_db::raw_sql(include_str!("sql/cut_recovery_confirming.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    // Fault boundary: SQL restores the durable Confirming checkpoint after admission.
     assert_eq!(
         service
             .cut_current(ACTOR, target)
@@ -261,6 +261,108 @@ async fn cut_state_is_denied_outside_the_actors_own_private_delivery_target() {
             DownloadError::Denied
         );
     }
+}
+
+#[tokio::test]
+async fn cut_ask_choice_admits_only_after_selection_with_frozen_explicit_quality() {
+    use yoink_downloads::{CutStage, CutSubmission, QualityChoice};
+    let (_directory, store, service) = setup().await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2400)).unwrap();
+    yoink_db::raw_sql(include_str!("sql/set_quality_ask.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    service
+        .cut_begin(ACTOR, target, 2400, URL, Some(2.0))
+        .await
+        .unwrap();
+    let ready = service
+        .cut_input(ACTOR, target, 2401, 4.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let CutSubmission::Quality(chooser) = service
+        .cut_submit(ACTOR, target, ready.id, ready.revision)
+        .await
+        .unwrap()
+    else {
+        panic!("ask preference must show chooser")
+    };
+    assert_eq!(chooser.stage, CutStage::Quality);
+    assert_eq!(chooser.operation_id, None);
+    let selected = service
+        .cut_choose(
+            ACTOR,
+            target,
+            chooser.id,
+            chooser.revision,
+            QualityChoice::Height(720),
+        )
+        .await
+        .unwrap();
+    let admitted = service
+        .cut_confirm(ACTOR, target, selected.id, selected.revision)
+        .await
+        .unwrap();
+    let frozen = persisted_request(&store, &admitted.operation_id).await;
+    assert_eq!(
+        frozen["clip_range"],
+        serde_json::json!({"start_seconds": 2.0, "end_seconds": 4.0})
+    );
+    assert_eq!(frozen["target"]["reply_to_message_id"], 2400);
+    assert_eq!(frozen["params"]["max_height"], 720);
+    assert_eq!(frozen["params"]["send_as_file"], true);
+    let replay = service
+        .cut_confirm(ACTOR, target, selected.id, selected.revision)
+        .await
+        .unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.operation_id, admitted.operation_id);
+    service
+        .cut_begin(ACTOR, target, 2410, URL, Some(5.0))
+        .await
+        .unwrap();
+    let ready = service
+        .cut_input(ACTOR, target, 2411, 7.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let CutSubmission::Quality(chooser) = service
+        .cut_submit(ACTOR, target, ready.id, ready.revision)
+        .await
+        .unwrap()
+    else {
+        panic!("ask preference must show chooser")
+    };
+    let selected = service
+        .cut_choose(
+            ACTOR,
+            target,
+            chooser.id,
+            chooser.revision,
+            QualityChoice::Best,
+        )
+        .await
+        .unwrap();
+    let best = service
+        .cut_confirm(ACTOR, target, selected.id, selected.revision)
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted_request(&store, &best.operation_id).await["params"]["max_height"],
+        serde_json::Value::Null
+    );
+    yoink_db::query(include_str!("sql/set_banned.sql"))
+        .bind(ACTOR as i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .cut_confirm(ACTOR, target, selected.id, selected.revision)
+            .await,
+        Err(DownloadError::Denied)
+    );
 }
 
 fn request() -> DownloadRequest {

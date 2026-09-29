@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 9] = [
+const MIGRATIONS: [Migration; 10] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -54,6 +54,11 @@ const MIGRATIONS: [Migration; 9] = [
     Migration {
         version: 9,
         sql: include_str!("../migrations-turso/0009_quality_sessions.sql"),
+        expected_tables: 52,
+    },
+    Migration {
+        version: 10,
+        sql: include_str!("../migrations-turso/0010_cut_quality.sql"),
         expected_tables: 52,
     },
 ];
@@ -311,7 +316,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 9);
+        assert_eq!(versions.len(), 10);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
@@ -321,6 +326,150 @@ mod tests {
         assert_eq!(versions[6].try_get::<i64, _>("version").unwrap(), 7);
         assert_eq!(versions[7].try_get::<i64, _>("version").unwrap(), 8);
         assert_eq!(versions[8].try_get::<i64, _>("version").unwrap(), 9);
+        assert_eq!(versions[9].try_get::<i64, _>("version").unwrap(), 10);
+    }
+
+    #[tokio::test]
+    async fn version_nine_cut_rows_survive_quality_migration_without_new_identity() {
+        let (_directory, store) = version_one_store().await;
+        {
+            let connection = store.database().connection().await.unwrap();
+            for migration in &MIGRATIONS[1..9] {
+                raw_sql(migration.sql).execute(&*connection).await.unwrap();
+                let fingerprint = schema_hash(&connection, migration.expected_tables)
+                    .await
+                    .unwrap();
+                query(include_str!("../sql/record_migration.sql"))
+                    .bind(migration.version)
+                    .bind(checksum(migration))
+                    .bind(fingerprint)
+                    .bind(chrono::Utc::now())
+                    .execute(&*connection)
+                    .await
+                    .unwrap();
+            }
+            raw_sql(include_str!("../sql/test_cut_v9_quality_migration.sql"))
+                .execute(&*connection)
+                .await
+                .unwrap();
+        }
+        store.migrate().await.unwrap();
+        let rows = query(include_str!("../sql/test_cut_quality_migration_rows.sql"))
+            .fetch_all(store.database())
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 7);
+        let expected = [
+            (
+                7,
+                "38e4f36a-14da-4f7b-8d1d-12d2191d8db1",
+                "confirming",
+                4,
+                11,
+                13,
+                1.0,
+                Some(2.0),
+                Some(8.0),
+                None,
+            ),
+            (
+                8,
+                "48e4f36a-14da-4f7b-8d1d-12d2191d8db2",
+                "ready",
+                5,
+                21,
+                23,
+                2.0,
+                Some(3.0),
+                Some(9.0),
+                None,
+            ),
+            (
+                10,
+                "58e4f36a-14da-4f7b-8d1d-12d2191d8db3",
+                "submitted",
+                6,
+                31,
+                33,
+                3.0,
+                Some(4.0),
+                Some(10.0),
+                Some("68e4f36a-14da-4f7b-8d1d-12d2191d8db4"),
+            ),
+            (
+                12,
+                "78e4f36a-14da-4f7b-8d1d-12d2191d8db5",
+                "cancelled",
+                7,
+                41,
+                43,
+                4.0,
+                None,
+                None,
+                None,
+            ),
+        ];
+        for (row, (actor, id, stage, revision, origin, last, begin, start, end, operation)) in
+            rows.iter().zip(expected)
+        {
+            assert_eq!(row.try_get::<i64, _>("actor_id").unwrap(), actor);
+            assert_eq!(row.try_get::<String, _>("id").unwrap(), id);
+            assert_eq!(row.try_get::<i64, _>("revision").unwrap(), revision);
+            assert_eq!(row.try_get::<String, _>("stage").unwrap(), stage);
+            assert_eq!(
+                row.try_get::<Option<String>, _>("operation_id")
+                    .unwrap()
+                    .as_deref(),
+                operation
+            );
+            assert_eq!(row.try_get::<Option<String>, _>("selected").unwrap(), None);
+            assert_eq!(row.try_get::<i64, _>("origin_message_id").unwrap(), origin);
+            assert_eq!(row.try_get::<i64, _>("last_message_id").unwrap(), last);
+            assert_eq!(
+                row.try_get::<String, _>("source_url").unwrap(),
+                format!("https://example.test/{stage}")
+            );
+            assert_eq!(
+                row.try_get::<Option<f64>, _>("begin_start").unwrap(),
+                Some(begin)
+            );
+            assert_eq!(row.try_get::<Option<f64>, _>("start").unwrap(), start);
+            assert_eq!(row.try_get::<Option<f64>, _>("end").unwrap(), end);
+        }
+        for (actor_id, expected_stage, expected_end) in [
+            (13, "start", -1.0),
+            (14, "end", -2.0),
+            (15, "cancelled", -3.0),
+        ] {
+            let row = query("SELECT stage,end FROM runtime_cut_sessions WHERE actor_id=?1")
+                .bind(actor_id)
+                .fetch_one(store.database())
+                .await
+                .unwrap();
+            assert_eq!(
+                row.try_get::<Option<f64>, _>("end").unwrap(),
+                Some(expected_end)
+            );
+            assert_eq!(row.try_get::<String, _>("stage").unwrap(), expected_stage);
+        }
+        store.verify_schema().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cut_quality_migration_preserves_nonnegative_range_constraints() {
+        let (_directory, store) = version_one_store().await;
+        store.migrate().await.unwrap();
+        let connection = store.database().connection().await.unwrap();
+        assert!(
+            raw_sql(include_str!(
+                "../sql/test_cut_negative_start_constraint.sql"
+            ))
+            .execute(&*connection)
+            .await
+            .is_err()
+        );
+        drop(connection);
+        store.verify_schema().await.unwrap();
     }
 
     #[tokio::test]

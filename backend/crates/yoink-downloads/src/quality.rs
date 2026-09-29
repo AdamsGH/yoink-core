@@ -6,6 +6,10 @@ use crate::{DownloadError, DownloadService, map_profile, map_store};
 
 pub use yoink_storage::{QualityChoice, QualitySession, QualityStage};
 
+pub(crate) fn quality_asks(value: Option<&str>) -> bool {
+    value.is_some_and(|quality| quality.trim().eq_ignore_ascii_case("ask"))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TelegramSubmission {
     Admitted(Admission),
@@ -123,7 +127,7 @@ impl DownloadService {
             if saved
                 .as_ref()
                 .and_then(|p| p.quality.as_deref())
-                .is_some_and(|q| q.eq_ignore_ascii_case("ask"))
+                .is_some_and(|q| quality_asks(Some(q)))
             {
                 let mut saved = saved.ok_or(DownloadError::InvalidPreferences)?;
                 saved.quality = Some("best".into());
@@ -252,4 +256,17 @@ fn without_overrides(request: DownloadRequest) -> Result<DownloadRequest, Downlo
     original
         .with_network(request.network().clone())
         .map_err(|_| DownloadError::InvalidInput)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quality_asks;
+
+    #[test]
+    fn ask_preference_matching_trims_and_ignores_ascii_case() {
+        assert!(quality_asks(Some("ask")));
+        assert!(quality_asks(Some("  AsK  ")));
+        assert!(!quality_asks(Some("best")));
+        assert!(!quality_asks(None));
+    }
 }

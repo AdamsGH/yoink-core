@@ -3,7 +3,7 @@ mod cache_control;
 mod chat_access;
 mod cut;
 mod language;
-pub use cut::{CutSession, CutStage};
+pub use cut::{CutSession, CutStage, CutSubmission};
 pub use yoink_identity::LanguagePreference;
 mod personal_cookies;
 pub mod profile;
