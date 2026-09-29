@@ -55,7 +55,7 @@ export async function runSettingsScenarios(context) {
     assert.equal(JSON.parse(await snapshot()).gallery_zip, 1);
     assert.equal(JSON.parse(await snapshot()).subs_auto, 1);
     let stable = await snapshot();
-    for (const data of ['prefs:quality:ask', 'prefs:role:owner', 'prefs:audio_codec:secret:extra']) await click(menu, data, {}, false);
+    for (const data of ['prefs:quality:bogus', 'prefs:role:owner', 'prefs:audio_codec:secret:extra']) await click(menu, data, {}, false);
     for (const options of [{ isBot: true }, { inaccessible: true }, { messagePatch: { message_thread_id: 9 } },
       { messagePatch: { chat: { id: -42, type: 'group', title: 'Fixture' } } },
       { messagePatch: { from: { id: 999, is_bot: true, first_name: 'Other bot' } } }]) {

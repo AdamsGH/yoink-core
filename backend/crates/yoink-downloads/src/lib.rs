@@ -8,9 +8,11 @@ pub use yoink_identity::LanguagePreference;
 mod personal_cookies;
 pub mod profile;
 mod progress;
+mod quality;
 pub use personal_cookies::{
     CookieDomain, PersonalCookieEntry, PersonalCookiePage, PersonalCookieStatus,
 };
+pub use quality::{QualityChoice, QualitySession, QualityStage, TelegramSubmission};
 mod settings;
 pub use settings::{EditableSettings, ProxySettings, SettingChange, SettingField};
 

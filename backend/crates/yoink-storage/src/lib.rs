@@ -6,6 +6,7 @@ mod cut;
 mod error;
 mod model;
 mod progress;
+mod quality;
 mod schema;
 mod store;
 pub use cache::CachedBatch;
@@ -17,4 +18,5 @@ pub use model::{
     ProgressStage,
 };
 pub use progress::{ProgressMessage, ProgressNotice};
+pub use quality::{QualityChoice, QualitySession, QualityStage};
 pub use store::{StopDeliveryReason, Store};

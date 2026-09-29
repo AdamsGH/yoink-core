@@ -34,15 +34,15 @@ pub struct ProfileStore {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct FormatPreferences {
-    quality: Option<String>,
-    codec: Option<String>,
-    container: Option<String>,
-    send_as_file: bool,
-    audio_codec: Option<String>,
-    gallery_zip: bool,
-    subtitle_language: Option<String>,
-    subtitle_automatic: bool,
+pub(crate) struct FormatPreferences {
+    pub(crate) quality: Option<String>,
+    pub(crate) codec: Option<String>,
+    pub(crate) container: Option<String>,
+    pub(crate) send_as_file: bool,
+    pub(crate) audio_codec: Option<String>,
+    pub(crate) gallery_zip: bool,
+    pub(crate) subtitle_language: Option<String>,
+    pub(crate) subtitle_automatic: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -155,7 +155,7 @@ impl ProfileStore {
         Ok(())
     }
 
-    pub(super) async fn format_preferences(
+    pub(crate) async fn format_preferences(
         &self,
         actor_id: u64,
     ) -> Result<Option<FormatPreferences>, ProfileError> {
@@ -654,7 +654,7 @@ pub fn resolve_format_preferences(
     resolve_format_values(mode, compact.as_ref(), overrides)
 }
 
-pub(super) fn resolve_format_values(
+pub(crate) fn resolve_format_values(
     mode: MediaMode,
     preferences: Option<&FormatPreferences>,
     o: &DownloadPreferenceOverrides,
@@ -1174,6 +1174,14 @@ mod tests {
             "malicious-quality-codec",
             "malicious-container",
             "malicious-audio",
+        );
+        assert_eq!(
+            resolve_format_values(
+                MediaMode::Video,
+                Some(&format_prefs("ask", "avc1", "mp4", "best")),
+                &DownloadPreferenceOverrides::default(),
+            ),
+            Err(ProfileError::InvalidPreferences)
         );
         let rescue = DownloadPreferenceOverrides {
             max_height: Some(None),

@@ -76,6 +76,7 @@ fn value_label(value: &str, language: Language) -> String {
         "true" => translate(language, Key::SettingsOn, &[]),
         "false" => translate(language, Key::SettingsOff, &[]),
         "best" => translate(language, Key::SettingsBest, &[]),
+        "ask" => translate(language, Key::SettingsAsk, &[]),
         _ => value.to_owned(),
     }
 }
@@ -296,7 +297,7 @@ mod tests {
             }
         }
         for bad in [
-            "prefs:quality:ask:0",
+            "prefs:quality:unknown:0",
             "prefs:quality:720",
             "prefs:quality:720:-1",
             "prefs:quality:720:123:extra",

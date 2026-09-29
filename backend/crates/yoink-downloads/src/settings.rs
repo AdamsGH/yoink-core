@@ -45,7 +45,9 @@ impl SettingField {
     }
     pub fn choices(self) -> &'static [&'static str] {
         match self {
-            Self::Quality => &["best", "2160", "1440", "1080", "720", "480", "360"],
+            Self::Quality => &[
+                "best", "2160", "1440", "1080", "720", "480", "360", "240", "144", "ask",
+            ],
             Self::Codec => &["avc1", "av01", "vp09"],
             Self::Container => &["mp4", "mkv"],
             Self::AudioCodec => &["best", "mp4a", "opus", "mp3"],
@@ -311,7 +313,8 @@ mod tests {
         for name in ["proxy_url", "args_json", "user_id", "subs_enabled", "role"] {
             assert!(SettingField::parse(name).is_none());
         }
-        assert!(SettingChange::new(SettingField::Quality, "ask").is_err());
+        assert!(SettingChange::new(SettingField::Quality, "ask").is_ok());
+        assert!(SettingChange::new(SettingField::Quality, "bogus").is_err());
         assert!(SettingChange::new(SettingField::SubtitleLanguage, "en-US").is_ok());
         assert!(SettingChange::new(SettingField::SubtitleLanguage, "eng-abcdefgh").is_err());
     }

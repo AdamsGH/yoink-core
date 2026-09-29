@@ -27,7 +27,7 @@ use yoink_domain::{
     DeliveryTarget, DownloadParams, DownloadPreferenceOverrides, DownloadRequest,
     MediaMode as DomainMediaMode,
 };
-use yoink_downloads::{DownloadError, DownloadService};
+use yoink_downloads::{DownloadError, DownloadService, TelegramSubmission};
 use yoink_i18n::{CatalogError, Key, Language, embedded as catalog};
 use yoink_storage::{Admission, OperationStatus};
 
@@ -40,6 +40,7 @@ mod media_command;
 mod plain_url;
 mod progress;
 mod proxy;
+mod quality;
 mod sender;
 mod settings;
 mod subs;
@@ -294,6 +295,7 @@ enum Command {
     Help,
     Status,
     Settings(settings::Action),
+    Quality(bool),
     Subs,
     Proxy(proxy::Action),
     Download(String),
@@ -317,6 +319,7 @@ impl std::fmt::Debug for Command {
             Self::Help => formatter.write_str("Help"),
             Self::Status => formatter.write_str("Status"),
             Self::Settings(_) => formatter.write_str("Settings"),
+            Self::Quality(_) => formatter.write_str("Quality"),
             Self::Subs => formatter.write_str("Subs"),
             Self::Proxy(_) => formatter.write_str("Proxy"),
             Self::Job(id) => formatter.debug_tuple("Job").field(id).finish(),
@@ -360,6 +363,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
             Command::Settings(settings::Action::Invalid),
             Command::Settings,
         ));
+    }
+    if name == "quality" {
+        return Some(Command::Quality(args.is_empty()));
     }
     if name == "subs" && args.is_empty() {
         return Some(Command::Subs);
@@ -803,6 +809,21 @@ async fn handle_message(
         }
         return Ok(());
     }
+    if let Command::Quality(valid) = command {
+        if target.chat_id() > 0 {
+            quality::handle_command(
+                &bot,
+                &message,
+                downloads.as_ref(),
+                actor_id,
+                target,
+                valid,
+                language,
+            )
+            .await;
+        }
+        return Ok(());
+    }
     if let Command::Subs = command {
         if target.chat_id() > 0 && actor_id == identity.owner_id && message.thread_id.is_none() {
             subs::handle_command(
@@ -844,6 +865,7 @@ async fn handle_message(
     let mut admitted = None;
     let reply = match command {
         Command::Settings(_)
+        | Command::Quality(_)
         | Command::Subs
         | Command::Proxy(_)
         | Command::Uncache(_)
@@ -869,7 +891,6 @@ async fn handle_message(
             let Some(service) = downloads.as_ref() else {
                 return Ok(());
             };
-            let key = format!("tg:{bot_id}:{}:{}", message.chat.id.0, message.id.0);
             let request = {
                 DownloadRequest::new(
                     actor_id,
@@ -883,16 +904,20 @@ async fn handle_message(
             };
             match request {
                 Ok(request) => match service
-                    .submit_preferred_request(
+                    .submit_telegram_request(
                         &request,
-                        &key,
+                        message.id.0,
                         DownloadPreferenceOverrides::default(),
                     )
                     .await
                 {
-                    Ok(admission) => {
+                    Ok(TelegramSubmission::Admitted(admission)) => {
                         admitted = Some(admission.operation_id);
                         admitted_response(admission, language)
+                    }
+                    Ok(TelegramSubmission::Quality(session)) => {
+                        quality::send_session(&bot, &message, &session, language).await;
+                        return Ok(());
                     }
                     Err(error) => download_error_response(error, language).to_owned(),
                 },
@@ -903,7 +928,6 @@ async fn handle_message(
             let Some(service) = downloads.as_ref() else {
                 return Ok(());
             };
-            let key = format!("tg:{bot_id}:{}:{}", message.chat.id.0, message.id.0);
             let mut params = DownloadParams::default().with_playlist(media.playlist);
             if let Some(engine) = media.engine {
                 params = params.with_engine(engine);
@@ -914,12 +938,16 @@ async fn handle_message(
                     .map_err(|_| DownloadError::InvalidInput);
             match request {
                 Ok(request) => match service
-                    .submit_preferred_request(&request, &key, media.overrides)
+                    .submit_telegram_request(&request, message.id.0, media.overrides)
                     .await
                 {
-                    Ok(admission) => {
+                    Ok(TelegramSubmission::Admitted(admission)) => {
                         admitted = Some(admission.operation_id);
                         admitted_response(admission, language)
+                    }
+                    Ok(TelegramSubmission::Quality(session)) => {
+                        quality::send_session(&bot, &message, &session, language).await;
+                        return Ok(());
                     }
                     Err(error) => download_error_response(error, language).to_owned(),
                 },
@@ -1001,6 +1029,12 @@ async fn handle_callback(
         .is_some_and(|data| data == "lang" || data.starts_with("lang:"))
     {
         lang::handle_callback(bot, query, identity, downloads).await
+    } else if query
+        .data
+        .as_deref()
+        .is_some_and(|data| data == "ql" || data.starts_with("ql:"))
+    {
+        quality::handle_callback(bot, query, identity, downloads).await
     } else if query
         .data
         .as_deref()
@@ -1114,6 +1148,19 @@ mod tests {
     #[test]
     fn parses_supported_commands_with_strict_arguments_and_bot_suffix() {
         assert_eq!(parse_command("/start", "yoink_bot"), Some(Command::Start));
+        assert_eq!(
+            parse_command("/quality", "yoink_bot"),
+            Some(Command::Quality(true))
+        );
+        assert_eq!(
+            parse_command("/quality@YOINK_BOT", "yoink_bot"),
+            Some(Command::Quality(true))
+        );
+        assert_eq!(
+            parse_command("/quality extra", "yoink_bot"),
+            Some(Command::Quality(false))
+        );
+        assert_eq!(parse_command("/quality@OtherBot", "yoink_bot"), None);
         assert_eq!(
             parse_command("/lang", "yoink_bot"),
             Some(Command::Lang(lang::Action::Menu))

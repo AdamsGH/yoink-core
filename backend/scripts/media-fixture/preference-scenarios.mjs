@@ -24,7 +24,7 @@ export async function runPreferenceScenarios(context) {
     assert.equal(originalRequest.params.send_as_file, true);
 
     // Replays must not consult a now-unusable saved quality.
-    await fixtureSql("UPDATE dl_user_settings SET quality = 'ask', send_as_file = 0 WHERE user_id = 42");
+    await fixtureSql("UPDATE dl_user_settings SET quality = 'bogus', send_as_file = 0 WHERE user_id = 42");
     await replay(videoCommand, original);
     assert.deepEqual(await request(original.operationId), originalRequest);
     await reject(videoCommand, 'Check your download settings before retrying.');
@@ -49,7 +49,7 @@ export async function runPreferenceScenarios(context) {
     const frozen = await submit(audioCommand);
     assert((await queryJob(frozen.operationId)).startsWith('queued|'));
     assert.equal((await request(frozen.operationId)).params.audio_codec, 'mp3');
-    await fixtureSql("UPDATE dl_user_settings SET quality = 'ask', audio_codec = 'invalid' WHERE user_id = 42");
+    await fixtureSql("UPDATE dl_user_settings SET quality = 'bogus', audio_codec = 'invalid' WHERE user_id = 42");
     botApi.setExpectedUpload({ method: 'sendaudio', filename: 'audio.mp3', mimeType: 'audio/mpeg', preserveMdat: false });
     const before = botApi.uploadCalls;
     await cancel(blocker.operationId);

@@ -73,6 +73,16 @@ define_keys! {
     CutGo => "telegram.cut_go";
     CutEdit => "telegram.cut_edit";
     CutCancel => "telegram.cut_cancel";
+    QualityUsage => "telegram.quality_usage";
+    QualityTitle => "telegram.quality_title";
+    QualityBest => "telegram.quality_best";
+    QualityHeight => "telegram.quality_height", ["height"];
+    QualityCancel => "telegram.quality_cancel";
+    QualityConfirming => "telegram.quality_confirming", ["choice"];
+    QualitySubmitted => "telegram.quality_submitted", ["id"];
+    QualityCancelled => "telegram.quality_cancelled";
+    QualityStale => "telegram.quality_stale";
+    QualityRetry => "telegram.quality_retry";
     SettingsUsage => "telegram.settings_usage";
     SettingsTitle => "telegram.settings_title", ["values"];
     SettingsQuality => "telegram.settings_quality";
@@ -86,6 +96,7 @@ define_keys! {
     SettingsOn => "telegram.settings_on";
     SettingsOff => "telegram.settings_off";
     SettingsBest => "telegram.settings_best";
+    SettingsAsk => "telegram.settings_ask";
     SettingsBack => "telegram.settings_back";
     LangUsage => "telegram.lang_usage";
     LangChoose => "telegram.lang_choose";
@@ -486,6 +497,23 @@ mod tests {
                     key.as_str()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn quality_choice_copy_and_resume_guidance_exist_in_both_locales() {
+        let catalog = Catalog::embedded().unwrap();
+        for language in [Language::English, Language::Russian] {
+            let title = catalog.render(language, Key::QualityTitle, &[]).unwrap();
+            let settings = catalog.render(language, Key::SettingsUsage, &[]).unwrap();
+            let help = catalog.render(language, Key::HelpEnabled, &[]).unwrap();
+            assert!(title.contains(if language == Language::English {
+                "not verified source formats"
+            } else {
+                "не проверенные форматы"
+            }));
+            assert!(settings.contains("ask"));
+            assert!(help.contains("/quality"));
         }
     }
 
