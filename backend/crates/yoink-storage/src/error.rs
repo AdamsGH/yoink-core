@@ -9,6 +9,8 @@ pub enum StoreError {
     Capacity,
     #[error("operation or lease is no longer available")]
     NotFoundOrStale,
+    #[error("storage operation is not authorized")]
+    Unauthorized,
     #[error("storage database operation failed")]
     Database,
     #[error("storage schema is missing or incompatible")]

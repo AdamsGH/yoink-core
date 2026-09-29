@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 use yoink_db::query;
-use yoink_domain::{CachedMedia, CachedMediaKind, DownloadRequest};
+use yoink_domain::{CachedMedia, CachedMediaKind, DownloadParams, DownloadRequest, MediaMode};
 
 use crate::{Store, StoreError, cache_key::media_cache_key, model::Claim};
 
@@ -19,6 +19,87 @@ pub struct CachedBatch {
 }
 
 impl Store {
+    /// Atomically advances the actor/bot message watermark and clears matching URL caches.
+    /// A stale message is a successful no-op, including after a cache is repopulated.
+    pub async fn clear_media_cache(
+        &self,
+        actor_id: u64,
+        bot_id: i64,
+        message_id: i32,
+        canonical_source_url: &str,
+        configured_owner: bool,
+    ) -> Result<Option<u64>, StoreError> {
+        let actor_id = i64::try_from(actor_id).map_err(|_| StoreError::InvalidInput)?;
+        if !configured_owner {
+            return Err(StoreError::Unauthorized);
+        }
+        if actor_id <= 0
+            || bot_id <= 0
+            || message_id <= 0
+            || canonical_source_url.is_empty()
+            || canonical_source_url.len() > 4096
+        {
+            return Err(StoreError::InvalidInput);
+        }
+        let parsed = DownloadRequest::new(
+            actor_id as u64,
+            canonical_source_url,
+            MediaMode::Video,
+            None,
+            DownloadParams::default(),
+        )
+        .map_err(|_| StoreError::InvalidInput)?;
+        if parsed.source_url().as_str() != canonical_source_url {
+            return Err(StoreError::InvalidInput);
+        }
+        let mut connection = self
+            .database()
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let authorized = query(include_str!("../sql/authorize_media_cache_clear.sql"))
+            .bind(actor_id)
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        if authorized.is_none() {
+            tx.rollback().await.map_err(|_| StoreError::Database)?;
+            return Err(StoreError::Unauthorized);
+        }
+        let advanced = query(include_str!(
+            "../sql/advance_media_cache_clear_watermark.sql"
+        ))
+        .bind(actor_id)
+        .bind(bot_id)
+        .bind(message_id)
+        .fetch_optional(&*tx)
+        .await
+        .map_err(|_| StoreError::Database)?;
+        if advanced.is_none() {
+            tx.commit().await.map_err(|_| StoreError::Database)?;
+            return Ok(None);
+        }
+        query(include_str!("../sql/clear_media_cache.sql"))
+            .bind(actor_id)
+            .bind(bot_id)
+            .bind(canonical_source_url)
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let row = query(include_str!("../sql/read_media_cache_clear_changes.sql"))
+            .fetch_one(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let affected: i64 = row.try_get("affected").map_err(|_| StoreError::Database)?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(Some(
+            u64::try_from(affected).map_err(|_| StoreError::Database)?,
+        ))
+    }
+
     pub async fn lookup_media_cache(
         &self,
         request: &DownloadRequest,

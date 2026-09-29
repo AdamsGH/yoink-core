@@ -78,6 +78,10 @@ define_keys! {
     HelpBasic => "telegram.help_basic";
     UsageDownload => "telegram.usage_download";
     PlainUrlUsage => "telegram.plain_url_usage";
+    UncacheUsage => "telegram.uncache_usage";
+    UncacheDone => "telegram.uncache_done", ["count"];
+    UncacheEmpty => "telegram.uncache_empty";
+    UncacheStale => "telegram.uncache_stale";
     DownloadsUnavailable => "telegram.downloads_unavailable";
     Status => "telegram.status", ["version", "readiness", "modules"];
     ReadinessReady => "telegram.readiness_ready";

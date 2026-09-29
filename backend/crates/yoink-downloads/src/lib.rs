@@ -1,4 +1,5 @@
 mod cache;
+mod cache_control;
 mod chat_access;
 mod cut;
 pub use cut::{CutSession, CutStage};
@@ -1272,6 +1273,7 @@ fn map_profile(error: ProfileError) -> DownloadError {
 fn map_store(error: StoreError) -> DownloadError {
     match error {
         StoreError::InvalidInput | StoreError::InvalidStoredData => DownloadError::InvalidInput,
+        StoreError::Unauthorized => DownloadError::Denied,
         StoreError::Conflict => DownloadError::Conflict,
         StoreError::Capacity => DownloadError::Capacity,
         StoreError::NotFoundOrStale => DownloadError::Task,

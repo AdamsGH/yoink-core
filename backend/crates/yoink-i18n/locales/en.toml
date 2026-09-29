@@ -1,4 +1,8 @@
 [telegram]
+uncache_usage = "Use /uncache URL in your private chat to clear your cached files for that exact URL, across formats. Other users, other bots and jobs are unchanged. Running downloads may refill the cache."
+uncache_done = "Removed {count} cached batches for this URL from your cache. Running downloads may refill it."
+uncache_empty = "No cached batches for this URL in your cache. Jobs are unchanged."
+uncache_stale = "This cache-clear request was already processed or is older than your last request. Nothing was removed. Send a new /uncache URL command to clear again."
 plain_url_usage = "Send one visible HTTP(S) link, optionally followed by START DURATION or START END_TIME. A single duration needs a t/start URL timestamp. For incomplete clips in groups, use /cut URL START END. Hidden links and music links are not automatic video downloads."
 settings_stale = "These buttons are outdated. Open /settings again to use the current values."
 cut_usage = "Use /cut URL to choose the start, /cut URL START to set the start and choose the end, or /cut to resume a draft."

@@ -1,0 +1,1 @@
+SELECT changes() AS affected;

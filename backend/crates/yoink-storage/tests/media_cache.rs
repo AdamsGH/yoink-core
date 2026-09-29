@@ -435,3 +435,229 @@ async fn cache_lookup_rejects_corrupt_bounded_payload_as_a_whole() {
     );
     store.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn scoped_clear_deletes_all_url_formats_and_replays_stay_noops_after_reopen() {
+    use yoink_domain::DownloadParams;
+
+    let disk = common::unmigrated_store().await;
+    disk.store.migrate().await.unwrap();
+    let actor = 73_301_u64;
+    let bot = 841_i64;
+    let url = "https://example.com/media?part=1";
+    yoink_db::query(include_str!("fixtures/seed_cache_clear_owner.sql"))
+        .bind(actor as i64)
+        .execute(disk.database())
+        .await
+        .unwrap();
+
+    async fn add_cache(
+        store: &Store,
+        actor: u64,
+        bot: i64,
+        url: &str,
+        mode: MediaMode,
+        key_id: &str,
+    ) -> DownloadRequest {
+        let request = DownloadRequest::new(actor, url, mode, None, DownloadParams::default())
+            .unwrap()
+            .with_target(DeliveryTarget::new(bot, actor as i64, None, None).unwrap())
+            .unwrap();
+        store.admit(&request, key_id, 1).await.unwrap();
+        let cache_key = yoink_storage::media_cache_key(&request).unwrap();
+        yoink_db::query(include_str!("fixtures/insert_media_cache.sql"))
+            .bind(actor as i64)
+            .bind(bot)
+            .bind(cache_key.as_str())
+            .bind(Uuid::new_v4())
+            .bind("[{\"kind\":\"video\",\"file_id\":\"opaque\",\"size_bytes\":1}]")
+            .execute(store.database())
+            .await
+            .unwrap();
+        request
+    }
+
+    let formats = [MediaMode::Video, MediaMode::Audio, MediaMode::Image];
+    let mut requests = Vec::new();
+    for (index, mode) in formats.into_iter().enumerate() {
+        requests.push(
+            add_cache(
+                &disk.store,
+                actor,
+                bot,
+                url,
+                mode,
+                &format!("clear-format-{index}"),
+            )
+            .await,
+        );
+    }
+    let other_actor = add_cache(
+        &disk.store,
+        actor + 1,
+        bot,
+        url,
+        MediaMode::Video,
+        "clear-other-actor",
+    )
+    .await;
+    let other_bot = add_cache(
+        &disk.store,
+        actor,
+        bot + 1,
+        url,
+        MediaMode::Video,
+        "clear-other-bot",
+    )
+    .await;
+    let other_url = add_cache(
+        &disk.store,
+        actor,
+        bot,
+        "https://example.com/media?part=2",
+        MediaMode::Video,
+        "clear-other-url",
+    )
+    .await;
+    let repopulated_request = requests[0].clone();
+
+    let before = yoink_db::query(include_str!("fixtures/count_cache_clear_rows.sql"))
+        .bind(actor as i64)
+        .fetch_one(disk.database())
+        .await
+        .unwrap();
+    let operations_before: i64 = before.try_get("operations").unwrap();
+    let deliveries_before: i64 = before.try_get("deliveries").unwrap();
+    assert_eq!(
+        disk.store
+            .clear_media_cache(actor, bot, 500, url, true)
+            .await
+            .unwrap(),
+        Some(3)
+    );
+    for request in requests {
+        assert!(
+            disk.store
+                .lookup_media_cache(&request)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    for request in [&other_actor, &other_bot, &other_url] {
+        assert!(
+            disk.store
+                .lookup_media_cache(request)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    let after = yoink_db::query(include_str!("fixtures/count_cache_clear_rows.sql"))
+        .bind(actor as i64)
+        .fetch_one(disk.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        after.try_get::<i64, _>("operations").unwrap(),
+        operations_before
+    );
+    assert_eq!(
+        after.try_get::<i64, _>("deliveries").unwrap(),
+        deliveries_before
+    );
+
+    let repopulated_key = yoink_storage::media_cache_key(&repopulated_request).unwrap();
+    yoink_db::query(include_str!("fixtures/insert_media_cache.sql"))
+        .bind(actor as i64)
+        .bind(bot)
+        .bind(repopulated_key.as_str())
+        .bind(Uuid::new_v4())
+        .bind("[{\"kind\":\"video\",\"file_id\":\"repopulated\",\"size_bytes\":1}]")
+        .execute(disk.database())
+        .await
+        .unwrap();
+    let path = disk.path();
+    disk.store.close().await.unwrap();
+    let reopened = Store::open(&path, false, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .clear_media_cache(actor, bot, 499, url, true)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        reopened
+            .clear_media_cache(actor, bot, 500, "https://example.com/media?part=2", true)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        reopened
+            .lookup_media_cache(&repopulated_request)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        reopened
+            .lookup_media_cache(&other_url)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    reopened.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cache_clear_rechecks_global_ban_before_advancing_watermark() {
+    let disk = common::store().await;
+    let actor = 73_302_u64;
+    let bot = 842_i64;
+    yoink_db::query(include_str!("fixtures/seed_cache_clear_owner.sql"))
+        .bind(actor as i64)
+        .execute(disk.database())
+        .await
+        .unwrap();
+    yoink_db::query(include_str!("fixtures/ban_cache_clear_owner.sql"))
+        .bind(actor as i64)
+        .execute(disk.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        disk.store
+            .clear_media_cache(actor, bot, 600, "https://example.com/valid", true)
+            .await,
+        Err(StoreError::Unauthorized)
+    );
+    yoink_db::query(include_str!("fixtures/restore_cache_clear_owner.sql"))
+        .bind(actor as i64)
+        .execute(disk.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        disk.store
+            .clear_media_cache(actor, bot, 600, "https://example.com/valid", true)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    assert_eq!(
+        disk.store
+            .clear_media_cache(actor, bot, 601, "https://bad@/not-a-valid-url", true)
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    assert_eq!(
+        disk.store
+            .clear_media_cache(actor, bot, 601, "https://example.com/valid", true)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    disk.store.close().await.unwrap();
+}

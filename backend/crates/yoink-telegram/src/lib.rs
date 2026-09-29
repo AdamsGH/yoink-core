@@ -37,6 +37,7 @@ mod plain_url;
 mod progress;
 mod sender;
 mod settings;
+mod uncache;
 pub use progress::ProgressConfig;
 
 /// Safe, fixed error categories. Underlying Telegram errors are deliberately discarded.
@@ -240,6 +241,7 @@ enum Command {
     Cancel(Uuid),
     Invalid,
     InvalidUrl,
+    Uncache(Option<String>),
 }
 
 impl std::fmt::Debug for Command {
@@ -255,6 +257,7 @@ impl std::fmt::Debug for Command {
             Self::Cancel(id) => formatter.debug_tuple("Cancel").field(id).finish(),
             Self::Invalid => formatter.write_str("Invalid"),
             Self::InvalidUrl => formatter.write_str("InvalidUrl"),
+            Self::Uncache(_) => formatter.write_str("Uncache([REDACTED])"),
         }
     }
 }
@@ -271,6 +274,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
 
     let name = name.to_ascii_lowercase();
     let args = words.collect::<Vec<_>>();
+    if name == "uncache" {
+        return Some(Command::Uncache(uncache::parse(&args)));
+    }
     if name == "settings" || name == "format" {
         return Some(settings::command(&args).map_or(
             Command::Settings(settings::Action::Invalid),
@@ -432,6 +438,8 @@ fn response(command: Command, language: Language, system: &SystemService, enable
         text.push_str(&translate(language, Key::CutUsage, &[]));
         text.push('\n');
         text.push_str(&translate(language, Key::PlainUrlUsage, &[]));
+        text.push('\n');
+        text.push_str(&translate(language, Key::UncacheUsage, &[]));
     }
     text
 }
@@ -609,6 +617,21 @@ async fn handle_message(
         },
     };
 
+    if let Command::Uncache(source) = command {
+        if target.chat_id() > 0 {
+            if let Some(service) = downloads.as_ref() {
+                uncache::handle_command(
+                    &bot, &message, service, actor_id, target, source, language,
+                )
+                .await;
+            } else {
+                let _ = bot
+                    .send_message(message.chat.id, media_unavailable_response(language))
+                    .await;
+            }
+        }
+        return Ok(());
+    }
     if let Command::Settings(action) = command {
         if target.chat_id() > 0 {
             if let Some(service) = downloads.as_ref() {
@@ -637,7 +660,9 @@ async fn handle_message(
     }
     let mut admitted = None;
     let reply = match command {
-        Command::Settings(_) => unreachable!("settings handled before media routing"),
+        Command::Settings(_) | Command::Uncache(_) => {
+            unreachable!("private controls handled before media routing")
+        }
         Command::Start | Command::Help if target.chat_id() < 0 => {
             translate(language, Key::UsageDownload, &[])
         }
