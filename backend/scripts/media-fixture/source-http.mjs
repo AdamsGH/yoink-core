@@ -16,6 +16,8 @@ export class SourceHttpFixture {
   #gateOpen = false;
   #progressOpen = false;
   #progress = new Set();
+  #cookieImportResponses = new Map();
+  #cookieImportRequests = [];
   constructor({ mediaBytes, cookieSecret, playlistMedia = [mediaBytes], imageBytes }) {
     this.mediaBytes = mediaBytes;
     this.cookieSecret = cookieSecret;
@@ -29,6 +31,9 @@ export class SourceHttpFixture {
   get revokedQueuedFetches() { return this.#revokedQueued; }
   get lateProxyQueuedFetches() { return this.#lateProxyQueued; }
   get requestTimes() { return this.#requestTimes; }
+  get cookieImportRequests() { return this.#cookieImportRequests; }
+  setCookieImportResponse(path, response) { this.#cookieImportResponses.set(path, response); }
+  clearCookieImportResponses() { this.#cookieImportResponses.clear(); }
   get slowResponses() { return this.#slow; }
   get gatedResponses() { return this.#gated; }
   openGate() { this.#gateOpen = true; }
@@ -53,6 +58,37 @@ export class SourceHttpFixture {
       if (req.url.includes('case=revoked-queued')) this.#revokedQueued++;
       if (req.url.includes('case=late-proxy-queued')) this.#lateProxyQueued++;
       const url = new URL(req.url, 'http://fixture.invalid');
+      if (url.pathname.startsWith('/cookie-import/')) {
+        this.#cookieImportRequests.push({ path: req.url, method: req.method, headers: { ...req.headers } });
+        const response = this.#cookieImportResponses.get(url.pathname);
+        if (!response) { res.writeHead(404); res.end(); return; }
+        const send = () => {
+          if (response.redirect) {
+            res.writeHead(response.status ?? 302, { location: response.redirect });
+            res.end();
+            return;
+          }
+          const body = Buffer.isBuffer(response.body) ? response.body : Buffer.from(response.body ?? '');
+          const headers = { ...(response.headers ?? {}) };
+          if (response.chunked) {
+            delete headers['content-length'];
+            delete headers['Content-Length'];
+          } else if (response.contentLength !== false) {
+            headers['content-length'] ??= String(body.length);
+          }
+          res.writeHead(response.status ?? 200, headers);
+          if (response.chunked && body.length > 1) {
+            const split = Math.floor(body.length / 2);
+            res.write(body.subarray(0, split));
+            res.end(body.subarray(split));
+          } else res.end(body);
+        };
+        if (response.delayMs) {
+          const timer = setTimeout(send, response.delayMs);
+          res.once('close', () => clearTimeout(timer));
+        } else send();
+        return;
+      }
       if (this.adaptiveSource?.respond(req, res, url)) return;
       const subtitle = subtitleResponse(url);
       if (subtitle) {

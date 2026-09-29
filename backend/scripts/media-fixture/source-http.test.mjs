@@ -26,3 +26,20 @@ test('source fixture exposes bounded real playlist entries and an independent im
   for (const path of ['/entry-0.mp4', '/entry-22.mp4', '/entry-999999999999999999999.mp4', '/missing-2.mp4']) assert.equal((await get(path)).status, 404);
   assert.equal(fixture.error, undefined);
 });
+
+test('source fixture records cookie URL request headers and serves configurable bounded responses', async t => {
+  const fixture = new SourceHttpFixture({ mediaBytes: Buffer.alloc(8), cookieSecret: 'fixture' });
+  const port = await fixture.start();
+  t.after(() => fixture.close());
+  const body = Buffer.from('fixture response');
+  fixture.setCookieImportResponse('/cookie-import/ok', { body, headers: { 'content-type': 'text/plain' } });
+  const response = await fetch(`http://127.0.0.1:${port}/cookie-import/ok?source-key=opaque`, { headers: { 'x-fixture-header': 'observed' } });
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), body);
+  assert.equal(fixture.cookieImportRequests.length, 1);
+  assert.equal(fixture.cookieImportRequests[0].path, '/cookie-import/ok?source-key=opaque');
+  assert.equal(fixture.cookieImportRequests[0].headers['x-fixture-header'], 'observed');
+  fixture.setCookieImportResponse('/cookie-import/redirect', { redirect: '/cookie-import/ok' });
+  const redirect = await fetch(`http://127.0.0.1:${port}/cookie-import/redirect`, { redirect: 'manual' });
+  assert.equal(redirect.status, 302);
+  assert.equal(redirect.headers.get('location'), '/cookie-import/ok');
+});

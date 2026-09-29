@@ -49,6 +49,7 @@ pub struct TelegramConfig {
     pub poll_timeout: Duration,
     pub progress: yoink_telegram::ProgressConfig,
     pub cookie_upload: yoink_telegram::CookieUploadConfig,
+    pub cookie_url: yoink_telegram::CookieUrlConfig,
     pub groups_enabled: bool,
 }
 
@@ -216,6 +217,28 @@ impl Config {
                     ));
                 }
             }
+            let cookie_url_timeout = timeout(
+                read("COOKIE_IMPORT_TIMEOUT_SECS")?,
+                "COOKIE_IMPORT_TIMEOUT_SECS",
+                30,
+            )?;
+            if cookie_url_timeout.as_secs() > 60 {
+                return Err(invalid(
+                    "COOKIE_IMPORT_TIMEOUT_SECS",
+                    "expected seconds in range 1..=60",
+                ));
+            }
+            let private_origins: Vec<String> = serde_json::from_str(
+                &read("COOKIE_IMPORT_PRIVATE_ORIGINS")?.unwrap_or_else(|| "[]".into()),
+            )
+            .map_err(|_| {
+                invalid(
+                    "COOKIE_IMPORT_PRIVATE_ORIGINS",
+                    "expected a JSON array of exact HTTP(S) origins",
+                )
+            })?;
+            let cookie_url = yoink_telegram::CookieUrlConfig::new(cookie_url_timeout, private_origins)
+                .map_err(|_| invalid("COOKIE_IMPORT_PRIVATE_ORIGINS", "expected at most 16 literal-IP origins with explicit ports and no credentials, paths, queries or fragments"))?;
             let groups_enabled = match read("TELEGRAM_GROUPS_ENABLED")?
                 .as_deref()
                 .unwrap_or("false")
@@ -231,6 +254,7 @@ impl Config {
                 poll_timeout,
                 progress,
                 cookie_upload,
+                cookie_url,
                 groups_enabled,
             })
         } else {
@@ -425,6 +449,56 @@ mod tests {
         ]);
         let loaded = config(&values).unwrap();
         assert!(!format!("{loaded:?}").contains("credential-marker"));
+    }
+
+    #[test]
+    fn cookie_import_configuration_is_bounded_and_redacted() {
+        let base = [
+            ("YOINK_RUST_TELEGRAM_ENABLED", "true"),
+            ("YOINK_RUST_TELEGRAM_TOKEN", "fixture-token"),
+            ("YOINK_RUST_OWNER_ID", "42"),
+        ];
+        assert!(config(&base).is_ok());
+        for value in ["0", "61", "1.5", "invalid", "", "-1"] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_COOKIE_IMPORT_TIMEOUT_SECS", value));
+            assert!(config(&values).is_err());
+        }
+        for value in ["1", "30", "60"] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_COOKIE_IMPORT_TIMEOUT_SECS", value));
+            assert!(config(&values).is_ok());
+        }
+        for value in [
+            "{}",
+            "null",
+            "[1]",
+            "not-json",
+            r#"["http://localhost:8899"]"#,
+            r#"["http://127.0.0.1"]"#,
+            r#"["http://127.0.0.1:0"]"#,
+            r#"["file:///credential-marker"]"#,
+            r#"["http://user:credential-marker@127.0.0.1:8899"]"#,
+            r#"["http://127.0.0.1:8899/credential-marker"]"#,
+            r#"["http://127.0.0.1:8899?token=credential-marker"]"#,
+            r#"["http://127.0.0.1:8899#credential-marker"]"#,
+        ] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_COOKIE_IMPORT_PRIVATE_ORIGINS", value));
+            let error = config(&values).unwrap_err();
+            assert!(!format!("{error:?} {error}").contains("credential-marker"));
+        }
+        let mut values = base.to_vec();
+        values.push((
+            "YOINK_RUST_COOKIE_IMPORT_PRIVATE_ORIGINS",
+            r#"["http://127.0.0.1:8899","https://[::1]:9443/"]"#,
+        ));
+        let loaded = config(&values).unwrap();
+        assert!(!format!("{loaded:?}").contains("8899"));
+        let excess = serde_json::to_string(&vec!["http://127.0.0.1:8899"; 17]).unwrap();
+        let mut values = base.to_vec();
+        values.push(("YOINK_RUST_COOKIE_IMPORT_PRIVATE_ORIGINS", &excess));
+        assert!(config(&values).is_err());
     }
 
     #[test]

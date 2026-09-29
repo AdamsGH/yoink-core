@@ -25,6 +25,7 @@ import { runUncacheScenarios } from './media-fixture/uncache-scenarios.mjs';
 import { runProxyScenarios } from './media-fixture/proxy-scenarios.mjs';
 import { runCookieScenarios } from './media-fixture/cookie-scenarios.mjs';
 import { runCookieUploadScenarios } from './media-fixture/cookie-upload-scenarios.mjs';
+import { runCookieUrlScenarios } from './media-fixture/cookie-url-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'settings', 'language', 'cut', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|settings|language|cut|urls|uncache|proxy|cookies|cookie-uploads]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'settings', 'language', 'cut', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|settings|language|cut|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -173,6 +174,8 @@ async function launchApp() {
     '--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','128','--memory','512m',
     '--env','YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS=1','--env','YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS=2',
     '--env','YOINK_RUST_TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS=2',
+    '--env','YOINK_RUST_COOKIE_IMPORT_TIMEOUT_SECS=2',
+    '--env',`YOINK_RUST_COOKIE_IMPORT_PRIVATE_ORIGINS=${JSON.stringify([`http://127.0.0.1:${sourcePort}`])}`,
     '--env','YOINK_RUST_BOT_API_FILE_ROOT=/var/lib/telegram-bot-api/fixture-bot/documents',
     '--env','YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT=/cookie-files/allowed',
     '--mount',`type=bind,source=${cookieFileDir},target=/cookie-files,readonly`,
@@ -647,6 +650,7 @@ if (scenario === 'all' || scenario === 'language') summaries.push(await runLangu
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'cookies') summaries.push(await runCookieScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'all' || scenario === 'cookie-uploads') summaries.push(await runCookieUploadScenarios({ ...commandContext, restartApp, cookieSecret, prepareLocalCookieFiles }));
+  if (scenario === 'all' || scenario === 'cookie-urls') summaries.push(await runCookieUrlScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'all' || scenario === 'gallery') {
   gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image });
   const gallerySummary = await runGalleryScenarios({ ...commandContext, gallerySource,

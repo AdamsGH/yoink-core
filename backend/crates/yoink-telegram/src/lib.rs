@@ -33,6 +33,7 @@ use yoink_storage::{Admission, OperationStatus};
 
 mod cookie;
 mod cookie_upload;
+mod cookie_url;
 mod cut;
 mod lang;
 mod media_command;
@@ -44,6 +45,7 @@ mod settings;
 mod subs;
 mod uncache;
 pub use cookie_upload::{CookieUploadConfig, CookieUploadConfigError};
+pub use cookie_url::{CookieUrlConfig, CookieUrlConfigError};
 pub use progress::ProgressConfig;
 
 /// Safe, fixed error categories. Underlying Telegram errors are deliberately discarded.
@@ -95,6 +97,7 @@ pub struct TelegramAdapter {
     progress: ProgressConfig,
     groups_enabled: bool,
     cookie_upload: Option<CookieUploadConfig>,
+    cookie_url: Option<CookieUrlConfig>,
     file_base: Url,
     http_client: reqwest::Client,
 }
@@ -150,6 +153,7 @@ impl TelegramAdapter {
             progress: ProgressConfig::default(),
             groups_enabled: false,
             cookie_upload: None,
+            cookie_url: None,
             file_base: cookie_upload::file_base(&api_origin, &token),
             http_client,
         })
@@ -163,6 +167,11 @@ impl TelegramAdapter {
 
     pub fn with_cookie_upload(mut self, config: CookieUploadConfig) -> Self {
         self.cookie_upload = Some(config);
+        self
+    }
+
+    pub fn with_cookie_url(mut self, config: CookieUrlConfig) -> Self {
+        self.cookie_url = Some(config);
         self
     }
 
@@ -209,11 +218,15 @@ impl TelegramAdapter {
                 },
                 self.bot_username,
                 self.system,
-                DownloadsDependency(self.downloads),
-                CookieUploadDependency {
-                    config: self.cookie_upload,
-                    base: self.file_base,
-                    client: self.http_client
+                DownloadsDependency(self.downloads.clone()),
+                MessageDependencies {
+                    downloads: self.downloads,
+                    upload: CookieUploadDependency {
+                        config: self.cookie_upload,
+                        base: self.file_base,
+                        client: self.http_client
+                    },
+                    cookie_url: CookieUrlDependency(self.cookie_url),
                 }
             ])
             .default_handler(|_| async {})
@@ -265,6 +278,16 @@ struct CookieUploadDependency {
     client: reqwest::Client,
 }
 
+#[derive(Clone)]
+struct CookieUrlDependency(Option<CookieUrlConfig>);
+
+#[derive(Clone)]
+struct MessageDependencies {
+    downloads: Option<DownloadService>,
+    upload: CookieUploadDependency,
+    cookie_url: CookieUrlDependency,
+}
+
 #[derive(Clone, PartialEq)]
 enum Command {
     Start,
@@ -281,6 +304,7 @@ enum Command {
     InvalidUrl,
     Uncache(Option<String>),
     Cookie(cookie::Action),
+    CookieUrl(cookie_url::Action),
     Lang(lang::Action),
 }
 
@@ -301,6 +325,7 @@ impl std::fmt::Debug for Command {
             Self::InvalidUrl => formatter.write_str("InvalidUrl"),
             Self::Uncache(_) => formatter.write_str("Uncache([REDACTED])"),
             Self::Cookie(_) => formatter.write_str("Cookie([REDACTED])"),
+            Self::CookieUrl(_) => formatter.write_str("CookieUrl([REDACTED])"),
             Self::Lang(_) => formatter.write_str("Lang"),
         }
     }
@@ -322,6 +347,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
         return Some(Command::Uncache(uncache::parse(&args)));
     }
     if name == "cookie" {
+        if let Some(action) = cookie_url::parse(&args) {
+            return Some(Command::CookieUrl(action));
+        }
         return Some(Command::Cookie(cookie::command(&args)));
     }
     if name == "lang" {
@@ -617,9 +645,11 @@ async fn handle_message(
     identity: TelegramIdentity,
     bot_username: String,
     system: SystemService,
-    DownloadsDependency(downloads): DownloadsDependency,
-    upload: CookieUploadDependency,
+    dependencies: MessageDependencies,
 ) -> Result<(), Infallible> {
+    let downloads = dependencies.downloads;
+    let upload = dependencies.upload;
+    let CookieUrlDependency(cookie_url_config) = dependencies.cookie_url;
     let bot_id = identity.bot_id;
     let Some((actor_id, target)) = incoming_route(identity, &message) else {
         return Ok(());
@@ -725,6 +755,24 @@ async fn handle_message(
         }
         return Ok(());
     }
+    if let Command::CookieUrl(action) = command {
+        if target.chat_id() > 0 {
+            cookie_url::handle(
+                &bot,
+                &message,
+                cookie_url::ImportDependencies {
+                    service: downloads.as_ref(),
+                    config: cookie_url_config,
+                    actor: actor_id,
+                    target,
+                    action,
+                    language,
+                },
+            )
+            .await;
+        }
+        return Ok(());
+    }
     if let Command::Lang(action) = command {
         if target.chat_id() > 0 && actor_id == identity.owner_id && message.thread_id.is_none() {
             lang::handle_command(
@@ -800,6 +848,7 @@ async fn handle_message(
         | Command::Proxy(_)
         | Command::Uncache(_)
         | Command::Cookie(_)
+        | Command::CookieUrl(_)
         | Command::Lang(_) => {
             unreachable!("private controls handled before media routing")
         }

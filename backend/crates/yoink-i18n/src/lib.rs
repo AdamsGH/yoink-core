@@ -115,6 +115,9 @@ define_keys! {
     CookieUploadGuidance => "telegram.cookie_upload_guidance";
     CookieUploadRetry => "telegram.cookie_upload_retry";
     CookieUploadReplay => "telegram.cookie_upload_replay";
+    CookieUrlUsage => "telegram.cookie_url_usage";
+    CookieUrlFetchError => "telegram.cookie_url_fetch_error";
+    CookieUrlSaved => "telegram.cookie_url_saved";
     DownloadsUnavailable => "telegram.downloads_unavailable";
     Status => "telegram.status", ["version", "readiness", "modules"];
     ReadinessReady => "telegram.readiness_ready";

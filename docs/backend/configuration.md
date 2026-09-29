@@ -41,12 +41,16 @@ Telegram is disabled unless enabled explicitly.
 | `YOINK_RUST_BOT_API_URL` | unset | HTTP(S) origin without credentials, path, query, or fragment | Optional Bot API endpoint override. |
 | `YOINK_RUST_TELEGRAM_POLL_TIMEOUT_SECS` | `30` | 1 through 50 seconds | Long-poll timeout. |
 | `YOINK_RUST_TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS` | `30` | 1 through 60 seconds | Deadline for awaiting Bot API metadata and document content. The file limit is 512 KiB. Local kernel I/O cannot be cancelled, but only one such read can remain outstanding. |
+| `YOINK_RUST_COOKIE_IMPORT_TIMEOUT_SECS` | `30` | 1 through 60 seconds | Total deadline for cookie URL imports, including concurrency wait, DNS, redirects and bounded body streaming. |
+| `YOINK_RUST_COOKIE_IMPORT_PRIVATE_ORIGINS` | `[]` | JSON array of at most 16 exact HTTP(S) literal-IP origins with explicit nonzero ports | Explicit exceptions to the cookie-import public-address policy. No hostname, credentials, path, query, fragment or wildcard. Leave empty unless that private endpoint is deliberately trusted. |
 | `YOINK_RUST_BOT_API_FILE_ROOT` | unset | Absolute, non-root directory without traversal | Remote prefix returned by local Bot API `getFile`. Requires both the local root below and an explicit `BOT_API_URL`. |
 | `YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT` | unset | Absolute, non-root directory without traversal | Read-only mount corresponding to the remote prefix. Local file access is disabled unless both roots are set. Symlinks and non-regular files are rejected. |
 | `YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS` | `2` | 1 through 60 seconds | Global progress tick. At most one status-message edit per tick, coalescing unchanged text. |
 | `YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS` | `10` | 1 through 60 seconds | Deadline for editing an already-confirmed status message. Ambiguous edits are safe to retry, unlike media sends. |
 
 Private commands and `/status` remain owner-only. Groups require the separate opt-in above, an identifiable non-bot sender, and current authorization for the original group/topic. The media service checks identity and destination at admission, execution, delivery and progress. Disabling group access prevents persisted group jobs from starting and retires their progress notices. See [access control](access-control.md) for role precedence and current limits. Database files have no PostgreSQL-style column or role ACLs: the trusted server process can read every row, including credentials. Treat the process, its host, and the private state directory as the security boundary. Read snapshots must not expose credential contents through operator or user-facing APIs.
+
+Cookie URL imports use a separate direct HTTP client. They do not send Telegram tokens, saved cookies, proxy credentials or ambient HTTP-proxy configuration to the source. Every redirect is resolved and checked again, and HTTPS cannot redirect to HTTP. The private-origin exception above is independent of the worker's origin configuration and does not permit other ports or redirect destinations. Adding an origin lets the owner request paths on that internal endpoint, so do not list a privileged local API. HTTP source URLs transfer cookie secrets in plaintext. Prefer HTTPS or upload a Telegram document instead.
 
 ## Optional media downloads
 
