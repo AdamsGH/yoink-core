@@ -44,6 +44,14 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    ProxyUsage => "telegram.proxy_usage";
+    ProxyTitle => "telegram.proxy_title", ["status"];
+    ProxyEnabled => "telegram.proxy_enabled";
+    ProxyDisabled => "telegram.proxy_disabled";
+    ProxyEnable => "telegram.proxy_enable";
+    ProxyDisable => "telegram.proxy_disable";
+    ProxyUnavailable => "telegram.proxy_unavailable";
+    ProxyStale => "telegram.proxy_stale";
     SettingsStale => "telegram.settings_stale";
     CutUsage => "telegram.cut_usage";
     CutAskStart => "telegram.cut_ask_start";

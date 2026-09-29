@@ -35,6 +35,7 @@ mod cut;
 mod media_command;
 mod plain_url;
 mod progress;
+mod proxy;
 mod sender;
 mod settings;
 mod uncache;
@@ -235,6 +236,7 @@ enum Command {
     Help,
     Status,
     Settings(settings::Action),
+    Proxy(proxy::Action),
     Download(String),
     Media(media_command::ParsedMedia),
     Job(Uuid),
@@ -253,6 +255,7 @@ impl std::fmt::Debug for Command {
             Self::Help => formatter.write_str("Help"),
             Self::Status => formatter.write_str("Status"),
             Self::Settings(_) => formatter.write_str("Settings"),
+            Self::Proxy(_) => formatter.write_str("Proxy"),
             Self::Job(id) => formatter.debug_tuple("Job").field(id).finish(),
             Self::Cancel(id) => formatter.debug_tuple("Cancel").field(id).finish(),
             Self::Invalid => formatter.write_str("Invalid"),
@@ -282,6 +285,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
             Command::Settings(settings::Action::Invalid),
             Command::Settings,
         ));
+    }
+    if name == "proxy" {
+        return Some(Command::Proxy(proxy::command(&args)));
     }
     if let Some(parsed) = media_command::parse(&name, &args) {
         return Some(parsed.map_or(Command::Invalid, Command::Media));
@@ -434,6 +440,8 @@ fn response(command: Command, language: Language, system: &SystemService, enable
         _ => String::new(),
     };
     if show_cut {
+        text.push('\n');
+        text.push_str(&translate(language, Key::ProxyUsage, &[]));
         text.push('\n');
         text.push_str(&translate(language, Key::CutUsage, &[]));
         text.push('\n');
@@ -647,6 +655,19 @@ async fn handle_message(
         }
         return Ok(());
     }
+    if let Command::Proxy(action) = command {
+        if target.chat_id() > 0 {
+            if let Some(service) = downloads.as_ref() {
+                proxy::handle_command(&bot, &message, service, actor_id, target, action, language)
+                    .await;
+            } else {
+                let _ = bot
+                    .send_message(message.chat.id, media_unavailable_response(language))
+                    .await;
+            }
+        }
+        return Ok(());
+    }
     if target.chat_id() < 0 {
         if matches!(command, Command::Status) {
             return Ok(());
@@ -660,7 +681,7 @@ async fn handle_message(
     }
     let mut admitted = None;
     let reply = match command {
-        Command::Settings(_) | Command::Uncache(_) => {
+        Command::Settings(_) | Command::Proxy(_) | Command::Uncache(_) => {
             unreachable!("private controls handled before media routing")
         }
         Command::Start | Command::Help if target.chat_id() < 0 => {
@@ -812,6 +833,12 @@ async fn handle_callback(
         .is_some_and(|data| data.starts_with("cut:"))
     {
         cut::handle_callback(bot, query, identity, downloads).await
+    } else if query
+        .data
+        .as_deref()
+        .is_some_and(|data| data.starts_with("proxy:"))
+    {
+        proxy::handle_callback(bot, query, identity, downloads).await
     } else {
         settings::handle_callback(bot, query, identity, downloads).await
     }
@@ -952,6 +979,29 @@ mod tests {
         assert_eq!(
             parse_command("/format@YOINK_BOT", "yoink_bot"),
             Some(Command::Settings(settings::Action::Menu))
+        );
+        assert_eq!(
+            parse_command("/proxy", "yoink_bot"),
+            Some(Command::Proxy(proxy::Action::Menu))
+        );
+        assert_eq!(
+            parse_command("/proxy@YOINK_BOT", "yoink_bot"),
+            Some(Command::Proxy(proxy::Action::Menu))
+        );
+        assert_eq!(
+            parse_command("/proxy secret", "yoink_bot"),
+            Some(Command::Proxy(proxy::Action::Invalid))
+        );
+        assert_eq!(parse_command("/proxy@other_bot", "yoink_bot"), None);
+        assert!(
+            !format!(
+                "{:?}",
+                parse_command(
+                    "/proxy http://private-user:private-password@example.test",
+                    "yoink_bot"
+                )
+            )
+            .contains("private-password")
         );
         assert_eq!(
             parse_command("/settings role owner", "yoink_bot"),

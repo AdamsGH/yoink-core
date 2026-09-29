@@ -1,4 +1,12 @@
 [telegram]
+proxy_usage = "Usage: /proxy (private chat only, no arguments)."
+proxy_title = "Proxy use: {status}. Changing this setting can stop queued or running downloads. Resubmit them if needed."
+proxy_enabled = "enabled"
+proxy_disabled = "disabled"
+proxy_enable = "Enable"
+proxy_disable = "Disable"
+proxy_unavailable = "No valid proxy is configured. Configure one before enabling proxy use."
+proxy_stale = "This proxy button is stale. Reopen /proxy and try again."
 uncache_usage = "Use /uncache URL in your private chat to clear your cached files for that exact URL, across formats. Other users, other bots and jobs are unchanged. Running downloads may refill the cache."
 uncache_done = "Removed {count} cached batches for this URL from your cache. Running downloads may refill it."
 uncache_empty = "No cached batches for this URL in your cache. Jobs are unchanged."

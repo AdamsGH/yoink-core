@@ -6,7 +6,7 @@ pub use cut::{CutSession, CutStage};
 pub mod profile;
 mod progress;
 mod settings;
-pub use settings::{EditableSettings, SettingChange, SettingField};
+pub use settings::{EditableSettings, ProxySettings, SettingChange, SettingField};
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 

@@ -20,6 +20,7 @@ import { runSettingsScenarios } from './media-fixture/settings-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
 import { runPlainUrlScenarios } from './media-fixture/plain-url-scenarios.mjs';
 import { runUncacheScenarios } from './media-fixture/uncache-scenarios.mjs';
+import { runProxyScenarios } from './media-fixture/proxy-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'adaptive', 'settings', 'cut', 'urls', 'uncache'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|adaptive|settings|cut|urls|uncache]');
+assert(['all', 'gallery', 'subtitles', 'adaptive', 'settings', 'cut', 'urls', 'uncache', 'proxy'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|adaptive|settings|cut|urls|uncache|proxy]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -612,6 +613,8 @@ try {
   if (scenario === 'all' || scenario === 'cut') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'urls') summaries.push(await runPlainUrlScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'uncache') summaries.push(await runUncacheScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'proxy') summaries.push(await runProxyScenarios({ ...commandContext, restartApp, proxyFixture,
+    proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'gallery') {
   gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image });
   const gallerySummary = await runGalleryScenarios({ ...commandContext, gallerySource,

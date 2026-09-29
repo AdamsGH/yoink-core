@@ -609,7 +609,7 @@ fn pool_allowed(identity: &IdentitySnapshot, use_pool: bool) -> bool {
         .is_some()
 }
 
-fn choose_proxy(
+pub(super) fn choose_proxy(
     actor_id: u64,
     personal: Option<&str>,
     system: Option<&str>,
@@ -947,7 +947,7 @@ fn valid_cookie_record(line: &str) -> bool {
         && (fields[4].is_empty() || fields[4].parse::<i64>().is_ok())
         && !fields[5].is_empty()
 }
-fn validate_proxy(value: &str) -> Result<(), ProfileError> {
+pub(super) fn validate_proxy(value: &str) -> Result<(), ProfileError> {
     if value.is_empty() || value.len() > MAX_PROXY_URL_BYTES || value.chars().any(char::is_control)
     {
         return Err(ProfileError::InvalidProxy);
