@@ -3,8 +3,12 @@ mod cache_control;
 mod chat_access;
 mod cut;
 pub use cut::{CutSession, CutStage};
+mod personal_cookies;
 pub mod profile;
 mod progress;
+pub use personal_cookies::{
+    CookieDomain, PersonalCookieEntry, PersonalCookiePage, PersonalCookieStatus,
+};
 mod settings;
 pub use settings::{EditableSettings, ProxySettings, SettingChange, SettingField};
 

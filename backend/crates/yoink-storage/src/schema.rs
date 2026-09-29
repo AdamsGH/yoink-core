@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 7] = [
+const MIGRATIONS: [Migration; 8] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -45,6 +45,11 @@ const MIGRATIONS: [Migration; 7] = [
         version: 7,
         sql: include_str!("../migrations-turso/0007_media_cache_clear.sql"),
         expected_tables: 50,
+    },
+    Migration {
+        version: 8,
+        sql: include_str!("../migrations-turso/0008_personal_cookie_mutation.sql"),
+        expected_tables: 51,
     },
 ];
 
@@ -301,7 +306,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 7);
+        assert_eq!(versions.len(), 8);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
@@ -309,6 +314,7 @@ mod tests {
         assert_eq!(versions[4].try_get::<i64, _>("version").unwrap(), 5);
         assert_eq!(versions[5].try_get::<i64, _>("version").unwrap(), 6);
         assert_eq!(versions[6].try_get::<i64, _>("version").unwrap(), 7);
+        assert_eq!(versions[7].try_get::<i64, _>("version").unwrap(), 8);
     }
 
     #[tokio::test]

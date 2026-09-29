@@ -90,6 +90,17 @@ define_keys! {
     UncacheDone => "telegram.uncache_done", ["count"];
     UncacheEmpty => "telegram.uncache_empty";
     UncacheStale => "telegram.uncache_stale";
+    CookieUsage => "telegram.cookie_usage";
+    CookieList => "telegram.cookie_list", ["domains"];
+    CookieEmpty => "telegram.cookie_empty";
+    CookieNext => "telegram.cookie_next";
+    CookieInvalidEntry => "telegram.cookie_invalid_entry";
+    CookieStored => "telegram.cookie_stored", ["domain", "count"];
+    CookieMissing => "telegram.cookie_missing", ["domain"];
+    CookieInvalid => "telegram.cookie_invalid", ["domain"];
+    CookieRemoved => "telegram.cookie_removed", ["count"];
+    CookieProcessed => "telegram.cookie_processed";
+    CookieStale => "telegram.cookie_stale";
     DownloadsUnavailable => "telegram.downloads_unavailable";
     Status => "telegram.status", ["version", "readiness", "modules"];
     ReadinessReady => "telegram.readiness_ready";

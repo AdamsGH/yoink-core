@@ -897,7 +897,7 @@ fn is_oauth(value: &str) -> bool {
     value.trim_start().starts_with("__oauth2__")
         || value.trim_start().starts_with("{\"__oauth2__\"")
 }
-fn valid_cookie(value: &str) -> bool {
+pub(crate) fn valid_cookie(value: &str) -> bool {
     if value.is_empty()
         || value.len() > MAX_COOKIE_JAR_BYTES
         || value

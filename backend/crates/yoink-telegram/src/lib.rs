@@ -31,6 +31,7 @@ use yoink_downloads::{DownloadError, DownloadService};
 use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for};
 use yoink_storage::{Admission, OperationStatus};
 
+mod cookie;
 mod cut;
 mod media_command;
 mod plain_url;
@@ -244,6 +245,7 @@ enum Command {
     Invalid,
     InvalidUrl,
     Uncache(Option<String>),
+    Cookie(cookie::Action),
 }
 
 impl std::fmt::Debug for Command {
@@ -261,6 +263,7 @@ impl std::fmt::Debug for Command {
             Self::Invalid => formatter.write_str("Invalid"),
             Self::InvalidUrl => formatter.write_str("InvalidUrl"),
             Self::Uncache(_) => formatter.write_str("Uncache([REDACTED])"),
+            Self::Cookie(_) => formatter.write_str("Cookie([REDACTED])"),
         }
     }
 }
@@ -279,6 +282,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
     let args = words.collect::<Vec<_>>();
     if name == "uncache" {
         return Some(Command::Uncache(uncache::parse(&args)));
+    }
+    if name == "cookie" {
+        return Some(Command::Cookie(cookie::command(&args)));
     }
     if name == "settings" || name == "format" {
         return Some(settings::command(&args).map_or(
@@ -640,6 +646,19 @@ async fn handle_message(
         }
         return Ok(());
     }
+    if let Command::Cookie(action) = command {
+        if target.chat_id() > 0 {
+            if let Some(service) = downloads.as_ref() {
+                cookie::handle_command(&bot, &message, service, actor_id, target, action, language)
+                    .await;
+            } else {
+                let _ = bot
+                    .send_message(message.chat.id, media_unavailable_response(language))
+                    .await;
+            }
+        }
+        return Ok(());
+    }
     if let Command::Settings(action) = command {
         if target.chat_id() > 0 {
             if let Some(service) = downloads.as_ref() {
@@ -681,7 +700,7 @@ async fn handle_message(
     }
     let mut admitted = None;
     let reply = match command {
-        Command::Settings(_) | Command::Proxy(_) | Command::Uncache(_) => {
+        Command::Settings(_) | Command::Proxy(_) | Command::Uncache(_) | Command::Cookie(_) => {
             unreachable!("private controls handled before media routing")
         }
         Command::Start | Command::Help if target.chat_id() < 0 => {
@@ -839,6 +858,12 @@ async fn handle_callback(
         .is_some_and(|data| data.starts_with("proxy:"))
     {
         proxy::handle_callback(bot, query, identity, downloads).await
+    } else if query
+        .data
+        .as_deref()
+        .is_some_and(|data| data.starts_with("cookie:"))
+    {
+        cookie::handle_callback(bot, query, identity, downloads).await
     } else {
         settings::handle_callback(bot, query, identity, downloads).await
     }
