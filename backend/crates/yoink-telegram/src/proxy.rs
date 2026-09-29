@@ -5,7 +5,7 @@ use teloxide::{
 };
 use yoink_domain::DeliveryTarget;
 use yoink_downloads::{DownloadService, ProxySettings};
-use yoink_i18n::{Key, Language, language_for};
+use yoink_i18n::{Key, Language};
 
 use crate::{DownloadsDependency, TelegramIdentity, download_error_response, translate};
 
@@ -179,7 +179,12 @@ pub(super) async fn handle_callback(
         let _ = bot.answer_callback_query(query.id).await;
         return Ok(());
     }
-    let language = language_for(query.from.language_code.as_deref());
+    let language = crate::reply_language(
+        downloads.as_ref(),
+        query.from.id.0,
+        query.from.language_code.as_deref(),
+    )
+    .await;
     let Some(service) = downloads.as_ref() else {
         let _ = bot
             .answer_callback_query(query.id)

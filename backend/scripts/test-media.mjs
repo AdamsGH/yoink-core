@@ -17,6 +17,7 @@ import { runSubtitleScenarios } from './media-fixture/subtitle-scenarios.mjs';
 import { createAdaptiveSource } from './media-fixture/adaptive-source.mjs';
 import { runAdaptiveScenarios } from './media-fixture/adaptive-scenarios.mjs';
 import { runSettingsScenarios } from './media-fixture/settings-scenarios.mjs';
+import { runLanguageScenarios } from './media-fixture/language-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
 import { runPlainUrlScenarios } from './media-fixture/plain-url-scenarios.mjs';
 import { runUncacheScenarios } from './media-fixture/uncache-scenarios.mjs';
@@ -31,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'adaptive', 'settings', 'cut', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|adaptive|settings|cut|urls|uncache|proxy|cookies|cookie-uploads]');
+assert(['all', 'gallery', 'subtitles', 'adaptive', 'settings', 'language', 'cut', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|adaptive|settings|language|cut|urls|uncache|proxy|cookies|cookie-uploads]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -635,6 +636,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'subtitles') summaries.push(await runSubtitleScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'adaptive') summaries.push(await runAdaptiveScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'settings') summaries.push(await runSettingsScenarios({ ...commandContext, restartApp }));
+if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'urls') summaries.push(await runPlainUrlScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'uncache') summaries.push(await runUncacheScenarios({ ...commandContext, restartApp }));

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runCutScenarios(context) {
   const { botApi, sourcePort, fixtureSql, waitFor, restartApp, assertWorkspaceClean } = context;
@@ -128,10 +129,12 @@ export async function runCutScenarios(context) {
     assert.equal(await count(), afterAdmission, 'cancelled draft cannot be confirmed');
     await message(`/cut ${url}`);
     await message('/cancel', { prefix: 'Clip cancelled' });
-    await message(`/cut ${url}`, { language: 'ru' });
-    const russian = await message('0.2', { language: 'ru' });
+    const russian = await withRussianPreference(fixtureSql, async () => {
+      await message(`/cut ${url}`, { language: 'en' });
+      return message('0.2', { language: 'en' });
+    });
     assert(/[А-Яа-яЁё]/u.test(russian.reply.data.text), 'Russian input must receive localized prompts');
-    await message('отмена', { language: 'ru' });
+    await withRussianPreference(fixtureSql, () => message('отмена', { language: 'en' }));
     // Settings has its own callback namespace, which must remain reachable.
     const settings = await message('/settings');
     assert(buttons(settings.reply).some(item => item.callback_data?.startsWith('prefs:')));

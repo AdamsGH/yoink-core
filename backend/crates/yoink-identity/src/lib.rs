@@ -6,6 +6,9 @@ use yoink_access::{
 };
 use yoink_db::{Database, query};
 
+mod language;
+pub use language::LanguagePreference;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroupContext {
     pub group_id: i64,
@@ -25,14 +28,22 @@ pub struct IdentitySnapshot {
     pub group: Option<GroupContext>,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Eq, PartialEq)]
 pub enum IdentityError {
     #[error("invalid identity or group identifier")]
     InvalidId,
     #[error("unknown role value in identity data")]
     UnknownRole,
-    #[error("identity database read failed")]
+    #[error("identity database operation failed")]
     Database,
+    #[error("language must be en or ru")]
+    InvalidLanguage,
+    #[error("language preference is stale or unavailable")]
+    LanguageConflict,
+    #[error("configured owner is not authorized")]
+    LanguageDenied,
+    #[error("language revision cannot be advanced")]
+    LanguageRevisionOverflow,
 }
 
 impl From<yoink_db::Error> for IdentityError {

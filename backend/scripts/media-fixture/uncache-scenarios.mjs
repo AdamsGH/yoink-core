@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runUncacheScenarios(context) {
   const { botApi, sourcePort, fixtureSql, waitFor, restartApp, assertWorkspaceClean } = context;
@@ -85,7 +86,7 @@ export async function runUncacheScenarios(context) {
     await command(`/uncache ${source}`, 'This cache-clear request', { messageId: cleared.messageId - 1 });
     assert.equal(await cached(source), '1', 'old updates after restart cannot delete repopulated cache');
     assert.equal(await cached(otherSource), '1');
-    await command(`/uncache ${source}`, 'Из вашего кэша удалено наборов файлов для этой ссылки: 1.', { language: 'ru' });
+    await withRussianPreference(fixtureSql, () => command(`/uncache ${source}`, 'Из вашего кэша удалено наборов файлов для этой ссылки: 1.', { language: 'en' }));
     await command(`/uncache ${source}`, 'No cached batches');
     assert.equal(await cached(source), '0');
     assert.equal(await foreign(), savedForeign);

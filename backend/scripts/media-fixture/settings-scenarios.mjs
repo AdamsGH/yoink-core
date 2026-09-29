@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runSettingsScenarios(context) {
   const { botApi, fixtureSql, sourcePort, waitFor, restartApp } = context;
@@ -73,7 +74,7 @@ export async function runSettingsScenarios(context) {
     assert.equal(await snapshot(), stable);
     await fixtureSql(`UPDATE users SET role='${role}' WHERE id=42`);
     await restartApp();
-    menu = await command('/format@yoink_fixture_bot', 'ru', 'Настройки загрузки');
+    menu = await withRussianPreference(fixtureSql, () => command('/format@yoink_fixture_bot', 'en', 'Настройки загрузки'));
     assert(menu.data.text.includes('360'));
     assert(menu.data.text.includes('zh-Hans'));
     assert.equal(await snapshot(), stable);

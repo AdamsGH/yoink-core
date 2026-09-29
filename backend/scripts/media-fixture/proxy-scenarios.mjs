@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runProxyScenarios(context) {
   const { botApi, fixtureSql, sourcePort, sourceFixture, proxyFixture, proxyUrl, waitFor, restartApp, queryJob, assertWorkspaceClean } = context;
@@ -72,7 +73,7 @@ export async function runProxyScenarios(context) {
     const staleAfterRestart = await click(enabled.menu, enabled.data);
     assert.equal(staleAfterRestart.ack.data.show_alert, true);
     assert.equal(await row(), stable);
-    const russian = await command('/proxy@YOINK_FIXTURE_BOT', 'ru');
+    const russian = await withRussianPreference(fixtureSql, () => command('/proxy@YOINK_FIXTURE_BOT', 'en'));
     assert.match(russian.data.text, /прокси/i);
     const current = `proxy:on:${(await state()).revision}`;
     for (const data of ['proxy:on', 'proxy:off:-1', 'proxy:on:1:extra', 'proxy:secret:0', 'proxy:on:' + '9'.repeat(80)]) {
@@ -112,7 +113,7 @@ export async function runProxyScenarios(context) {
     const settingsMenu = await command('/settings');
     const settingsPage = (await click(settingsMenu, 'prefs:subs_auto:_menu', { edit: true })).changed;
     const oldSettingsButton = buttons(settingsPage).find(b => b.callback_data?.startsWith('prefs:subs_auto:false:')).callback_data;
-    await toggle(true, 'ru');
+    await withRussianPreference(fixtureSql, () => toggle(true, 'en'));
     const afterProxy = await row();
     assert.equal((await click(settingsMenu, oldSettingsButton)).ack.data.show_alert, true);
     assert.equal(await row(), afterProxy, 'proxy edit invalidates the old settings button');

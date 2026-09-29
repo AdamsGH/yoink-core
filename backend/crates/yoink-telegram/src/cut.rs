@@ -7,7 +7,7 @@ use teloxide::{
 use uuid::Uuid;
 use yoink_domain::DeliveryTarget;
 use yoink_downloads::{CutSession, CutStage, DownloadError, DownloadService};
-use yoink_i18n::{Key, Language, language_for};
+use yoink_i18n::{Key, Language};
 
 use crate::{
     DownloadsDependency, TelegramIdentity, admitted_response, download_error_response,
@@ -407,7 +407,12 @@ pub(super) async fn handle_callback(
     let Some(data) = query.data.as_deref().filter(|d| d.starts_with("cut:")) else {
         return Ok(());
     };
-    let language = language_for(query.from.language_code.as_deref());
+    let language = crate::reply_language(
+        downloads.as_ref(),
+        query.from.id.0,
+        query.from.language_code.as_deref(),
+    )
+    .await;
     let Some(message) = query.message.as_ref().and_then(|m| m.regular_message()) else {
         answer_alert(&bot, query.id, translate(language, Key::ErrorDenied, &[])).await;
         return Ok(());

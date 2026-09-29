@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runCookieUploadScenarios(context) {
   const { botApi, fixtureSql, waitFor, restartApp, sourceFixture, sourcePort, cookieSecret, queryJob, assertWorkspaceClean } = context;
@@ -174,7 +175,7 @@ export async function runCookieUploadScenarios(context) {
     const topicUpload = await upload(Buffer.from(cookie()), { name: 'topic.test.txt', topic: 44, expectedSilent: true });
     assertNoMutation(topicUpload);
 
-    const russian = await upload(Buffer.from(cookie()), { name: 'ru.test.txt', language: 'ru', mode: { fetch: 'file' } });
+    const russian = await withRussianPreference(fixtureSql, () => upload(Buffer.from(cookie()), { name: 'ru.test.txt', language: 'en', mode: { fetch: 'file' } }));
     assert.match(russian.reply.data.text, /сохран|cookie/i);
     assertReplySafe(russian.reply.data.text);
     const english = await upload(Buffer.from(cookie()), { name: 'en.test.txt', mode: { fetch: 'file' } });

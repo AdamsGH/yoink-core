@@ -82,6 +82,12 @@ define_keys! {
     SettingsOff => "telegram.settings_off";
     SettingsBest => "telegram.settings_best";
     SettingsBack => "telegram.settings_back";
+    LangUsage => "telegram.lang_usage";
+    LangChoose => "telegram.lang_choose";
+    LangEnglish => "telegram.lang_english";
+    LangRussian => "telegram.lang_russian";
+    LangSet => "telegram.lang_set", ["language"];
+    LangStale => "telegram.lang_stale";
     HelpEnabled => "telegram.help_enabled";
     HelpBasic => "telegram.help_basic";
     UsageDownload => "telegram.usage_download";

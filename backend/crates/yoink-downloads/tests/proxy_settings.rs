@@ -166,6 +166,84 @@ async fn admission_no_row_defaults_and_enable_creates_settings_only_with_proxy()
 }
 
 #[tokio::test]
+async fn owner_language_settings_are_private_revisioned_and_freshly_authorized() {
+    let (_dir, store, service) = setup(None).await;
+    let own = target(OWNER as i64, None, BOT);
+    assert_eq!(
+        service.preferred_language(OWNER).await.unwrap().as_deref(),
+        Some("en")
+    );
+    assert_eq!(
+        service.preferred_language(43).await.unwrap().as_deref(),
+        Some("en")
+    );
+    assert_eq!(service.preferred_language(999).await.unwrap(), None);
+    assert_eq!(
+        service.preferred_language(0).await,
+        Err(DownloadError::Denied)
+    );
+    assert_eq!(
+        service.preferred_language(u64::MAX).await,
+        Err(DownloadError::Denied)
+    );
+    let initial = service.language_settings(OWNER, own).await.unwrap();
+    let selected = service
+        .change_language(OWNER, own, "ru", initial.revision)
+        .await
+        .unwrap();
+    assert_eq!(selected.code, "ru");
+    assert!(selected.revision > initial.revision);
+    assert_eq!(
+        service
+            .change_language(OWNER, own, "en", initial.revision)
+            .await,
+        Err(DownloadError::Conflict)
+    );
+    assert_eq!(
+        service
+            .change_language(OWNER, own, "de", selected.revision)
+            .await,
+        Err(DownloadError::InvalidPreferences)
+    );
+    for (actor, destination) in [
+        (43, target(43, None, BOT)),
+        (OWNER, target(43, None, BOT)),
+        (OWNER, target(OWNER as i64, None, BOT + 1)),
+        (OWNER, target(OWNER as i64, Some(7), BOT)),
+    ] {
+        assert_eq!(
+            service.language_settings(actor, destination).await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service
+                .change_language(actor, destination, "en", selected.revision)
+                .await,
+            Err(DownloadError::Denied)
+        );
+    }
+    yoink_db::query(include_str!("sql/language_ban.sql"))
+        .bind(OWNER as i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        service.language_settings(OWNER, own).await,
+        Err(DownloadError::Denied)
+    );
+    assert_eq!(
+        service
+            .change_language(OWNER, own, "en", selected.revision)
+            .await,
+        Err(DownloadError::Denied)
+    );
+    assert_eq!(
+        service.preferred_language(OWNER).await.unwrap().as_deref(),
+        Some("ru")
+    );
+}
+
+#[tokio::test]
 async fn personal_proxy_precedence_validation_disable_and_secret_redaction() {
     let (_dir, store, service) = setup(Some("http://system.example:8080")).await;
     let own = target(OWNER as i64, None, BOT);
@@ -212,6 +290,17 @@ async fn personal_proxy_precedence_validation_disable_and_secret_redaction() {
         .execute(store.database())
         .await
         .unwrap();
+    assert_eq!(
+        service.preferred_language(OWNER).await.unwrap().as_deref(),
+        Some("en")
+    );
+    let language = service.language_settings(OWNER, own).await.unwrap();
+    assert_eq!(language.code, "en");
+    let changed_language = service
+        .change_language(OWNER, own, "ru", language.revision)
+        .await
+        .unwrap();
+    assert_eq!(changed_language.code, "ru");
     assert_eq!(
         service.change_proxy_setting(OWNER, own, false, 40).await,
         Ok(())

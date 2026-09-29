@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runProgressScenarios(context) {
   const { botApi, sourceFixture, sourcePort, fixtureSql, waitFor, restartApp } = context;
@@ -59,7 +60,7 @@ export async function runProgressScenarios(context) {
   assert.equal(replies(), deletedBefore + 1, 'deleted status message is not recreated');
   botApi.setEditMode('success');
 
-  const russian = await h.submit(`/video http://127.0.0.1:${sourcePort}/media?case=progress-russian`, { language: 'ru' });
+  const russian = await withRussianPreference(fixtureSql, () => h.submit(`/video http://127.0.0.1:${sourcePort}/media?case=progress-russian`, { language: 'en' }));
   await h.succeeded(russian.operationId);
   await finished(russian.operationId);
   assert.match(await checkpoint(russian.operationId), /^1\|Операция .*завершено.*Доставлено файлов: 1\/1\./);

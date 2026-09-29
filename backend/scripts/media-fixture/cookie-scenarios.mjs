@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runCookieScenarios(context) {
   const { botApi, fixtureSql, waitFor, restartApp, sourceFixture, sourcePort, cookieSecret, queryJob, assertWorkspaceClean } = context;
@@ -35,7 +36,7 @@ export async function runCookieScenarios(context) {
     const id = botApi.enqueueCallback(actor, 42, menu.messageId, data, options);
     const ack = await waitFor(() => botApi.calls.slice(start).find(c => c.method === 'answercallbackquery' && c.data.callback_query_id === id), 'personal cookie callback acknowledgement');
     const changed = edit ? await waitFor(() => botApi.calls.slice(start).find(c => c.method === 'editmessagetext' && c.data.message_id === menu.messageId), 'personal cookie page edit') : undefined;
-    if (!edit) assert(!botApi.calls.slice(start).some(c => c.method === 'editmessagetext'));
+    if (!edit) assert(!botApi.calls.slice(start).some(c => c.method === 'editmessagetext' && Number(c.data.chat_id) === 42 && c.data.message_id === menu.messageId));
     return { ack, changed };
   }
   const personalCount = () => fixtureSql('SELECT count(*) FROM cookies WHERE user_id=42 AND is_pool=0');
@@ -107,7 +108,7 @@ export async function runCookieScenarios(context) {
     }
     await command('/cookie clear', { messageId: deleted.incomingMessageId - 1 });
     assert.equal(await personalCount(), beforeDenied, 'old updates after restart must not remove replacement cookies');
-    const cleared = await command('/cookie clear', { language: 'ru' });
+    const cleared = await withRussianPreference(fixtureSql, () => command('/cookie clear', { language: 'en' }));
     assert.match(cleared.data.text, /удал|очищ/i);
     assert.equal(await personalCount(), '0', 'clear removes valid and invalid personal rows');
     assert.equal(await untouched(), otherRows);

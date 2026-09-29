@@ -28,12 +28,13 @@ use yoink_domain::{
     MediaMode as DomainMediaMode,
 };
 use yoink_downloads::{DownloadError, DownloadService};
-use yoink_i18n::{CatalogError, Key, Language, embedded as catalog, language_for};
+use yoink_i18n::{CatalogError, Key, Language, embedded as catalog};
 use yoink_storage::{Admission, OperationStatus};
 
 mod cookie;
 mod cookie_upload;
 mod cut;
+mod lang;
 mod media_command;
 mod plain_url;
 mod progress;
@@ -278,6 +279,7 @@ enum Command {
     InvalidUrl,
     Uncache(Option<String>),
     Cookie(cookie::Action),
+    Lang(lang::Action),
 }
 
 impl std::fmt::Debug for Command {
@@ -296,6 +298,7 @@ impl std::fmt::Debug for Command {
             Self::InvalidUrl => formatter.write_str("InvalidUrl"),
             Self::Uncache(_) => formatter.write_str("Uncache([REDACTED])"),
             Self::Cookie(_) => formatter.write_str("Cookie([REDACTED])"),
+            Self::Lang(_) => formatter.write_str("Lang"),
         }
     }
 }
@@ -317,6 +320,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
     }
     if name == "cookie" {
         return Some(Command::Cookie(cookie::command(&args)));
+    }
+    if name == "lang" {
+        return Some(Command::Lang(lang::command(&args)));
     }
     if name == "settings" || name == "format" {
         return Some(settings::command(&args).map_or(
@@ -634,12 +640,15 @@ async fn handle_message(
     let Some(text) = message.text() else {
         return Ok(());
     };
-    let language = language_for(
+    let language = reply_language(
+        downloads.as_ref(),
+        actor_id,
         message
             .from
             .as_ref()
             .and_then(|user| user.language_code.as_deref()),
-    );
+    )
+    .await;
     if cut::try_handle_message(
         &bot,
         &message,
@@ -710,6 +719,21 @@ async fn handle_message(
         }
         return Ok(());
     }
+    if let Command::Lang(action) = command {
+        if target.chat_id() > 0 && actor_id == identity.owner_id && message.thread_id.is_none() {
+            lang::handle_command(
+                &bot,
+                &message,
+                identity.bot_id,
+                downloads.as_ref(),
+                actor_id,
+                action,
+                language,
+            )
+            .await;
+        }
+        return Ok(());
+    }
     if let Command::Settings(action) = command {
         if target.chat_id() > 0 {
             if let Some(service) = downloads.as_ref() {
@@ -751,7 +775,11 @@ async fn handle_message(
     }
     let mut admitted = None;
     let reply = match command {
-        Command::Settings(_) | Command::Proxy(_) | Command::Uncache(_) | Command::Cookie(_) => {
+        Command::Settings(_)
+        | Command::Proxy(_)
+        | Command::Uncache(_)
+        | Command::Cookie(_)
+        | Command::Lang(_) => {
             unreachable!("private controls handled before media routing")
         }
         Command::Start | Command::Help if target.chat_id() < 0 => {
@@ -900,6 +928,12 @@ async fn handle_callback(
     if query
         .data
         .as_deref()
+        .is_some_and(|data| data == "lang" || data.starts_with("lang:"))
+    {
+        lang::handle_callback(bot, query, identity, downloads).await
+    } else if query
+        .data
+        .as_deref()
         .is_some_and(|data| data.starts_with("cut:"))
     {
         cut::handle_callback(bot, query, identity, downloads).await
@@ -920,6 +954,19 @@ async fn handle_callback(
     }
 }
 
+async fn reply_language(
+    service: Option<&DownloadService>,
+    actor: u64,
+    fallback: Option<&str>,
+) -> Language {
+    let preferred = if let Some(service) = service {
+        service.preferred_language(actor).await.ok().flatten()
+    } else {
+        None
+    };
+    lang::resolve_language(preferred.as_deref(), fallback)
+}
+
 fn unknown_operation(language: Language) -> String {
     translate(language, Key::OperationNotFound, &[])
 }
@@ -928,6 +975,7 @@ fn unknown_operation(language: Language) -> String {
 mod tests {
     use super::*;
     use yoink_downloads::DeliveryError;
+    use yoink_i18n::language_for;
 
     #[test]
     fn incoming_routes_require_opt_in_and_an_identified_user_in_the_original_chat() {
@@ -990,6 +1038,19 @@ mod tests {
     #[test]
     fn parses_supported_commands_with_strict_arguments_and_bot_suffix() {
         assert_eq!(parse_command("/start", "yoink_bot"), Some(Command::Start));
+        assert_eq!(
+            parse_command("/lang", "yoink_bot"),
+            Some(Command::Lang(lang::Action::Menu))
+        );
+        assert_eq!(
+            parse_command("/lang@YOINK_BOT", "yoink_bot"),
+            Some(Command::Lang(lang::Action::Menu))
+        );
+        assert_eq!(
+            parse_command("/lang extra", "yoink_bot"),
+            Some(Command::Lang(lang::Action::Invalid))
+        );
+        assert_eq!(parse_command("/lang@OtherBot", "yoink_bot"), None);
         assert_eq!(
             parse_command("/HELP@yoink_bot", "yoink_bot"),
             Some(Command::Help)

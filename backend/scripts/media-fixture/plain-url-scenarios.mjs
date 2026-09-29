@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { commandHarness } from './command-harness.mjs';
+import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runPlainUrlScenarios(context) {
   const { botApi, sourcePort, fixtureSql, waitFor, restartApp, assertWorkspaceClean } = context;
@@ -48,7 +49,7 @@ export async function runPlainUrlScenarios(context) {
 
     const countBeforeInvalid = await count();
     await reply(`${source} 7`, entity(`${source} 7`), 'Send one visible');
-    await reply(`${source} bad`, { ...entity(`${source} bad`), language: 'ru' }, 'Отправьте одну');
+    await withRussianPreference(fixtureSql, () => reply(`${source} bad`, { ...entity(`${source} bad`), language: 'en' }, 'Отправьте одну'));
     const malformed = entity(`🦀 ${source}`);
     malformed.entities[0].offset = 1;
     await reply(`🦀 ${source}`, malformed, 'Send one visible');

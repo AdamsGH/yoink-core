@@ -300,12 +300,15 @@ pub(super) async fn handle_document(
     let Some(document) = message.document() else {
         return;
     };
-    let language = yoink_i18n::language_for(
+    let language = crate::reply_language(
+        dependencies.downloads,
+        actor,
         message
             .from
             .as_ref()
             .and_then(|user| user.language_code.as_deref()),
-    );
+    )
+    .await;
     let Some(domain) = requested_upload(message.caption(), document.file_name.as_deref(), username)
     else {
         return;
