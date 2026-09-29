@@ -53,6 +53,11 @@ define_keys! {
     ProxyUnavailable => "telegram.proxy_unavailable";
     ProxyStale => "telegram.proxy_stale";
     SettingsStale => "telegram.settings_stale";
+    SubsTitle => "telegram.subs_title", ["values"];
+    SubsAutomaticOn => "telegram.subs_automatic_on";
+    SubsAutomaticOff => "telegram.subs_automatic_off";
+    SubsInvalidLanguage => "telegram.subs_invalid_language";
+    SubsStale => "telegram.subs_stale";
     CutUsage => "telegram.cut_usage";
     CutAskStart => "telegram.cut_ask_start";
     CutAskEnd => "telegram.cut_ask_end";

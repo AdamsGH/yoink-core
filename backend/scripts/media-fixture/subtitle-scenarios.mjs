@@ -79,7 +79,7 @@ export async function runSubtitleScenarios(context) {
       assert.equal(await fixtureSql(`SELECT count(*) FROM runtime_delivery_units WHERE operation_id='${failed.operationId}'`), '0');
       await assertWorkspaceClean();
     }
-    await h.reject('/subs', 'Usage:');
+    await h.reject('/subs invalid-input', 'Usage:');
     await h.reject(`${command} --height 720`, 'Usage:');
     await h.reject(`${command} --subtitle-language en.*`, 'Usage:');
     await fixtureSql("UPDATE dl_user_settings SET subs_lang='en.*' WHERE user_id=42");

@@ -14,6 +14,7 @@ import { runGroupScenarios } from './media-fixture/group-scenarios.mjs';
 import { startGallerySource } from './media-fixture/gallery-source.mjs';
 import { runGalleryScenarios } from './media-fixture/gallery-scenarios.mjs';
 import { runSubtitleScenarios } from './media-fixture/subtitle-scenarios.mjs';
+import { runSubtitleSettingsScenarios } from './media-fixture/subtitle-settings-scenarios.mjs';
 import { createAdaptiveSource } from './media-fixture/adaptive-source.mjs';
 import { runAdaptiveScenarios } from './media-fixture/adaptive-scenarios.mjs';
 import { runSettingsScenarios } from './media-fixture/settings-scenarios.mjs';
@@ -32,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'adaptive', 'settings', 'language', 'cut', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|adaptive|settings|language|cut|urls|uncache|proxy|cookies|cookie-uploads]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'settings', 'language', 'cut', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|settings|language|cut|urls|uncache|proxy|cookies|cookie-uploads]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -634,6 +635,8 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   await restartApp();
   if (scenario === 'all') summaries.push(await runProgressScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'subtitles') summaries.push(await runSubtitleScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'subtitle-settings') summaries.push(await runSubtitleSettingsScenarios({ ...commandContext, restartApp,
+    proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'adaptive') summaries.push(await runAdaptiveScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'settings') summaries.push(await runSettingsScenarios({ ...commandContext, restartApp }));
 if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));

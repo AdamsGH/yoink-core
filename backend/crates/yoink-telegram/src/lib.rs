@@ -41,6 +41,7 @@ mod progress;
 mod proxy;
 mod sender;
 mod settings;
+mod subs;
 mod uncache;
 pub use cookie_upload::{CookieUploadConfig, CookieUploadConfigError};
 pub use progress::ProgressConfig;
@@ -270,6 +271,7 @@ enum Command {
     Help,
     Status,
     Settings(settings::Action),
+    Subs,
     Proxy(proxy::Action),
     Download(String),
     Media(media_command::ParsedMedia),
@@ -291,6 +293,7 @@ impl std::fmt::Debug for Command {
             Self::Help => formatter.write_str("Help"),
             Self::Status => formatter.write_str("Status"),
             Self::Settings(_) => formatter.write_str("Settings"),
+            Self::Subs => formatter.write_str("Subs"),
             Self::Proxy(_) => formatter.write_str("Proxy"),
             Self::Job(id) => formatter.debug_tuple("Job").field(id).finish(),
             Self::Cancel(id) => formatter.debug_tuple("Cancel").field(id).finish(),
@@ -329,6 +332,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
             Command::Settings(settings::Action::Invalid),
             Command::Settings,
         ));
+    }
+    if name == "subs" && args.is_empty() {
+        return Some(Command::Subs);
     }
     if name == "proxy" {
         return Some(Command::Proxy(proxy::command(&args)));
@@ -749,6 +755,20 @@ async fn handle_message(
         }
         return Ok(());
     }
+    if let Command::Subs = command {
+        if target.chat_id() > 0 && actor_id == identity.owner_id && message.thread_id.is_none() {
+            subs::handle_command(
+                &bot,
+                &message,
+                downloads.as_ref(),
+                actor_id,
+                identity.bot_id,
+                language,
+            )
+            .await;
+        }
+        return Ok(());
+    }
     if let Command::Proxy(action) = command {
         if target.chat_id() > 0 {
             if let Some(service) = downloads.as_ref() {
@@ -776,6 +796,7 @@ async fn handle_message(
     let mut admitted = None;
     let reply = match command {
         Command::Settings(_)
+        | Command::Subs
         | Command::Proxy(_)
         | Command::Uncache(_)
         | Command::Cookie(_)
@@ -931,6 +952,12 @@ async fn handle_callback(
         .is_some_and(|data| data == "lang" || data.starts_with("lang:"))
     {
         lang::handle_callback(bot, query, identity, downloads).await
+    } else if query
+        .data
+        .as_deref()
+        .is_some_and(|data| data == "subs" || data.starts_with("subs:"))
+    {
+        subs::handle_callback(bot, query, identity, downloads).await
     } else if query
         .data
         .as_deref()
@@ -1113,6 +1140,11 @@ mod tests {
             parse_command("/settings", "yoink_bot"),
             Some(Command::Settings(settings::Action::Menu))
         );
+        assert_eq!(parse_command("/subs", "yoink_bot"), Some(Command::Subs));
+        assert_eq!(
+            parse_command("/subs@YOINK_BOT", "yoink_bot"),
+            Some(Command::Subs)
+        );
         assert_eq!(
             parse_command("/format@YOINK_BOT", "yoink_bot"),
             Some(Command::Settings(settings::Action::Menu))
@@ -1170,6 +1202,12 @@ mod tests {
             .is_some_and(|command| matches!(command, Command::Media(media) if media.playlist.is_some_and(|range| range.start() == 1 && range.end() == Some(3)))));
         assert!(parse_command("/playlist https://example.test/list", "yoink_bot")
             .is_some_and(|command| matches!(command, Command::Media(media) if media.playlist.is_some_and(|range| range.start() == 1 && range.end() == Some(20)))));
+        assert!(parse_command("/subs https://example.test/subtitles", "yoink_bot")
+            .is_some_and(|command| matches!(command, Command::Media(media) if media.mode == DomainMediaMode::Subtitles)));
+        assert_eq!(
+            parse_command("/subs invalid", "yoink_bot"),
+            Some(Command::Invalid)
+        );
         assert_eq!(
             media_unavailable_response(Language::English),
             "Experimental downloads are unavailable."
