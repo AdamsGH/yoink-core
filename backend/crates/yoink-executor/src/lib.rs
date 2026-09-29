@@ -694,6 +694,7 @@ fn load_artifact(
             "application/x-subrip",
             subtitle_magic(header, false),
         ),
+        "text/x-ssa" => ("subtitles.ass", "text/x-ssa", ssa_magic(header)),
         "application/zip" => (
             "archive.zip",
             "application/zip",
@@ -706,7 +707,10 @@ fn load_artifact(
     if !valid_magic {
         return Err(ExecutorError::UnsafeArtifact);
     }
-    let filename = if matches!(media_type, "text/vtt" | "application/x-subrip") {
+    let filename = if matches!(
+        media_type,
+        "text/vtt" | "application/x-subrip" | "text/x-ssa"
+    ) {
         let name = path
             .file_name()
             .and_then(|v| v.to_str())
@@ -716,11 +720,12 @@ fn load_artifact(
             || !name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
-            || !name.ends_with(if media_type == "text/vtt" {
-                ".vtt"
-            } else {
-                ".srt"
-            })
+            || !match media_type {
+                "text/vtt" => name.ends_with(".vtt"),
+                "application/x-subrip" => name.ends_with(".srt"),
+                "text/x-ssa" => name.ends_with(".ass") || name.ends_with(".ssa"),
+                _ => false,
+            }
         {
             return Err(ExecutorError::UnsafeArtifact);
         }
@@ -734,6 +739,14 @@ fn load_artifact(
         media_type: media_type.into(),
         size_bytes: descriptor.size_bytes,
     })
+}
+
+// Only sniff the signature here. The worker validates the complete bounded text,
+// event fields and cue timing before publishing any subtitle artifact.
+fn ssa_magic(header: &[u8]) -> bool {
+    let header = header.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(header);
+    header.starts_with(b"[Script Info]")
+        && header.get(13).is_some_and(|b| matches!(b, b'\r' | b'\n'))
 }
 
 fn subtitle_magic(header: &[u8], vtt: bool) -> bool {
@@ -848,6 +861,96 @@ mod tests {
         }
     }
     use std::io::Write;
+
+    #[test]
+    fn ssa_sniff_requires_header_boundary_and_allows_bom_and_truncated_unicode() {
+        for bytes in [
+            b"[Script Info]\nScriptType: v4+\n; \xd0".as_slice(),
+            b"\xef\xbb\xbf[Script Info]\r\nScriptType: v4\r\n",
+        ] {
+            assert!(ssa_magic(bytes));
+        }
+        for bytes in [
+            b"[Script Info]".as_slice(),
+            b"[Script Info]garbage\n",
+            b"[Script InfoX]\n",
+            b"[Events]\nDialogue: 0,0:00:00.00,0:00:02.00,text",
+            b"<html>[Script Info]</html>",
+            b"[Script Info]\0\n",
+        ] {
+            assert!(!ssa_magic(bytes));
+        }
+    }
+
+    #[test]
+    fn ass_and_ssa_artifact_documents_preserve_bytes_filename_and_mime() {
+        for (extension, script_type, bom) in [("ass", "v4+", ""), ("ssa", "v4", "\u{feff}")] {
+            let temp = tempfile::tempdir().unwrap();
+            let name = format!("subtitles-ru-orig.{extension}");
+            let bytes = format!(
+                "{bom}[Script Info]\r\nScriptType: {script_type}\r\n[Events]\r\nFormat: Start, End, Text\r\nDialogue: 0:00:00.00,0:00:02.00,Текст, with comma\r\n"
+            );
+            std::fs::write(temp.path().join(&name), bytes.as_bytes()).unwrap();
+            let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+                path: yoink_worker_protocol::ArtifactPath::parse(&name).unwrap(),
+                size_bytes: bytes.len() as u64,
+                media_type: "text/x-ssa".into(),
+            };
+            let mut artifact = load_artifact(temp.path(), &descriptor, 4096).unwrap();
+            assert_eq!(artifact.filename, name);
+            assert_eq!(artifact.media_type, "text/x-ssa");
+            let mut actual = Vec::new();
+            artifact.file.read_to_end(&mut actual).unwrap();
+            assert_eq!(actual, bytes.as_bytes());
+            assert!(matches!(
+                load_artifact(temp.path(), &descriptor, bytes.len() as u64 - 1),
+                Err(ExecutorError::UnsafeArtifact)
+            ));
+        }
+    }
+
+    #[test]
+    fn ssa_artifacts_reject_mime_signature_and_filename_mismatches() {
+        let temp = tempfile::tempdir().unwrap();
+        for (name, mime, bytes) in [
+            (
+                "subtitles-en.exe",
+                "text/x-ssa",
+                b"[Script Info]\n".as_slice(),
+            ),
+            ("subtitles-en.vtt", "text/x-ssa", b"[Script Info]\n"),
+            ("subtitles-en.srt", "text/x-ssa", b"[Script Info]\n"),
+            ("subtitles-en.ass", "text/vtt", b"[Script Info]\n"),
+            (
+                "subtitles-en.ssa",
+                "application/x-subrip",
+                b"[Script Info]\n",
+            ),
+            ("subtitles-en.ass", "text/x-ass", b"[Script Info]\n"),
+            (
+                "subtitles-en.ass",
+                "text/x-ssa",
+                b"<html>not subtitles</html>",
+            ),
+            ("subtitles-en.ssa", "text/x-ssa", b"WEBVTT\n"),
+            ("other.ass", "text/x-ssa", b"[Script Info]\n"),
+            ("subtitles-en secret.ass", "text/x-ssa", b"[Script Info]\n"),
+        ] {
+            std::fs::write(temp.path().join(name), bytes).unwrap();
+            let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+                path: yoink_worker_protocol::ArtifactPath::parse(name).unwrap(),
+                size_bytes: bytes.len() as u64,
+                media_type: mime.into(),
+            };
+            assert!(
+                matches!(
+                    load_artifact(temp.path(), &descriptor, 4096),
+                    Err(ExecutorError::UnsafeArtifact)
+                ),
+                "{name} / {mime}"
+            );
+        }
+    }
 
     #[test]
     fn artifact_debug_does_not_include_payload() {

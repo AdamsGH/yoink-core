@@ -12,9 +12,14 @@ test('subtitle source exposes exact tracks, missing files and chunked limits wit
   const page = await (await get('/subtitles.html?tracks=ru,ru-orig,en&format=srt')).text();
   assert.equal((page.match(/<track /g) ?? []).length, 3);
   assert(page.includes('/subtitles-ru-orig.srt'));
-  for (const extension of ['vtt', 'srt']) {
+  for (const extension of ['vtt', 'srt', 'ass', 'ssa']) {
     assert.deepEqual(Buffer.from(await (await get(`/subtitles-ru.${extension}`)).arrayBuffer()), subtitleBytes('ru', extension));
   }
+  assert.equal((await get('/subtitles-en.ass')).headers.get('content-type'), 'text/x-ssa');
+  assert.equal((await get('/subtitles-en.ssa')).headers.get('content-type'), 'text/x-ssa');
+  const alternatives = await (await get('/subtitles.html?tracks=en&formats=srt,ass,ssa')).text();
+  assert(alternatives.indexOf('.srt?') < alternatives.indexOf('.ass?'));
+  assert(alternatives.indexOf('.ass?') < alternatives.indexOf('.ssa?'));
   assert.equal((await get('/subtitles-ru-orig.vtt?case=missing')).status, 404);
   const oversized = await get('/subtitles-en.vtt?case=oversized');
   assert.equal(oversized.headers.get('content-length'), null);
