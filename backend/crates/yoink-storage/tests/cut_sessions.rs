@@ -391,6 +391,18 @@ async fn cut_quality_is_durable_choice_replay_safe_and_submitted_can_be_replaced
                 target(BOT, ACTOR),
                 ready.id,
                 choosing.revision,
+                QualityChoice::Audio
+            )
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    assert_eq!(
+        store
+            .cut_choose(
+                ACTOR,
+                target(BOT, ACTOR),
+                ready.id,
+                choosing.revision,
                 QualityChoice::Height(0)
             )
             .await,

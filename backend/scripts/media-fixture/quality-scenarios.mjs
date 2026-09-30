@@ -64,9 +64,9 @@ export async function runQualityScenarios(context) {
     const draft = await message(`/cut ${sourceUrl} 0.2 0.7 --send-as-file true`);
     assert(buttons(draft.reply).length >= 9, 'ask chooser must serve all choices');
     const served = buttons(draft.reply).map(b => b.callback_data).filter(value => value.startsWith('ql:'));
-    assert.equal(served.length, 10, 'chooser must offer nine quality choices and cancel');
-    assert.deepEqual(new Set(served.map(value => value.split(':')[1])), new Set([...options, 'cancel']));
-    for (const data of served) assert.match(data, /^ql:(?:best|2160|1440|1080|720|480|360|240|144|cancel):[0-9a-f]{32}:[1-9]\d*$/);
+    assert.equal(served.length, 11, 'chooser must offer nine quality choices, Audio and cancel');
+    assert.deepEqual(new Set(served.map(value => value.split(':')[1])), new Set([...options, 'audio', 'cancel']));
+    for (const data of served) assert.match(data, /^ql:(?:best|2160|1440|1080|720|480|360|240|144|audio|cancel):[0-9a-f]{32}:[1-9]\d*$/);
     assert.equal(await count(), before, 'prompting must not admit an operation');
     assert.equal(await fixtureSql(settingsSql(settingsFields)), prefsBeforePrompt, 'prompting must not write any preference field');
     assert.equal(JSON.parse(await fixtureSql(settingsSql(['quality']))).quality, 'ask', 'prompt must not mutate saved preference');
@@ -167,6 +167,86 @@ export async function runQualityScenarios(context) {
     await h.succeeded(bestOperation);
     assert.equal((await h.request(bestOperation)).params.max_height, null, 'selected best must be stored as no maximum height');
 
+    // Audio is a durable exclusive mode choice, not a video-height alias.
+    await fixtureSql("UPDATE dl_user_settings SET quality='ask',audio_codec='mp3',send_as_file=0 WHERE user_id=42");
+    const audioDraft = await message(`/video ${sourceUrl}&ask-audio-saved=true`);
+    const audioButton = findButton(audioDraft.reply, 'ql:audio:');
+    assert.match(buttons(audioDraft.reply).find(b => b.callback_data === audioButton).text, /audio/i);
+    const audioPrefs = await fixtureSql(settingsSql(settingsFields));
+    const beforeAudio = await count();
+    for (const item of deniedSet) {
+      const denied = await callback(audioButton, audioDraft, { ...(item.flags ?? {}), ...(item.actor ? { actor: item.actor } : {}) });
+      assert(denied.ack.data.text || denied.ack.data.show_alert, 'Audio callbacks have the same private-owner/current-bot boundary');
+    }
+    await fixtureSql("UPDATE users SET ban_until=unixepoch('now')*1000000+600000000 WHERE id=42");
+    const audioDenied = await callback(audioButton, audioDraft);
+    assert(audioDenied.ack.data.text || audioDenied.ack.data.show_alert, 'Audio admission must recheck current bans');
+    await fixtureSql('UPDATE users SET ban_until=NULL WHERE id=42');
+    assert.equal(await count(), beforeAudio);
+    assert.equal((await session()).stage, 'choosing', 'denied Audio choice cannot consume the session');
+    await restartApp();
+    const audioResume = await message('/quality');
+    assert.equal(findButton(audioResume.reply, 'ql:audio:'), audioButton, 'Audio selection survives pending-session restart');
+    botApi.setExpectedUpload({ method: 'sendaudio', filename: 'audio.mp3', mimeType: 'audio/mpeg', preserveMdat: false });
+    const uploadsBeforeAudio = botApi.uploadCalls;
+    const audioClick = await callback(audioButton, audioResume);
+    const audioOperation = await admission(audioClick.start);
+    await h.succeeded(audioOperation);
+    assert.equal(botApi.uploadCalls, uploadsBeforeAudio + 1);
+    await h.inspectUpload('quality Audio with saved codec', { video: false, audio: true, audioCodec: 'mp3' });
+    const frozenAudio = await h.request(audioOperation);
+    assert.equal(frozenAudio.media_mode, 'audio');
+    assert.equal(frozenAudio.params.audio_codec, 'mp3');
+    assert.equal(frozenAudio.params.max_height, null);
+    assert.equal(frozenAudio.params.send_as_file, false);
+    assert.equal(botApi.calls.slice(audioClick.start).find(c => c.method === 'sendaudio').reply_to_message_id, audioDraft.id);
+    assert.equal((await session()).selected, 'audio');
+    assert.equal(await fixtureSql(settingsSql(settingsFields)), audioPrefs, 'Audio selection cannot write preferences');
+    const audioCount = await count();
+    await fixtureSql("UPDATE dl_user_settings SET quality='best',audio_codec='aac',send_as_file=1 WHERE user_id=42");
+    await restartApp();
+    const audioReplay = await callback(audioButton, audioResume);
+    assert.equal(await admission(audioReplay.start), audioOperation);
+    assert.equal(await count(), audioCount);
+    assert.equal(botApi.uploadCalls, uploadsBeforeAudio + 1);
+    assert.deepEqual(await h.request(audioOperation), frozenAudio, 'Audio replay uses frozen admission preferences');
+    const audioChanged = await callback(findButton(audioDraft.reply, 'ql:720:'), audioDraft);
+    assert(audioChanged.ack.data.text || audioChanged.ack.data.show_alert, 'admitted Audio cannot change to video');
+    // Simulate admission succeeding before its quality-session result was recorded.
+    await fixtureSql("UPDATE runtime_quality_sessions SET stage='confirming',revision=2,operation_id=NULL WHERE actor_id=42 AND bot_id=123456 AND chat_id=42");
+    await restartApp();
+    const audioRecoveryMenu = await message('/quality');
+    assert.equal(buttons(audioRecoveryMenu.reply).length, 1, 'only the claimed Audio action is retryable');
+    const audioRecovery = await callback(findButton(audioRecoveryMenu.reply, 'ql:audio:'), audioRecoveryMenu);
+    assert.equal(await admission(audioRecovery.start), audioOperation);
+    assert.equal(await count(), audioCount, 'Audio crash recovery cannot admit another operation');
+    assert.equal(botApi.uploadCalls, uploadsBeforeAudio + 1);
+    assert.equal((await session()).stage, 'submitted');
+    botApi.setExpectedUpload(null);
+
+    // Explicit audio/file flags survive, video-only flags do not. Preserve the clip.
+    await fixtureSql("UPDATE dl_user_settings SET quality='ask',codec='avc1',container='mp4',audio_codec='mp3',send_as_file=0 WHERE user_id=42");
+    const audioClip = await message(`/cut ${sourceUrl}&ask-audio-clip=true 0.2 0.7 --video-codec h265 --container mkv --audio-codec aac --send-as-file true`);
+    await fixtureSql("UPDATE dl_user_settings SET quality='invalid',codec='invalid',container='invalid',audio_codec='invalid' WHERE user_id=42");
+    const invalidVideoPrefs = await fixtureSql(settingsSql(settingsFields));
+    botApi.setExpectedUpload({ method: 'senddocument', filename: 'audio.m4a', mimeType: 'audio/mp4', preserveMdat: false });
+    const audioClipClick = await callback(findButton(audioClip.reply, 'ql:audio:'), audioClip);
+    const audioClipOperation = await admission(audioClipClick.start);
+    await h.succeeded(audioClipOperation);
+    await h.inspectUpload('quality Audio with explicit codec and clip', { video: false, audio: true, audioCodec: 'aac', durationMin: 0.35, durationMax: 0.8 });
+    const audioClipRequest = await h.request(audioClipOperation);
+    assert.equal(audioClipRequest.media_mode, 'audio');
+    assert.equal(audioClipRequest.params.audio_codec, 'aac');
+    assert.equal(audioClipRequest.params.send_as_file, true);
+    assert.equal(audioClipRequest.params.max_height, null);
+    assert.notEqual(audioClipRequest.params.video_codec, 'h265', 'video-only override must not leak into Audio mode');
+    assert.notEqual(audioClipRequest.params.container, 'mkv', 'video-only container must not leak into Audio mode');
+    assert.deepEqual(audioClipRequest.clip_range, { start_seconds: 0.2, end_seconds: 0.7 });
+    assert.equal(botApi.calls.slice(audioClipClick.start).find(c => c.method === 'senddocument').reply_to_message_id, audioClip.id);
+    assert.equal(await fixtureSql(settingsSql(settingsFields)), invalidVideoPrefs, 'admitting Audio must not repair or rewrite invalid saved preferences');
+    botApi.setExpectedUpload(null);
+    await fixtureSql("UPDATE dl_user_settings SET quality='ask',codec='avc1',container='mp4',audio_codec='best',send_as_file=0 WHERE user_id=42");
+
     // A new chooser supersedes the old one. Old identifiers remain inert even after reset.
     await fixtureSql("UPDATE dl_user_settings SET quality='ask' WHERE user_id=42");
     const oldDraft = await message(`/download ${sourceUrl}`);
@@ -229,8 +309,10 @@ export async function runQualityScenarios(context) {
     assert(buttons(immediateClip.reply).some(b => b.callback_data?.startsWith('ql:')), 'immediate plain-URL clips must use quality chooser');
     const russian = await withRussianPreference(fixtureSql, async () => message(`/video ${sourceUrl}`, { language: 'en' }));
     assert(/[А-Яа-яЁё]/u.test(russian.reply.data.text), 'saved Russian language must localize chooser');
+    const russianAudio = buttons(russian.reply).find(b => b.callback_data?.startsWith('ql:audio:'));
+    assert(russianAudio && /[А-Яа-яЁё]/u.test(russianAudio.text), 'saved Russian language must localize Audio action');
     await assertWorkspaceClean();
-    return 'durable ask-quality chooser/resume, bounded callbacks, private authorization, frozen admission, restart recovery, replay, actual document output and bypass cases passed';
+    return 'durable quality/Audio chooser, private authorization, exclusive frozen admission, restart/crash replay, real MP3 and clipped AAC document output, unchanged preferences and bypass cases passed';
   } finally {
     botApi.setExpectedUpload(null);
     await fixtureSql(`UPDATE users SET ${userFields.map(f => `${f}=${literal(oldUser[f])}`).join(',')} WHERE id=42`);

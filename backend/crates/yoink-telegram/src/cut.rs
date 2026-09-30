@@ -166,6 +166,12 @@ fn selected_confirmation_keyboard(
             "qbest".to_owned(),
             translate(language, Key::QualityBest, &[]),
         ),
+        QualityChoice::Audio => {
+            return (
+                translate(language, Key::CutStale, &[]),
+                InlineKeyboardMarkup::new(Vec::<Vec<InlineKeyboardButton>>::new()),
+            );
+        }
         QualityChoice::Height(height) => (
             format!("q{height}"),
             translate(
@@ -199,7 +205,7 @@ fn render_values(
             Key::CutSummary,
             &[("start", &time_display(start)), ("end", &time_display(end))],
         ),
-        CutStage::Quality => translate(language, Key::QualityTitle, &[]),
+        CutStage::Quality => translate(language, Key::CutQualityTitle, &[]),
         CutStage::Confirming => translate(language, Key::CutConfirming, &[]),
         CutStage::Submitted => translate(
             language,
@@ -716,6 +722,26 @@ mod tests {
                 .map(|button| button["callback_data"].as_str().unwrap())
                 .collect::<Vec<_>>();
             assert_eq!(callbacks.len(), 11);
+            let (title, _) = render_values(
+                CutStage::Quality,
+                Some(1.0),
+                Some(2.0),
+                None,
+                id,
+                11,
+                language,
+            );
+            assert!(!title.to_lowercase().contains("audio"));
+            assert!(!title.to_lowercase().contains("аудио"));
+            assert!(callback(&encode_values("qaudio", id, 11)).is_err());
+            let (_, invalid_selected) =
+                selected_confirmation_keyboard(QualityChoice::Audio, id, 12, language);
+            assert!(
+                serde_json::to_value(invalid_selected).unwrap()["inline_keyboard"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
             for data in callbacks {
                 assert!(data.len() <= 64);
                 assert!(matches!(

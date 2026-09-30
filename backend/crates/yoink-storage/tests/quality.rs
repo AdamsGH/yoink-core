@@ -159,6 +159,72 @@ async fn transitions_replay_guards_and_restart_persistence() {
 }
 
 #[tokio::test]
+async fn audio_choice_is_durable_exclusive_and_replay_safe() {
+    let fixture = common::store().await;
+    let draft = fixture
+        .quality_begin(
+            ACTOR,
+            target(),
+            31,
+            &request(31, "https://example.com/audio"),
+        )
+        .await
+        .unwrap();
+    let selected = fixture
+        .quality_claim(
+            ACTOR,
+            target(),
+            draft.id,
+            draft.revision,
+            QualityChoice::Audio,
+        )
+        .await
+        .unwrap();
+    assert_eq!(selected.selected, Some(QualityChoice::Audio));
+    assert_eq!(selected.request().media_mode(), MediaMode::Video);
+    assert_eq!(
+        fixture
+            .quality_claim(
+                ACTOR,
+                target(),
+                draft.id,
+                draft.revision,
+                QualityChoice::Audio
+            )
+            .await
+            .unwrap(),
+        selected
+    );
+    assert_eq!(
+        fixture
+            .quality_claim(
+                ACTOR,
+                target(),
+                draft.id,
+                draft.revision,
+                QualityChoice::Height(720)
+            )
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        fixture
+            .quality_cancel(ACTOR, target(), draft.id, draft.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+    let path = fixture.path();
+    fixture.close().await.unwrap();
+    let reopened = Store::open(&path, false, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.quality_current(ACTOR, target()).await.unwrap(),
+        Some(selected)
+    );
+}
+
+#[tokio::test]
 async fn cancellation_replay_is_limited_and_debug_redacts_source() {
     let store = common::store().await;
     let s = store

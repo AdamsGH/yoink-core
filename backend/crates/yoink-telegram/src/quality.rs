@@ -25,7 +25,7 @@ enum Callback {
 }
 
 fn parse_choice(value: &str) -> Option<QualityChoice> {
-    if value == "best" || HEIGHTS.contains(&value) {
+    if value == "best" || value == "audio" || HEIGHTS.contains(&value) {
         QualityChoice::parse(value).ok()
     } else {
         None
@@ -70,6 +70,7 @@ fn callback_data(choice: &str, id: Uuid, revision: i64) -> String {
 fn choice_label(choice: &QualityChoice, language: Language) -> String {
     match choice.as_str() {
         "best" => translate(language, Key::QualityBest, &[]),
+        "audio" => translate(language, Key::QualityAudio, &[]),
         height => translate(language, Key::QualityHeight, &[("height", height)]),
     }
 }
@@ -100,6 +101,7 @@ fn keyboard_values(
                 ),
                 callback_data("best", id, revision),
             )];
+            let audio = parse_choice("audio").expect("supported choice");
             buttons.extend(HEIGHTS.iter().map(|height| {
                 let choice = QualityChoice::parse(height).expect("supported height");
                 InlineKeyboardButton::callback(
@@ -111,10 +113,16 @@ fn keyboard_values(
                 .chunks(3)
                 .map(|row| row.to_vec())
                 .collect::<Vec<_>>();
-            rows.push(vec![InlineKeyboardButton::callback(
-                translate(language, Key::QualityCancel, &[]),
-                callback_data("cancel", id, revision),
-            )]);
+            rows.push(vec![
+                InlineKeyboardButton::callback(
+                    choice_label(&audio, language),
+                    callback_data("audio", id, revision),
+                ),
+                InlineKeyboardButton::callback(
+                    translate(language, Key::QualityCancel, &[]),
+                    callback_data("cancel", id, revision),
+                ),
+            ]);
             rows
         }
         QualityStage::Confirming => selected
@@ -395,7 +403,7 @@ mod tests {
     fn callback_wire_format_is_closed_canonical_and_bounded() {
         let id = Uuid::parse_str("38e4f36a14da4f7b8d1d12d2191d8db1").unwrap();
         for choice in [
-            "best", "2160", "1440", "1080", "720", "480", "360", "240", "144",
+            "best", "audio", "2160", "1440", "1080", "720", "480", "360", "240", "144",
         ] {
             let data = callback_data(choice, id, 1);
             assert!(data.len() <= 64);
@@ -409,6 +417,7 @@ mod tests {
             "ql:720:38e4f36a14da4f7b8d1d12d2191d8db1:1:extra",
             "ql:0720:38e4f36a14da4f7b8d1d12d2191d8db1:1",
             "ql:ask:38e4f36a14da4f7b8d1d12d2191d8db1:1",
+            "ql:unknown:38e4f36a14da4f7b8d1d12d2191d8db1:1",
             "ql:720:uuid:1",
             "quality:720:38e4f36a14da4f7b8d1d12d2191d8db1:1",
             "ql:cancel:38e4f36a14da4f7b8d1d12d2191d8db1:9223372036854775808",
@@ -439,10 +448,18 @@ mod tests {
         for language in [Language::English, Language::Russian] {
             let text = translate(language, Key::QualityTitle, &[]);
             assert!(text.contains(if language == Language::English {
-                "maximum-height limit"
+                "Choose a download option"
             } else {
-                "предельную высоту"
+                "вариант загрузки"
             }));
+            assert!(
+                text.to_lowercase()
+                    .contains(if language == Language::English {
+                        "audio"
+                    } else {
+                        "аудио"
+                    })
+            );
             assert!(text.len() < 4096);
             let markup = serde_json::to_value(keyboard_values(
                 QualityStage::Choosing,
@@ -459,10 +476,11 @@ mod tests {
                 .flat_map(|row| row.as_array().unwrap())
                 .map(|button| button["callback_data"].as_str().unwrap())
                 .collect::<Vec<_>>();
-            assert_eq!(values.len(), 10);
+            assert_eq!(values.len(), 11);
             assert!(values.iter().all(|value| callback(value).is_some()));
             for choice in [
-                "best", "2160", "1440", "1080", "720", "480", "360", "240", "144", "cancel",
+                "best", "audio", "2160", "1440", "1080", "720", "480", "360", "240", "144",
+                "cancel",
             ] {
                 assert!(
                     values
@@ -482,6 +500,31 @@ mod tests {
                 .as_str()
                 .unwrap();
             assert_eq!(retry, callback_data("720", id, 2));
+            let confirming_audio = serde_json::to_value(keyboard_values(
+                QualityStage::Confirming,
+                id,
+                2,
+                Some(parse_choice("audio").unwrap()),
+                language,
+            ))
+            .unwrap();
+            assert_eq!(
+                confirming_audio["inline_keyboard"][0][0]["callback_data"],
+                callback_data("audio", id, 2)
+            );
+            let audio_label = confirming_audio["inline_keyboard"][0][0]["text"]
+                .as_str()
+                .unwrap();
+            assert_eq!(audio_label, translate(language, Key::QualityAudio, &[]));
+            assert!(!audio_label.contains("p"));
+            let rendered_audio =
+                translate(language, Key::QualityConfirming, &[("choice", audio_label)]);
+            assert!(rendered_audio.contains(audio_label));
+            assert!(!rendered_audio.contains(if language == Language::English {
+                "Up to"
+            } else {
+                "Не выше"
+            }));
             let submitted = serde_json::to_value(keyboard_values(
                 QualityStage::Submitted,
                 id,
@@ -491,6 +534,15 @@ mod tests {
             ))
             .unwrap();
             assert!(submitted["inline_keyboard"].as_array().unwrap().is_empty());
+            let cancelled = serde_json::to_value(keyboard_values(
+                QualityStage::Cancelled,
+                id,
+                4,
+                Some(parse_choice("audio").unwrap()),
+                language,
+            ))
+            .unwrap();
+            assert!(cancelled["inline_keyboard"].as_array().unwrap().is_empty());
             assert!(callback_error(DownloadError::Conflict, language).contains(
                 if language == Language::English {
                     "outdated"

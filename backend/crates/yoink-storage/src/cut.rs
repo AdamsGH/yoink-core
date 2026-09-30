@@ -376,7 +376,7 @@ impl Store {
         revision: i64,
         choice: QualityChoice,
     ) -> Result<CutSession, StoreError> {
-        if QualityChoice::parse(choice.as_str()).is_err() {
+        if QualityChoice::parse(choice.as_str()).is_err() || choice == QualityChoice::Audio {
             return Err(StoreError::InvalidInput);
         }
         let mut conn = self
@@ -551,6 +551,14 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
         .map_err(|_| StoreError::InvalidStoredData)?;
     let target = DeliveryTarget::new(bot_id, chat_id, None, Some(origin_message_id))
         .map_err(|_| StoreError::InvalidStoredData)?;
+    let selected = row
+        .try_get::<Option<String>, _>("selected")
+        .map_err(|_| StoreError::InvalidStoredData)?
+        .map(|value| QualityChoice::parse(&value))
+        .transpose()?;
+    if selected == Some(QualityChoice::Audio) {
+        return Err(StoreError::InvalidStoredData);
+    }
     Ok(CutSession {
         id: row
             .try_get("id")
@@ -580,11 +588,7 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
         operation_id: row
             .try_get("operation_id")
             .map_err(|_| StoreError::InvalidStoredData)?,
-        selected: row
-            .try_get::<Option<String>, _>("selected")
-            .map_err(|_| StoreError::InvalidStoredData)?
-            .map(|v| QualityChoice::parse(&v))
-            .transpose()?,
+        selected,
         url: row
             .try_get("source_url")
             .map_err(|_| StoreError::InvalidStoredData)?,

@@ -63,6 +63,7 @@ define_keys! {
     CutAskEnd => "telegram.cut_ask_end";
     CutSummary => "telegram.cut_summary", ["start", "end"];
     CutConfirming => "telegram.cut_confirming";
+    CutQualityTitle => "telegram.cut_quality_title";
     CutSubmitted => "telegram.cut_submitted", ["id"];
     CutCancelled => "telegram.cut_cancelled";
     CutTimeHint => "telegram.cut_time_hint";
@@ -76,6 +77,7 @@ define_keys! {
     QualityUsage => "telegram.quality_usage";
     QualityTitle => "telegram.quality_title";
     QualityBest => "telegram.quality_best";
+    QualityAudio => "telegram.quality_audio";
     QualityHeight => "telegram.quality_height", ["height"];
     QualityCancel => "telegram.quality_cancel";
     QualityConfirming => "telegram.quality_confirming", ["choice"];
@@ -511,8 +513,23 @@ mod tests {
             assert!(title.contains(if language == Language::English {
                 "not verified source formats"
             } else {
-                "не проверенные форматы"
+                "наличие форматов у источника не проверяется"
             }));
+            assert!(title.contains(if language == Language::English {
+                "Best applies no height limit"
+            } else {
+                "«Лучшее» не ограничивает высоту"
+            }));
+            assert!(
+                catalog
+                    .render(language, Key::QualityAudio, &[])
+                    .unwrap()
+                    .contains(if language == Language::English {
+                        "Audio"
+                    } else {
+                        "аудио"
+                    })
+            );
             assert!(settings.contains("ask"));
             assert!(help.contains("/quality"));
             assert!(help.contains("/list URL"));

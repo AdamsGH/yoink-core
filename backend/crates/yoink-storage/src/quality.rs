@@ -8,12 +8,14 @@ use crate::{Store, StoreError, codec};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QualityChoice {
     Best,
+    Audio,
     Height(u32),
 }
 impl QualityChoice {
     pub fn parse(value: &str) -> Result<Self, StoreError> {
         match value {
             "best" => Ok(Self::Best),
+            "audio" => Ok(Self::Audio),
             "2160" => Ok(Self::Height(2160)),
             "1440" => Ok(Self::Height(1440)),
             "1080" => Ok(Self::Height(1080)),
@@ -28,6 +30,7 @@ impl QualityChoice {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Best => "best",
+            Self::Audio => "audio",
             Self::Height(2160) => "2160",
             Self::Height(1440) => "1440",
             Self::Height(1080) => "1080",
@@ -41,7 +44,7 @@ impl QualityChoice {
     }
     pub fn max_height(self) -> Option<u32> {
         match self {
-            Self::Best => None,
+            Self::Best | Self::Audio => None,
             Self::Height(h) => Some(h),
         }
     }
@@ -480,7 +483,7 @@ mod tests {
     #[test]
     fn parser_accepts_only_the_public_labels() {
         for label in [
-            "best", "2160", "1440", "1080", "720", "480", "360", "240", "144",
+            "best", "audio", "2160", "1440", "1080", "720", "480", "360", "240", "144",
         ] {
             assert_eq!(QualityChoice::parse(label).unwrap().as_str(), label);
         }

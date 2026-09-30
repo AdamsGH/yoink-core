@@ -1,5 +1,7 @@
 use uuid::Uuid;
-use yoink_domain::{DeliveryTarget, DownloadPreferenceOverrides, DownloadRequest, MediaMode};
+use yoink_domain::{
+    DeliveryTarget, DownloadParams, DownloadPreferenceOverrides, DownloadRequest, MediaMode,
+};
 use yoink_storage::{Admission, StoreError};
 
 use crate::{DownloadError, DownloadService, map_profile, map_store};
@@ -187,13 +189,7 @@ impl DownloadService {
             if current.selected != Some(choice) {
                 return Err(DownloadError::Conflict);
             }
-            let original = without_overrides(current.request().clone())?;
-            let mut overrides = current
-                .request()
-                .preference_overrides()
-                .cloned()
-                .unwrap_or_default();
-            overrides.max_height = Some(choice.max_height());
+            let (original, overrides) = selected_request(current.request(), choice)?;
             let key = format!(
                 "tg:{}:{}:{}",
                 target.bot_id(),
@@ -209,16 +205,7 @@ impl DownloadService {
             .quality_claim(actor, target, id, revision, choice)
             .await
             .map_err(map_quality_error)?;
-        let original = without_overrides(s.request().clone())?;
-        let mut overrides = s
-            .request()
-            .preference_overrides()
-            .cloned()
-            .unwrap_or_default();
-        if overrides.max_height.is_some() {
-            return Err(DownloadError::InvalidPreferences);
-        }
-        overrides.max_height = Some(choice.max_height());
+        let (original, overrides) = selected_request(s.request(), choice)?;
         let key = format!(
             "tg:{}:{}:{}",
             target.bot_id(),
@@ -269,9 +256,60 @@ fn without_overrides(request: DownloadRequest) -> Result<DownloadRequest, Downlo
         .map_err(|_| DownloadError::InvalidInput)
 }
 
+fn selected_request(
+    draft: &DownloadRequest,
+    choice: QualityChoice,
+) -> Result<(DownloadRequest, DownloadPreferenceOverrides), DownloadError> {
+    if choice == QualityChoice::Audio {
+        let params = draft.params();
+        let audio = DownloadRequest::new(
+            draft.actor_id(),
+            draft.source_url().as_str(),
+            MediaMode::Audio,
+            draft.clip_range(),
+            DownloadParams::default()
+                .with_engine(params.engine())
+                .with_playlist(params.playlist())
+                .with_clips(params.clips().to_vec())
+                .map_err(|_| DownloadError::InvalidInput)?,
+        )
+        .map_err(|_| DownloadError::InvalidInput)?;
+        let mut audio = if let Some(target) = draft.target().copied() {
+            audio
+                .with_target(target)
+                .map_err(|_| DownloadError::InvalidInput)?
+        } else {
+            return Err(DownloadError::InvalidInput);
+        };
+        audio = audio
+            .with_network(draft.network().clone())
+            .map_err(|_| DownloadError::InvalidInput)?;
+        let saved = draft.preference_overrides().cloned().unwrap_or_default();
+        let overrides = DownloadPreferenceOverrides {
+            audio_codec: saved.audio_codec,
+            send_as_file: saved.send_as_file,
+            ..Default::default()
+        };
+        Ok((audio, overrides))
+    } else {
+        let original = without_overrides(draft.clone())?;
+        let mut overrides = draft.preference_overrides().cloned().unwrap_or_default();
+        if overrides.max_height.is_some() {
+            return Err(DownloadError::InvalidPreferences);
+        }
+        overrides.max_height = Some(choice.max_height());
+        Ok((original, overrides))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::quality_asks;
+    use super::{quality_asks, selected_request};
+    use yoink_domain::{
+        AudioCodec, ClipRange, Container, DeliveryTarget, DownloadParams,
+        DownloadPreferenceOverrides, DownloadRequest, Engine, MediaMode, PlaylistRange, VideoCodec,
+    };
+    use yoink_storage::QualityChoice;
 
     #[test]
     fn ask_preference_matching_trims_and_ignores_ascii_case() {
@@ -279,5 +317,45 @@ mod tests {
         assert!(quality_asks(Some("  AsK  ")));
         assert!(!quality_asks(Some("best")));
         assert!(!quality_asks(None));
+    }
+
+    #[test]
+    fn audio_selection_preserves_structure_and_filters_video_overrides() {
+        let target = DeliveryTarget::new(12, 42, None, Some(77)).unwrap();
+        let draft = DownloadRequest::new(
+            42,
+            "https://example.com/audio?secret=private",
+            MediaMode::Video,
+            Some(ClipRange::new(1.0, 4.0).unwrap()),
+            DownloadParams::default()
+                .with_engine(Engine::YtDlp)
+                .with_playlist(Some(PlaylistRange::new(2, Some(4)).unwrap())),
+        )
+        .unwrap()
+        .with_target(target)
+        .unwrap()
+        .with_preference_overrides(DownloadPreferenceOverrides {
+            video_codec: Some(VideoCodec::H265),
+            container: Some(Container::Mkv),
+            max_height: Some(Some(720)),
+            audio_codec: Some(AudioCodec::Aac),
+            send_as_file: Some(true),
+            ..Default::default()
+        });
+        let (audio, overrides) = selected_request(&draft, QualityChoice::Audio).unwrap();
+        assert_eq!(audio.media_mode(), MediaMode::Audio);
+        assert_eq!(audio.source_url(), draft.source_url());
+        assert_eq!(audio.actor_id(), draft.actor_id());
+        assert_eq!(audio.target(), Some(&target));
+        assert_eq!(audio.clip_range(), draft.clip_range());
+        assert_eq!(audio.params().engine(), Engine::YtDlp);
+        assert_eq!(audio.params().playlist(), draft.params().playlist());
+        assert_eq!(audio.params().clips(), draft.params().clips());
+        assert_eq!(overrides.audio_codec, Some(AudioCodec::Aac));
+        assert_eq!(overrides.send_as_file, Some(true));
+        assert_eq!(overrides.max_height, None);
+        assert_eq!(overrides.video_codec, None);
+        assert_eq!(overrides.container, None);
+        assert!(!format!("{audio:?}").contains("secret=private"));
     }
 }

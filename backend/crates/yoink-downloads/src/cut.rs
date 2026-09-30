@@ -122,6 +122,9 @@ impl DownloadService {
         choice: QualityChoice,
     ) -> Result<CutSession, DownloadError> {
         self.authorize_cut(actor, target).await?;
+        if choice == QualityChoice::Audio {
+            return Err(DownloadError::InvalidInput);
+        }
         self.store
             .cut_choose(actor, target, id, revision, choice)
             .await
