@@ -1,8 +1,8 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use yoink_domain::{
-    AudioCodec, ClipRange, DeliveryTarget, DownloadParams, DownloadPreferenceOverrides,
-    DownloadRequest, MediaMode, PlaylistRange,
+    AudioCodec, ClipRange, Container, DeliveryTarget, DownloadParams, DownloadPreferenceOverrides,
+    DownloadRequest, MediaMode, PlaylistRange, VideoCodec,
 };
 use yoink_downloads::{
     Delivery, DeliveryArtifact, DeliveryFuture, DownloadConfig, DownloadError, DownloadService,
@@ -112,6 +112,338 @@ async fn ask(store: &Store) {
         .execute(store.database())
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn quality_cut_service_replays_link_without_admission_and_survives_reopen() {
+    let (dir, store, service) = setup().await;
+    ask(&store).await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
+    let TelegramSubmission::Quality(draft) = service
+        .submit_telegram_request(
+            &request(URL, 2150),
+            2150,
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected prompt")
+    };
+    service
+        .change_setting(
+            ACTOR,
+            target,
+            yoink_downloads::SettingChange::new(yoink_downloads::SettingField::Quality, "best")
+                .unwrap(),
+            Some(service.settings(ACTOR, target).await.unwrap().revision),
+        )
+        .await
+        .unwrap();
+    let before = service.settings(ACTOR, target).await.unwrap();
+    let cut = service
+        .quality_cut(ACTOR, target, draft.id, draft.revision)
+        .await
+        .unwrap();
+    assert_eq!(cut.original_request().unwrap(), draft.request());
+    assert_eq!(cut.stage, yoink_downloads::CutStage::Start);
+    let count = yoink_db::query(include_str!("sql/count_operations.sql"))
+        .fetch_one(store.database())
+        .await
+        .unwrap();
+    assert_eq!(count.try_get::<i64, _>("count").unwrap(), 0);
+    let replay = service
+        .quality_cut(ACTOR, target, draft.id, draft.revision)
+        .await
+        .unwrap();
+    assert_eq!(replay.id, cut.id);
+    let after = service.settings(ACTOR, target).await.unwrap();
+    assert_eq!(after, before);
+    drop(service);
+    drop(store);
+    let reopened = Arc::new(
+        Store::open(
+            &dir.path().join("quality.db"),
+            false,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap(),
+    );
+    let service = service_for(
+        Arc::clone(&reopened),
+        dir.path().join("workspace"),
+        Some(ACTOR as i64),
+    );
+    let replay = service
+        .quality_cut(ACTOR, target, draft.id, draft.revision)
+        .await
+        .unwrap();
+    assert_eq!(replay.id, cut.id);
+}
+
+#[tokio::test]
+async fn quality_cut_service_auth_matrix_denies_non_owner_wrong_chat_bot_thread_and_ban() {
+    let (_dir, store, service) = setup().await;
+    ask(&store).await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
+    let TelegramSubmission::Quality(draft) = service
+        .submit_telegram_request(
+            &request(URL, 2170),
+            2170,
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected prompt")
+    };
+    let wrong_chat = DeliveryTarget::new(BOT, 43, None, None).unwrap();
+    let wrong_bot = DeliveryTarget::new(BOT + 1, ACTOR as i64, None, None).unwrap();
+    let thread = DeliveryTarget::new(BOT, ACTOR as i64, Some(9), None).unwrap();
+    for (actor, attempted) in [
+        (ACTOR, wrong_chat),
+        (ACTOR, wrong_bot),
+        (ACTOR, thread),
+        (43, target),
+    ] {
+        assert_eq!(
+            service
+                .quality_cut(actor, attempted, draft.id, draft.revision)
+                .await,
+            Err(DownloadError::Denied)
+        );
+    }
+    let non_owner = service_for(Arc::clone(&store), _dir.path().join("workspace"), None);
+    assert_eq!(
+        non_owner
+            .quality_cut(ACTOR, target, draft.id, draft.revision)
+            .await,
+        Err(DownloadError::Denied)
+    );
+    yoink_db::query(include_str!("sql/language_ban.sql"))
+        .bind(ACTOR as i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .quality_cut(ACTOR, target, draft.id, draft.revision)
+            .await,
+        Err(DownloadError::Denied)
+    );
+    assert_eq!(
+        store
+            .quality_current(ACTOR, target)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        draft.id
+    );
+    assert!(store.cut_current(ACTOR, target).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn quality_cut_service_rejects_playlist_and_multiclips_without_mutation() {
+    let (_dir, store, service) = setup().await;
+    ask(&store).await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
+    for (message, params) in [
+        (
+            2171,
+            DownloadParams::default().with_playlist(Some(PlaylistRange::new(1, Some(2)).unwrap())),
+        ),
+        (
+            2172,
+            DownloadParams::default()
+                .with_clips(vec![ClipRange::new(1.0, 2.0).unwrap()])
+                .unwrap(),
+        ),
+    ] {
+        let req = DownloadRequest::new(ACTOR, URL, MediaMode::Video, None, params)
+            .unwrap()
+            .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(message)).unwrap())
+            .unwrap();
+        let TelegramSubmission::Quality(draft) = service
+            .submit_telegram_request(&req, message, DownloadPreferenceOverrides::default())
+            .await
+            .unwrap()
+        else {
+            panic!("expected prompt")
+        };
+        assert_eq!(
+            service
+                .quality_cut(ACTOR, target, draft.id, draft.revision)
+                .await,
+            Err(DownloadError::InvalidInput)
+        );
+        assert_eq!(
+            store.quality_current(ACTOR, target).await.unwrap().unwrap(),
+            *draft
+        );
+        assert!(store.cut_current(ACTOR, target).await.unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn quality_cut_service_does_not_replace_an_old_full_source_quality_choice() {
+    let (_dir, store, service) = setup().await;
+    ask(&store).await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
+    let _old = service
+        .cut_begin(ACTOR, target, 2180, URL, Some(1.0))
+        .await
+        .unwrap();
+    let ready = service
+        .cut_input(ACTOR, target, 2181, 5.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let yoink_downloads::CutSubmission::Quality(old) = service
+        .cut_submit(ACTOR, target, ready.id, ready.revision)
+        .await
+        .unwrap()
+    else {
+        panic!("expected full-source quality chooser")
+    };
+    assert_eq!(old.stage, yoink_downloads::CutStage::Quality);
+    let TelegramSubmission::Quality(quality) = service
+        .submit_telegram_request(
+            &request(URL, 2182),
+            2182,
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected quality prompt")
+    };
+    assert_eq!(
+        service
+            .quality_cut(ACTOR, target, quality.id, quality.revision)
+            .await,
+        Err(DownloadError::Conflict)
+    );
+    assert_eq!(
+        store.cut_current(ACTOR, target).await.unwrap().unwrap().id,
+        old.id
+    );
+    assert_eq!(
+        store
+            .quality_current(ACTOR, target)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        quality.id
+    );
+}
+
+#[tokio::test]
+async fn quality_cut_edit_admits_original_target_and_frozen_overrides() {
+    let (_dir, store, service) = setup().await;
+    ask(&store).await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
+    let original_target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2160)).unwrap();
+    let base = DownloadRequest::new(
+        ACTOR,
+        URL,
+        MediaMode::Video,
+        Some(ClipRange::new(1.0, 2.0).unwrap()),
+        DownloadParams::default(),
+    )
+    .unwrap()
+    .with_target(original_target)
+    .unwrap();
+    let overrides = DownloadPreferenceOverrides {
+        video_codec: Some(VideoCodec::Vp9),
+        audio_codec: Some(AudioCodec::Opus),
+        container: Some(Container::Mkv),
+        send_as_file: Some(true),
+        ..Default::default()
+    };
+    let TelegramSubmission::Quality(draft) = service
+        .submit_telegram_request(&base, 2160, overrides)
+        .await
+        .unwrap()
+    else {
+        panic!("expected prompt")
+    };
+    let ready = service
+        .quality_cut(ACTOR, target, draft.id, draft.revision)
+        .await
+        .unwrap();
+    let edited = service
+        .cut_edit(ACTOR, target, ready.id, ready.revision)
+        .await
+        .unwrap();
+    let _start = service
+        .cut_input(ACTOR, target, 2161, 3.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let ready = service
+        .cut_input(ACTOR, target, 2162, 9.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ready.start, Some(3.0));
+    let yoink_downloads::CutSubmission::Quality(quality) = service
+        .cut_submit(ACTOR, target, edited.id, ready.revision)
+        .await
+        .unwrap()
+    else {
+        panic!("saved ask requires a clip quality choice")
+    };
+    let chosen = service
+        .cut_choose(
+            ACTOR,
+            target,
+            quality.id,
+            quality.revision,
+            QualityChoice::Height(720),
+        )
+        .await
+        .unwrap();
+    let admission = service
+        .cut_confirm(ACTOR, target, chosen.id, chosen.revision)
+        .await
+        .unwrap();
+    let frozen = persisted_request(&store, admission.operation_id).await;
+    assert_eq!(frozen["target"]["reply_to_message_id"], 2160);
+    assert_eq!(frozen["clip_range"]["start_seconds"], 3.0);
+    assert_eq!(frozen["clip_range"]["end_seconds"], 9.0);
+    assert_eq!(frozen["params"]["video_codec"], "vp9");
+    assert_eq!(frozen["params"]["audio_codec"], "opus");
+    assert_eq!(frozen["params"]["container"], "mkv");
+    assert_eq!(frozen["params"]["send_as_file"], true);
+    assert_eq!(frozen["params"]["max_height"], 720);
+    let settings = service.settings(ACTOR, target).await.unwrap();
+    service
+        .change_setting(
+            ACTOR,
+            target,
+            yoink_downloads::SettingChange::new(yoink_downloads::SettingField::Quality, "480")
+                .unwrap(),
+            Some(settings.revision),
+        )
+        .await
+        .unwrap();
+    yoink_db::query(include_str!("sql/cut_recovery_after_admission.sql"))
+        .bind(ACTOR as i64)
+        .bind(BOT)
+        .bind(ACTOR as i64)
+        .bind(ready.id.to_string())
+        .execute(store.database())
+        .await
+        .unwrap();
+    let replay = service
+        .cut_confirm(ACTOR, target, chosen.id, chosen.revision)
+        .await
+        .unwrap();
+    assert_eq!(replay.operation_id, admission.operation_id);
+    assert_eq!(persisted_request(&store, replay.operation_id).await, frozen);
 }
 
 #[tokio::test]

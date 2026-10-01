@@ -1,9 +1,6 @@
 //! Persistent clip conversations. Transport adapters never own the admission recipe.
 use uuid::Uuid;
-use yoink_domain::{
-    ClipRange, DeliveryTarget, DownloadParams, DownloadPreferenceOverrides, DownloadRequest,
-    MediaMode,
-};
+use yoink_domain::{ClipRange, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode};
 use yoink_storage::Admission;
 
 pub use yoink_storage::QualityChoice;
@@ -180,20 +177,42 @@ impl DownloadService {
             session.end.ok_or(DownloadError::InvalidInput)?,
         )
         .map_err(|_| DownloadError::InvalidInput)?;
-        let request = DownloadRequest::new(
-            actor,
-            session.source_url().ok_or(DownloadError::InvalidInput)?,
-            MediaMode::Video,
-            Some(clip),
-            DownloadParams::default(),
-        )
-        .map_err(|_| DownloadError::InvalidInput)?
-        .with_target(session.target)
-        .map_err(|_| DownloadError::InvalidInput)?;
+        let request = if let Some(original) = session.original_request() {
+            let mut request = DownloadRequest::new(
+                actor,
+                original.source_url().as_str(),
+                MediaMode::Video,
+                Some(clip),
+                original.params().clone(),
+            )
+            .map_err(|_| DownloadError::InvalidInput)?;
+            if let Some(target) = original.target().copied() {
+                request = request
+                    .with_target(target)
+                    .map_err(|_| DownloadError::InvalidInput)?;
+            }
+            request
+                .with_network(original.network().clone())
+                .map_err(|_| DownloadError::InvalidInput)?
+        } else {
+            DownloadRequest::new(
+                actor,
+                session.source_url().ok_or(DownloadError::InvalidInput)?,
+                MediaMode::Video,
+                Some(clip),
+                DownloadParams::default(),
+            )
+            .map_err(|_| DownloadError::InvalidInput)?
+            .with_target(session.target)
+            .map_err(|_| DownloadError::InvalidInput)?
+        };
         // The identity belongs to the draft, not to the Telegram callback delivery.
         // A crash after admission leaves Confirming, whose retry finds the frozen request.
         let key = format!("cut:{}:{}:{}", target.bot_id(), actor, id.simple());
-        let mut overrides = DownloadPreferenceOverrides::default();
+        let mut overrides = session
+            .original_request()
+            .and_then(|request| request.preference_overrides().cloned())
+            .unwrap_or_default();
         if let Some(choice) = session.selected {
             overrides.max_height = Some(choice.max_height());
         }

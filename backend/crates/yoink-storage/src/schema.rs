@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 11] = [
+const MIGRATIONS: [Migration; 12] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -64,6 +64,11 @@ const MIGRATIONS: [Migration; 11] = [
     Migration {
         version: 11,
         sql: include_str!("../migrations-turso/0011_quality_audio.sql"),
+        expected_tables: 52,
+    },
+    Migration {
+        version: 12,
+        sql: include_str!("../migrations-turso/0012_quality_cut_handoff.sql"),
         expected_tables: 52,
     },
 ];
@@ -313,6 +318,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migration_twelve_preserves_all_legacy_quality_and_cut_columns() {
+        let (_directory, store) = version_one_store().await;
+        let before_quality;
+        let before_cut;
+        {
+            let connection = store.database().connection().await.unwrap();
+            for migration in &MIGRATIONS[1..11] {
+                raw_sql(migration.sql).execute(&*connection).await.unwrap();
+                let fingerprint = schema_hash(&connection, migration.expected_tables)
+                    .await
+                    .unwrap();
+                query(include_str!("../sql/record_migration.sql"))
+                    .bind(migration.version)
+                    .bind(checksum(migration))
+                    .bind(fingerprint)
+                    .bind(chrono::Utc::now())
+                    .execute(&*connection)
+                    .await
+                    .unwrap();
+            }
+            raw_sql(include_str!(
+                "../sql/test_quality_cut_migration_fixture.sql"
+            ))
+            .execute(&*connection)
+            .await
+            .unwrap();
+            before_quality = query(include_str!("../sql/test_quality_cut_migration_rows.sql"))
+                .fetch_all(&*connection)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| row.try_get::<String, _>("snapshot").unwrap())
+                .collect::<Vec<_>>();
+            before_cut = query(include_str!(
+                "../sql/test_quality_cut_migration_cut_rows.sql"
+            ))
+            .fetch_all(&*connection)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("snapshot").unwrap())
+            .collect::<Vec<_>>();
+        }
+        store.migrate().await.unwrap();
+        let after_quality = query(include_str!("../sql/test_quality_cut_migration_rows.sql"))
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("snapshot").unwrap())
+            .collect::<Vec<_>>();
+        let after_cut = query(include_str!(
+            "../sql/test_quality_cut_migration_cut_rows.sql"
+        ))
+        .fetch_all(store.database())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.try_get::<String, _>("snapshot").unwrap())
+        .collect::<Vec<_>>();
+        assert_eq!(after_quality, before_quality);
+        assert_eq!(after_cut, before_cut);
+    }
+
+    #[tokio::test]
     async fn valid_version_one_history_upgrades_to_latest() {
         let (_directory, store) = version_one_store().await;
         store.migrate().await.unwrap();
@@ -321,7 +391,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 11);
+        assert_eq!(versions.len(), 12);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
@@ -333,6 +403,7 @@ mod tests {
         assert_eq!(versions[8].try_get::<i64, _>("version").unwrap(), 9);
         assert_eq!(versions[9].try_get::<i64, _>("version").unwrap(), 10);
         assert_eq!(versions[10].try_get::<i64, _>("version").unwrap(), 11);
+        assert_eq!(versions[11].try_get::<i64, _>("version").unwrap(), 12);
     }
 
     #[tokio::test]
@@ -481,6 +552,8 @@ mod tests {
             rows.iter().zip(expected)
         {
             assert_eq!(row.try_get::<i64, _>("actor_id").unwrap(), actor);
+            assert_eq!(row.try_get::<i64, _>("bot_id").unwrap(), 9);
+            assert_eq!(row.try_get::<i64, _>("chat_id").unwrap(), actor);
             assert_eq!(row.try_get::<String, _>("id").unwrap(), id);
             assert_eq!(row.try_get::<i64, _>("revision").unwrap(), revision);
             assert_eq!(row.try_get::<String, _>("stage").unwrap(), stage);

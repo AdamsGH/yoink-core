@@ -1,8 +1,11 @@
 use crate::QualityChoice;
+use crate::codec;
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 use yoink_db::{Row, query};
-use yoink_domain::{ClipRange, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode};
+use yoink_domain::{
+    ClipRange, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode, NetworkSelection,
+};
 
 use crate::{Store, StoreError};
 
@@ -56,13 +59,21 @@ pub struct CutSession {
     pub end: Option<f64>,
     pub operation_id: Option<Uuid>,
     pub selected: Option<QualityChoice>,
-    begin_start: Option<f64>,
-    url: Option<String>,
+    pub(crate) begin_start: Option<f64>,
+    pub(crate) url: Option<String>,
+    pub(crate) original: Option<Box<DownloadRequest>>,
+    pub(crate) linked_quality_id: Option<Uuid>,
 }
 
 impl CutSession {
     pub fn source_url(&self) -> Option<&str> {
         self.url.as_deref()
+    }
+    pub fn original_request(&self) -> Option<&DownloadRequest> {
+        self.original.as_deref()
+    }
+    pub fn linked_quality_id(&self) -> Option<Uuid> {
+        self.linked_quality_id
     }
 }
 
@@ -172,6 +183,8 @@ impl Store {
             selected: None,
             begin_start: start,
             url: Some(url.to_owned()),
+            original: None,
+            linked_quality_id: None,
         };
         put(&tx, &session).await?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
@@ -307,6 +320,7 @@ impl Store {
         s.start = None;
         s.end = None;
         s.selected = None;
+        s.original = None;
         put(&tx, &s).await?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(s)
@@ -492,6 +506,13 @@ async fn get(
         .await
         .map_err(|_| StoreError::Database)
 }
+pub(crate) async fn current_in_transaction(
+    tx: &Transaction<'_>,
+    actor: u64,
+    target: DeliveryTarget,
+) -> Result<Option<CutSession>, StoreError> {
+    get(tx, actor, target).await?.map(decode).transpose()
+}
 async fn require(
     tx: &turso::transaction::Transaction<'_>,
     actor: u64,
@@ -531,6 +552,13 @@ async fn put(tx: &turso::transaction::Transaction<'_>, s: &CutSession) -> Result
         .bind(s.end)
         .bind(s.operation_id)
         .bind(s.selected.map(QualityChoice::as_str))
+        .bind(
+            s.original
+                .as_ref()
+                .map(|r| codec::encode(r).map(|v| v.to_string()))
+                .transpose()?,
+        )
+        .bind(s.linked_quality_id)
         .execute(&**tx)
         .await
         .map_err(|_| StoreError::Database)?;
@@ -559,6 +587,56 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
     if selected == Some(QualityChoice::Audio) {
         return Err(StoreError::InvalidStoredData);
     }
+    let stage = CutStage::parse(
+        &row.try_get::<String, _>("stage")
+            .map_err(|_| StoreError::InvalidStoredData)?,
+    )?;
+    let url: Option<String> = row
+        .try_get("source_url")
+        .map_err(|_| StoreError::InvalidStoredData)?;
+    let original = row
+        .try_get::<Option<String>, _>("original_request_json")
+        .map_err(|_| StoreError::InvalidStoredData)?
+        .map(|raw| {
+            serde_json::from_str(&raw)
+                .map_err(|_| StoreError::InvalidStoredData)
+                .and_then(codec::decode)
+                .map(Box::new)
+        })
+        .transpose()?;
+    let linked_quality_raw: Option<String> = row
+        .try_get("linked_quality_id")
+        .map_err(|_| StoreError::InvalidStoredData)?;
+    let linked_quality_id = linked_quality_raw
+        .as_deref()
+        .map(|value| Uuid::parse_str(value).map_err(|_| StoreError::InvalidStoredData))
+        .transpose()?;
+    if let (Some(raw), Some(parsed)) = (linked_quality_raw.as_deref(), linked_quality_id)
+        && raw != parsed.to_string()
+    {
+        return Err(StoreError::InvalidStoredData);
+    }
+    if let Some(request) = &original {
+        let request_target = request.target().ok_or(StoreError::InvalidStoredData)?;
+        if request.actor_id() != actor as u64
+            || request.media_mode() != MediaMode::Video
+            || request.network() != &NetworkSelection::NONE
+            || request.params().playlist().is_some()
+            || !request.params().clips().is_empty()
+            || request.source_url().as_str()
+                != url.as_deref().ok_or(StoreError::InvalidStoredData)?
+            || request_target.bot_id() != bot_id
+            || request_target.chat_id() != chat_id
+            || request_target.thread_id().is_some()
+            || request_target.reply_to_message_id() != Some(origin_message_id)
+            || linked_quality_id.is_none()
+        {
+            return Err(StoreError::InvalidStoredData);
+        }
+    }
+    if linked_quality_id.is_some() && original.is_none() && stage != CutStage::Cancelled {
+        return Err(StoreError::InvalidStoredData);
+    }
     Ok(CutSession {
         id: row
             .try_get("id")
@@ -566,10 +644,7 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
         revision: row
             .try_get("revision")
             .map_err(|_| StoreError::InvalidStoredData)?,
-        stage: CutStage::parse(
-            &row.try_get::<String, _>("stage")
-                .map_err(|_| StoreError::InvalidStoredData)?,
-        )?,
+        stage,
         actor_id: u64::try_from(actor).map_err(|_| StoreError::InvalidStoredData)?,
         target,
         origin_message_id,
@@ -589,8 +664,15 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
             .try_get("operation_id")
             .map_err(|_| StoreError::InvalidStoredData)?,
         selected,
-        url: row
-            .try_get("source_url")
-            .map_err(|_| StoreError::InvalidStoredData)?,
+        url,
+        original,
+        linked_quality_id,
     })
+}
+
+pub(crate) async fn put_handoff(
+    tx: &Transaction<'_>,
+    session: &CutSession,
+) -> Result<(), StoreError> {
+    put(tx, session).await
 }

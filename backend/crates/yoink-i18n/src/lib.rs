@@ -85,6 +85,11 @@ define_keys! {
     QualityCancelled => "telegram.quality_cancelled";
     QualityStale => "telegram.quality_stale";
     QualityRetry => "telegram.quality_retry";
+    QualityCut => "telegram.quality_cut";
+    QualityCutting => "telegram.quality_cutting";
+    QualityResumeCut => "telegram.quality_resume_cut";
+    QualityCutStale => "telegram.quality_cut_stale";
+    QualityCutActive => "telegram.quality_cut_active";
     SettingsUsage => "telegram.settings_usage";
     SettingsTitle => "telegram.settings_title", ["values"];
     SettingsQuality => "telegram.settings_quality";

@@ -50,6 +50,20 @@ impl DownloadService {
             .await
             .map_err(map_quality_error)
     }
+    pub async fn quality_cut(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<crate::CutSession, DownloadError> {
+        self.authorize_quality(actor, target)?;
+        self.authorize_chat(actor, target).await?;
+        self.store
+            .quality_cut(actor, target, id, revision)
+            .await
+            .map_err(map_quality_error)
+    }
     pub async fn submit_telegram_request(
         &self,
         request: &DownloadRequest,

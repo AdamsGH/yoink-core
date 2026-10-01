@@ -56,6 +56,7 @@ pub enum QualityStage {
     Confirming,
     Submitted,
     Cancelled,
+    Cutting,
 }
 impl QualityStage {
     fn text(self) -> &'static str {
@@ -64,6 +65,7 @@ impl QualityStage {
             Self::Confirming => "confirming",
             Self::Submitted => "submitted",
             Self::Cancelled => "cancelled",
+            Self::Cutting => "cutting",
         }
     }
     fn parse(s: &str) -> Result<Self, StoreError> {
@@ -72,6 +74,7 @@ impl QualityStage {
             "confirming" => Ok(Self::Confirming),
             "submitted" => Ok(Self::Submitted),
             "cancelled" => Ok(Self::Cancelled),
+            "cutting" => Ok(Self::Cutting),
             _ => Err(StoreError::InvalidStoredData),
         }
     }
@@ -86,6 +89,7 @@ pub struct QualitySession {
     pub origin_message_id: i32,
     pub selected: Option<QualityChoice>,
     pub operation_id: Option<Uuid>,
+    pub cut_session_id: Option<Uuid>,
     pub(crate) request: DownloadRequest,
     pub(crate) last_message_id: i32,
 }
@@ -99,6 +103,7 @@ impl std::fmt::Debug for QualitySession {
             .field("origin_message_id", &self.origin_message_id)
             .field("selected", &self.selected)
             .field("operation_id", &self.operation_id)
+            .field("cut_session_id", &self.cut_session_id)
             .field("request", &"[REDACTED]")
             .finish()
     }
@@ -110,6 +115,120 @@ impl QualitySession {
 }
 
 impl Store {
+    pub async fn quality_cut(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<crate::CutSession, StoreError> {
+        validate_revision(actor, target, revision)?;
+        let mut conn = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let row = query(include_str!("../sql/quality_get_for_target.sql"))
+            .bind(actor as i64)
+            .bind(target.bot_id())
+            .bind(target.chat_id())
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?
+            .ok_or(StoreError::NotFoundOrStale)?;
+        let mut quality = decode(row)?;
+        if quality.id != id {
+            return Err(StoreError::Conflict);
+        }
+        if quality.stage == QualityStage::Cutting {
+            if revision != quality.revision && revision != quality.revision - 1 {
+                return Err(StoreError::Conflict);
+            }
+            let linked = quality
+                .cut_session_id
+                .ok_or(StoreError::InvalidStoredData)?;
+            let cut = crate::cut::current_in_transaction(&tx, actor, target)
+                .await?
+                .ok_or(StoreError::Conflict)?;
+            if cut.id != linked || cut.linked_quality_id != Some(id) {
+                return Err(StoreError::Conflict);
+            }
+            tx.commit().await.map_err(|_| StoreError::Database)?;
+            return Ok(cut);
+        }
+        if quality.stage != QualityStage::Choosing || quality.revision != revision {
+            return Err(StoreError::Conflict);
+        }
+        if quality.request.params().playlist().is_some()
+            || !quality.request.params().clips().is_empty()
+        {
+            return Err(StoreError::InvalidInput);
+        }
+        let active = crate::cut::current_in_transaction(&tx, actor, target).await?;
+        if let Some(existing) = &active {
+            if existing.last_message_id >= quality.origin_message_id {
+                return Err(StoreError::Conflict);
+            }
+            if matches!(
+                existing.stage,
+                crate::CutStage::Start
+                    | crate::CutStage::End
+                    | crate::CutStage::Ready
+                    | crate::CutStage::Quality
+                    | crate::CutStage::Confirming
+            ) {
+                return Err(StoreError::Conflict);
+            }
+        }
+        let request = quality.request.clone();
+        let range = request.clip_range();
+        let (start, end, stage) = match range {
+            Some(range) => (
+                Some(range.start_seconds()),
+                Some(range.end_seconds()),
+                crate::CutStage::Ready,
+            ),
+            None => (None, None, crate::CutStage::Start),
+        };
+        let cut_id = Uuid::new_v4();
+        let cut = crate::CutSession {
+            id: cut_id,
+            revision: 1,
+            stage,
+            actor_id: actor,
+            target: DeliveryTarget::new(
+                target.bot_id(),
+                target.chat_id(),
+                None,
+                Some(quality.origin_message_id),
+            )
+            .map_err(|_| StoreError::InvalidInput)?,
+            origin_message_id: quality.origin_message_id,
+            last_message_id: quality.origin_message_id,
+            start,
+            end,
+            operation_id: None,
+            selected: None,
+            begin_start: start,
+            url: Some(request.source_url().as_str().to_owned()),
+            original: Some(Box::new(request)),
+            linked_quality_id: Some(id),
+        };
+        quality.stage = QualityStage::Cutting;
+        quality.revision = quality
+            .revision
+            .checked_add(1)
+            .ok_or(StoreError::InvalidInput)?;
+        quality.cut_session_id = Some(cut_id);
+        put(&tx, actor, &quality).await?;
+        crate::cut::put_handoff(&tx, &cut).await?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(cut)
+    }
+
     pub async fn quality_current(
         &self,
         actor: u64,
@@ -192,6 +311,7 @@ impl Store {
             origin_message_id: message,
             selected: None,
             operation_id: None,
+            cut_session_id: None,
             request: request.clone(),
             last_message_id: message,
         };
@@ -369,7 +489,22 @@ async fn get(
 }
 async fn put(tx: &turso::Connection, actor: u64, s: &QualitySession) -> Result<(), StoreError> {
     let request = codec::encode(&s.request)?;
-    query("INSERT INTO runtime_quality_sessions(actor_id,bot_id,chat_id,id,revision,stage,origin_message_id,last_message_id,request_json,selected,operation_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(actor_id,bot_id,chat_id) DO UPDATE SET id=excluded.id,revision=excluded.revision,stage=excluded.stage,origin_message_id=excluded.origin_message_id,last_message_id=excluded.last_message_id,request_json=excluded.request_json,selected=excluded.selected,operation_id=excluded.operation_id").bind(actor as i64).bind(s.target.bot_id()).bind(s.target.chat_id()).bind(s.id.to_string()).bind(s.revision).bind(s.stage.text()).bind(s.origin_message_id).bind(s.last_message_id).bind(request.to_string()).bind(s.selected.map(QualityChoice::as_str)).bind(s.operation_id.map(|x|x.to_string())).execute(tx).await.map_err(|_|StoreError::Database)?;
+    query(include_str!("../sql/quality_put.sql"))
+        .bind(actor as i64)
+        .bind(s.target.bot_id())
+        .bind(s.target.chat_id())
+        .bind(s.id.to_string())
+        .bind(s.revision)
+        .bind(s.stage.text())
+        .bind(s.origin_message_id)
+        .bind(s.last_message_id)
+        .bind(request.to_string())
+        .bind(s.selected.map(QualityChoice::as_str))
+        .bind(s.operation_id.map(|x| x.to_string()))
+        .bind(s.cut_session_id.map(|x| x.to_string()))
+        .execute(tx)
+        .await
+        .map_err(|_| StoreError::Database)?;
     Ok(())
 }
 fn decode(row: Row) -> Result<QualitySession, StoreError> {
@@ -444,6 +579,16 @@ fn decode(row: Row) -> Result<QualitySession, StoreError> {
         .as_ref()
         .map(|s| Uuid::parse_str(s).map_err(|_| StoreError::InvalidStoredData))
         .transpose()?;
+    let linked_raw: Option<String> = row
+        .try_get("linked_cut_id")
+        .map_err(|_| StoreError::InvalidStoredData)?;
+    let cut_session_id = linked_raw
+        .as_ref()
+        .map(|v| Uuid::parse_str(v).map_err(|_| StoreError::InvalidStoredData))
+        .transpose()?;
+    if matches!(stage, QualityStage::Cutting) != cut_session_id.is_some() {
+        return Err(StoreError::InvalidStoredData);
+    }
     if let (Some(raw), Some(parsed)) = (op.as_deref(), operation_id)
         && raw != parsed.to_string()
     {
@@ -453,6 +598,7 @@ fn decode(row: Row) -> Result<QualitySession, StoreError> {
         QualityStage::Choosing => 1,
         QualityStage::Confirming | QualityStage::Cancelled => 2,
         QualityStage::Submitted => 3,
+        QualityStage::Cutting => 2,
     };
     if revision != expected_revision
         || origin_message_id <= 0
@@ -472,6 +618,7 @@ fn decode(row: Row) -> Result<QualitySession, StoreError> {
         last_message_id,
         selected,
         operation_id,
+        cut_session_id,
         request,
     })
 }

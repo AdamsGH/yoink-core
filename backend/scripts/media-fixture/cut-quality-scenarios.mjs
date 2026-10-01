@@ -20,10 +20,11 @@ export async function runCutQualityScenarios(context) {
   assert(cutColumns.includes('selected') && cutColumns.includes('revision'), 'cut chooser migration columns are required');
   const cutObject = `json_object(${cutColumns.map(c => `'${c}',${c}`).join(',')})`;
   const originalCuts = await fixtureSql(`SELECT coalesce(json_group_array(${cutObject}),'[]') FROM runtime_cut_sessions WHERE actor_id=42`);
-  const originalQuality = await fixtureSql("SELECT coalesce(json_group_array(json_object('actor_id',actor_id,'bot_id',bot_id,'chat_id',chat_id,'id',id,'revision',revision,'stage',stage,'origin_message_id',origin_message_id,'last_message_id',last_message_id,'request_json',request_json,'selected',selected,'operation_id',operation_id)),'[]') FROM runtime_quality_sessions WHERE actor_id=42");
+  const qualityColumns = (await fixtureSql("SELECT name FROM pragma_table_info('runtime_quality_sessions') ORDER BY cid")).split('\n').filter(Boolean);
+  const qualityObject = `json_object(${qualityColumns.map(c => `'${c}',${c}`).join(',')})`;
+  const originalQuality = await fixtureSql(`SELECT coalesce(json_group_array(${qualityObject}),'[]') FROM runtime_quality_sessions WHERE actor_id=42`);
   let independentQuality = originalQuality;
-  const qualityColumns = ['actor_id','bot_id','chat_id','id','revision','stage','origin_message_id','last_message_id','request_json','selected','operation_id'];
-  const qualitySnapshot = () => fixtureSql(`SELECT coalesce(json_group_array(json_object(${qualityColumns.map(c => `'${c}',${c}`).join(',')})),'[]') FROM runtime_quality_sessions WHERE actor_id=42`);
+  const qualitySnapshot = () => fixtureSql(`SELECT coalesce(json_group_array(${qualityObject}),'[]') FROM runtime_quality_sessions WHERE actor_id=42`);
   const initialOperations = await fixtureSql('SELECT count(*) FROM runtime_operations');
   const count = () => fixtureSql('SELECT count(*) FROM runtime_operations');
   const buttons = reply => (typeof reply.data.reply_markup === 'string' ? JSON.parse(reply.data.reply_markup) : reply.data.reply_markup)?.inline_keyboard?.flat() ?? [];
@@ -258,16 +259,16 @@ export async function runCutQualityScenarios(context) {
       await fixtureSql(`UPDATE dl_user_settings SET ${settingsFields.map(f => `${f}=${lit(row[f])}`).join(',')} WHERE user_id=42`);
     } else await fixtureSql('DELETE FROM dl_user_settings WHERE user_id=42');
     await fixtureSql('DELETE FROM runtime_quality_sessions WHERE actor_id=42');
-    for (const row of JSON.parse(originalQuality)) {
-      await fixtureSql(`INSERT INTO runtime_quality_sessions (${qualityColumns.join(',')}) VALUES (${qualityColumns.map(c => lit(row[c])).join(',')})`);
-    }
     await fixtureSql('DELETE FROM runtime_cut_sessions WHERE actor_id=42');
     for (const row of JSON.parse(originalCuts)) {
       await fixtureSql(`INSERT INTO runtime_cut_sessions (${cutColumns.join(',')}) VALUES (${cutColumns.map(c => lit(row[c])).join(',')})`);
     }
+    for (const row of JSON.parse(originalQuality)) {
+      await fixtureSql(`INSERT INTO runtime_quality_sessions (${qualityColumns.join(',')}) VALUES (${qualityColumns.map(c => lit(row[c])).join(',')})`);
+    }
     assert.equal(await fixtureSql(`SELECT coalesce(json_group_array(${cutObject}),'[]') FROM runtime_cut_sessions WHERE actor_id=42`), originalCuts, 'cut rows restored');
     assert.equal(await fixtureSql(`SELECT json_object(${userFields.map(f => `'${f}',${f}`).join(',')}) FROM users WHERE id=42`), JSON.stringify(originalUser), 'user settings and revisions restored');
     assert.equal(await fixtureSql(snap(settingsFields)), originalSettings, 'all user preferences and revisions restored');
-    assert.equal(await fixtureSql("SELECT coalesce(json_group_array(json_object('actor_id',actor_id,'bot_id',bot_id,'chat_id',chat_id,'id',id,'revision',revision,'stage',stage,'origin_message_id',origin_message_id,'last_message_id',last_message_id,'request_json',request_json,'selected',selected,'operation_id',operation_id)),'[]') FROM runtime_quality_sessions WHERE actor_id=42"), originalQuality, 'regular quality sessions restored unchanged');
+    assert.equal(await fixtureSql(`SELECT coalesce(json_group_array(${qualityObject}),'[]') FROM runtime_quality_sessions WHERE actor_id=42`), originalQuality, 'regular quality sessions restored unchanged');
   }
 }

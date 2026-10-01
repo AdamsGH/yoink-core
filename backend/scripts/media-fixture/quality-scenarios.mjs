@@ -16,7 +16,9 @@ export async function runQualityScenarios(context) {
   const settingsSql = fields => `SELECT json_object(${fields.map(f => `'${f}',${f}`).join(',')}) FROM dl_user_settings WHERE user_id=42`;
   const oldSettings = await fixtureSql(settingsSql(settingsFields));
   const oldUser = JSON.parse(await fixtureSql(`SELECT json_object(${userFields.map(f => `'${f}',${f}`).join(',')}) FROM users WHERE id=42`));
-  const oldSessions = await fixtureSql("SELECT coalesce(json_group_array(json_object('actor_id',actor_id,'bot_id',bot_id,'chat_id',chat_id,'id',id,'revision',revision,'stage',stage,'origin_message_id',origin_message_id,'last_message_id',last_message_id,'request_json',request_json,'selected',selected,'operation_id',operation_id)),'[]') FROM runtime_quality_sessions WHERE actor_id=42");
+  const sessionFields = (await fixtureSql("SELECT name FROM pragma_table_info('runtime_quality_sessions') ORDER BY cid")).split('\n').filter(Boolean);
+  const sessionObject = `json_object(${sessionFields.map(f => `'${f}',${f}`).join(',')})`;
+  const oldSessions = await fixtureSql(`SELECT coalesce(json_group_array(${sessionObject}),'[]') FROM runtime_quality_sessions WHERE actor_id=42`);
   const count = () => fixtureSql('SELECT count(*) FROM runtime_operations');
   const buttons = reply => (typeof reply.data.reply_markup === 'string' ? JSON.parse(reply.data.reply_markup) : reply.data.reply_markup)?.inline_keyboard?.flat() ?? [];
   async function message(text, { id = nextMessage++, language = 'en', thread, actor = 42, chat = 42, entities } = {}) {
@@ -64,9 +66,9 @@ export async function runQualityScenarios(context) {
     const draft = await message(`/cut ${sourceUrl} 0.2 0.7 --send-as-file true`);
     assert(buttons(draft.reply).length >= 9, 'ask chooser must serve all choices');
     const served = buttons(draft.reply).map(b => b.callback_data).filter(value => value.startsWith('ql:'));
-    assert.equal(served.length, 11, 'chooser must offer nine quality choices, Audio and cancel');
-    assert.deepEqual(new Set(served.map(value => value.split(':')[1])), new Set([...options, 'audio', 'cancel']));
-    for (const data of served) assert.match(data, /^ql:(?:best|2160|1440|1080|720|480|360|240|144|audio|cancel):[0-9a-f]{32}:[1-9]\d*$/);
+    assert.equal(served.length, 12, 'single-video chooser offers nine quality choices, Audio, Cut and cancel');
+    assert.deepEqual(new Set(served.map(value => value.split(':')[1])), new Set([...options, 'audio', 'cut', 'cancel']));
+    for (const data of served) assert.match(data, /^ql:(?:best|2160|1440|1080|720|480|360|240|144|audio|cut|cancel):[0-9a-f]{32}:[1-9]\d*$/);
     assert.equal(await count(), before, 'prompting must not admit an operation');
     assert.equal(await fixtureSql(settingsSql(settingsFields)), prefsBeforePrompt, 'prompting must not write any preference field');
     assert.equal(JSON.parse(await fixtureSql(settingsSql(['quality']))).quality, 'ask', 'prompt must not mutate saved preference');
@@ -283,6 +285,14 @@ export async function runQualityScenarios(context) {
       const mediaBeforePrompt = sourceFixture.mediaRequests;
       const pending = await message(command);
       assert(buttons(pending.reply).some(b => b.callback_data?.startsWith('ql:')), `${command.split(' ')[0]} must offer quality choice`);
+      const cutChoices = buttons(pending.reply).filter(b => b.callback_data?.startsWith('ql:cut:'));
+      if (command.startsWith('/video ')) assert.equal(cutChoices.length, 1, 'supported single-video draft exposes Cut');
+      else {
+        assert.equal(cutChoices.length, 0, 'playlist quality draft hides Cut');
+        const identity = buttons(pending.reply).find(b => b.callback_data?.startsWith('ql:'))?.callback_data.split(':');
+        const forged = await callback(`ql:cut:${identity[2]}:${identity[3]}`, pending);
+        assert(forged.ack.data.text || forged.ack.data.show_alert, 'forged playlist Cut callback must be rejected');
+      }
       assert.equal(await count(), operationsBeforePrompt);
       assert.equal(sourceFixture.mediaRequests, mediaBeforePrompt, 'quality choice must precede playlist/video metadata fetch');
       const cancel = findButton(pending.reply, 'ql:cancel:');
@@ -322,10 +332,10 @@ export async function runQualityScenarios(context) {
     } else await fixtureSql('DELETE FROM dl_user_settings WHERE user_id=42');
     await fixtureSql('DELETE FROM runtime_quality_sessions WHERE actor_id=42');
     for (const row of JSON.parse(oldSessions)) {
-      await fixtureSql(`INSERT INTO runtime_quality_sessions (actor_id,bot_id,chat_id,id,revision,stage,origin_message_id,last_message_id,request_json,selected,operation_id) VALUES (${row.actor_id},${row.bot_id},${row.chat_id},${literal(row.id)},${row.revision},${literal(row.stage)},${row.origin_message_id},${row.last_message_id},${literal(row.request_json)},${literal(row.selected)},${literal(row.operation_id)})`);
+      await fixtureSql(`INSERT INTO runtime_quality_sessions (${sessionFields.join(',')}) VALUES (${sessionFields.map(f => literal(row[f])).join(',')})`);
     }
     assert.equal(await fixtureSql(`SELECT json_object(${userFields.map(f => `'${f}',${f}`).join(',')}) FROM users WHERE id=42`), JSON.stringify(oldUser), 'user role, ban, language and revision must be restored exactly');
     assert.equal(await fixtureSql(settingsSql(settingsFields)), oldSettings, 'all settings and updated_at must be restored exactly');
-    assert.equal(await fixtureSql("SELECT coalesce(json_group_array(json_object('actor_id',actor_id,'bot_id',bot_id,'chat_id',chat_id,'id',id,'revision',revision,'stage',stage,'origin_message_id',origin_message_id,'last_message_id',last_message_id,'request_json',request_json,'selected',selected,'operation_id',operation_id)),'[]') FROM runtime_quality_sessions WHERE actor_id=42"), oldSessions, 'quality sessions must be restored exactly');
+    assert.equal(await fixtureSql(`SELECT coalesce(json_group_array(${sessionObject}),'[]') FROM runtime_quality_sessions WHERE actor_id=42`), oldSessions, 'quality sessions must be restored exactly');
   }
 }

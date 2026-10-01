@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 use yoink_db::raw_sql;
-use yoink_domain::{ClipRange, DownloadPreferenceOverrides, Engine, PlaylistRange};
+use yoink_domain::{ClipRange, Container, DownloadPreferenceOverrides, Engine, PlaylistRange};
 use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode};
 use yoink_storage::{QualityChoice, QualityStage, Store, StoreError};
 
@@ -71,6 +71,424 @@ async fn begin_watermarks_replace_intent_and_replay_without_mutation() {
         .unwrap();
     assert_ne!(first.id, replacement.id);
     assert_eq!(replacement.origin_message_id, 11);
+}
+
+#[tokio::test]
+async fn cut_handoff_is_atomic_linked_and_replayed_after_reopen() {
+    let fixture = common::store().await;
+    let path = fixture.path();
+    let params = DownloadParams::default().with_engine(Engine::Gallery);
+    let seeded = DownloadRequest::new(
+        ACTOR,
+        "https://example.com/clip",
+        MediaMode::Video,
+        Some(ClipRange::new(4.0, 12.0).unwrap()),
+        params,
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(14)).unwrap())
+    .unwrap()
+    .with_preference_overrides(DownloadPreferenceOverrides {
+        container: Some(Container::Mkv),
+        send_as_file: Some(true),
+        ..Default::default()
+    });
+    let quality = fixture
+        .quality_begin(ACTOR, target(), 14, &seeded)
+        .await
+        .unwrap();
+    let cut = fixture
+        .quality_cut(ACTOR, target(), quality.id, quality.revision)
+        .await
+        .unwrap();
+    assert_eq!(cut.stage, yoink_storage::CutStage::Ready);
+    assert_eq!((cut.start, cut.end), (Some(4.0), Some(12.0)));
+    assert_eq!(cut.original_request(), Some(&seeded));
+    assert_eq!(cut.linked_quality_id(), Some(quality.id));
+    assert_eq!(
+        fixture
+            .quality_current(ACTOR, target())
+            .await
+            .unwrap()
+            .unwrap()
+            .stage,
+        QualityStage::Cutting
+    );
+    assert!(
+        fixture
+            .quality_claim(
+                ACTOR,
+                target(),
+                quality.id,
+                quality.revision,
+                QualityChoice::Audio
+            )
+            .await
+            .is_err()
+    );
+    fixture.close().await.unwrap();
+    let reopened = Store::open(&path, false, Duration::from_secs(2))
+        .await
+        .unwrap();
+    let replay = reopened
+        .quality_cut(ACTOR, target(), quality.id, quality.revision)
+        .await
+        .unwrap();
+    assert_eq!(replay.id, cut.id);
+    assert_eq!(replay.original_request(), Some(&seeded));
+    let cancelled = reopened
+        .cut_cancel(ACTOR, target(), cut.id, cut.revision, Some(15))
+        .await
+        .unwrap();
+    assert_eq!(cancelled.stage, yoink_storage::CutStage::Cancelled);
+    let replay_cancelled = reopened
+        .quality_cut(ACTOR, target(), quality.id, quality.revision)
+        .await
+        .unwrap();
+    assert_eq!(replay_cancelled.id, cut.id);
+    assert_eq!(replay_cancelled.stage, yoink_storage::CutStage::Cancelled);
+    let unrelated = reopened
+        .cut_begin(ACTOR, target(), 16, "https://example.com/new", None)
+        .await
+        .unwrap();
+    assert_eq!(unrelated.source_url(), Some("https://example.com/new"));
+    assert!(unrelated.original_request().is_none());
+    assert_eq!(
+        reopened
+            .quality_cut(ACTOR, target(), quality.id, quality.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+}
+
+#[tokio::test]
+async fn cut_handoff_rejects_playlist_without_mutating_either_draft() {
+    let store = common::store().await;
+    let params =
+        DownloadParams::default().with_playlist(Some(PlaylistRange::new(1, Some(2)).unwrap()));
+    let request = DownloadRequest::new(
+        ACTOR,
+        "https://example.com/list",
+        MediaMode::Video,
+        None,
+        params,
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(20)).unwrap())
+    .unwrap();
+    let quality = store
+        .quality_begin(ACTOR, target(), 20, &request)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .quality_cut(ACTOR, target(), quality.id, quality.revision)
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    assert_eq!(
+        store
+            .quality_current(ACTOR, target())
+            .await
+            .unwrap()
+            .unwrap(),
+        quality
+    );
+    assert!(store.cut_current(ACTOR, target()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn cut_handoff_preserves_unrelated_active_cut_and_rejects_old_origin() {
+    let store = common::store().await;
+    let active = store
+        .cut_begin(ACTOR, target(), 29, "https://example.com/existing", None)
+        .await
+        .unwrap();
+    let quality = store
+        .quality_begin(
+            ACTOR,
+            target(),
+            30,
+            &request(30, "https://example.com/owner"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .quality_cut(ACTOR, target(), quality.id, quality.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        store
+            .cut_current(ACTOR, target())
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        active.id
+    );
+    assert_eq!(
+        store
+            .quality_current(ACTOR, target())
+            .await
+            .unwrap()
+            .unwrap(),
+        quality
+    );
+
+    let older = common::store().await;
+    let cut = older
+        .cut_begin(ACTOR, target(), 32, "https://example.com/newer", None)
+        .await
+        .unwrap();
+    let quality = older
+        .quality_begin(
+            ACTOR,
+            target(),
+            31,
+            &request(31, "https://example.com/older"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        older
+            .quality_cut(ACTOR, target(), quality.id, quality.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        older
+            .cut_current(ACTOR, target())
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        cut.id
+    );
+
+    let choosing = common::store().await;
+    let _initial = choosing
+        .cut_begin(ACTOR, target(), 34, "https://example.com/full", Some(1.0))
+        .await
+        .unwrap();
+    let ready = choosing
+        .cut_input(ACTOR, target(), 35, 4.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let old_choice = choosing
+        .cut_quality(ACTOR, target(), ready.id, ready.revision)
+        .await
+        .unwrap();
+    let quality = choosing
+        .quality_begin(
+            ACTOR,
+            target(),
+            36,
+            &request(36, "https://example.com/new-source"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        choosing
+            .quality_cut(ACTOR, target(), quality.id, quality.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        choosing
+            .cut_current(ACTOR, target())
+            .await
+            .unwrap()
+            .unwrap(),
+        old_choice
+    );
+}
+
+#[tokio::test]
+async fn cut_handoff_checks_cut_watermark_and_submitted_replay_is_stable() {
+    let store = common::store().await;
+    let target = target();
+    let cancelled = store
+        .cut_begin(ACTOR, target, 40, "https://example.com/c", None)
+        .await
+        .unwrap();
+    let cancelled = store
+        .cut_cancel(ACTOR, target, cancelled.id, cancelled.revision, Some(45))
+        .await
+        .unwrap();
+    let quality = store
+        .quality_begin(ACTOR, target, 44, &request(44, "https://example.com/q"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .quality_cut(ACTOR, target, quality.id, quality.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        store.cut_current(ACTOR, target).await.unwrap().unwrap(),
+        cancelled
+    );
+
+    let equal = common::store().await;
+    let cut = equal
+        .cut_begin(ACTOR, target, 47, "https://example.com/equal", None)
+        .await
+        .unwrap();
+    let quality = equal
+        .quality_begin(
+            ACTOR,
+            target,
+            47,
+            &request(47, "https://example.com/equal-quality"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        equal
+            .quality_cut(ACTOR, target, quality.id, quality.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+    assert_eq!(
+        equal.cut_current(ACTOR, target).await.unwrap().unwrap().id,
+        cut.id
+    );
+
+    let fresh = common::store().await;
+    let ready_request = DownloadRequest::new(
+        ACTOR,
+        "https://example.com/submitted",
+        MediaMode::Video,
+        Some(ClipRange::new(2.0, 8.0).unwrap()),
+        DownloadParams::default(),
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(50)).unwrap())
+    .unwrap();
+    let quality = fresh
+        .quality_begin(ACTOR, target, 50, &ready_request)
+        .await
+        .unwrap();
+    let cut = fresh
+        .quality_cut(ACTOR, target, quality.id, quality.revision)
+        .await
+        .unwrap();
+    let confirming = fresh
+        .cut_claim(ACTOR, target, cut.id, cut.revision)
+        .await
+        .unwrap();
+    let operation = Uuid::new_v4();
+    let submitted = fresh
+        .cut_submitted(ACTOR, target, cut.id, confirming.revision, operation)
+        .await
+        .unwrap();
+    assert_eq!(
+        fresh
+            .cut_submitted(ACTOR, target, cut.id, confirming.revision, operation)
+            .await
+            .unwrap(),
+        submitted
+    );
+    assert_eq!(
+        fresh
+            .quality_cut(ACTOR, target, quality.id, quality.revision)
+            .await
+            .unwrap(),
+        submitted
+    );
+}
+
+#[tokio::test]
+async fn linked_original_must_match_row_and_unsupported_multiclip_is_rejected() {
+    let store = common::store().await;
+    let target = target();
+    let params = DownloadParams::default()
+        .with_clips(vec![ClipRange::new(1.0, 2.0).unwrap()])
+        .unwrap();
+    let multi_request = DownloadRequest::new(
+        ACTOR,
+        "https://example.com/multi",
+        MediaMode::Video,
+        None,
+        params,
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(61)).unwrap())
+    .unwrap();
+    let quality = store
+        .quality_begin(ACTOR, target, 61, &multi_request)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .quality_cut(ACTOR, target, quality.id, quality.revision)
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    assert_eq!(
+        store.quality_current(ACTOR, target).await.unwrap().unwrap(),
+        quality
+    );
+    assert!(store.cut_current(ACTOR, target).await.unwrap().is_none());
+
+    let request = request(62, "https://example.com/valid");
+    let quality = store
+        .quality_begin(ACTOR, target, 62, &request)
+        .await
+        .unwrap();
+    let cut = store
+        .quality_cut(ACTOR, target, quality.id, quality.revision)
+        .await
+        .unwrap();
+    let database = store.database().clone();
+    yoink_db::query(include_str!("../sql/corrupt_cut_original.sql"))
+        .bind(ACTOR as i64)
+        .execute(&database)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.cut_current(ACTOR, target).await,
+        Err(StoreError::InvalidStoredData)
+    );
+    assert!(!format!("{cut:?}").contains("example.com"));
+}
+
+#[tokio::test]
+async fn cut_handoff_rolls_back_quality_transition_when_cut_insert_fails() {
+    let store = common::store().await;
+    let target = target();
+    let quality = store
+        .quality_begin(
+            ACTOR,
+            target,
+            80,
+            &request(80, "https://example.com/rollback"),
+        )
+        .await
+        .unwrap();
+    yoink_db::raw_sql(include_str!("../sql/test_fail_cut_handoff.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .quality_cut(ACTOR, target, quality.id, quality.revision)
+            .await,
+        Err(StoreError::Database)
+    );
+    yoink_db::raw_sql(include_str!("../sql/test_restore_cut_handoff.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        store.quality_current(ACTOR, target).await.unwrap().unwrap(),
+        quality
+    );
+    assert!(store.cut_current(ACTOR, target).await.unwrap().is_none());
 }
 
 #[tokio::test]

@@ -1,3 +1,4 @@
 SELECT actor_id, bot_id, chat_id, id, revision, stage, origin_message_id,
-       last_message_id, source_url, begin_start, start, end, operation_id, selected
+       last_message_id, source_url, begin_start, start, end, operation_id, selected,
+       original_request_json, linked_quality_id
 FROM runtime_cut_sessions WHERE actor_id = ? AND bot_id = ? AND chat_id = ?;

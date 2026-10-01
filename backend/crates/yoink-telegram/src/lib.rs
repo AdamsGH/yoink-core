@@ -916,7 +916,10 @@ async fn handle_message(
                         admitted_response(admission, language)
                     }
                     Ok(TelegramSubmission::Quality(session)) => {
-                        quality::send_session(&bot, &message, &session, language).await;
+                        quality::send_session(
+                            &bot, &message, service, actor_id, target, &session, language,
+                        )
+                        .await;
                         return Ok(());
                     }
                     Err(error) => download_error_response(error, language).to_owned(),
@@ -949,7 +952,10 @@ async fn handle_message(
                         admitted_response(admission, language)
                     }
                     Ok(TelegramSubmission::Quality(session)) => {
-                        quality::send_session(&bot, &message, &session, language).await;
+                        quality::send_session(
+                            &bot, &message, service, actor_id, target, &session, language,
+                        )
+                        .await;
                         return Ok(());
                     }
                     Err(error) => download_error_response(error, language).to_owned(),
