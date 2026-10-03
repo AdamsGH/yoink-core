@@ -1,0 +1,1 @@
+SELECT ban_until FROM users WHERE id = ?1;

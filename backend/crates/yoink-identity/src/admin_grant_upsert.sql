@@ -1,0 +1,1 @@
+INSERT INTO user_permissions (user_id, plugin, feature, granted_by, granted_at, expires_at, grant_source) VALUES (?1, ?2, ?3, ?4, CAST(unixepoch('subsec') * 1000000 AS INTEGER), ?5, 'manual') ON CONFLICT(user_id, plugin, feature) DO UPDATE SET granted_by = excluded.granted_by, granted_at = excluded.granted_at, expires_at = excluded.expires_at, grant_source = 'manual';

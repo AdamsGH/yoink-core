@@ -37,7 +37,7 @@ impl AuthState {
         self.service.set(service)
     }
 
-    fn service(&self) -> Result<&AuthService, ApiError> {
+    pub(crate) fn service(&self) -> Result<&AuthService, ApiError> {
         self.service.get().ok_or(ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
             "Authentication unavailable",
@@ -54,10 +54,11 @@ pub(crate) fn router(state: AuthState, system: yoink_application::SystemService)
         router = router.route("/api/v1/auth/dev", post(dev_token));
     }
     router
+        .merge(crate::admin::router())
         .route_layer(middleware::from_fn(move |request: Request, next: Next| {
             let ready = system.snapshot().ready;
             async move {
-                if ready {
+                let mut response = if ready {
                     next.run(request).await
                 } else {
                     ApiError(
@@ -65,14 +66,26 @@ pub(crate) fn router(state: AuthState, system: yoink_application::SystemService)
                         "Authentication unavailable",
                     )
                     .into_response()
+                };
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static("no-store"),
+                );
+                if response.status() == StatusCode::UNAUTHORIZED {
+                    response.headers_mut().insert(
+                        header::WWW_AUTHENTICATE,
+                        header::HeaderValue::from_static("Bearer"),
+                    );
                 }
+                response
             }
         }))
         .layer(DefaultBodyLimit::max(20 * 1024))
         .with_state(state)
 }
 
-struct ApiError(StatusCode, &'static str);
+#[derive(Debug)]
+pub(crate) struct ApiError(pub(crate) StatusCode, pub(crate) &'static str);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -123,7 +136,7 @@ struct TokenResponse {
     role: String,
 }
 
-fn no_store<T: Serialize>(value: T) -> impl IntoResponse {
+pub(crate) fn no_store<T: Serialize>(value: T) -> impl IntoResponse {
     ([(header::CACHE_CONTROL, "no-store")], Json(value))
 }
 
@@ -208,7 +221,10 @@ async fn dev_token(
     Ok(no_store(issue(service, &user)?))
 }
 
-fn authenticated_id(service: &AuthService, headers: &HeaderMap) -> Result<i64, ApiError> {
+pub(crate) fn authenticated_id(
+    service: &AuthService,
+    headers: &HeaderMap,
+) -> Result<i64, ApiError> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let value = values
         .next()

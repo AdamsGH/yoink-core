@@ -131,7 +131,7 @@ try {
   }
   const suites = profilesOnly
     ? [['-p', 'yoink-downloads', '--test', 'profile', '--test', 'native_smoke']]
-    : [['-p', 'yoink-db'], ['-p', 'yoink-storage'], ...(!storageOnly ? [['-p', 'yoink-identity'], ['-p', 'yoink-downloads']] : [])];
+    : [['-p', 'yoink-db'], ['-p', 'yoink-storage'], ...(!storageOnly ? [['-p', 'yoink-identity'], ['-p', 'yoink-http'], ['-p', 'yoink-downloads']] : [])];
   for (const suite of suites) {
     const output = await command('cargo', ['test', '--locked', ...suite]);
     const counts = [...output.matchAll(/test result: ok\. (\d+) passed;/g)];

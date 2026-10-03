@@ -1,5 +1,6 @@
 //! Thin HTTP adapter for Yoink application services.
 
+mod admin;
 mod auth;
 pub use auth::{AuthService, AuthState};
 

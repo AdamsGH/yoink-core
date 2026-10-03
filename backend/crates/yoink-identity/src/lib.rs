@@ -6,6 +6,7 @@ use yoink_access::{
 };
 use yoink_db::{Database, query};
 
+pub mod admin;
 mod language;
 mod profile;
 pub use language::LanguagePreference;
@@ -265,6 +266,65 @@ fn parse_role(value: String) -> Result<Role, IdentityError> {
 
 /// Features registered by the core plugin set. Unknown features never gain
 /// access merely because the caller has the owner role.
+pub fn registered_feature_metadata(
+    plugin: &str,
+    feature: &str,
+) -> Option<(&'static str, &'static str)> {
+    match (plugin, feature) {
+        ("dl", "inline") => Some((
+            "Inline search",
+            "YouTube search and URL lookup via @bot inline mode",
+        )),
+        ("dl", "shared_cookies") => Some((
+            "Shared admin cookies",
+            "Fall back to admin cookies when user has none for a domain",
+        )),
+        ("stats", "stats") => Some((
+            "Chat Statistics",
+            "Access to /stats command and analytics dashboard",
+        )),
+        ("insight", "summary") => Some((
+            "AI Summary",
+            "Access to /summary and /about commands (YouTube transcript + Gemini)",
+        )),
+        ("insight", "tldr") => Some((
+            "TL;DR",
+            "Access to /tldr command (any URL summarised via gateway LLM)",
+        )),
+        ("insight", "search") => Some((
+            "AI Search",
+            "Route /summary, /about and /tldr fetch through the gateway answer engine (/v1/search). Enables web-search + smart scrape for URLs and topical questions.",
+        )),
+        ("music", "inline") => Some((
+            "Music Inline Search",
+            "Search and share music links via inline queries (@bot query)",
+        )),
+        ("inbox", "ingest") => Some((
+            "Inbox Ingest",
+            "Save links into the inbox (via bot, web, or REST).",
+        )),
+        ("inbox", "classify") => Some((
+            "AI Categorisation",
+            "Automatically categorise saved links with an LLM.",
+        )),
+        ("inbox", "share") => Some(("Share Categories", "Share categories with an inbox team.")),
+        ("inbox", "gh_sync") => Some((
+            "GitHub Stars Sync",
+            "Sync the user's starred GitHub repositories into the inbox viewer.",
+        )),
+        ("inbox", "gh_organise") => Some((
+            "AI-Organise Stars",
+            "Batch-organise starred repositories into folders with an LLM.",
+        )),
+        ("inbox", "gh_write") => Some((
+            "Star/Unstar From Yoink",
+            "Star or unstar repositories from the yoink UI. Requires opt-in public_repo OAuth upgrade.",
+        )),
+        ("inbox", "admin") => Some(("Inbox Admin", "Manage the inbox of any user.")),
+        _ => None,
+    }
+}
+
 pub fn registered_features() -> Vec<FeatureSpec> {
     use Role::*;
     [

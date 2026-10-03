@@ -4898,6 +4898,7 @@ name = "yoink-identity"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "serde",
  "tempfile",
  "thiserror",
  "tokio",

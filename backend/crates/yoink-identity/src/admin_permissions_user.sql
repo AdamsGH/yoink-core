@@ -1,0 +1,1 @@
+SELECT id, user_id, plugin, feature, granted_by, granted_at, expires_at, grant_source FROM user_permissions WHERE user_id = ?1 AND (expires_at IS NULL OR expires_at > CAST(unixepoch('subsec')*1000000 AS INTEGER)) ORDER BY plugin, feature;

@@ -1,0 +1,1 @@
+UPDATE users SET ban_until=4102444800000000 WHERE id=1001;

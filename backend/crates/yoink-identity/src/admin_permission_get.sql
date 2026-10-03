@@ -1,0 +1,1 @@
+SELECT id, user_id, plugin, feature, granted_by, granted_at, expires_at, grant_source FROM user_permissions WHERE user_id = ?1 AND plugin = ?2 AND feature = ?3;

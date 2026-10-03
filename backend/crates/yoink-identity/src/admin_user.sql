@@ -1,0 +1,1 @@
+SELECT u.id, u.username, u.first_name, u.photo_url, u.role, u.language, u.theme, u.ban_until, u.created_at, u.updated_at, (SELECT count(*) FROM download_log d WHERE d.user_id=u.id), (SELECT max(d.created_at) FROM download_log d WHERE d.user_id=u.id) FROM users u WHERE u.id = ?1;

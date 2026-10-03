@@ -1,0 +1,1 @@
+DELETE FROM user_permissions WHERE user_id = ?1 AND plugin = ?2 AND feature = ?3;

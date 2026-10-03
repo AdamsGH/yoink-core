@@ -1,6 +1,6 @@
 # Access control and identity
 
-Policy rules are implemented as typed values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds read-only authorization snapshots and provides transactional registration, profile and settings operations. Opt-in frontend authentication uses these shared operations; media retains its separate command gates. Full account administration and product API parity remain pending.
+Policy rules are implemented as typed values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds read-only authorization snapshots and provides transactional registration, profile, settings and account/access administration. Opt-in frontend authentication uses these shared operations; media retains its separate command gates. Group/configuration/API-key administration and product API parity remain pending.
 
 ## Global roles and blocks
 
@@ -26,6 +26,16 @@ The download service performs fresh read-only identity checks at admission, befo
 ## Frontend identity operations
 
 Signed WebApp registration applies persisted open/approved-only onboarding atomically. New configured-owner accounts receive the owner role; existing accounts preserve roles, timed bans, preferences and grants. Blocking checks precede registration updates and owner elevation. Authenticated profile/settings requests reload current identity, so stale JWT roles cannot restore revoked access. Settings and signed profile updates advance the shared microsecond revision, invalidating older Telegram language callbacks. See [configuration](configuration.md#optional-frontend-authentication) for activation, verification bounds and the dangerous development-only impersonation switch.
+
+## Account and access administration
+
+With frontend authentication enabled, the native API implements user listing/detail/update, feature catalog and access views, explicit permission grant/revoke and bot settings at the existing `/api/v1` routes. User listing supports bounded pagination, search, role/status filters, sorting and download-count periods. Actor roles and bans are checked against current database state inside each operation, not trusted from JWT claims. Mutations run in Immediate transactions. Missing identity, unknown stored roles, corrupt policy and database failures do not authorize access.
+
+Admins can manage ordinary users; owner-level targets and promotions require an owner. The configured owner cannot be changed through these APIs. User patches accept role, EN/RU language and a nullable timed ban only. Profile changes advance the shared microsecond revision, invalidating old Telegram language callbacks. Grant writes require a registered feature and preserve provenance protections: admins cannot replace or revoke tag-derived grants, while owners can. Active permission listings exclude expired grants. Global bans override role and explicit/provider feature access.
+
+Bot settings reads require admin access and writes require owner access. The writable keys are `bot_access_mode`, `browser_cookies_min_role`, `inline_storage_chat_id` and `inline_storage_thread_id`, with closed policy values and validated IDs. Registration immediately respects persisted open/approved-only policy. Storing browser-cookie or inline destinations does not implement their remaining operational workflows. Tag-map editing, group registration/configuration, API-key administration, Telegram command-list refresh and full product APIs remain pending. Feature grants do not bypass the separate minimum-role or configured-owner media command gates.
+
+`just verify-db` covers native transactional administration and authenticated HTTP contracts. `just test-media admin` exercises owner administration through real HTTP and the fixture Bot API, including approved-only onboarding, immediate role/grant/ban enforcement, persisted policy across restart and localized Telegram replies. These checks use isolated data and fake credentials, not production activation.
 
 ## Read-only snapshot boundary
 
