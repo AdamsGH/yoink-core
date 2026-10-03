@@ -476,6 +476,156 @@ async fn bot_policy_defaults_validation_and_patch_preserve_unknown_settings() {
 }
 
 #[tokio::test]
+async fn tag_map_validates_authorizes_sorts_and_persists_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    secure(dir.path());
+    let path = dir.path().join("admin-tag-map.db");
+    let db_store = Store::open(&path, true, Duration::from_secs(2))
+        .await
+        .unwrap();
+    db_store.migrate().await.unwrap();
+    raw_sql(include_str!("sql/admin_policy.sql"))
+        .execute(db_store.database())
+        .await
+        .unwrap();
+    let db = db_store.database().clone();
+    raw_sql(include_str!("sql/admin_imported_tag_map.sql"))
+        .execute(&db)
+        .await
+        .unwrap();
+    let identity = IdentityStore::new(db.clone(), Some(3001), false);
+    use yoink_identity::admin::AdminTagMapEntry;
+    let expected = vec![
+        AdminTagMapEntry {
+            tag: "Alpha".into(),
+            features: vec!["dl:inline".into()],
+        },
+        AdminTagMapEntry {
+            tag: "Бета".into(),
+            features: vec!["stats:stats".into()],
+        },
+        AdminTagMapEntry {
+            tag: "Я".repeat(129),
+            features: vec![],
+        },
+    ];
+    assert_eq!(
+        identity
+            .admin_update_tag_map(3002, &expected)
+            .await
+            .unwrap_err(),
+        AdminError::Forbidden
+    );
+    assert_eq!(
+        identity
+            .admin_update_tag_map(9999, &expected)
+            .await
+            .unwrap_err(),
+        AdminError::Unauthorized
+    );
+    assert_eq!(identity.admin_tag_map(3002).await.unwrap(), expected);
+    let written = identity
+        .admin_update_tag_map(3001, &expected)
+        .await
+        .unwrap();
+    assert_eq!(written, expected);
+    assert_eq!(identity.admin_tag_map(3002).await.unwrap(), expected);
+    for invalid in [
+        vec![AdminTagMapEntry {
+            tag: " ".into(),
+            features: vec![],
+        }],
+        vec![
+            AdminTagMapEntry {
+                tag: "duplicate".into(),
+                features: vec![],
+            },
+            AdminTagMapEntry {
+                tag: "duplicate".into(),
+                features: vec![],
+            },
+        ],
+        vec![AdminTagMapEntry {
+            tag: "unknown".into(),
+            features: vec!["missing:feature".into()],
+        }],
+    ] {
+        assert_eq!(
+            identity
+                .admin_update_tag_map(3001, &invalid)
+                .await
+                .unwrap_err(),
+            AdminError::InvalidInput
+        );
+        assert_eq!(identity.admin_tag_map(3001).await.unwrap(), expected);
+    }
+    drop(identity);
+    drop(db);
+    db_store.close().await.unwrap();
+    drop(db_store);
+    let reopened = Store::open(&path, false, Duration::from_secs(2))
+        .await
+        .unwrap();
+    let identity = IdentityStore::new(reopened.database().clone(), Some(3001), false);
+    assert_eq!(identity.admin_tag_map(3001).await.unwrap(), expected);
+    query(include_str!("sql/admin_corrupt_tag_map.sql"))
+        .execute(reopened.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        identity.admin_tag_map(3001).await.unwrap_err(),
+        AdminError::Unavailable
+    );
+    let stored: String = query(include_str!("sql/admin_read_tag_map.sql"))
+        .fetch_one(reopened.database())
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(
+        stored, "not-json",
+        "a failed read never repairs corrupt persisted state"
+    );
+}
+
+#[tokio::test]
+async fn banned_configured_owner_cannot_read_or_replace_tag_map() {
+    let (_dir, db, identity) = setup(
+        "admin-banned-tag-owner.db",
+        include_str!("sql/admin_policy.sql"),
+        3001,
+    )
+    .await;
+    query(include_str!("sql/admin_ban_tag_owner.sql"))
+        .execute(&db)
+        .await
+        .unwrap();
+    use yoink_identity::admin::AdminTagMapEntry;
+    let entries = vec![AdminTagMapEntry {
+        tag: "keep".into(),
+        features: vec!["dl:inline".into()],
+    }];
+    assert_eq!(
+        identity.admin_tag_map(3001).await.unwrap_err(),
+        AdminError::Forbidden
+    );
+    assert_eq!(
+        identity
+            .admin_update_tag_map(3001, &entries)
+            .await
+            .unwrap_err(),
+        AdminError::Forbidden
+    );
+    let stored: i64 = query(include_str!("sql/admin_tag_map_count.sql"))
+        .fetch_one(&db)
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(stored, 0);
+}
+
+#[tokio::test]
 async fn user_listing_filters_searches_paginates_and_uses_download_fixtures() {
     let (_dir, _db, store) =
         setup("admin-list.db", include_str!("sql/admin_listing.sql"), 4001).await;

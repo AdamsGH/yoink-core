@@ -1023,6 +1023,131 @@ async fn registration_policy_changes_are_validated_atomic_and_applied_to_signed_
 }
 
 #[tokio::test]
+async fn tag_map_routes_match_legacy_contract_and_validate_atomically() {
+    let (_directory, store, app) = fixture(false).await;
+    let owner = access_token(&app, 42).await;
+    let regular = access_token(&app, 43).await;
+    let path = "/api/v1/bot-settings/tag-map";
+    assert_eq!(
+        request(&app, "GET", path, Some(&regular), Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/v1/bot-settings/available-features",
+            Some(&regular),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&app, "GET", path, Some(&owner), Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+    let features = request(
+        &app,
+        "GET",
+        "/api/v1/bot-settings/available-features",
+        Some(&owner),
+        Value::Null,
+    )
+    .await
+    .1;
+    let feature_keys: Vec<_> = features
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["key"].as_str().unwrap())
+        .collect();
+    let mut sorted_feature_keys = feature_keys.clone();
+    sorted_feature_keys.sort();
+    assert_eq!(
+        feature_keys, sorted_feature_keys,
+        "available feature order is deterministic"
+    );
+    assert!(features.as_array().unwrap().iter().any(|item| item == &json!({"key":"dl:inline","plugin":"dl","feature":"inline","label":"Inline search","description":"YouTube search and URL lookup via @bot inline mode"})));
+    let mapping = json!([
+        {"tag":"Бета", "features":["stats:stats"]},
+        {"tag":"Alpha", "features":["dl:inline"]}
+    ]);
+    let (status, written) = request(&app, "PUT", path, Some(&owner), mapping.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{written}");
+    assert_eq!(written[0]["tag"], "Alpha");
+    assert_eq!(written[1]["tag"], "Бета");
+    assert_eq!(
+        request(&app, "GET", path, Some(&owner), Value::Null)
+            .await
+            .1,
+        written
+    );
+    assert_eq!(
+        request(&app, "PUT", path, Some(&regular), json!([]))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    for invalid in [
+        json!({"tag":"single object","features":[]}),
+        json!([{"tag":"missing features"}]),
+        json!([{"tag":"extra","features":[],"ignored":true}]),
+        json!([{"tag":" ","features":[]}]),
+        json!([{"tag":"duplicate","features":[]},{"tag":"duplicate","features":[]}]),
+        json!([{"tag":"unknown","features":["missing:feature"]}]),
+        json!([{"tag":"bad feature","features":["dl:inline:extra"]}]),
+        json!([{"tag":"bad type","features":[1]}]),
+    ] {
+        assert_eq!(
+            request(&app, "PUT", path, Some(&owner), invalid.clone())
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{invalid}"
+        );
+        assert_eq!(
+            request(&app, "GET", path, Some(&owner), Value::Null)
+                .await
+                .1,
+            written
+        );
+    }
+    assert_eq!(
+        request(&app, "PUT", path, Some(&owner), json!([])).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&app, "GET", path, Some(&owner), Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+    yoink_db::query(include_str!("sql/set_role.sql"))
+        .bind("banned")
+        .bind(42_i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&app, "PUT", path, Some(&owner), mapping).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&app, "GET", path, Some(&owner), Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn rejection_and_body_limit_responses_keep_security_headers() {
     let (_directory, store, app) = fixture(false).await;
     let owner = access_token(&app, 42).await;

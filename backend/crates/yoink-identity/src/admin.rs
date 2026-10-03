@@ -100,6 +100,19 @@ pub struct AdminFeature {
     pub default_min_role: Option<Role>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AdminTagMapEntry {
+    pub tag: String,
+    pub features: Vec<String>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AdminAvailableFeature {
+    pub key: String,
+    pub plugin: String,
+    pub feature: String,
+    pub label: String,
+    pub description: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AdminFeatureAccess {
     pub plugin: String,
     pub feature: String,
@@ -590,6 +603,111 @@ impl IdentityStore {
         .await;
         finish_admin(tx, result).await
     }
+    pub async fn admin_tag_map(&self, actor_id: i64) -> Result<Vec<AdminTagMapEntry>, AdminError> {
+        if actor_id <= 0 {
+            return Err(AdminError::InvalidInput);
+        }
+        let mut c = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let tx = Transaction::new(&mut c, TransactionBehavior::Deferred)
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let result = async {
+            admin_auth(&tx, actor_id, self.owner_id, true, false).await?;
+            let row = query(include_str!("admin_tag_map_read.sql"))
+                .fetch_optional(&*tx)
+                .await
+                .map_err(|_| AdminError::Unavailable)?;
+            match row {
+                None => Ok(Vec::new()),
+                Some(row) => {
+                    let raw: String = row.try_get(0).map_err(|_| AdminError::Unavailable)?;
+                    decode_tag_map(&raw)
+                }
+            }
+        }
+        .await;
+        finish_admin(tx, result).await
+    }
+
+    pub async fn admin_update_tag_map(
+        &self,
+        actor_id: i64,
+        entries: &[AdminTagMapEntry],
+    ) -> Result<Vec<AdminTagMapEntry>, AdminError> {
+        if actor_id <= 0 {
+            return Err(AdminError::InvalidInput);
+        }
+        let mapping = validated_tag_map(entries).ok_or(AdminError::InvalidInput)?;
+        let encoded = serde_json::to_string(&mapping).map_err(|_| AdminError::InvalidInput)?;
+        let mut c = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let result = async {
+            if admin_auth(&tx, actor_id, self.owner_id, true, true).await? != Role::Owner {
+                return Err(AdminError::Forbidden);
+            }
+            query(include_str!("admin_tag_map_upsert.sql"))
+                .bind(&encoded)
+                .execute(&*tx)
+                .await
+                .map_err(|_| AdminError::Unavailable)?;
+            Ok(mapping
+                .into_iter()
+                .map(|(tag, features)| AdminTagMapEntry { tag, features })
+                .collect())
+        }
+        .await;
+        finish_admin(tx, result).await
+    }
+
+    pub async fn admin_available_features(
+        &self,
+        actor_id: i64,
+    ) -> Result<Vec<AdminAvailableFeature>, AdminError> {
+        if actor_id <= 0 {
+            return Err(AdminError::InvalidInput);
+        }
+        let mut c = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let tx = Transaction::new(&mut c, TransactionBehavior::Deferred)
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let result = async {
+            admin_auth(&tx, actor_id, self.owner_id, true, false).await?;
+            let mut items: Vec<_> = registered_features()
+                .into_iter()
+                .map(|spec| {
+                    let (label, description) =
+                        registered_feature_metadata(&spec.plugin, &spec.feature)
+                            .ok_or(AdminError::Unavailable)?;
+                    Ok(AdminAvailableFeature {
+                        key: format!("{}:{}", spec.plugin, spec.feature),
+                        plugin: spec.plugin,
+                        feature: spec.feature,
+                        label: label.into(),
+                        description: description.into(),
+                    })
+                })
+                .collect::<Result<_, AdminError>>()?;
+            items.sort_by(|a, b| a.key.cmp(&b.key));
+            Ok(items)
+        }
+        .await;
+        finish_admin(tx, result).await
+    }
+
     pub async fn admin_bot_settings(
         &self,
         actor_id: i64,
@@ -687,6 +805,50 @@ impl IdentityStore {
         .await;
         finish_admin(tx, result).await
     }
+}
+
+fn validated_tag_map(entries: &[AdminTagMapEntry]) -> Option<BTreeMap<String, Vec<String>>> {
+    let mut mapping = BTreeMap::new();
+    for entry in entries {
+        if entry.tag.trim().is_empty() || entry.tag.chars().any(char::is_control) {
+            return None;
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for key in &entry.features {
+            let (plugin, feature) = key.split_once(':')?;
+            if plugin.is_empty()
+                || feature.is_empty()
+                || feature.contains(':')
+                || !registered_features()
+                    .iter()
+                    .any(|spec| spec.plugin == plugin && spec.feature == feature)
+                || !seen.insert(key)
+            {
+                return None;
+            }
+        }
+        if mapping
+            .insert(entry.tag.clone(), entry.features.clone())
+            .is_some()
+        {
+            return None;
+        }
+    }
+    Some(mapping)
+}
+
+fn decode_tag_map(raw: &str) -> Result<Vec<AdminTagMapEntry>, AdminError> {
+    let mapping: BTreeMap<String, Vec<String>> =
+        serde_json::from_str(raw).map_err(|_| AdminError::Unavailable)?;
+    let entries: Vec<_> = mapping
+        .into_iter()
+        .map(|(tag, features)| AdminTagMapEntry { tag, features })
+        .collect();
+    let validated = validated_tag_map(&entries).ok_or(AdminError::Unavailable)?;
+    Ok(validated
+        .into_iter()
+        .map(|(tag, features)| AdminTagMapEntry { tag, features })
+        .collect())
 }
 
 fn feature(s: FeatureSpec) -> AdminFeature {

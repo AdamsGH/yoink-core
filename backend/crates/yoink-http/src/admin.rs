@@ -38,6 +38,14 @@ pub(crate) fn router() -> Router<AuthState> {
             "/api/v1/bot-settings",
             get(bot_settings).patch(update_bot_settings),
         )
+        .route(
+            "/api/v1/bot-settings/tag-map",
+            get(tag_map).put(update_tag_map),
+        )
+        .route(
+            "/api/v1/bot-settings/available-features",
+            get(available_features),
+        )
 }
 
 impl From<AdminError> for ApiError {
@@ -304,6 +312,78 @@ async fn revoke_permission(
         .admin_revoke_permission(actor, id, &plugin, &feature)
         .await?;
     Ok(no_store(serde_json::json!({"ok": true})))
+}
+
+async fn tag_map(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = state.service()?;
+    let actor = authenticated_id(service, &headers)?;
+    Ok(no_store(service.identities.admin_tag_map(actor).await?))
+}
+
+fn tag_map_entries(value: Value) -> Result<Vec<yoink_identity::admin::AdminTagMapEntry>, ApiError> {
+    let entries = value.as_array().ok_or_else(invalid_request)?;
+    entries
+        .iter()
+        .map(|entry| {
+            let object = entry.as_object().ok_or_else(invalid_request)?;
+            if object.len() != 2 || !object.contains_key("tag") || !object.contains_key("features")
+            {
+                return Err(invalid_request());
+            }
+            let tag = object
+                .get("tag")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid_request)?;
+            let features = object
+                .get("features")
+                .and_then(Value::as_array)
+                .ok_or_else(invalid_request)?;
+            let features = features
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(invalid_request)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(yoink_identity::admin::AdminTagMapEntry {
+                tag: tag.to_owned(),
+                features,
+            })
+        })
+        .collect()
+}
+
+async fn update_tag_map(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = state.service()?;
+    let actor = authenticated_id(service, &headers)?;
+    let Json(body) = body.map_err(|_| invalid_request())?;
+    let entries = tag_map_entries(body)?;
+    Ok(no_store(
+        service
+            .identities
+            .admin_update_tag_map(actor, &entries)
+            .await?,
+    ))
+}
+
+async fn available_features(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = state.service()?;
+    let actor = authenticated_id(service, &headers)?;
+    Ok(no_store(
+        service.identities.admin_available_features(actor).await?,
+    ))
 }
 
 async fn bot_settings(

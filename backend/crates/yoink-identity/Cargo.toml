@@ -11,6 +11,7 @@ yoink-db.workspace = true
 turso = "=0.7.2"
 thiserror.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 yoink-access.workspace = true
 
 [dev-dependencies]

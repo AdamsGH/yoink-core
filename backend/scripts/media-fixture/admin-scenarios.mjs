@@ -13,6 +13,7 @@ export async function runAdminScenarios(context) {
   const base = `http://127.0.0.1:${appHttpPort}`;
   const literal = value => `'${String(value).replaceAll("'", "''")}'`;
   const savedPolicy = await fixtureSql("SELECT value FROM bot_settings WHERE key='bot_access_mode'");
+  const savedTagMap = await fixtureSql("SELECT value FROM bot_settings WHERE key='tag_map'");
   const operations = () => fixtureSql('SELECT count(*) FROM runtime_operations');
   const signedInitData = id => {
     const authDate = String(Math.floor(Date.now() / 1000));
@@ -93,6 +94,10 @@ export async function runAdminScenarios(context) {
     await completeDownload(registeredActor, 'approved');
     await request(`/api/v1/users/${registeredActor}`, { token: ownerToken, method: 'PATCH', body: { role: 'admin' }, expected: 200 });
     await request('/api/v1/features', { token: signedToken, expected: 200 });
+    const available = await request('/api/v1/bot-settings/available-features', { token: signedToken, expected: 200 });
+    assert(available.data.some(feature => feature.key === 'dl:inline' && feature.label && feature.description));
+    await request('/api/v1/bot-settings/tag-map', { token: signedToken, expected: 200 });
+    await request('/api/v1/bot-settings/tag-map', { token: signedToken, method: 'PUT', body: [], expected: 403 });
     await request(`/api/v1/users/${registeredActor}`, { token: ownerToken, method: 'PATCH', body: { role: 'restricted' }, expected: 200 });
     await deniedDownload(registeredActor, 'role-revoked');
     await request('/api/v1/features', { token: signedToken, expected: 403 });
@@ -102,6 +107,40 @@ export async function runAdminScenarios(context) {
     assert(Array.isArray(catalog.data));
     const permissionFeature = catalog.data.find(feature => feature.plugin === 'dl' && feature.feature === 'inline');
     assert(permissionFeature, 'feature catalog must advertise dl/inline before the fixture grants it');
+    await request('/api/v1/bot-settings/tag-map', { expected: 401 });
+    await request('/api/v1/bot-settings/tag-map', { token: signedToken, expected: 403 });
+    const tagEntries = [
+      { tag: 'alpha', features: ['dl:inline'] },
+      { tag: 'Подписчик', features: ['insight:tldr', 'stats:stats'] },
+      { tag: 'Я'.repeat(129), features: [] },
+    ];
+    const replaced = await request('/api/v1/bot-settings/tag-map', { token: ownerToken, method: 'PUT', body: [...tagEntries].reverse(), expected: 200 });
+    assert.deepEqual(replaced.data, tagEntries, 'mapping response must sort Unicode tag labels');
+    for (const body of [
+      '{',
+      [{ tag: 'unknown', features: ['dl:missing'] }],
+      [{ tag: 'duplicate', features: [] }, { tag: 'duplicate', features: ['dl:inline'] }],
+      [{ tag: ' ', features: ['dl:inline'] }],
+      [{ tag: 'invalid', features: 'dl:inline' }],
+    ]) {
+      await request('/api/v1/bot-settings/tag-map', { token: ownerToken, method: 'PUT', body, expected: 422 });
+      assert.deepEqual((await request('/api/v1/bot-settings/tag-map', { token: ownerToken, expected: 200 })).data, tagEntries,
+        'rejected replacement must leave stored map unchanged');
+    }
+    const storedMap = await fixtureSql("SELECT value FROM bot_settings WHERE key='tag_map'");
+    await fixtureSql("UPDATE bot_settings SET value='{' WHERE key='tag_map'");
+    await request('/api/v1/bot-settings/tag-map', { token: ownerToken, expected: 503 });
+    assert.equal(await fixtureSql("SELECT value FROM bot_settings WHERE key='tag_map'"), '{', 'read must not repair corrupt data implicitly');
+    await fixtureSql(`UPDATE bot_settings SET value=${literal(storedMap)} WHERE key='tag_map'`);
+    const ownerBan = await fixtureSql('SELECT ban_until FROM users WHERE id=42');
+    try {
+      await fixtureSql("UPDATE users SET ban_until=(unixepoch('now')+600)*1000000 WHERE id=42");
+      await request('/api/v1/bot-settings/tag-map', { token: ownerToken, expected: 403 });
+      await request('/api/v1/bot-settings/tag-map', { token: ownerToken, method: 'PUT', body: [], expected: 403 });
+      assert.equal(await fixtureSql("SELECT value FROM bot_settings WHERE key='tag_map'"), storedMap, 'configured-owner ban must prevent replacement');
+    } finally {
+      await fixtureSql(`UPDATE users SET ban_until=${ownerBan || 'NULL'} WHERE id=42`);
+    }
     await request(`/api/v1/users/${registeredActor}/permissions`, {
       token: ownerToken, method: 'POST', body: { plugin: permissionFeature.plugin, feature: permissionFeature.feature }, expected: 200,
     });
@@ -136,6 +175,8 @@ export async function runAdminScenarios(context) {
 
     await restartApp();
     assert.equal(await fixtureSql("SELECT value FROM bot_settings WHERE key='bot_access_mode'"), 'approved_only', 'policy survives application restart');
+    assert.deepEqual((await request('/api/v1/bot-settings/tag-map', { token: ownerToken, expected: 200 })).data, tagEntries, 'tag map survives restart');
+    assert.deepEqual((await request('/api/v1/bot-settings/tag-map', { token: ownerToken, method: 'PUT', body: [], expected: 200 })).data, [], 'empty replacement clears mapping');
     assert.equal(await fixtureSql(`SELECT role FROM users WHERE id=${registeredActor}`), 'restricted');
     assert.equal(await fixtureSql(`SELECT count(*) FROM user_permissions WHERE user_id=${registeredActor} AND plugin='${permissionFeature.plugin}' AND feature='${permissionFeature.feature}'`), '1', 'explicit grant survives application restart');
     assert.equal(await fixtureSql(`SELECT role||'|'||language FROM users WHERE id=${telegramActor}`), 'user|ru');
@@ -159,8 +200,10 @@ export async function runAdminScenarios(context) {
     await deniedDownload(registeredActor, 'grant-revoked');
   } finally {
     botApi.setExpectedUpload(null);
+    if (savedTagMap) await fixtureSql(`UPDATE bot_settings SET value=${literal(savedTagMap)} WHERE key='tag_map'`);
+    else await fixtureSql("DELETE FROM bot_settings WHERE key='tag_map'");
     if (savedPolicy) await fixtureSql(`UPDATE bot_settings SET value=${literal(savedPolicy)},updated_at=unixepoch('now')*1000000 WHERE key='bot_access_mode'`);
     else await fixtureSql("DELETE FROM bot_settings WHERE key='bot_access_mode'");
   }
-  return 'authenticated owner administration, approved-only registration, immediate role/grant/ban enforcement, persisted policy and localized Telegram behavior verified';
+  return 'authenticated owner administration, validated tag-map replacement and catalog, approved-only registration, immediate role/grant/ban enforcement, persisted policy and localized Telegram behavior verified';
 }
