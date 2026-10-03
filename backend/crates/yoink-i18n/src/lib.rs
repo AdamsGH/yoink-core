@@ -62,6 +62,12 @@ define_keys! {
     CutAskStart => "telegram.cut_ask_start";
     CutAskEnd => "telegram.cut_ask_end";
     CutSummary => "telegram.cut_summary", ["start", "end"];
+    CutRanges => "telegram.cut_ranges", ["ranges"];
+    CutAdd => "telegram.cut_add";
+    CutDownload => "telegram.cut_download";
+    CutChangeSegment => "telegram.cut_change_segment", ["index"];
+    CutDeleteSegment => "telegram.cut_delete_segment", ["index"];
+    CutBack => "telegram.cut_back";
     CutConfirming => "telegram.cut_confirming";
     CutQualityTitle => "telegram.cut_quality_title";
     CutSubmitted => "telegram.cut_submitted", ["id"];

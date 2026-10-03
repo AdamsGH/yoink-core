@@ -21,6 +21,10 @@ enum Callback {
     Go(Uuid, i64),
     Quality(QualityChoice, Uuid, i64),
     Edit(Uuid, i64),
+    Add(Uuid, i64),
+    EditSegment(usize, Uuid, i64),
+    DeleteSegment(usize, Uuid, i64),
+    Back(Uuid, i64),
     Cancel(Uuid, i64),
 }
 
@@ -63,9 +67,28 @@ fn callback(data: &str) -> Result<Callback, CallbackError> {
         "q1440" => Ok(Callback::Quality(QualityChoice::Height(1440), id, revision)),
         "q2160" => Ok(Callback::Quality(QualityChoice::Height(2160), id, revision)),
         "edit" => Ok(Callback::Edit(id, revision)),
+        "add" => Ok(Callback::Add(id, revision)),
+        "back" => Ok(Callback::Back(id, revision)),
+        _ if action.starts_with('e') => parse_segment_action(&action[1..])
+            .map(|index| Callback::EditSegment(index, id, revision))
+            .ok_or(CallbackError::Syntax),
+        _ if action.starts_with('d') => parse_segment_action(&action[1..])
+            .map(|index| Callback::DeleteSegment(index, id, revision))
+            .ok_or(CallbackError::Syntax),
         "cancel" => Ok(Callback::Cancel(id, revision)),
         _ => Err(CallbackError::Syntax),
     }
+}
+
+fn parse_segment_action(value: &str) -> Option<usize> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let index = value.parse::<usize>().ok()?;
+    (index < 20).then_some(index)
 }
 
 fn encode_values(action: &str, id: Uuid, revision: i64) -> String {
@@ -74,11 +97,60 @@ fn encode_values(action: &str, id: Uuid, revision: i64) -> String {
 
 fn keyboard_values(
     stage: CutStage,
+    clips: &[yoink_domain::ClipRange],
     id: Uuid,
     revision: i64,
     language: Language,
 ) -> InlineKeyboardMarkup {
     let rows = match stage {
+        CutStage::Ready if !clips.is_empty() => {
+            let mut rows = Vec::new();
+            if clips.len() < 20 {
+                rows.push(vec![InlineKeyboardButton::callback(
+                    translate(language, Key::CutAdd, &[]),
+                    encode_values("add", id, revision),
+                )]);
+            }
+            for index in 0..clips.len() {
+                rows.push(vec![
+                    InlineKeyboardButton::callback(
+                        translate(
+                            language,
+                            Key::CutChangeSegment,
+                            &[("index", &(index + 1).to_string())],
+                        ),
+                        encode_values(
+                            &if clips.len() == 1 {
+                                "edit".to_owned()
+                            } else {
+                                format!("e{index}")
+                            },
+                            id,
+                            revision,
+                        ),
+                    ),
+                    InlineKeyboardButton::callback(
+                        translate(
+                            language,
+                            Key::CutDeleteSegment,
+                            &[("index", &(index + 1).to_string())],
+                        ),
+                        encode_values(&format!("d{index}"), id, revision),
+                    ),
+                ]);
+            }
+            rows.push(vec![
+                InlineKeyboardButton::callback(
+                    translate(language, Key::CutDownload, &[]),
+                    encode_values("go", id, revision),
+                ),
+                InlineKeyboardButton::callback(
+                    translate(language, Key::CutCancel, &[]),
+                    encode_values("cancel", id, revision),
+                ),
+            ]);
+            rows
+        }
         CutStage::Ready => vec![vec![
             InlineKeyboardButton::callback(
                 translate(language, Key::CutGo, &[]),
@@ -116,29 +188,116 @@ fn keyboard_values(
                 .chunks(3)
                 .map(|row| row.to_vec())
                 .collect::<Vec<_>>();
-            rows.push(vec![
-                InlineKeyboardButton::callback(
-                    translate(language, Key::CutEdit, &[]),
-                    encode_values("edit", id, revision),
-                ),
-                InlineKeyboardButton::callback(
+            if !clips.is_empty() {
+                if clips.len() < 20 {
+                    rows.push(vec![InlineKeyboardButton::callback(
+                        translate(language, Key::CutAdd, &[]),
+                        encode_values("add", id, revision),
+                    )]);
+                }
+                for index in 0..clips.len() {
+                    rows.push(vec![
+                        InlineKeyboardButton::callback(
+                            translate(
+                                language,
+                                Key::CutChangeSegment,
+                                &[("index", &(index + 1).to_string())],
+                            ),
+                            encode_values(
+                                &if clips.len() == 1 {
+                                    "edit".to_owned()
+                                } else {
+                                    format!("e{index}")
+                                },
+                                id,
+                                revision,
+                            ),
+                        ),
+                        InlineKeyboardButton::callback(
+                            translate(
+                                language,
+                                Key::CutDeleteSegment,
+                                &[("index", &(index + 1).to_string())],
+                            ),
+                            encode_values(&format!("d{index}"), id, revision),
+                        ),
+                    ]);
+                }
+                rows.push(vec![InlineKeyboardButton::callback(
                     translate(language, Key::CutCancel, &[]),
                     encode_values("cancel", id, revision),
-                ),
-            ]);
+                )]);
+            } else {
+                rows.push(vec![
+                    InlineKeyboardButton::callback(
+                        translate(language, Key::CutEdit, &[]),
+                        encode_values("edit", id, revision),
+                    ),
+                    InlineKeyboardButton::callback(
+                        translate(language, Key::CutCancel, &[]),
+                        encode_values("cancel", id, revision),
+                    ),
+                ]);
+            }
             rows
         }
+        CutStage::Start | CutStage::End if !clips.is_empty() => vec![vec![
+            InlineKeyboardButton::callback(
+                translate(language, Key::CutBack, &[]),
+                encode_values("back", id, revision),
+            ),
+            InlineKeyboardButton::callback(
+                translate(language, Key::CutCancel, &[]),
+                encode_values("cancel", id, revision),
+            ),
+        ]],
         _ => Vec::new(),
     };
     InlineKeyboardMarkup::new(rows)
 }
 
 fn render(session: &CutSession, language: Language) -> (String, InlineKeyboardMarkup) {
-    let (mut text, mut keyboard) = render_values(
+    let (mut text, _) = render_values(
         session.stage,
         session.start,
         session.end,
         session.operation_id,
+        session.id,
+        session.revision,
+        language,
+    );
+    if (!session.clips.is_empty()
+        && matches!(
+            session.stage,
+            CutStage::Ready | CutStage::Quality | CutStage::Confirming
+        ))
+        || (!session.clips.is_empty() && matches!(session.stage, CutStage::Start | CutStage::End))
+    {
+        text = translate(
+            language,
+            Key::CutRanges,
+            &[("ranges", &ranges_display(&session.clips))],
+        );
+        if matches!(session.stage, CutStage::Start | CutStage::End) {
+            let key = if session.stage == CutStage::Start {
+                Key::CutAskStart
+            } else {
+                Key::CutAskEnd
+            };
+            text = format!("{}\n{text}", translate(language, key, &[]));
+        }
+        if session.stage == CutStage::Quality {
+            text.push('\n');
+            text.push_str(&translate(language, Key::CutQualityTitle, &[]));
+        }
+        if session.stage == CutStage::Confirming {
+            text.push('\n');
+            text.push_str(&translate(language, Key::CutConfirming, &[]));
+        }
+    }
+    let mut keyboard = keyboard_values(
+        session.stage,
+        &session.clips,
         session.id,
         session.revision,
         language,
@@ -188,6 +347,22 @@ fn selected_confirmation_keyboard(
     )
 }
 
+fn ranges_display(clips: &[yoink_domain::ClipRange]) -> String {
+    clips
+        .iter()
+        .enumerate()
+        .map(|(index, clip)| {
+            format!(
+                "{}. {}-{}",
+                index + 1,
+                time_display(Some(clip.start_seconds())),
+                time_display(Some(clip.end_seconds()))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn render_values(
     stage: CutStage,
     start: Option<f64>,
@@ -217,16 +392,20 @@ fn render_values(
         ),
         CutStage::Cancelled => translate(language, Key::CutCancelled, &[]),
     };
-    (tail, keyboard_values(stage, id, revision, language))
+    (tail, keyboard_values(stage, &[], id, revision, language))
 }
 
 fn time_display(value: Option<f64>) -> String {
     value
         .map(|v| {
-            format!("{v:.3}")
-                .trim_end_matches('0')
-                .trim_end_matches('.')
-                .to_owned()
+            if v >= 1_000_000_000.0 || (v > 0.0 && v < 0.001) {
+                format!("{v:.3e}")
+            } else {
+                format!("{v:.3}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_owned()
+            }
         })
         .unwrap_or_else(|| "0".to_owned())
 }
@@ -481,7 +660,8 @@ pub(super) async fn send_session(
     if matches!(
         session.stage,
         CutStage::Ready | CutStage::Quality | CutStage::Confirming
-    ) {
+    ) || (matches!(session.stage, CutStage::Start | CutStage::End) && !session.clips.is_empty())
+    {
         let _ = send.reply_markup(markup).await;
     } else {
         let _ = send.await;
@@ -547,7 +727,7 @@ pub(super) async fn handle_callback(
     };
     let actor = query.from.id.0;
     enum Outcome {
-        Updated(CutSession),
+        Updated(Box<CutSession>),
         Admitted(yoink_storage::Admission),
     }
     let operation =
@@ -555,11 +735,27 @@ pub(super) async fn handle_callback(
             Callback::Edit(id, revision) => service
                 .cut_edit(actor, target, id, revision)
                 .await
-                .map(Outcome::Updated),
+                .map(|session| Outcome::Updated(Box::new(session))),
+            Callback::Add(id, revision) => service
+                .cut_add(actor, target, id, revision)
+                .await
+                .map(|session| Outcome::Updated(Box::new(session))),
+            Callback::EditSegment(index, id, revision) => service
+                .cut_edit_segment(actor, target, id, revision, index)
+                .await
+                .map(|session| Outcome::Updated(Box::new(session))),
+            Callback::DeleteSegment(index, id, revision) => service
+                .cut_delete_segment(actor, target, id, revision, index)
+                .await
+                .map(|session| Outcome::Updated(Box::new(session))),
+            Callback::Back(id, revision) => service
+                .cut_back(actor, target, id, revision)
+                .await
+                .map(|session| Outcome::Updated(Box::new(session))),
             Callback::Cancel(id, revision) => service
                 .cut_cancel(actor, target, id, revision, None)
                 .await
-                .map(Outcome::Updated),
+                .map(|session| Outcome::Updated(Box::new(session))),
             Callback::Go(id, revision) => service
                 .cut_submit(actor, target, id, revision)
                 .await
@@ -675,8 +871,8 @@ mod tests {
     fn callbacks_round_trip_are_bounded_and_closed() {
         let id = Uuid::parse_str("38e4f36a14da4f7b8d1d12d2191d8db1").unwrap();
         for action in [
-            "go", "edit", "cancel", "qbest", "q144", "q240", "q360", "q480", "q720", "q1080",
-            "q1440", "q2160",
+            "go", "edit", "cancel", "add", "e0", "d19", "back", "qbest", "q144", "q240", "q360",
+            "q480", "q720", "q1080", "q1440", "q2160",
         ] {
             let data = encode_values(action, id, 7);
             assert!(data.len() <= 64);
@@ -685,6 +881,10 @@ mod tests {
                 match action {
                     "go" => Callback::Go(id, 7),
                     "edit" => Callback::Edit(id, 7),
+                    "add" => Callback::Add(id, 7),
+                    "e0" => Callback::EditSegment(0, id, 7),
+                    "d19" => Callback::DeleteSegment(19, id, 7),
+                    "back" => Callback::Back(id, 7),
                     "cancel" => Callback::Cancel(id, 7),
                     "qbest" => Callback::Quality(QualityChoice::Best, id, 7),
                     height => Callback::Quality(
@@ -702,6 +902,10 @@ mod tests {
             "cut:go:38e4f36a14da4f7b8d1d12d2191d8db1:1:extra",
             "cut:q999:38e4f36a14da4f7b8d1d12d2191d8db1:1",
             "cut:q720:38e4f36a14da4f7b8d1d12d2191d8db1:0",
+            "cut:e20:38e4f36a14da4f7b8d1d12d2191d8db1:1",
+            "cut:d01:38e4f36a14da4f7b8d1d12d2191d8db1:1",
+            "cut:e:38e4f36a14da4f7b8d1d12d2191d8db1:1",
+            "cut:d-1:38e4f36a14da4f7b8d1d12d2191d8db1:1",
             "prefs:menu",
             too_long.as_str(),
         ] {
@@ -710,10 +914,65 @@ mod tests {
     }
 
     #[test]
+    fn multi_range_display_and_keyboard_are_bounded_and_ordered_in_both_locales() {
+        let id = Uuid::parse_str("38e4f36a14da4f7b8d1d12d2191d8db1").unwrap();
+        let mut clips = (0..20)
+            .map(|index| {
+                yoink_domain::ClipRange::new(index as f64 * 2.0, index as f64 * 2.0 + 1.0).unwrap()
+            })
+            .collect::<Vec<_>>();
+        clips[19] = yoink_domain::ClipRange::new(1.0e300, f64::MAX).unwrap();
+        let shown = ranges_display(&clips);
+        assert!(shown.contains("20. 1.000e300-1.798e308"));
+        for language in [Language::English, Language::Russian] {
+            let summary = translate(language, Key::CutRanges, &[("ranges", &shown)]);
+            assert!(summary.len() < 4096);
+            let markup =
+                serde_json::to_value(keyboard_values(CutStage::Ready, &clips, id, 9, language))
+                    .unwrap();
+            let callbacks = markup["inline_keyboard"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|row| row.as_array().unwrap())
+                .map(|button| button["callback_data"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(callbacks.len(), 42);
+            assert!(!callbacks.iter().any(|data| data.contains(":add:")));
+            assert_eq!(callbacks[0], format!("cut:e0:{}:9", id.simple()));
+            assert_eq!(callbacks[1], format!("cut:d0:{}:9", id.simple()));
+            assert_eq!(callbacks[38], format!("cut:e19:{}:9", id.simple()));
+            assert_eq!(callbacks[39], format!("cut:d19:{}:9", id.simple()));
+        }
+    }
+
+    #[test]
+    fn singleton_ready_and_quality_expose_add_delete_and_legacy_edit() {
+        let id = Uuid::new_v4();
+        let clips = [yoink_domain::ClipRange::new(0.1, 0.3).unwrap()];
+        for language in [Language::English, Language::Russian] {
+            for stage in [CutStage::Ready, CutStage::Quality] {
+                let markup =
+                    serde_json::to_value(keyboard_values(stage, &clips, id, 7, language)).unwrap();
+                let actions = markup["inline_keyboard"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|row| row.as_array().unwrap())
+                    .map(|button| button["callback_data"].as_str().unwrap())
+                    .collect::<Vec<_>>();
+                for action in ["add", "edit", "d0", "cancel"] {
+                    assert!(actions.contains(&encode_values(action, id, 7).as_str()));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn chooser_has_localized_choices_and_selected_confirming_replays_same_callback() {
         let id = Uuid::parse_str("38e4f36a14da4f7b8d1d12d2191d8db1").unwrap();
         for language in [Language::English, Language::Russian] {
-            let markup = keyboard_values(CutStage::Quality, id, 11, language);
+            let markup = keyboard_values(CutStage::Quality, &[], id, 11, language);
             let value = serde_json::to_value(markup).unwrap();
             let rows = value["inline_keyboard"].as_array().unwrap();
             let callbacks = rows
@@ -748,6 +1007,10 @@ mod tests {
                     callback(data),
                     Ok(Callback::Quality(_, _, 11))
                         | Ok(Callback::Edit(_, 11))
+                        | Ok(Callback::Add(_, 11))
+                        | Ok(Callback::EditSegment(_, _, 11))
+                        | Ok(Callback::DeleteSegment(_, _, 11))
+                        | Ok(Callback::Back(_, 11))
                         | Ok(Callback::Cancel(_, 11))
                 ));
             }

@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 12] = [
+const MIGRATIONS: [Migration; 13] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -69,6 +69,11 @@ const MIGRATIONS: [Migration; 12] = [
     Migration {
         version: 12,
         sql: include_str!("../migrations-turso/0012_quality_cut_handoff.sql"),
+        expected_tables: 52,
+    },
+    Migration {
+        version: 13,
+        sql: include_str!("../migrations-turso/0013_cut_segments.sql"),
         expected_tables: 52,
     },
 ];
@@ -391,7 +396,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 12);
+        assert_eq!(versions.len(), 13);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
@@ -404,6 +409,7 @@ mod tests {
         assert_eq!(versions[9].try_get::<i64, _>("version").unwrap(), 10);
         assert_eq!(versions[10].try_get::<i64, _>("version").unwrap(), 11);
         assert_eq!(versions[11].try_get::<i64, _>("version").unwrap(), 12);
+        assert_eq!(versions[12].try_get::<i64, _>("version").unwrap(), 13);
     }
 
     #[tokio::test]

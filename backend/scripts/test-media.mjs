@@ -22,6 +22,7 @@ import { runFormatScenarios } from './media-fixture/format-scenarios.mjs';
 import { runSettingsScenarios } from './media-fixture/settings-scenarios.mjs';
 import { runLanguageScenarios } from './media-fixture/language-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
+import { runCutSegmentsScenarios } from './media-fixture/cut-segments-scenarios.mjs';
 import { runQualityScenarios } from './media-fixture/quality-scenarios.mjs';
 import { runCutQualityScenarios } from './media-fixture/cut-quality-scenarios.mjs';
 import { runQualityCutScenarios } from './media-fixture/quality-cut-scenarios.mjs';
@@ -39,7 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'cut', 'cut-quality', 'quality-cut', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|cut|cut-quality|quality-cut|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -653,6 +654,7 @@ if (scenario === 'all' || scenario === 'language') summaries.push(await runLangu
   if (scenario === 'all' || scenario === 'cut') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut-quality') summaries.push(await runCutQualityScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'quality-cut') summaries.push(await runQualityCutScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'cut-segments') summaries.push(await runCutSegmentsScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'quality') summaries.push(await runQualityScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'urls') summaries.push(await runPlainUrlScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'uncache') summaries.push(await runUncacheScenarios({ ...commandContext, restartApp }));

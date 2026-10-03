@@ -96,6 +96,151 @@ async fn cut_transitions_preserve_time_input_semantics_and_watermarks() {
 }
 
 #[tokio::test]
+async fn ordered_segments_edit_back_delete_restart_and_bound() {
+    let fixture = common::store().await;
+    let path = fixture.path();
+    let store = &fixture.store;
+    let draft = begin(store, 700, Some(1.0)).await;
+    let ready = store
+        .cut_input(ACTOR, target(BOT, ACTOR), 701, 3.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ready.clips.len(), 1);
+    let add = store
+        .cut_add(ACTOR, target(BOT, ACTOR), ready.id, ready.revision)
+        .await
+        .unwrap();
+    let start = store
+        .cut_input(ACTOR, target(BOT, ACTOR), 702, 5.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let pending = store
+        .cut_input(ACTOR, target(BOT, ACTOR), 703, 8.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.clips.len(), 2);
+    store.close().await.unwrap();
+    let reopened = Store::open(&path, false, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let persisted = reopened
+        .cut_current(ACTOR, target(BOT, ACTOR))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.clips, pending.clips);
+    let edit = reopened
+        .cut_edit_segment(ACTOR, target(BOT, ACTOR), pending.id, pending.revision, 1)
+        .await
+        .unwrap();
+    assert_eq!(edit.editing_index, Some(1));
+    reopened
+        .cut_input(ACTOR, target(BOT, ACTOR), 704, 9.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let replaced = reopened
+        .cut_input(ACTOR, target(BOT, ACTOR), 705, 12.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replaced.clips[0].start_seconds(), 1.0);
+    assert_eq!(replaced.clips[1].start_seconds(), 9.0);
+    let edit = reopened
+        .cut_edit_segment(ACTOR, target(BOT, ACTOR), replaced.id, replaced.revision, 1)
+        .await
+        .unwrap();
+    let back = reopened
+        .cut_back(ACTOR, target(BOT, ACTOR), edit.id, edit.revision)
+        .await
+        .unwrap();
+    assert_eq!(back.clips, replaced.clips);
+    assert_eq!(back.stage, CutStage::Ready);
+    let deleting = reopened
+        .cut_delete_segment(ACTOR, target(BOT, ACTOR), back.id, back.revision, 0)
+        .await
+        .unwrap();
+    assert_eq!(deleting.clips.len(), 1);
+    assert_eq!(
+        reopened
+            .cut_delete_segment(ACTOR, target(BOT, ACTOR), deleting.id, deleting.revision, 9)
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    let only = reopened
+        .cut_delete_segment(ACTOR, target(BOT, ACTOR), deleting.id, deleting.revision, 0)
+        .await
+        .unwrap();
+    assert!(only.clips.is_empty());
+    assert_eq!(only.stage, CutStage::Start);
+    assert_eq!(
+        reopened
+            .cut_claim(ACTOR, target(BOT, ACTOR), only.id, only.revision)
+            .await,
+        Err(StoreError::Conflict)
+    );
+    let mut current = only;
+    for n in 0..20 {
+        reopened
+            .cut_input(
+                ACTOR,
+                target(BOT, ACTOR),
+                706 + n * 2,
+                n as f64 * 10.0,
+                false,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        current = reopened
+            .cut_input(
+                ACTOR,
+                target(BOT, ACTOR),
+                707 + n * 2,
+                n as f64 * 10.0 + 2.0,
+                false,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.clips.len(), (n + 1) as usize);
+        if n < 19 {
+            current = reopened
+                .cut_add(ACTOR, target(BOT, ACTOR), current.id, current.revision)
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        reopened
+            .cut_add(ACTOR, target(BOT, ACTOR), current.id, current.revision)
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    assert_eq!(
+        reopened
+            .cut_edit_segment(ACTOR, target(BOT, ACTOR), current.id, current.revision, 20)
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    let stale = reopened
+        .cut_delete_segment(
+            ACTOR,
+            target(BOT, ACTOR),
+            current.id,
+            current.revision - 1,
+            0,
+        )
+        .await;
+    assert_eq!(stale, Err(StoreError::Conflict));
+    let _ = (draft, add, start);
+    reopened.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn cut_cancel_tombstone_replacement_scope_and_restart() {
     let fixture = common::store().await;
     let path = fixture.path();

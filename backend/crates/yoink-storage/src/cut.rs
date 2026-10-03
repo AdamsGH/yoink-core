@@ -57,6 +57,8 @@ pub struct CutSession {
     pub last_message_id: i32,
     pub start: Option<f64>,
     pub end: Option<f64>,
+    pub clips: Vec<ClipRange>,
+    pub editing_index: Option<usize>,
     pub operation_id: Option<Uuid>,
     pub selected: Option<QualityChoice>,
     pub(crate) begin_start: Option<f64>,
@@ -90,6 +92,8 @@ impl std::fmt::Debug for CutSession {
             .field("source_url", &self.url.as_ref().map(|_| "[REDACTED]"))
             .field("start", &self.start)
             .field("end", &self.end)
+            .field("clips", &self.clips)
+            .field("editing_index", &self.editing_index)
             .field("operation_id", &self.operation_id)
             .field("selected", &self.selected)
             .finish()
@@ -179,6 +183,8 @@ impl Store {
             last_message_id: message_id,
             start,
             end: None,
+            clips: Vec::new(),
+            editing_index: None,
             operation_id: None,
             selected: None,
             begin_start: start,
@@ -234,8 +240,20 @@ impl Store {
                     value
                 };
                 let range = ClipRange::new(start, end).map_err(|_| StoreError::InvalidInput)?;
-                s.start = Some(range.start_seconds());
-                s.end = Some(range.end_seconds());
+                if let Some(index) = s.editing_index {
+                    if index >= s.clips.len() {
+                        return Err(StoreError::InvalidStoredData);
+                    }
+                    s.clips[index] = range;
+                } else {
+                    if s.clips.len() >= 20 {
+                        return Err(StoreError::InvalidInput);
+                    }
+                    s.clips.push(range);
+                }
+                s.editing_index = None;
+                s.start = s.clips.first().map(ClipRange::start_seconds);
+                s.end = s.clips.first().map(ClipRange::end_seconds);
                 s.stage = CutStage::Ready;
             }
             _ => return Err(StoreError::InvalidInput),
@@ -272,7 +290,143 @@ impl Store {
         s.stage = CutStage::Start;
         s.start = None;
         s.end = None;
+        s.editing_index = Some(0);
         s.operation_id = None;
+        s.selected = None;
+        put(&tx, &s).await?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(s)
+    }
+
+    pub async fn cut_add(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<CutSession, StoreError> {
+        self.cut_begin_segment(actor, target, id, revision, None, true)
+            .await
+    }
+
+    pub async fn cut_edit_segment(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+        index: usize,
+    ) -> Result<CutSession, StoreError> {
+        self.cut_begin_segment(actor, target, id, revision, Some(index), false)
+            .await
+    }
+
+    async fn cut_begin_segment(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+        index: Option<usize>,
+        append: bool,
+    ) -> Result<CutSession, StoreError> {
+        let mut conn = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let mut s = require(&tx, actor, target, id, revision).await?;
+        if !matches!(s.stage, CutStage::Ready | CutStage::Quality) {
+            return Err(StoreError::Conflict);
+        }
+        if append {
+            if s.clips.len() >= 20 {
+                return Err(StoreError::InvalidInput);
+            }
+        } else if index.is_none_or(|i| i >= s.clips.len()) {
+            return Err(StoreError::InvalidInput);
+        }
+        s.revision = s.revision.checked_add(1).ok_or(StoreError::InvalidInput)?;
+        s.stage = CutStage::Start;
+        s.start = None;
+        s.end = None;
+        s.editing_index = index;
+        s.selected = None;
+        s.operation_id = None;
+        put(&tx, &s).await?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(s)
+    }
+
+    pub async fn cut_delete_segment(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+        index: usize,
+    ) -> Result<CutSession, StoreError> {
+        let mut conn = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let mut s = require(&tx, actor, target, id, revision).await?;
+        if !matches!(s.stage, CutStage::Ready | CutStage::Quality) {
+            return Err(StoreError::Conflict);
+        }
+        if index >= s.clips.len() {
+            return Err(StoreError::InvalidInput);
+        }
+        s.clips.remove(index);
+        s.revision = s.revision.checked_add(1).ok_or(StoreError::InvalidInput)?;
+        s.selected = None;
+        s.operation_id = None;
+        s.editing_index = None;
+        s.start = s.clips.first().map(ClipRange::start_seconds);
+        s.end = s.clips.first().map(ClipRange::end_seconds);
+        if s.clips.is_empty() {
+            s.stage = CutStage::Start;
+            s.start = None;
+            s.end = None;
+        } else {
+            s.stage = CutStage::Ready;
+        }
+        put(&tx, &s).await?;
+        tx.commit().await.map_err(|_| StoreError::Database)?;
+        Ok(s)
+    }
+
+    pub async fn cut_back(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<CutSession, StoreError> {
+        let mut conn = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| StoreError::Database)?;
+        let mut s = require(&tx, actor, target, id, revision).await?;
+        if !matches!(s.stage, CutStage::Start | CutStage::End) || s.clips.is_empty() {
+            return Err(StoreError::Conflict);
+        }
+        s.revision = s.revision.checked_add(1).ok_or(StoreError::InvalidInput)?;
+        s.stage = CutStage::Ready;
+        s.start = s.clips.first().map(ClipRange::start_seconds);
+        s.end = s.clips.first().map(ClipRange::end_seconds);
+        s.editing_index = None;
         s.selected = None;
         put(&tx, &s).await?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
@@ -320,6 +474,8 @@ impl Store {
         s.start = None;
         s.end = None;
         s.selected = None;
+        s.clips.clear();
+        s.editing_index = None;
         s.original = None;
         put(&tx, &s).await?;
         tx.commit().await.map_err(|_| StoreError::Database)?;
@@ -559,6 +715,16 @@ async fn put(tx: &turso::transaction::Transaction<'_>, s: &CutSession) -> Result
                 .transpose()?,
         )
         .bind(s.linked_quality_id)
+        .bind(
+            serde_json::to_string(
+                &s.clips
+                    .iter()
+                    .map(|clip| [clip.start_seconds(), clip.end_seconds()])
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|_| StoreError::InvalidInput)?,
+        )
+        .bind(s.editing_index.map(|index| index as i64))
         .execute(&**tx)
         .await
         .map_err(|_| StoreError::Database)?;
@@ -637,6 +803,33 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
     if linked_quality_id.is_some() && original.is_none() && stage != CutStage::Cancelled {
         return Err(StoreError::InvalidStoredData);
     }
+    let clips_raw: String = row
+        .try_get("clips_json")
+        .map_err(|_| StoreError::InvalidStoredData)?;
+    let stored_clips: Vec<[f64; 2]> =
+        serde_json::from_str(&clips_raw).map_err(|_| StoreError::InvalidStoredData)?;
+    if stored_clips.len() > 20 {
+        return Err(StoreError::InvalidStoredData);
+    }
+    let clips = stored_clips
+        .into_iter()
+        .map(|[start, end]| ClipRange::new(start, end).map_err(|_| StoreError::InvalidStoredData))
+        .collect::<Result<Vec<_>, _>>()?;
+    let editing_index = row
+        .try_get::<Option<i64>, _>("editing_index")
+        .map_err(|_| StoreError::InvalidStoredData)?
+        .map(|index| usize::try_from(index).map_err(|_| StoreError::InvalidStoredData))
+        .transpose()?;
+    if editing_index.is_some_and(|index| index >= clips.len())
+        || (matches!(
+            stage,
+            CutStage::Ready | CutStage::Quality | CutStage::Confirming | CutStage::Submitted
+        ) && clips.is_empty())
+        || (stage == CutStage::Cancelled && !clips.is_empty())
+        || (editing_index.is_some() && !matches!(stage, CutStage::Start | CutStage::End))
+    {
+        return Err(StoreError::InvalidStoredData);
+    }
     Ok(CutSession {
         id: row
             .try_get("id")
@@ -660,6 +853,8 @@ fn decode(row: Row) -> Result<CutSession, StoreError> {
         end: row
             .try_get("end")
             .map_err(|_| StoreError::InvalidStoredData)?,
+        clips,
+        editing_index,
         operation_id: row
             .try_get("operation_id")
             .map_err(|_| StoreError::InvalidStoredData)?,

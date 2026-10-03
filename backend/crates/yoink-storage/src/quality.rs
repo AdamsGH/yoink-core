@@ -210,6 +210,8 @@ impl Store {
             last_message_id: quality.origin_message_id,
             start,
             end,
+            clips: range.into_iter().collect(),
+            editing_index: None,
             operation_id: None,
             selected: None,
             begin_start: start,

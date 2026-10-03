@@ -1,6 +1,6 @@
 //! Persistent clip conversations. Transport adapters never own the admission recipe.
 use uuid::Uuid;
-use yoink_domain::{ClipRange, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode};
+use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode};
 use yoink_storage::Admission;
 
 pub use yoink_storage::QualityChoice;
@@ -9,14 +9,19 @@ pub use yoink_storage::{CutSession, CutStage};
 #[derive(Clone, Debug, PartialEq)]
 pub enum CutSubmission {
     Admitted(Admission),
-    Quality(CutSession),
+    Quality(Box<CutSession>),
 }
 
 use crate::{DownloadError, DownloadService, map_store};
 
 impl DownloadService {
     async fn authorize_cut(&self, actor: u64, target: DeliveryTarget) -> Result<(), DownloadError> {
-        if target.chat_id() <= 0 || target.chat_id() as u64 != actor || target.thread_id().is_some()
+        if !self
+            .identities
+            .is_configured_owner(i64::try_from(actor).map_err(|_| DownloadError::Denied)?)
+            || target.chat_id() <= 0
+            || target.chat_id() as u64 != actor
+            || target.thread_id().is_some()
         {
             return Err(DownloadError::Denied);
         }
@@ -75,6 +80,64 @@ impl DownloadService {
         self.authorize_cut(actor, target).await?;
         self.store
             .cut_edit(actor, target, id, revision)
+            .await
+            .map_err(map_store)
+    }
+
+    pub async fn cut_add(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<CutSession, DownloadError> {
+        self.authorize_cut(actor, target).await?;
+        self.store
+            .cut_add(actor, target, id, revision)
+            .await
+            .map_err(map_store)
+    }
+
+    pub async fn cut_edit_segment(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+        index: usize,
+    ) -> Result<CutSession, DownloadError> {
+        self.authorize_cut(actor, target).await?;
+        self.store
+            .cut_edit_segment(actor, target, id, revision, index)
+            .await
+            .map_err(map_store)
+    }
+
+    pub async fn cut_delete_segment(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+        index: usize,
+    ) -> Result<CutSession, DownloadError> {
+        self.authorize_cut(actor, target).await?;
+        self.store
+            .cut_delete_segment(actor, target, id, revision, index)
+            .await
+            .map_err(map_store)
+    }
+
+    pub async fn cut_back(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        id: Uuid,
+        revision: i64,
+    ) -> Result<CutSession, DownloadError> {
+        self.authorize_cut(actor, target).await?;
+        self.store
+            .cut_back(actor, target, id, revision)
             .await
             .map_err(map_store)
     }
@@ -151,7 +214,7 @@ impl DownloadService {
                 .store
                 .cut_quality(actor, target, id, revision)
                 .await
-                .map(CutSubmission::Quality)
+                .map(|session| CutSubmission::Quality(Box::new(session)))
                 .map_err(map_store);
         }
         self.cut_confirm(actor, target, id, revision)
@@ -172,18 +235,27 @@ impl DownloadService {
             .cut_claim(actor, target, id, revision)
             .await
             .map_err(map_store)?;
-        let clip = ClipRange::new(
-            session.start.ok_or(DownloadError::InvalidInput)?,
-            session.end.ok_or(DownloadError::InvalidInput)?,
-        )
-        .map_err(|_| DownloadError::InvalidInput)?;
+        let clips = session.clips.clone();
+        if clips.is_empty() || clips.len() > 20 {
+            return Err(DownloadError::InvalidInput);
+        }
+        let single = (clips.len() == 1).then_some(clips[0]);
         let request = if let Some(original) = session.original_request() {
+            let params = if single.is_some() {
+                original.params().clone()
+            } else {
+                original
+                    .params()
+                    .clone()
+                    .with_clips(clips.clone())
+                    .map_err(|_| DownloadError::InvalidInput)?
+            };
             let mut request = DownloadRequest::new(
                 actor,
                 original.source_url().as_str(),
                 MediaMode::Video,
-                Some(clip),
-                original.params().clone(),
+                single,
+                params,
             )
             .map_err(|_| DownloadError::InvalidInput)?;
             if let Some(target) = original.target().copied() {
@@ -199,8 +271,14 @@ impl DownloadService {
                 actor,
                 session.source_url().ok_or(DownloadError::InvalidInput)?,
                 MediaMode::Video,
-                Some(clip),
-                DownloadParams::default(),
+                single,
+                if single.is_some() {
+                    DownloadParams::default()
+                } else {
+                    DownloadParams::default()
+                        .with_clips(clips.clone())
+                        .map_err(|_| DownloadError::InvalidInput)?
+                },
             )
             .map_err(|_| DownloadError::InvalidInput)?
             .with_target(session.target)

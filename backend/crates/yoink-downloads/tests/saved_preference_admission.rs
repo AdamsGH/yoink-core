@@ -99,7 +99,7 @@ async fn setup_with_owner(
 #[tokio::test]
 async fn cut_confirmation_replays_frozen_preferences_and_checks_authorization() {
     use yoink_downloads::CutStage;
-    let (_directory, store, service) = setup().await;
+    let (_directory, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
     let target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2100)).unwrap();
     let callback_target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(9999)).unwrap();
     let draft = service
@@ -335,7 +335,7 @@ async fn formats_submission_ignores_saved_quality_and_enforces_private_owner_tar
 async fn cut_recovers_admission_before_session_completion_without_a_second_job() {
     use yoink_domain::ClipRange;
     use yoink_downloads::CutStage;
-    let (_directory, store, service) = setup().await;
+    let (_directory, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
     let target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2200)).unwrap();
     service
         .cut_begin(ACTOR, target, 2200, URL, Some(0.2))
@@ -406,7 +406,7 @@ async fn cut_recovers_admission_before_session_completion_without_a_second_job()
 
 #[tokio::test]
 async fn cut_state_is_denied_outside_the_actors_own_private_delivery_target() {
-    let (_directory, _store, service) = setup().await;
+    let (_directory, _store, service) = setup_with_owner(Some(ACTOR as i64)).await;
     for target in [
         DeliveryTarget::new(BOT, 99, None, None).unwrap(),
         DeliveryTarget::new(BOT, -100, None, None).unwrap(),
@@ -436,7 +436,7 @@ async fn cut_state_is_denied_outside_the_actors_own_private_delivery_target() {
 #[tokio::test]
 async fn cut_ask_choice_admits_only_after_selection_with_frozen_explicit_quality() {
     use yoink_downloads::{CutStage, CutSubmission, QualityChoice};
-    let (_directory, store, service) = setup().await;
+    let (_directory, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
     let target = DeliveryTarget::new(BOT, ACTOR as i64, None, Some(2400)).unwrap();
     yoink_db::raw_sql(include_str!("sql/set_quality_ask.sql"))
         .execute(store.database())

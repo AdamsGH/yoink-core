@@ -34,7 +34,7 @@ export async function operationsChecks({ backend, root, database, query, contrac
     assert.equal((await stat(restored)).mode & 0o777, 0o600);
     await compareAllContent(query, contract, native, restored);
     const ledger = await nativeRequest(native, restored, 'SELECT COUNT(*) FROM runtime_migrations');
-    assert.equal(Number(ledger.rows[0][0]), 4);
+    assert.equal(Number(ledger.rows[0][0]), 13);
     const sequence = await nativeRequest(native, restored, "INSERT INTO api_keys(name,key_hash,prefix,scopes,created_by,created_at) VALUES ('restore-sequence','restore-sequence-hash','p','[]',9007199254740993,0) RETURNING CAST(id AS TEXT)");
     assert.equal(sequence.rows[0][0], '2000000001', 'restore preserves native allocator high-water');
     const sentinel = await readFile(backup);
