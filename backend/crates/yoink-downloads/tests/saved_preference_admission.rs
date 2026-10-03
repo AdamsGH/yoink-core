@@ -33,6 +33,13 @@ async fn setup() -> (tempfile::TempDir, Arc<Store>, DownloadService) {
 async fn setup_with_owner(
     owner_id: Option<i64>,
 ) -> (tempfile::TempDir, Arc<Store>, DownloadService) {
+    setup_with_quotas(owner_id, yoink_storage::QuotaLimits::default()).await
+}
+
+async fn setup_with_quotas(
+    owner_id: Option<i64>,
+    quotas: yoink_storage::QuotaLimits,
+) -> (tempfile::TempDir, Arc<Store>, DownloadService) {
     let directory = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
@@ -85,6 +92,7 @@ async fn setup_with_owner(
         executor,
         Arc::new(PanicDelivery),
         DownloadConfig {
+            quotas,
             admission: yoink_storage::AdmissionPolicy {
                 max_pending_actor: 10,
                 ..DownloadConfig::default().admission
@@ -643,7 +651,16 @@ async fn subtitle_preferences_are_frozen_and_replay_does_not_reresolve_them() {
 
 #[tokio::test]
 async fn admitted_preferences_are_frozen_and_replayed_before_settings_are_read() {
-    let (_directory, store, service) = setup().await;
+    // This preference contract admits more than five NEW operations in one minute.
+    // Its explicit fixture limit isolates preference resolution from quota exhaustion.
+    let (_directory, store, service) = setup_with_quotas(
+        None,
+        yoink_storage::QuotaLimits {
+            minute: 20,
+            ..yoink_storage::QuotaLimits::default()
+        },
+    )
+    .await;
     let request = request();
     let first = service
         .submit_preferred_request(
@@ -984,4 +1001,98 @@ async fn explicit_submit_still_rejects_a_forged_preference_marker() {
         service.submit_request(&forged, "forged-marker").await,
         Err(DownloadError::InvalidInput)
     );
+}
+
+#[tokio::test]
+async fn time_quota_uses_configured_id_not_owner_role_and_all_public_admission_paths() {
+    use yoink_db::query;
+    // This fixture user has an owner ROLE but no configured owner ID.
+    let (_dir, store, service) = setup().await;
+    let req = request();
+    let mut admissions = Vec::new();
+    for i in 0..5 {
+        let key = format!("quota-{i}");
+        let admission = if i % 2 == 0 {
+            service.submit_request(&req, &key).await.unwrap()
+        } else {
+            service
+                .submit_preferred_request(&req, &key, DownloadPreferenceOverrides::default())
+                .await
+                .unwrap()
+        };
+        admissions.push(admission);
+    }
+    assert!(matches!(
+        service.submit_request(&req, "quota-over").await,
+        Err(DownloadError::QuotaExceeded {
+            retry_after_secs: 1..=60
+        })
+    ));
+    assert!(
+        !service
+            .submit_request(&req, "quota-0")
+            .await
+            .unwrap()
+            .created
+    );
+    assert!(
+        !service
+            .submit_preferred_request(&req, "quota-1", DownloadPreferenceOverrides::default())
+            .await
+            .unwrap()
+            .created
+    );
+    // Cancellation remains charged, and its replay is free even at full quota.
+    service
+        .cancel(ACTOR, admissions[0].operation_id)
+        .await
+        .unwrap();
+    assert!(
+        !service
+            .submit_request(&req, "quota-0")
+            .await
+            .unwrap()
+            .created
+    );
+    let counts = query("SELECT count FROM rate_limits WHERE user_id=?1 ORDER BY \"window\"")
+        .bind(ACTOR as i64)
+        .fetch_all(store.database())
+        .await
+        .unwrap();
+    assert_eq!(counts.len(), 3);
+    assert!(counts.iter().all(|r| r.try_get::<i64, _>(0).unwrap() == 5));
+    query("UPDATE users SET role='restricted' WHERE id=?1")
+        .bind(ACTOR as i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert_eq!(
+        service.submit_request(&req, "denied").await,
+        Err(DownloadError::Denied)
+    );
+    assert!(
+        query("SELECT count FROM rate_limits WHERE user_id=?1")
+            .bind(ACTOR as i64)
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.try_get::<i64, _>(0).unwrap() == 5)
+    );
+
+    let (_dir, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
+    for i in 0..6 {
+        service
+            .submit_request(&req, &format!("exempt-{i}"))
+            .await
+            .unwrap();
+    }
+    let n: i64 = query("SELECT count(*) FROM rate_limits WHERE user_id=?1")
+        .bind(ACTOR as i64)
+        .fetch_one(store.database())
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(n, 0);
 }

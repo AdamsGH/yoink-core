@@ -31,7 +31,9 @@ use yoink_domain::{
 };
 use yoink_executor::{Executor, ExecutorError, ValidatedArtifact};
 use yoink_identity::IdentityStore;
-use yoink_storage::{Admission, AdmissionPolicy, Claim, OperationRecord, Store, StoreError};
+use yoink_storage::{
+    Admission, AdmissionPolicy, Claim, ClaimPolicy, OperationRecord, QuotaLimits, Store, StoreError,
+};
 use yoink_worker_protocol::{
     HttpSourceUrl, MediaMode, NetworkCredentials, PROTOCOL_VERSION, TaskKind, WorkerRequest,
 };
@@ -96,6 +98,8 @@ pub enum DeliveryArtifact {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DownloadConfig {
     pub admission: AdmissionPolicy,
+    pub quotas: QuotaLimits,
+    pub claim: ClaimPolicy,
     pub concurrency: usize,
     pub lease: Duration,
     pub heartbeat_interval: Duration,
@@ -113,6 +117,8 @@ impl Default for DownloadConfig {
                 max_pending_global: 50,
                 max_pending_actor: 5,
             },
+            quotas: QuotaLimits::default(),
+            claim: ClaimPolicy::default(),
             concurrency: 2,
             lease: Duration::from_secs(30),
             heartbeat_interval: Duration::from_secs(5),
@@ -211,6 +217,8 @@ pub enum DownloadError {
     Denied,
     #[error("download capacity has been reached")]
     Capacity,
+    #[error("download time quota exceeded; retry in {retry_after_secs} seconds")]
+    QuotaExceeded { retry_after_secs: u64 },
     #[error("idempotency key conflicts with an existing request")]
     Conflict,
     #[error("download storage operation failed")]
@@ -251,6 +259,13 @@ impl DownloadService {
         if delivery.bot_id() <= 0 {
             return Err(DownloadError::InvalidConfig);
         }
+        // The exemption uses exactly the trusted configured identity, not a role
+        // or a flag in a DownloadRequest. All admission paths share this Store view.
+        let store = Arc::new(
+            Store::from_database(store.database().clone())
+                .with_quotas(config.quotas, identities.configured_owner_id())
+                .map_err(|_| DownloadError::InvalidConfig)?,
+        );
         let profile = ProfileStore::new(store.database().clone());
         Ok(Self {
             store,
@@ -498,7 +513,7 @@ impl DownloadService {
             }
             let claim = tokio::select! {
                 _ = shutdown.cancelled() => return Ok(()),
-                result = self.store.claim_for_bot(&worker_id, self.config.lease, self.delivery.bot_id()) => result.map_err(map_store)?,
+                result = self.store.claim_for_bot_bounded(&worker_id, self.config.lease, self.delivery.bot_id(), self.config.claim) => result.map_err(map_store)?,
             };
             match claim {
                 Some(claim) => {
@@ -1271,7 +1286,9 @@ fn request_format_defaults(request: &DownloadRequest) -> bool {
 }
 
 fn validate_config(config: &DownloadConfig) -> Result<(), DownloadError> {
-    if !(1..=8).contains(&config.concurrency)
+    if config.quotas.validate().is_err()
+        || config.claim.validate().is_err()
+        || !(1..=8).contains(&config.concurrency)
         || config.lease < Duration::from_secs(1)
         || config.lease > Duration::from_secs(300)
         || config.lease.subsec_nanos() != 0
@@ -1327,6 +1344,9 @@ fn map_store(error: StoreError) -> DownloadError {
         StoreError::Unauthorized => DownloadError::Denied,
         StoreError::Conflict => DownloadError::Conflict,
         StoreError::Capacity => DownloadError::Capacity,
+        StoreError::QuotaExceeded { retry_after_secs } => {
+            DownloadError::QuotaExceeded { retry_after_secs }
+        }
         StoreError::NotFoundOrStale => DownloadError::Task,
         StoreError::Database | StoreError::Schema => DownloadError::Database,
     }
@@ -1381,6 +1401,45 @@ mod tests {
                 .to_string()
                 .contains("cookie")
         );
+    }
+
+    #[test]
+    fn invalid_quota_or_active_configuration_fails_closed() {
+        for n in [0, 1_000_001, u32::MAX] {
+            for quotas in [
+                QuotaLimits {
+                    minute: n,
+                    ..QuotaLimits::default()
+                },
+                QuotaLimits {
+                    hour: n,
+                    ..QuotaLimits::default()
+                },
+                QuotaLimits {
+                    day: n,
+                    ..QuotaLimits::default()
+                },
+            ] {
+                assert_eq!(
+                    validate_config(&DownloadConfig {
+                        quotas,
+                        ..DownloadConfig::default()
+                    }),
+                    Err(DownloadError::InvalidConfig)
+                );
+            }
+        }
+        for n in [0, 101, u32::MAX] {
+            assert_eq!(
+                validate_config(&DownloadConfig {
+                    claim: ClaimPolicy {
+                        max_active_actor: n
+                    },
+                    ..DownloadConfig::default()
+                }),
+                Err(DownloadError::InvalidConfig)
+            );
+        }
     }
 
     #[test]
@@ -1452,6 +1511,14 @@ mod tests {
     #[test]
     fn store_errors_map_without_exposing_storage_details() {
         assert_eq!(map_store(StoreError::Capacity), DownloadError::Capacity);
+        assert_eq!(
+            map_store(StoreError::QuotaExceeded {
+                retry_after_secs: 60
+            }),
+            DownloadError::QuotaExceeded {
+                retry_after_secs: 60
+            }
+        );
         assert_eq!(map_store(StoreError::Conflict), DownloadError::Conflict);
         assert_eq!(map_store(StoreError::NotFoundOrStale), DownloadError::Task);
         assert_eq!(map_store(StoreError::Database), DownloadError::Database);

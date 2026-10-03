@@ -14,6 +14,8 @@ Run Rust workspace commands from the repository root:
 | `cd backend && just fmt` | Check Rust formatting. |
 | `cd backend && just lint` | Clippy all workspace targets with warnings denied. |
 | `cd backend && just test` | Workspace tests. |
+| `cd backend && just test-quota` | Focused deterministic native quota/active-safety, service admission/draft replay, config and EN/RU transport contracts. |
+| `cd backend && just check-quota` | Focused all-target Clippy for storage, downloads, server, Telegram and i18n. |
 | `cd backend && just verify-ops` | Workspace checks, Rust 1.88 operator image, and synthetic 41-table import/backup/restore with host/container CLIs and real ENOSPC checks. |
 | `cd backend && just verify` | Formatting, lint, Rust and fixture unit tests, smoke checks, recursive script syntax checks, canonical schema generation checks, and documentation link checks. |
 | `cd backend && just test-storage-db` | Native storage contracts using private temporary file databases. No PostgreSQL or Docker required. |

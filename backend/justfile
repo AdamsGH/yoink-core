@@ -179,3 +179,11 @@ migrate:
 
 check-schema:
     cargo run --locked -p yoink-server -- check-schema
+
+# Focused quota/storage/admission/config/transport contracts on disposable native DBs.
+# One Cargo invocation keeps dependency feature resolution consistent across crates.
+test-quota:
+    cargo test --locked --message-format short --lib --bin yoink-server --test saved_preference_admission -p yoink-storage -p yoink-downloads -p yoink-server -p yoink-telegram -p yoink-i18n
+
+check-quota:
+    cargo clippy --locked --all-targets -p yoink-storage -p yoink-downloads -p yoink-server -p yoink-telegram -p yoink-i18n -- -D warnings

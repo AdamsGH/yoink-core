@@ -26,6 +26,7 @@ import { runAdminScenarios } from './media-fixture/admin-scenarios.mjs';
 import { runMenuScenarios } from './media-fixture/menu-scenarios.mjs';
 import { runGroupAdminScenarios } from './media-fixture/group-admin-scenarios.mjs';
 import { runMembershipScenarios } from './media-fixture/membership-scenarios.mjs';
+import { runQuotaScenarios } from './media-fixture/quota-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
 import { runCutSegmentsScenarios } from './media-fixture/cut-segments-scenarios.mjs';
 import { runQualityScenarios } from './media-fixture/quality-scenarios.mjs';
@@ -45,7 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -206,9 +207,15 @@ async function launchApp() {
     '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env',`YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=${workerSocketTimeoutSeconds}`,
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
+    // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
+    ...(scenario === 'all' ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
     '--entrypoint','yoink-fixture-server',fixtureImage]);
+  await waitFor(async () => {
+    try { return (await nativeQuery('SELECT 1')).trim() === '1'; }
+    catch (error) { if (error.code === 'ECONNREFUSED') return false; throw error; }
+  }, 'native fixture SQL listener after launch');
 }
 async function stopApp() {
   if (!appContainerId) return;
@@ -217,7 +224,7 @@ async function stopApp() {
   containers.delete(appContainerId);
   appContainerId=undefined;
 }
-async function restartApp() { await stopApp(); await launchApp(); await sleep(350); }
+async function restartApp() { await stopApp(); await launchApp(); }
 async function operationForReply(fromIndex) {
   return await waitFor(() => {
     const reply=botApi.calls.slice(fromIndex).find(call=>call.method==='sendmessage'&&/[0-9a-f]{8}-[0-9a-f-]{27}/i.test(call.data.text));
@@ -660,6 +667,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'settings') summaries.push(await runSettingsScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'onboarding') summaries.push(await runOnboardingScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'quotas') summaries.push(await runQuotaScenarios({ ...commandContext, restartApp }));
   if (scenario === 'admin') summaries.push(await runAdminScenarios({ ...commandContext, restartApp, appHttpPort, authSecret: fixtureAuthSecret, telegramToken: token }));
 if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
   if (scenario === 'group-admin') summaries.push(await runGroupAdminScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));

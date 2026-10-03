@@ -40,6 +40,55 @@ pub struct AdmissionPolicy {
     pub max_pending_global: u32,
     pub max_pending_actor: u32,
 }
+/// Trusted downloader configuration, never deserialized from request/ingress data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuotaLimits {
+    pub minute: u32,
+    pub hour: u32,
+    pub day: u32,
+}
+impl Default for QuotaLimits {
+    fn default() -> Self {
+        Self {
+            minute: 5,
+            hour: 30,
+            day: 100,
+        }
+    }
+}
+impl QuotaLimits {
+    pub fn validate(self) -> Result<(), crate::StoreError> {
+        if [self.minute, self.hour, self.day]
+            .iter()
+            .any(|n| !(1..=1_000_000).contains(n))
+        {
+            return Err(crate::StoreError::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+/// Separate from admission/pending capacity. Includes running and delivering work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimPolicy {
+    pub max_active_actor: u32,
+}
+impl Default for ClaimPolicy {
+    fn default() -> Self {
+        Self {
+            max_active_actor: 3,
+        }
+    }
+}
+impl ClaimPolicy {
+    pub fn validate(self) -> Result<(), crate::StoreError> {
+        if !(1..=100).contains(&self.max_active_actor) {
+            return Err(crate::StoreError::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Admission {
     pub operation_id: Uuid,

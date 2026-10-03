@@ -2,7 +2,7 @@ use std::{fmt, path::PathBuf, time::Duration};
 
 use yoink_downloads::{DownloadConfig, DownloadNetworkConfig};
 use yoink_executor::ExecutorConfig;
-use yoink_storage::AdmissionPolicy;
+use yoink_storage::{AdmissionPolicy, ClaimPolicy, QuotaLimits};
 
 use crate::config::{ConfigError, invalid};
 
@@ -155,6 +155,15 @@ impl MediaConfig {
                     max_pending_actor: number(read, "DOWNLOAD_MAX_PENDING_PER_USER", 3, 1, 1000)?
                         as u32,
                 },
+                quotas: QuotaLimits {
+                    minute: number(read, "DOWNLOAD_QUOTA_MINUTE", 5, 1, 1_000_000)? as u32,
+                    hour: number(read, "DOWNLOAD_QUOTA_HOUR", 30, 1, 1_000_000)? as u32,
+                    day: number(read, "DOWNLOAD_QUOTA_DAY", 100, 1, 1_000_000)? as u32,
+                },
+                claim: ClaimPolicy {
+                    max_active_actor: number(read, "DOWNLOAD_MAX_ACTIVE_PER_USER", 3, 1, 100)?
+                        as u32,
+                },
                 concurrency,
                 lease,
                 heartbeat_interval,
@@ -243,6 +252,8 @@ mod tests {
     fn bounded_defaults_and_fixed_worker_program() {
         let config = parse(&[]).unwrap();
         assert_eq!(config.downloads.concurrency, 2);
+        assert_eq!(config.downloads.quotas, QuotaLimits::default());
+        assert_eq!(config.downloads.claim, ClaimPolicy::default());
         assert_eq!(config.downloads.cache_ttl, Duration::from_secs(2_592_000));
         assert_eq!(
             config.executor.program,
@@ -260,6 +271,12 @@ mod tests {
     fn rejects_unsafe_or_unbounded_configuration_without_echoing_values() {
         for entries in [
             vec![("DOWNLOAD_CONCURRENCY", "0")],
+            vec![("DOWNLOAD_QUOTA_MINUTE", "0")],
+            vec![("DOWNLOAD_QUOTA_HOUR", "-1")],
+            vec![("DOWNLOAD_QUOTA_DAY", "1000001")],
+            vec![("DOWNLOAD_QUOTA_MINUTE", "secret")],
+            vec![("DOWNLOAD_MAX_ACTIVE_PER_USER", "0")],
+            vec![("DOWNLOAD_MAX_ACTIVE_PER_USER", "101")],
             vec![("DOWNLOAD_MAX_BYTES", "52428801")],
             vec![("DOWNLOAD_WORKSPACE", "/")],
             vec![("DOWNLOAD_WORKSPACE", "relative")],
@@ -287,6 +304,29 @@ mod tests {
             assert!(!format!("{error:?} {error}").contains("secret"));
         }
         assert!(MediaConfig::from_lookup(&mut |_| Ok(None), Duration::from_secs(30)).is_err());
+    }
+
+    #[test]
+    fn quotas_and_active_limits_accept_bounds_independently() {
+        let config = parse(&[
+            ("DOWNLOAD_QUOTA_MINUTE", "1"),
+            ("DOWNLOAD_QUOTA_HOUR", "1000000"),
+            ("DOWNLOAD_QUOTA_DAY", "2"),
+            ("DOWNLOAD_MAX_ACTIVE_PER_USER", "100"),
+        ])
+        .unwrap();
+        assert_eq!(
+            config.downloads.quotas,
+            QuotaLimits {
+                minute: 1,
+                hour: 1_000_000,
+                day: 2
+            }
+        );
+        assert_eq!(config.downloads.claim.max_active_actor, 100);
+        // Pending admission defaults are intentionally not normalized to library values.
+        assert_eq!(config.downloads.admission.max_pending_global, 100);
+        assert_eq!(config.downloads.admission.max_pending_actor, 3);
     }
 
     #[test]

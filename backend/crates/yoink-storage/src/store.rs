@@ -10,13 +10,15 @@ use crate::{
     codec,
     error::StoreError,
     model::{
-        Admission, AdmissionPolicy, Claim, LeaseHeartbeat, OperationRecord, OperationStatus,
-        ProgressStage,
+        Admission, AdmissionPolicy, Claim, ClaimPolicy, LeaseHeartbeat, OperationRecord,
+        OperationStatus, ProgressStage, QuotaLimits,
     },
 };
 
 pub struct Store {
     pub(crate) database: Database,
+    quota_limits: QuotaLimits,
+    quota_owner_id: Option<i64>,
 }
 
 impl Store {
@@ -31,11 +33,31 @@ impl Store {
         let database = Database::open(path, create, acquire_timeout)
             .await
             .map_err(|_| StoreError::Database)?;
-        Ok(Self { database })
+        Ok(Self::from_database(database))
     }
 
     pub fn from_database(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            quota_limits: QuotaLimits::default(),
+            quota_owner_id: None,
+        }
+    }
+
+    /// Construct a configured view over the same owning database connection. Only
+    /// trusted startup code should supply the configured owner ID; roles are irrelevant.
+    pub fn with_quotas(
+        mut self,
+        limits: QuotaLimits,
+        owner_id: Option<i64>,
+    ) -> Result<Self, StoreError> {
+        limits.validate()?;
+        if owner_id.is_some_and(|id| id <= 0) {
+            return Err(StoreError::InvalidInput);
+        }
+        self.quota_limits = limits;
+        self.quota_owner_id = owner_id;
+        Ok(self)
     }
 
     pub async fn migrate(&self) -> Result<(), StoreError> {
@@ -122,7 +144,7 @@ impl Store {
         idempotency_key: &str,
         policy: AdmissionPolicy,
     ) -> Result<Admission, StoreError> {
-        self.admit_inner(request, idempotency_key, policy, true)
+        self.admit_inner(request, idempotency_key, policy, true, None)
             .await
     }
 
@@ -132,7 +154,7 @@ impl Store {
         idempotency_key: &str,
         policy: AdmissionPolicy,
     ) -> Result<Admission, StoreError> {
-        self.admit_inner(request, idempotency_key, policy, false)
+        self.admit_inner(request, idempotency_key, policy, false, None)
             .await
     }
 
@@ -142,6 +164,7 @@ impl Store {
         idempotency_key: &str,
         policy: AdmissionPolicy,
         preserve_first_network: bool,
+        now_override: Option<i64>,
     ) -> Result<Admission, StoreError> {
         validate_key(idempotency_key)?;
         validate_policy(policy)?;
@@ -197,6 +220,25 @@ impl Store {
         if global >= policy.max_pending_global as i64 || actor >= policy.max_pending_actor as i64 {
             return Err(StoreError::Capacity);
         }
+        // Replay/conflict and capacity precede charging. A failed insertion or commit
+        // rolls these writes back together with the new operation.
+        let now = match now_override {
+            Some(now) => now,
+            None => query(include_str!("../sql/quota_now.sql"))
+                .fetch_one(&*tx)
+                .await
+                .map_err(|_| StoreError::Database)?
+                .try_get("now")
+                .map_err(|_| StoreError::Database)?,
+        };
+        crate::quota::charge(
+            &tx,
+            request.actor_id(),
+            self.quota_limits,
+            self.quota_owner_id,
+            now,
+        )
+        .await?;
         let id = query(include_str!("../sql/admit_insert.sql"))
             .bind(request.actor_id() as i64)
             .bind(idempotency_key)
@@ -222,7 +264,8 @@ impl Store {
         worker_id: &str,
         lease: Duration,
     ) -> Result<Option<Claim>, StoreError> {
-        self.claim_filtered(worker_id, lease, None).await
+        self.claim_filtered(worker_id, lease, None, ClaimPolicy::default())
+            .await
     }
 
     pub async fn claim_for_bot(
@@ -234,7 +277,22 @@ impl Store {
         if bot_id <= 0 {
             return Err(StoreError::InvalidInput);
         }
-        self.claim_filtered(worker_id, lease, Some(bot_id)).await
+        self.claim_for_bot_bounded(worker_id, lease, bot_id, ClaimPolicy::default())
+            .await
+    }
+
+    pub async fn claim_for_bot_bounded(
+        &self,
+        worker_id: &str,
+        lease: Duration,
+        bot_id: i64,
+        policy: ClaimPolicy,
+    ) -> Result<Option<Claim>, StoreError> {
+        if bot_id <= 0 {
+            return Err(StoreError::InvalidInput);
+        }
+        self.claim_filtered(worker_id, lease, Some(bot_id), policy)
+            .await
     }
 
     async fn claim_filtered(
@@ -242,7 +300,9 @@ impl Store {
         worker_id: &str,
         lease: Duration,
         bot_id: Option<i64>,
+        policy: ClaimPolicy,
     ) -> Result<Option<Claim>, StoreError> {
+        policy.validate()?;
         validate_worker(worker_id)?;
         validate_lease(lease)?;
         let mut connection = self
@@ -280,11 +340,13 @@ impl Store {
             Some(bot_id) => {
                 query(include_str!("../sql/claim_for_bot_select.sql"))
                     .bind(bot_id.to_string())
+                    .bind(policy.max_active_actor as i64)
                     .fetch_optional(&*tx)
                     .await
             }
             None => {
                 query(include_str!("../sql/claim_select.sql"))
+                    .bind(policy.max_active_actor as i64)
                     .fetch_optional(&*tx)
                     .await
             }
@@ -952,3 +1014,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "quota_tests.rs"]
+mod quota_tests;

@@ -83,6 +83,11 @@ pub struct IdentityStore {
 }
 
 impl IdentityStore {
+    /// Trusted startup identity, independent of persisted role grants.
+    pub fn configured_owner_id(&self) -> Option<i64> {
+        self.owner_id
+    }
+
     /// Configuration-only owner elevation. Global bans still take precedence.
     pub fn is_configured_owner(&self, user_id: i64) -> bool {
         self.owner_id == Some(user_id)

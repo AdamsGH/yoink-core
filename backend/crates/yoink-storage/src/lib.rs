@@ -7,6 +7,7 @@ mod error;
 mod model;
 mod progress;
 mod quality;
+mod quota;
 mod schema;
 mod store;
 pub use cache::CachedBatch;
@@ -14,8 +15,8 @@ pub use cache_key::{MediaCacheKey, media_cache_key};
 pub use cut::{CutSession, CutStage};
 pub use error::StoreError;
 pub use model::{
-    Admission, AdmissionPolicy, Claim, LeaseHeartbeat, OperationRecord, OperationStatus,
-    ProgressStage,
+    Admission, AdmissionPolicy, Claim, ClaimPolicy, LeaseHeartbeat, OperationRecord,
+    OperationStatus, ProgressStage, QuotaLimits,
 };
 pub use progress::{ProgressMessage, ProgressNotice};
 pub use quality::{QualityChoice, QualitySession, QualityStage};

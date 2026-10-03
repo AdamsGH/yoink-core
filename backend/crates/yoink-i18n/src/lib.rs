@@ -170,6 +170,7 @@ define_keys! {
     ReadinessNotReady => "telegram.readiness_not_ready";
     ErrorDenied => "telegram.error_denied";
     ErrorCapacity => "telegram.error_capacity";
+    ErrorQuota => "telegram.error_quota", ["seconds"];
     ErrorConflict => "telegram.error_conflict";
     ErrorInvalidInput => "telegram.error_invalid_input";
     ErrorInvalidPreferences => "telegram.error_invalid_preferences";

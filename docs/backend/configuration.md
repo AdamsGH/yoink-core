@@ -77,6 +77,17 @@ Downloads are disabled unless enabled explicitly. Enabling them requires Telegra
 
 The supported download, timeout, workspace, proxy, credential, quota, retry, cache and worker-output settings remain under the `YOINK_RUST_DOWNLOAD_*` and `YOINK_RUST_WORKER_*` prefixes. Their defaults and validation are enforced in `backend/crates/yoink-server/src/media_config.rs`; consult that source when setting detailed values. Do not put database or bot credentials into committed files or example commands. The private-origin exception is only for a trusted, isolated local fixture.
 
+### Download quotas
+
+| Variable | Default | Supported value | Behavior |
+| --- | --- | --- | --- |
+| `YOINK_RUST_DOWNLOAD_QUOTA_MINUTE` | `5` | 1 through 1000000 | Accepted new operations per actor in an anchored 60-second window. |
+| `YOINK_RUST_DOWNLOAD_QUOTA_HOUR` | `30` | 1 through 1000000 | Accepted new operations per actor in an anchored 3600-second window. |
+| `YOINK_RUST_DOWNLOAD_QUOTA_DAY` | `100` | 1 through 1000000 | Accepted new operations per actor in an anchored 86400-second window. |
+| `YOINK_RUST_DOWNLOAD_MAX_ACTIVE_PER_USER` | `3` | 1 through 100 | Running plus delivering operations per actor, across bots and destinations. Includes the owner and cache hits. |
+
+Time quotas use preserved native/imported `rate_limits` rows and survive restart. Only `YOINK_RUST_OWNER_ID` bypasses time quotas; stored roles do not. Replay, conflicts and rejected admission do not consume counters. Retries do not charge again. Active work and pending admission capacity are separate limits. See the [quota contract](downloads-parity.md#quotas-and-active-work) for charging, reset and rollback behavior.
+
 ## Localization and diagnostics
 
 Telegram replies use embedded English and Russian TOML catalogs. Update both catalogs together. Health and system diagnostics remain unauthenticated and contain no user data. Enabled auth routes expose the profile/settings contracts above. Keep the loopback bind unless exposure is intentional, use a trusted TLS reverse proxy for frontend traffic, and keep dev authentication disabled. Tokens are redacted in configuration diagnostics. Changes to embedded catalogs require a rebuild.

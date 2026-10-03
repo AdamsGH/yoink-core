@@ -7,6 +7,8 @@ pub enum StoreError {
     Conflict,
     #[error("pending operation capacity has been reached")]
     Capacity,
+    #[error("download time quota exceeded; retry in {retry_after_secs} seconds")]
+    QuotaExceeded { retry_after_secs: u64 },
     #[error("operation or lease is no longer available")]
     NotFoundOrStale,
     #[error("storage operation is not authorized")]

@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 14] = [
+const MIGRATIONS: [Migration; 15] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -79,6 +79,11 @@ const MIGRATIONS: [Migration; 14] = [
     Migration {
         version: 14,
         sql: include_str!("../migrations-turso/0014_native_membership.sql"),
+        expected_tables: 56,
+    },
+    Migration {
+        version: 15,
+        sql: include_str!("../migrations-turso/0015_download_quotas.sql"),
         expected_tables: 56,
     },
 ];
@@ -328,6 +333,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn quota_upgrade_preserves_operations_and_imported_counters_and_fingerprints_index() {
+        let (_dir, store) = version_one_store().await;
+        {
+            let connection = store.database().connection().await.unwrap();
+            for migration in &MIGRATIONS[1..14] {
+                raw_sql(migration.sql).execute(&*connection).await.unwrap();
+                let fingerprint = schema_hash(&connection, migration.expected_tables)
+                    .await
+                    .unwrap();
+                query(include_str!("../sql/record_migration.sql"))
+                    .bind(migration.version)
+                    .bind(checksum(migration))
+                    .bind(fingerprint)
+                    .bind(chrono::Utc::now())
+                    .execute(&*connection)
+                    .await
+                    .unwrap();
+            }
+        }
+        raw_sql("INSERT INTO runtime_operations(id,actor_id,idempotency_key,request,max_attempts) VALUES('fixture',7,'old','{\"old\":true}',3); INSERT INTO rate_limits VALUES(7,'minute',4,1700000060000000),(7,'hour',29,1700003600000000),(7,'day',99,1700086400000000),(7,'other',8,1);")
+            .execute(store.database()).await.unwrap();
+        let snapshot = |sql: &str| query(sql);
+        let operations_sql = "SELECT json_object('id',id,'actor_id',actor_id,'key',idempotency_key,'request',request,'status',status,'created_at',created_at) FROM runtime_operations";
+        let counters_sql = "SELECT json_object('user_id',user_id,'window',\"window\",'count',count,'reset_at',reset_at) FROM rate_limits ORDER BY user_id,\"window\"";
+        let before_ops: String = snapshot(operations_sql)
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+        let before_counters = snapshot(counters_sql)
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.try_get::<String, _>(0).unwrap())
+            .collect::<Vec<_>>();
+        store.migrate().await.unwrap();
+        store.migrate().await.unwrap();
+        store.verify_schema().await.unwrap();
+        let after_ops: String = snapshot(operations_sql)
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+        let after_counters = snapshot(counters_sql)
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.try_get::<String, _>(0).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(before_ops, after_ops);
+        assert_eq!(before_counters, after_counters);
+        raw_sql("DROP INDEX operations_active_actor")
+            .execute(store.database())
+            .await
+            .unwrap();
+        assert_eq!(store.verify_schema().await, Err(StoreError::Schema));
+        assert_eq!(store.migrate().await, Err(StoreError::Schema));
+    }
+
+    #[tokio::test]
     async fn membership_upgrade_preserves_imported_state_and_fingerprints_indexes() {
         let (_directory, store) = version_one_store().await;
         let before = {
@@ -469,7 +538,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 14);
+        assert_eq!(versions.len(), 15);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
@@ -484,6 +553,7 @@ mod tests {
         assert_eq!(versions[11].try_get::<i64, _>("version").unwrap(), 12);
         assert_eq!(versions[12].try_get::<i64, _>("version").unwrap(), 13);
         assert_eq!(versions[13].try_get::<i64, _>("version").unwrap(), 14);
+        assert_eq!(versions[14].try_get::<i64, _>("version").unwrap(), 15);
     }
 
     #[tokio::test]

@@ -743,6 +743,13 @@ fn format_status(system: &SystemService, language: Language) -> String {
 
 fn download_error_response(error: DownloadError, language: Language) -> String {
     let key = match error {
+        DownloadError::QuotaExceeded { retry_after_secs } => {
+            return translate(
+                language,
+                Key::ErrorQuota,
+                &[("seconds", &retry_after_secs.to_string())],
+            );
+        }
         DownloadError::Denied => Key::ErrorDenied,
         DownloadError::Capacity => Key::ErrorCapacity,
         DownloadError::Conflict => Key::ErrorConflict,
@@ -1862,10 +1869,42 @@ mod tests {
     }
 
     #[test]
+    fn quota_messages_are_actionable_localized_and_bounded() {
+        for (lang, hint) in [
+            (Language::English, "Wait 60 seconds"),
+            (Language::Russian, "Подождите 60 сек."),
+        ] {
+            let text = download_error_response(
+                DownloadError::QuotaExceeded {
+                    retry_after_secs: 60,
+                },
+                lang,
+            );
+            assert!(text.contains(hint));
+            assert!(text.len() < 512);
+        }
+        for lang in [Language::English, Language::Russian] {
+            assert!(
+                download_error_response(
+                    DownloadError::QuotaExceeded {
+                        retry_after_secs: u64::MAX
+                    },
+                    lang
+                )
+                .len()
+                    < 512
+            );
+        }
+    }
+
+    #[test]
     fn every_download_error_has_english_and_russian_user_text() {
         let errors = [
             DownloadError::Denied,
             DownloadError::Capacity,
+            DownloadError::QuotaExceeded {
+                retry_after_secs: 60,
+            },
             DownloadError::Conflict,
             DownloadError::InvalidInput,
             DownloadError::InvalidPreferences,
