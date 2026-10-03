@@ -2,6 +2,7 @@
 
 mod admin;
 mod auth;
+mod groups;
 pub use auth::{AuthService, AuthState};
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};

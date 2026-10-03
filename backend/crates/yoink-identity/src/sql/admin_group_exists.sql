@@ -1,0 +1,1 @@
+SELECT EXISTS(SELECT 1 FROM groups WHERE id=?1);

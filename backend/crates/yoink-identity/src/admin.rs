@@ -15,8 +15,10 @@ pub enum AdminError {
     Unauthorized,
     #[error("insufficient permissions")]
     Forbidden,
-    #[error("user not found")]
+    #[error("user or group not found")]
     NotFound,
+    #[error("resource already exists")]
+    Conflict,
     #[error("invalid administration input")]
     InvalidInput,
     #[error("administration data is unavailable")]
@@ -711,6 +713,8 @@ fn valid_ids(a: i64, t: i64) -> Result<(), AdminError> {
         Ok(())
     }
 }
+pub mod groups;
+
 fn blocked(role: Role, ban: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
     role == Role::Banned || ban.is_some_and(|b| b > now)
 }

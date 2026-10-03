@@ -1,6 +1,6 @@
 # Access control and identity
 
-Policy rules are implemented as typed values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds read-only authorization snapshots and provides transactional registration, profile, settings and account/access administration. Opt-in frontend authentication uses these shared operations; media retains its separate command gates. Group/configuration/API-key administration and product API parity remain pending.
+Policy rules are implemented as typed values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds read-only authorization snapshots and provides transactional registration, profile, settings and account/access administration. Opt-in frontend authentication uses these shared operations; media retains its separate command gates. Authenticated group/topic/member-policy administration is available. Tag maps, API keys, remaining configuration workflows and product API parity remain pending.
 
 ## Global roles and blocks
 
@@ -33,9 +33,17 @@ With frontend authentication enabled, the native API implements user listing/det
 
 Admins can manage ordinary users; owner-level targets and promotions require an owner. The configured owner cannot be changed through these APIs. User patches accept role, EN/RU language and a nullable timed ban only. Profile changes advance the shared microsecond revision, invalidating old Telegram language callbacks. Grant writes require a registered feature and preserve provenance protections: admins cannot replace or revoke tag-derived grants, while owners can. Active permission listings exclude expired grants. Global bans override role and explicit/provider feature access.
 
-Bot settings reads require admin access and writes require owner access. The writable keys are `bot_access_mode`, `browser_cookies_min_role`, `inline_storage_chat_id` and `inline_storage_thread_id`, with closed policy values and validated IDs. Registration immediately respects persisted open/approved-only policy. Storing browser-cookie or inline destinations does not implement their remaining operational workflows. Tag-map editing, group registration/configuration, API-key administration, Telegram command-list refresh and full product APIs remain pending. Feature grants do not bypass the separate minimum-role or configured-owner media command gates.
+Bot settings reads require admin access and writes require owner access. The writable keys are `bot_access_mode`, `browser_cookies_min_role`, `inline_storage_chat_id` and `inline_storage_thread_id`, with closed policy values and validated IDs. Registration immediately respects persisted open/approved-only policy. Storing browser-cookie or inline destinations does not implement their remaining operational workflows. Tag-map editing, automatic Telegram group registration, API-key administration, Telegram command-list refresh and full product APIs remain pending. Feature grants do not bypass the separate minimum-role or configured-owner media command gates.
 
 `just verify-db` covers native transactional administration and authenticated HTTP contracts. `just test-media admin` exercises owner administration through real HTTP and the fixture Bot API, including approved-only onboarding, immediate role/grant/ban enforcement, persisted policy across restart and localized Telegram replies. These checks use isolated data and fake credentials, not production activation.
+
+## Group administration
+
+Authenticated admins and owners can list, create, patch and delete groups and manage their topic and member policies through `/api/v1/groups`. New groups are disabled until explicitly enabled. Listing excludes private-chat records. Topics include nullable main-chat policies; a positive-topic whitelist denies unlisted topics. Member overrides stay local and never change the user's global role. Every operation reloads the actor's current role and bans; writes authorize inside an Immediate transaction. A stale token cannot restore demoted or banned administrative access. Group deletion cascades topic and member policies, without deleting historical downloads.
+
+The existing frontend request and response shapes are supported, including positive private-chat storage destinations, nullable storage fields and 256-character Unicode names. Stored `allow_pm`, NSFW and storage settings do not implement private-delivery redirects or other unported workflows. Group photos and automatic Telegram registration are not implemented.
+
+`just test-media group-admin` checks real HTTP mutations against Telegram admission and delivery, topic whitelist behavior, local role isolation, global bans, revocation, cascading deletion and persistence across restart. It runs against the rebuilt fixture image with disposable data. Native HTTP regressions cover stale-token demotions and timed bans across every group-policy operation.
 
 ## Read-only snapshot boundary
 

@@ -46,6 +46,7 @@ impl From<AdminError> for ApiError {
             AdminError::Unauthorized => Self(StatusCode::UNAUTHORIZED, "Invalid identity"),
             AdminError::Forbidden => Self(StatusCode::FORBIDDEN, "Access denied"),
             AdminError::NotFound => Self(StatusCode::NOT_FOUND, "Not found"),
+            AdminError::Conflict => Self(StatusCode::CONFLICT, "Already exists"),
             AdminError::InvalidInput => invalid_request(),
             AdminError::Unavailable => Self(
                 StatusCode::SERVICE_UNAVAILABLE,

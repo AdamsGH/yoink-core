@@ -1,0 +1,1 @@
+UPDATE groups SET title=CASE WHEN ?2 THEN ?1 ELSE title END,enabled=COALESCE(?3,enabled),auto_grant_role=COALESCE(?4,auto_grant_role),allow_pm=COALESCE(?5,allow_pm),nsfw_allowed=COALESCE(?6,nsfw_allowed),storage_chat_id=CASE WHEN ?8 THEN ?7 ELSE storage_chat_id END,storage_thread_id=CASE WHEN ?10 THEN ?9 ELSE storage_thread_id END WHERE id=?11;

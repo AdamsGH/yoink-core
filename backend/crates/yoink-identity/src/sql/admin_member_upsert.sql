@@ -1,0 +1,1 @@
+INSERT INTO user_group_policies(user_id,group_id,role_override,allow_pm_override) VALUES(?1,?2,?3,?4) ON CONFLICT(user_id,group_id) DO UPDATE SET role_override=excluded.role_override,allow_pm_override=excluded.allow_pm_override;

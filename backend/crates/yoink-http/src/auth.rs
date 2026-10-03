@@ -55,6 +55,7 @@ pub(crate) fn router(state: AuthState, system: yoink_application::SystemService)
     }
     router
         .merge(crate::admin::router())
+        .merge(crate::groups::router())
         .route_layer(middleware::from_fn(move |request: Request, next: Next| {
             let ready = system.snapshot().ready;
             async move {
