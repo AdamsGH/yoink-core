@@ -17,6 +17,7 @@ use yoink_identity::{IdentityError, IdentityStore, TrustedProfile, UserProfile, 
 #[derive(Clone)]
 pub struct AuthState {
     service: Arc<OnceLock<AuthService>>,
+    identities: Arc<OnceLock<Arc<IdentityStore>>>,
     dev_enabled: bool,
 }
 
@@ -29,12 +30,27 @@ impl AuthState {
     pub fn new(dev_enabled: bool) -> Self {
         Self {
             service: Arc::new(OnceLock::new()),
+            identities: Arc::new(OnceLock::new()),
             dev_enabled,
         }
     }
 
     pub fn install(&self, service: AuthService) -> Result<(), AuthService> {
         self.service.set(service)
+    }
+
+    pub fn install_identities(
+        &self,
+        identities: Arc<IdentityStore>,
+    ) -> Result<(), Arc<IdentityStore>> {
+        self.identities.set(identities)
+    }
+
+    pub(crate) fn identities(&self) -> Result<&Arc<IdentityStore>, ApiError> {
+        self.identities.get().ok_or(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Authentication unavailable",
+        ))
     }
 
     pub(crate) fn service(&self) -> Result<&AuthService, ApiError> {

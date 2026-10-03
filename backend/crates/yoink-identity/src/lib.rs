@@ -8,6 +8,7 @@ use yoink_db::{Database, query};
 
 pub mod admin;
 mod language;
+pub mod m2m;
 mod profile;
 pub use language::LanguagePreference;
 pub use profile::{TrustedProfile, UserProfile, UserSettings};

@@ -197,6 +197,10 @@ impl TelegramAdapter {
         self
     }
 
+    pub fn bot_username(&self) -> &str {
+        &self.bot_username
+    }
+
     /// Returns a clone-backed delivery implementation sharing this bot's client.
     pub fn delivery(&self) -> Arc<dyn yoink_downloads::Delivery> {
         Arc::new(TelegramDelivery {

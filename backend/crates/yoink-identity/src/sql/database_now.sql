@@ -1,1 +1,1 @@
-SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000000 AS now;
+SELECT CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER) AS now;

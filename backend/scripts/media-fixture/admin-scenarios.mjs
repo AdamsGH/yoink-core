@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHmac, randomInt } from 'node:crypto';
 import { commandHarness } from './command-harness.mjs';
 import { apiKeyScenarios } from './api-key-scenarios.mjs';
+import { m2mScenarios } from './m2m-scenarios.mjs';
 
 export async function runAdminScenarios(context) {
   const { botApi, fixtureSql, waitFor, restartApp, sourcePort, appHttpPort, authSecret } = context;
@@ -205,6 +206,7 @@ export async function runAdminScenarios(context) {
     assert.equal(revokedAccess.data.find(feature => feature.plugin === permissionFeature.plugin && feature.feature === permissionFeature.feature)?.effective, false,
       'revoking dl/inline must remove effective grant access immediately');
     await deniedDownload(registeredActor, 'grant-revoked');
+    await m2mScenarios({ request, fixtureSql, restartApp, appHttpPort, ownerToken, actor: registeredActor });
   } finally {
     botApi.setExpectedUpload(null);
     await apiKeys?.cleanup();
@@ -213,5 +215,5 @@ export async function runAdminScenarios(context) {
     if (savedPolicy) await fixtureSql(`UPDATE bot_settings SET value=${literal(savedPolicy)},updated_at=unixepoch('now')*1000000 WHERE key='bot_access_mode'`);
     else await fixtureSql("DELETE FROM bot_settings WHERE key='bot_access_mode'");
   }
-  return 'authenticated administration, tag-map replacement and catalog, API-key generation/nonexposure/revocation/restart, approved-only registration, immediate role/grant/ban enforcement, persisted policy and localized Telegram behavior verified';
+  return 'authenticated administration, tag-map replacement and catalog, API-key generation/nonexposure/revocation/restart, M2M scope/expiry/revocation/status/users/groups/events persistence, approved-only registration, immediate role/grant/ban enforcement, persisted policy and localized Telegram behavior verified';
 }

@@ -88,17 +88,22 @@ async fn run_impl(
     let address = listener.local_addr().map_err(|_| ServerError::Bind)?;
     tokio::pin!(shutdown_signal);
     let mut tasks = JoinSet::new();
-    let auth_state = config
-        .auth
-        .as_ref()
-        .map(|auth| yoink_http::AuthState::new(auth.dev_enabled));
-    let http_auth = auth_state.clone();
+    let auth_state =
+        yoink_http::AuthState::new(config.auth.as_ref().is_some_and(|auth| auth.dev_enabled));
+    let http_auth = config.auth.as_ref().map(|_| auth_state.clone());
+    let http_identities = auth_state.clone();
     let http_system = system.clone();
     let http_cancel = cancel.clone();
     tasks.spawn(async move {
-        yoink_http::serve_with_auth(listener, http_system, http_auth, http_cancel)
-            .await
-            .map_err(|_| ServerError::Http)
+        yoink_http::serve_with_identity(
+            listener,
+            http_system,
+            http_auth,
+            http_identities,
+            http_cancel,
+        )
+        .await
+        .map_err(|_| ServerError::Http)
     });
     tracing::info!(%address, "HTTP diagnostics listening");
     let owner_id = config.telegram.as_ref().map(|telegram| telegram.owner_id);
@@ -129,13 +134,17 @@ async fn run_impl(
                 .verify_schema()
                 .await
                 .map_err(|_| ServerError::DatabaseStartup)?;
-            identities = Some(Arc::new(yoink_identity::IdentityStore::new(
+            let identity = Arc::new(yoink_identity::IdentityStore::new(
                 store.database().clone(),
                 owner_id
                     .map(|id| id as i64)
                     .or_else(|| config.auth.as_ref().map(|auth| auth.owner_id)),
                 false,
-            )));
+            ));
+            auth_state
+                .install_identities(identity.clone())
+                .map_err(|_| ServerError::DatabaseStartup)?;
+            identities = Some(identity);
         }
         if let Some(auth) = config.auth {
             let service = yoink_http::AuthService {
@@ -143,8 +152,6 @@ async fn run_impl(
                 crypto: auth.crypto,
             };
             auth_state
-                .as_ref()
-                .ok_or(ServerError::DatabaseStartup)?
                 .install(service)
                 .map_err(|_| ServerError::DatabaseStartup)?;
         }
@@ -257,6 +264,9 @@ async fn run_impl(
         }
     };
     let telegram_enabled = telegram.is_some();
+    let bot_username = telegram
+        .as_ref()
+        .map(|bot| format!("@{}", bot.bot_username()));
     let media_enabled = downloads.is_some();
     if let Some(downloads) = downloads {
         let media_cancel = cancel.clone();
@@ -277,6 +287,7 @@ async fn run_impl(
                 .map_err(|_| ServerError::Telegram)
         });
     }
+    system.set_bot_status(telegram_enabled, bot_username);
     system.set_ready(true);
     tracing::info!(%address, telegram_enabled, media_enabled, "diagnostic adapters ready");
     let result = supervise(
@@ -322,6 +333,7 @@ async fn stop_and_drain(
     initial: Result<(), ServerError>,
 ) -> Result<(), ServerError> {
     system.set_ready(false);
+    system.set_bot_status(false, None);
     cancel.cancel();
     let drain = timeout(shutdown_timeout, async {
         let mut error = None;

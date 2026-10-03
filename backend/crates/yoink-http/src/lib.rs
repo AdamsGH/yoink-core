@@ -3,6 +3,7 @@
 mod admin;
 mod auth;
 mod groups;
+mod m2m;
 pub use auth::{AuthService, AuthState};
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
@@ -31,6 +32,26 @@ pub fn router_with_auth(system: SystemService, auth: Option<AuthState>) -> Route
         Some(state) => diagnostics.merge(auth::router(state, system)),
         None => diagnostics,
     }
+}
+
+pub fn router_with_identity(
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+) -> Router {
+    router_with_auth(system.clone(), auth).merge(m2m::router(identities, system))
+}
+
+pub async fn serve_with_identity(
+    listener: TcpListener,
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    axum::serve(listener, router_with_identity(system, auth, identities))
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
 }
 
 pub async fn serve_with_auth(
@@ -97,6 +118,31 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn m2m_without_jwt_does_not_register_disabled_auth_routes() {
+        let system = SystemService::new("test");
+        system.set_ready(true);
+        let app = router_with_identity(system, None, AuthState::new(false));
+        for endpoint in ["/api/v1/auth/token", "/api/v1/auth/dev"] {
+            assert_eq!(
+                request(app.clone(), Method::POST, endpoint).await.status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(
+            request(app.clone(), Method::GET, "/api/v1/users/me")
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            request(app, Method::GET, "/api/internal/v1/status")
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     async fn json(response: axum::response::Response) -> Value {

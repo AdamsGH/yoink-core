@@ -1,8 +1,11 @@
 //! Application services shared by transports. No framework or database types.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
 };
 
 use serde::Serialize;
@@ -34,6 +37,9 @@ pub struct SystemService {
     version: Arc<str>,
     ready: Arc<AtomicBool>,
     downloads_enabled: Arc<AtomicBool>,
+    started: Arc<Instant>,
+    bot_running: Arc<AtomicBool>,
+    bot_username: Arc<RwLock<Option<String>>>,
 }
 
 impl SystemService {
@@ -42,11 +48,36 @@ impl SystemService {
             version: Arc::from(version.into()),
             ready: Arc::new(AtomicBool::new(false)),
             downloads_enabled: Arc::new(AtomicBool::new(false)),
+            started: Arc::new(Instant::now()),
+            bot_running: Arc::new(AtomicBool::new(false)),
+            bot_username: Arc::new(RwLock::new(None)),
         }
     }
 
     pub fn set_ready(&self, ready: bool) {
         self.ready.store(ready, Ordering::Release);
+    }
+
+    pub fn uptime_seconds(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+
+    pub fn set_bot_status(&self, running: bool, username: Option<String>) {
+        self.bot_running.store(running, Ordering::Release);
+        if let Ok(mut current) = self.bot_username.write() {
+            *current = username;
+        }
+    }
+
+    pub fn bot_running(&self) -> bool {
+        self.bot_running.load(Ordering::Acquire)
+    }
+
+    pub fn bot_username(&self) -> Option<String> {
+        self.bot_username
+            .read()
+            .ok()
+            .and_then(|value| value.clone())
     }
 
     /// Advertises only the implemented progressive-video slice, not download parity.
@@ -88,6 +119,18 @@ mod tests {
         assert!(!other.snapshot().ready);
         service.set_ready(false);
         assert!(!adapter.snapshot().ready);
+    }
+
+    #[test]
+    fn lifecycle_status_uses_monotonic_age_and_explicit_bot_state() {
+        let service = SystemService::new("test");
+        let before = service.uptime_seconds();
+        service.set_bot_status(true, None);
+        assert!(service.uptime_seconds() >= before);
+        assert!(service.bot_running());
+        assert_eq!(service.bot_username(), None);
+        service.set_bot_status(false, None);
+        assert!(!service.bot_running());
     }
 
     #[test]
