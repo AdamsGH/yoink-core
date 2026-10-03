@@ -119,6 +119,9 @@ define_keys! {
     LangStale => "telegram.lang_stale";
     HelpEnabled => "telegram.help_enabled";
     HelpBasic => "telegram.help_basic";
+    UserHelpEnabled => "telegram.user_help_enabled";
+    UserHelpBasic => "telegram.user_help_basic";
+    RegistrationPending => "telegram.registration_pending";
     UsageDownload => "telegram.usage_download";
     PlainUrlUsage => "telegram.plain_url_usage";
     UncacheUsage => "telegram.uncache_usage";

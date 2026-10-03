@@ -416,6 +416,7 @@ mod tests {
             owner_id: 42,
             bot_id: 123,
             groups_enabled: false,
+            identity_enabled: false,
         };
         let message_json = serde_json::json!({
             "message_id": 7, "date": 0,

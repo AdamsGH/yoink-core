@@ -21,6 +21,7 @@ import { FormatSource } from './media-fixture/format-source.mjs';
 import { runFormatScenarios } from './media-fixture/format-scenarios.mjs';
 import { runSettingsScenarios } from './media-fixture/settings-scenarios.mjs';
 import { runLanguageScenarios } from './media-fixture/language-scenarios.mjs';
+import { runOnboardingScenarios } from './media-fixture/onboarding-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
 import { runCutSegmentsScenarios } from './media-fixture/cut-segments-scenarios.mjs';
 import { runQualityScenarios } from './media-fixture/quality-scenarios.mjs';
@@ -40,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -300,8 +301,9 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     assert.equal(sourceFixture.mediaRequests, initialSourceRequests, 'replayed update must not execute another download');
     const replies = botApi.calls.filter(call => call.method === 'sendmessage').map(call => call.data.text);
     assert(replies.some(text => text.includes(operationId) && text.includes('succeeded')), 'owner /job must return the succeeded operation status');
-    assert.equal(botApi.calls.filter(call => call.method === 'sendmessage' && call.data.chat_id === 43).length, 0,
-      'non-owner is ignored by the private owner gate');
+    const foreignStatus = await waitFor(() => botApi.calls.slice(replayCallStart).find(call =>
+      call.method === 'sendmessage' && Number(call.data.chat_id) === 43), 'ordinary-user foreign-operation denial');
+    assert.equal(foreignStatus.data.text, 'Operation not found.', 'ordinary users cannot inspect another actor\'s operation');
     const unknownId = randomUUID();
     botApi.enqueue(42, 42, `/job ${unknownId}`);
     await waitFor(() => botApi.calls.some(call => call.method === 'sendmessage' && call.data.text === 'Operation not found.'), 'unknown owner operation response');
@@ -650,7 +652,8 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'adaptive') summaries.push(await runAdaptiveScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'formats') summaries.push(await runFormatScenarios({ ...commandContext, restartApp, cookieSecret, proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'settings') summaries.push(await runSettingsScenarios({ ...commandContext, restartApp }));
-if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'onboarding') summaries.push(await runOnboardingScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut-quality') summaries.push(await runCutQualityScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'quality-cut') summaries.push(await runQualityCutScenarios({ ...commandContext, restartApp }));

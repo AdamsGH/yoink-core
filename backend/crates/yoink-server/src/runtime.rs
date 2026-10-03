@@ -111,6 +111,7 @@ async fn run_impl(
         .as_ref()
         .map(|db| (db.health_interval, db.acquire_timeout));
     let mut database: Option<Arc<yoink_storage::Store>> = None;
+    let mut identities: Option<Arc<yoink_identity::IdentityStore>> = None;
     let mut downloads = None;
     let prepare = async {
         if let Some(database_config) = &config.database {
@@ -128,15 +129,17 @@ async fn run_impl(
                 .verify_schema()
                 .await
                 .map_err(|_| ServerError::DatabaseStartup)?;
+            identities = Some(Arc::new(yoink_identity::IdentityStore::new(
+                store.database().clone(),
+                owner_id
+                    .map(|id| id as i64)
+                    .or_else(|| config.auth.as_ref().map(|auth| auth.owner_id)),
+                false,
+            )));
         }
         if let Some(auth) = config.auth {
-            let store = database.as_ref().ok_or(ServerError::DatabaseStartup)?;
             let service = yoink_http::AuthService {
-                identities: Arc::new(yoink_identity::IdentityStore::new(
-                    store.database().clone(),
-                    Some(auth.owner_id),
-                    false,
-                )),
+                identities: identities.clone().ok_or(ServerError::DatabaseStartup)?,
                 crypto: auth.crypto,
             };
             auth_state
@@ -163,14 +166,13 @@ async fn run_impl(
             ),
             None => None,
         };
+        if let Some(identities) = identities.clone() {
+            telegram = telegram.map(|adapter| adapter.with_identity_store(identities));
+        }
         if let Some(media) = config.media {
             let store = database.as_ref().ok_or(ServerError::MediaStartup)?;
             let adapter = telegram.take().ok_or(ServerError::MediaStartup)?;
-            let identities = Arc::new(yoink_identity::IdentityStore::new(
-                store.database().clone(),
-                owner_id.map(|id| id as i64),
-                false,
-            ));
+            let identities = identities.clone().ok_or(ServerError::MediaStartup)?;
             let worker_workspace = media.executor.workspace_root.clone();
             let executor = yoink_executor::Executor::new(media.executor)
                 .map_err(|_| ServerError::MediaStartup)?;

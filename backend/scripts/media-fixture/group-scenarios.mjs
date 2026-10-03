@@ -33,7 +33,7 @@ export async function runGroupScenarios(context) {
       [8000000000013, group, 18], [8000000000014, group, 18], [777777, group, 18],
       [user, group, 18, { isBot: true }],
       [42, group, 18, { senderChat: { id: group, type: 'supergroup', title: 'Anonymous sender' } }],
-      [user, user], [user, group, 18, { command: '/status' }],
+      [user, user, 18], [user, group, 18, { command: '/status' }],
       [42, group, 18, { command: `/uncache ${origin}/media` }],
     ]);
     const bareSource = `${origin}/media?case=group-bare-url`;

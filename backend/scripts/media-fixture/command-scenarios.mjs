@@ -83,7 +83,7 @@ export async function runCommandMediaScenarios(context) {
 
     const gateStart = botApi.calls.length;
     const beforeDenied = Number((await fixtureSql('SELECT count(*) FROM runtime_operations')).trim());
-    botApi.enqueue(43, 43, `/video ${sourceUrl}`);
+    botApi.enqueue(43, 43, `/list ${sourceUrl}`);
     botApi.enqueue(42, -10042, `/audio ${sourceUrl}`);
     botApi.enqueue(42, 42, `/video@another_bot ${sourceUrl}`);
     botApi.enqueue(42, 42, '/status');

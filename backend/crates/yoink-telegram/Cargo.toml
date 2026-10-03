@@ -20,10 +20,13 @@ yoink-domain.workspace = true
 yoink-downloads = { path = "../yoink-downloads" }
 yoink-executor = { path = "../yoink-executor" }
 yoink-storage.workspace = true
+yoink-identity.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+yoink-db.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

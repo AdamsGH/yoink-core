@@ -61,7 +61,7 @@ export async function runPlainUrlScenarios(context) {
       [42, 42, `/unknown ${source}`, entity(`/unknown ${source}`)],
       [42, 42, `/video@other_bot ${source}`, entity(`/video@other_bot ${source}`)],
       [42, 42, source, { ...entity(source), viaBot: 999 }],
-      [43, 43, source, entity(source)],
+      [43, 44, source, entity(source)],
       [42, -10042, source, { ...entity(source), replyToBot: 123456 }],
       [42, 42, 'https://open.spotify.com/track/test', entity('https://open.spotify.com/track/test', 'https://open.spotify.com/track/test')],
     ]) botApi.enqueue(actor, chat, text, nextId++, 'en', options);

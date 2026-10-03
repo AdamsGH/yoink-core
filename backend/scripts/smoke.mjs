@@ -181,6 +181,51 @@ test('native WebApp authentication, restart persistence and failed-startup isola
     assert.equal(profile.role, 'owner');
     assert.equal((await fetch(base + '/api/v1/auth/dev?user_id=43&role=owner', { method: 'POST' })).status, 401);
     assert.equal((await fetch(base + '/api/v1/auth/dev?user_id=42', { method: 'POST' })).status, 200);
+
+    const ordinary = await (await postLogin(base, signed(43))).json();
+    const ordinaryHeaders = { authorization: `Bearer ${ordinary.access_token}`, 'content-type': 'application/json' };
+    assert.equal((await fetch(base + '/api/v1/settings', { method: 'PATCH', headers: ordinaryHeaders, body: JSON.stringify({ language: 'ru' }) })).status, 200);
+    server.child.kill('SIGTERM');
+    assert.equal((await server.exit()).code, 0);
+    let polls = 0;
+    const sent = [];
+    const message = (id, actor, text) => ({
+      message_id: id, date: 1700000000,
+      from: { id: actor, is_bot: actor === fakeMe.id, first_name: 'Fixture', language_code: 'en' },
+      chat: { id: 43, type: 'private', first_name: 'Fixture' }, text,
+    });
+    const botApi = http.createServer(async (request, response) => {
+      response.setHeader('content-type', 'application/json');
+      const method = request.url.split('/').at(-1).toLowerCase();
+      let result;
+      if (method === 'getme') result = fakeMe;
+      else if (method === 'getupdates') {
+        result = ++polls === 1 ? [{ update_id: 1, message: message(1, 43, '/help') }] : [];
+        await sleep(30);
+      } else if (method === 'sendmessage') {
+        let body = '';
+        for await (const chunk of request) body += chunk;
+        sent.push(JSON.parse(body));
+        result = message(2, fakeMe.id, sent.at(-1).text);
+      } else {
+        response.writeHead(400);
+        response.end(JSON.stringify({ ok: false, error_code: 400, description: 'unexpected method' }));
+        return;
+      }
+      response.end(JSON.stringify({ ok: true, result }));
+    });
+    const botAddress = await listen(t, botApi);
+    server = start(t, { ...env, ...telegramConfig(botAddress), YOINK_RUST_DOWNLOADS_ENABLED: 'false' });
+    await server.address();
+    await until(() => sent.length > 0 && polls >= 2, 'media-disabled localized ordinary help');
+    server.child.kill('SIGTERM');
+    assert.equal((await server.exit()).code, 0);
+    assert.equal(sent.length, 1);
+    assert.equal(Number(sent[0].chat_id), 43);
+    assert.match(sent[0].text, /видео|загруз|аудио/i);
+    assert.doesNotMatch(sent[0].text, /\/cookie|\/proxy|\/status/);
+    assert(!server.output().includes(fakeToken));
+    assert(!server.output().includes(ordinary.access_token));
   } finally {
     if (server) {
       server.child.kill('SIGTERM');

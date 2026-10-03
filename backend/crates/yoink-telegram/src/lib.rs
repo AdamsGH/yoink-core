@@ -29,6 +29,7 @@ use yoink_domain::{
 };
 use yoink_downloads::{DownloadError, DownloadService, TelegramSubmission};
 use yoink_i18n::{CatalogError, Key, Language, embedded as catalog};
+use yoink_identity::{IdentityError, IdentityStore, TrustedProfile};
 use yoink_storage::{Admission, OperationStatus};
 
 mod cookie;
@@ -84,9 +85,10 @@ struct TelegramIdentity {
     owner_id: u64,
     bot_id: u64,
     groups_enabled: bool,
+    identity_enabled: bool,
 }
 
-/// Owner-only diagnostics and opt-in media delivery over Telegram long polling.
+/// Telegram long polling with owner-private controls and trusted private-user downloads.
 pub struct TelegramAdapter {
     bot: Bot,
     owner_id: u64,
@@ -97,6 +99,7 @@ pub struct TelegramAdapter {
     poll_timeout: Duration,
     progress: ProgressConfig,
     groups_enabled: bool,
+    identities: Option<Arc<IdentityStore>>,
     cookie_upload: Option<CookieUploadConfig>,
     cookie_url: Option<CookieUrlConfig>,
     file_base: Url,
@@ -153,6 +156,7 @@ impl TelegramAdapter {
             poll_timeout,
             progress: ProgressConfig::default(),
             groups_enabled: false,
+            identities: None,
             cookie_upload: None,
             cookie_url: None,
             file_base: cookie_upload::file_base(&api_origin, &token),
@@ -179,6 +183,12 @@ impl TelegramAdapter {
     /// Keeps owner-private access unchanged and permits policy-checked group commands.
     pub fn with_group_access(mut self, enabled: bool) -> Self {
         self.groups_enabled = enabled;
+        self
+    }
+
+    /// Enables trusted private-user onboarding against the shared identity database.
+    pub fn with_identity_store(mut self, identities: Arc<IdentityStore>) -> Self {
+        self.identities = Some(identities);
         self
     }
 
@@ -215,7 +225,8 @@ impl TelegramAdapter {
                 TelegramIdentity {
                     owner_id: self.owner_id,
                     bot_id: self.bot_id,
-                    groups_enabled: self.groups_enabled
+                    groups_enabled: self.groups_enabled,
+                    identity_enabled: self.identities.is_some(),
                 },
                 self.bot_username,
                 self.system,
@@ -228,6 +239,7 @@ impl TelegramAdapter {
                         client: self.http_client
                     },
                     cookie_url: CookieUrlDependency(self.cookie_url),
+                    identities: self.identities,
                 }
             ])
             .default_handler(|_| async {})
@@ -287,6 +299,7 @@ struct MessageDependencies {
     downloads: Option<DownloadService>,
     upload: CookieUploadDependency,
     cookie_url: CookieUrlDependency,
+    identities: Option<Arc<IdentityStore>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -449,7 +462,12 @@ fn incoming_route(identity: TelegramIdentity, message: &Message) -> Option<(u64,
         return None;
     }
     if message.chat.is_private() {
-        if !is_owner_private(identity.owner_id, message) || message.thread_id.is_some() {
+        let matching_private =
+            message.chat.id.0 > 0 && u64::try_from(message.chat.id.0).ok() == Some(user.id.0);
+        if !matching_private
+            || message.thread_id.is_some()
+            || (!identity.identity_enabled && user.id.0 != identity.owner_id)
+        {
             return None;
         }
     } else if !identity.groups_enabled
@@ -471,16 +489,96 @@ fn incoming_route(identity: TelegramIdentity, message: &Message) -> Option<(u64,
     Some((user.id.0, target))
 }
 
-fn is_owner_private(owner_id: u64, message: &Message) -> bool {
-    has_owner_private_access(
-        owner_id,
-        message.chat.is_private(),
-        message.from.as_ref().map(|user| user.id.0),
-    )
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateAccess {
+    Owner,
+    User,
+    Pending,
+    Denied,
 }
 
-fn has_owner_private_access(owner_id: u64, chat_is_private: bool, sender_id: Option<u64>) -> bool {
-    chat_is_private && sender_id == Some(owner_id)
+async fn private_access(
+    identities: Option<&IdentityStore>,
+    message: &Message,
+    actor: u64,
+    configured_owner: u64,
+) -> PrivateAccess {
+    let Some(identities) = identities else {
+        return if actor == configured_owner {
+            PrivateAccess::Owner
+        } else {
+            PrivateAccess::Denied
+        };
+    };
+    match identities.current_profile(actor as i64).await {
+        Ok(profile) => private_access_for_role(&profile.role.to_string(), actor, configured_owner),
+        Err(IdentityError::Unauthorized) => {
+            let Some(sender) = message.from.as_ref() else {
+                return PrivateAccess::Denied;
+            };
+            let profile = TrustedProfile {
+                user_id: actor as i64,
+                username: sender.username.clone(),
+                first_name: Some(sender.first_name.clone()),
+                photo_url: None,
+            };
+            match identities.register(&profile).await {
+                Ok(profile) => {
+                    private_access_for_role(&profile.role.to_string(), actor, configured_owner)
+                }
+                Err(_) => PrivateAccess::Denied,
+            }
+        }
+        Err(_) => PrivateAccess::Denied,
+    }
+}
+
+fn private_access_for_role(role: &str, actor: u64, configured_owner: u64) -> PrivateAccess {
+    if role == "banned" {
+        PrivateAccess::Denied
+    } else if role == "restricted" {
+        PrivateAccess::Pending
+    } else if actor == configured_owner {
+        PrivateAccess::Owner
+    } else if matches!(role, "user" | "moderator" | "admin" | "owner") {
+        PrivateAccess::User
+    } else {
+        PrivateAccess::Denied
+    }
+}
+
+fn owner_only_command(command: &Command, text: &str) -> bool {
+    matches!(
+        command,
+        Command::Status
+            | Command::Settings(_)
+            | Command::Quality(_)
+            | Command::Subs
+            | Command::Proxy(_)
+            | Command::Uncache(_)
+            | Command::Cookie(_)
+            | Command::CookieUrl(_)
+            | Command::Lang(_)
+    ) || matches!(
+        command,
+        Command::Media(media)
+            if (media.mode != DomainMediaMode::Video
+                && media.mode != DomainMediaMode::Audio
+                && media.mode != DomainMediaMode::Image)
+                || media.clip.is_some()
+                || media.playlist.is_some()
+                || media.overrides != DownloadPreferenceOverrides::default()
+    ) || text.split_whitespace().next().is_some_and(|word| {
+        matches!(
+            word.split('@')
+                .next()
+                .unwrap_or_default()
+                .trim_start_matches('/')
+                .to_ascii_lowercase()
+                .as_str(),
+            "cut" | "list"
+        )
+    })
 }
 
 fn translate(language: Language, key: Key, parameters: &[(&str, &str)]) -> String {
@@ -660,8 +758,65 @@ async fn handle_message(
     let Some((actor_id, target)) = incoming_route(identity, &message) else {
         return Ok(());
     };
+    if !system.snapshot().ready {
+        return Ok(());
+    }
+    let private = message.chat.is_private();
+    let access = if private {
+        private_access(
+            dependencies.identities.as_deref(),
+            &message,
+            actor_id,
+            identity.owner_id,
+        )
+        .await
+    } else {
+        PrivateAccess::User
+    };
+    if private {
+        match access {
+            PrivateAccess::Denied => {
+                let fallback = message
+                    .from
+                    .as_ref()
+                    .and_then(|user| user.language_code.as_deref());
+                let language = reply_language_with_identity(
+                    downloads.as_ref(),
+                    dependencies.identities.as_deref(),
+                    actor_id,
+                    fallback,
+                )
+                .await;
+                let _ = bot
+                    .send_message(message.chat.id, translate(language, Key::ErrorDenied, &[]))
+                    .await;
+                return Ok(());
+            }
+            PrivateAccess::Pending => {
+                let fallback = message
+                    .from
+                    .as_ref()
+                    .and_then(|user| user.language_code.as_deref());
+                let language = reply_language_with_identity(
+                    downloads.as_ref(),
+                    dependencies.identities.as_deref(),
+                    actor_id,
+                    fallback,
+                )
+                .await;
+                let reply = translate(language, Key::RegistrationPending, &[]);
+                let _ = bot.send_message(message.chat.id, reply).await;
+                return Ok(());
+            }
+            PrivateAccess::Owner | PrivateAccess::User => {}
+        }
+    }
+    let is_owner = access == PrivateAccess::Owner;
 
     if message.document().is_some() && target.chat_id() > 0 {
+        if !is_owner {
+            return Ok(());
+        }
         cookie_upload::handle_document(
             &bot,
             &message,
@@ -682,8 +837,13 @@ async fn handle_message(
     let Some(text) = message.text() else {
         return Ok(());
     };
-    let language = reply_language(
+    let language = reply_language_with_identity(
         downloads.as_ref(),
+        if private {
+            dependencies.identities.as_deref()
+        } else {
+            None
+        },
         actor_id,
         message
             .from
@@ -691,25 +851,38 @@ async fn handle_message(
             .and_then(|user| user.language_code.as_deref()),
     )
     .await;
-    if cut::try_handle_message(
-        &bot,
-        &message,
-        &bot_username,
-        actor_id,
-        target,
-        downloads.as_ref(),
-        language,
-    )
-    .await
+    let parsed_command = parse_command(text, &bot_username);
+    if private
+        && !is_owner
+        && parsed_command
+            .as_ref()
+            .is_some_and(|command| owner_only_command(command, text))
     {
         return Ok(());
     }
-    let command = match parse_command(text, &bot_username) {
+    if (!private || is_owner)
+        && cut::try_handle_message(
+            &bot,
+            &message,
+            &bot_username,
+            actor_id,
+            target,
+            downloads.as_ref(),
+            language,
+        )
+        .await
+    {
+        return Ok(());
+    }
+    let command = match parsed_command {
         Some(command) => command,
         None => match plain_url::parse(&message, bot_id) {
             None => return Ok(()),
             Some(Err(())) => Command::InvalidUrl,
             Some(Ok(plain_url::Action::Download(media))) => Command::Media(media),
+            Some(Ok(plain_url::Action::AskEnd { .. })) if private && !is_owner => {
+                return Ok(());
+            }
             Some(Ok(plain_url::Action::AskEnd { media, start })) => {
                 // The parser only offers a dialog in a private chat. Its storage,
                 // authorization and recovery are shared with explicit /cut.
@@ -732,6 +905,9 @@ async fn handle_message(
             }
         },
     };
+    if private && !is_owner && owner_only_command(&command, text) {
+        return Ok(());
+    }
 
     if let Command::Uncache(source) = command {
         if target.chat_id() > 0 {
@@ -876,6 +1052,19 @@ async fn handle_message(
         }
         Command::Start | Command::Help if target.chat_id() < 0 => {
             translate(language, Key::UsageDownload, &[])
+        }
+        Command::Start | Command::Help | Command::Invalid | Command::InvalidUrl
+            if private && !is_owner =>
+        {
+            translate(
+                language,
+                if downloads.is_some() {
+                    Key::UserHelpEnabled
+                } else {
+                    Key::UserHelpBasic
+                },
+                &[],
+            )
         }
         Command::Start
         | Command::Help
@@ -1086,6 +1275,31 @@ async fn reply_language(
     lang::resolve_language(preferred.as_deref(), fallback)
 }
 
+async fn reply_language_with_identity(
+    service: Option<&DownloadService>,
+    identities: Option<&IdentityStore>,
+    actor: u64,
+    fallback: Option<&str>,
+) -> Language {
+    let identity_preference = match (identities, i64::try_from(actor)) {
+        (Some(store), Ok(user_id)) => store
+            .language_preference(user_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|preference| preference.code),
+        _ => None,
+    };
+    let preferred = match identity_preference {
+        Some(preferred) => Some(preferred),
+        None => match service {
+            Some(service) => service.preferred_language(actor).await.ok().flatten(),
+            None => None,
+        },
+    };
+    lang::resolve_language(preferred.as_deref(), fallback)
+}
+
 fn unknown_operation(language: Language) -> String {
     translate(language, Key::OperationNotFound, &[])
 }
@@ -1096,12 +1310,55 @@ mod tests {
     use yoink_downloads::DeliveryError;
     use yoink_i18n::language_for;
 
+    #[tokio::test]
+    async fn persisted_identity_language_localizes_without_download_service() {
+        use std::time::Duration;
+        use yoink_db::{Database, raw_sql};
+
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        let database = Database::open(
+            &directory.path().join("identity.db"),
+            true,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        raw_sql(
+            r#"CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT NOT NULL, language TEXT NOT NULL, updated_at INTEGER NOT NULL);
+               INSERT INTO users VALUES (43, 'user', 'ru', 1), (44, 'restricted', 'ru', 1);"#,
+        )
+        .execute(&database)
+        .await
+        .unwrap();
+        let identities = IdentityStore::new(database, None, false);
+
+        for actor in [43, 44] {
+            assert_eq!(
+                reply_language_with_identity(None, Some(&identities), actor, Some("en")).await,
+                Language::Russian,
+                "stored Russian must override English Telegram metadata even when downloads are disabled"
+            );
+        }
+        assert_eq!(
+            reply_language_with_identity(None, None, 45, Some("en")).await,
+            Language::English,
+            "unregistered identity lookup must retain Telegram fallback"
+        );
+    }
+
     #[test]
     fn incoming_routes_require_opt_in_and_an_identified_user_in_the_original_chat() {
         let identity = TelegramIdentity {
             owner_id: 42,
             bot_id: 123456,
             groups_enabled: false,
+            identity_enabled: false,
         };
         let value = serde_json::json!({
             "message_id": 10, "date": 0, "from": {"id": 42, "is_bot": false, "first_name": "Fixture"},
@@ -1118,6 +1375,7 @@ mod tests {
         assert!(route(identity, group.clone()).is_none());
         let enabled = TelegramIdentity {
             groups_enabled: true,
+            identity_enabled: true,
             ..identity
         };
         let (actor, target) = route(enabled, group.clone()).unwrap();
@@ -1148,10 +1406,101 @@ mod tests {
         let mut nonowner = value.clone();
         nonowner["from"]["id"] = 43.into();
         nonowner["chat"]["id"] = 43.into();
+        assert_eq!(route(enabled, nonowner.clone()).unwrap().0, 43);
+        nonowner["from"]["is_bot"] = true.into();
         assert!(route(enabled, nonowner).is_none());
+        let mut spoofed = value.clone();
+        spoofed["sender_chat"] = serde_json::json!({"id": 42, "type": "channel", "title": "spoof"});
+        assert!(route(enabled, spoofed).is_none());
         let mut private_topic = value;
         private_topic["message_thread_id"] = 18.into();
         assert!(route(enabled, private_topic).is_none());
+    }
+
+    #[test]
+    fn trusted_private_access_maps_roles_without_elevating_sender_claims() {
+        assert_eq!(private_access_for_role("user", 43, 42), PrivateAccess::User);
+        assert_eq!(
+            private_access_for_role("restricted", 43, 42),
+            PrivateAccess::Pending
+        );
+        assert_eq!(
+            private_access_for_role("banned", 43, 42),
+            PrivateAccess::Denied
+        );
+        assert_eq!(
+            private_access_for_role("admin", 42, 42),
+            PrivateAccess::Owner
+        );
+        assert_eq!(
+            private_access_for_role("owner", 43, 42),
+            PrivateAccess::User
+        );
+    }
+
+    #[test]
+    fn ordinary_help_is_localized_and_does_not_leak_sensitive_controls() {
+        for language in [Language::English, Language::Russian] {
+            let enabled = translate(language, Key::UserHelpEnabled, &[]);
+            let basic = translate(language, Key::UserHelpBasic, &[]);
+            let pending = translate(language, Key::RegistrationPending, &[]);
+            for text in [&enabled, &basic, &pending] {
+                for forbidden in [
+                    "/status",
+                    "/list",
+                    "/cut",
+                    "/quality",
+                    "/uncache",
+                    "/cookie",
+                    "/proxy",
+                    "--height",
+                    "--video-codec",
+                ] {
+                    assert!(!text.contains(forbidden), "{forbidden} leaked in {text}");
+                }
+            }
+            assert!(enabled.contains("/video"));
+            assert!(enabled.contains("/audio"));
+            assert!(enabled.contains("/image"));
+            assert!(basic.contains("/start"));
+        }
+    }
+
+    #[test]
+    fn private_control_dispatch_is_owner_only() {
+        let text_and_commands = [
+            ("/status", Command::Status),
+            ("/settings", Command::Settings(settings::Action::Menu)),
+            ("/quality", Command::Quality(true)),
+            ("/proxy", Command::Proxy(proxy::Action::Menu)),
+            ("/uncache https://example.test", Command::Uncache(None)),
+            ("/cookie", Command::Cookie(cookie::Action::List(None))),
+            ("/lang", Command::Lang(lang::Action::Menu)),
+            (
+                "/list https://example.test",
+                Command::Media(
+                    media_command::parse("list", &["https://example.test"])
+                        .unwrap()
+                        .unwrap(),
+                ),
+            ),
+            ("/cut", Command::Invalid),
+        ];
+        for (text, command) in text_and_commands {
+            assert!(owner_only_command(&command, text), "{text}");
+        }
+        assert!(!owner_only_command(
+            &Command::Media(
+                media_command::parse("video", &["https://example.test"])
+                    .unwrap()
+                    .unwrap()
+            ),
+            "/video https://example.test"
+        ));
+        assert!(!owner_only_command(
+            &Command::Download("https://example.test".into()),
+            "/download https://example.test"
+        ));
     }
 
     #[test]
@@ -1339,11 +1688,19 @@ mod tests {
     }
 
     #[test]
-    fn access_requires_owner_and_private_chat() {
-        assert!(has_owner_private_access(7, true, Some(7)));
-        assert!(!has_owner_private_access(7, false, Some(7)));
-        assert!(!has_owner_private_access(7, true, Some(8)));
-        assert!(!has_owner_private_access(7, true, None));
+    fn owner_identity_cannot_override_blocking_or_unknown_roles() {
+        assert_eq!(
+            private_access_for_role("banned", 42, 42),
+            PrivateAccess::Denied
+        );
+        assert_eq!(
+            private_access_for_role("restricted", 42, 42),
+            PrivateAccess::Pending
+        );
+        assert_eq!(
+            private_access_for_role("unknown", 43, 42),
+            PrivateAccess::Denied
+        );
     }
 
     #[test]

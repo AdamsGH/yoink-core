@@ -5010,6 +5010,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde_json",
  "teloxide",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -5017,10 +5018,12 @@ dependencies = [
  "url",
  "uuid",
  "yoink-application",
+ "yoink-db",
  "yoink-domain",
  "yoink-downloads",
  "yoink-executor",
  "yoink-i18n",
+ "yoink-identity",
  "yoink-storage",
 ]
 
