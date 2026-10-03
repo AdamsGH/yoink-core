@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHmac, randomInt } from 'node:crypto';
 import { commandHarness } from './command-harness.mjs';
+import { apiKeyScenarios } from './api-key-scenarios.mjs';
 
 export async function runAdminScenarios(context) {
   const { botApi, fixtureSql, waitFor, restartApp, sourcePort, appHttpPort, authSecret } = context;
@@ -10,6 +11,7 @@ export async function runAdminScenarios(context) {
   const registeredActor = 7_000_000_000_000 + randomInt(1_000_000_000);
   const telegramActor = registeredActor + 1;
   let messageId = 1_800_000;
+  let apiKeys;
   const base = `http://127.0.0.1:${appHttpPort}`;
   const literal = value => `'${String(value).replaceAll("'", "''")}'`;
   const savedPolicy = await fixtureSql("SELECT value FROM bot_settings WHERE key='bot_access_mode'");
@@ -98,9 +100,11 @@ export async function runAdminScenarios(context) {
     assert(available.data.some(feature => feature.key === 'dl:inline' && feature.label && feature.description));
     await request('/api/v1/bot-settings/tag-map', { token: signedToken, expected: 200 });
     await request('/api/v1/bot-settings/tag-map', { token: signedToken, method: 'PUT', body: [], expected: 403 });
+    apiKeys = await apiKeyScenarios({ request, fixtureSql, ownerToken, adminToken: signedToken, ordinaryToken: nonOwner });
     await request(`/api/v1/users/${registeredActor}`, { token: ownerToken, method: 'PATCH', body: { role: 'restricted' }, expected: 200 });
     await deniedDownload(registeredActor, 'role-revoked');
     await request('/api/v1/features', { token: signedToken, expected: 403 });
+    await apiKeys.assertDenied(signedToken);
     await request('/api/v1/users/me', { token: signedToken, expected: 200 });
 
     const catalog = await request('/api/v1/features', { token: ownerToken, expected: 200 });
@@ -136,6 +140,7 @@ export async function runAdminScenarios(context) {
     try {
       await fixtureSql("UPDATE users SET ban_until=(unixepoch('now')+600)*1000000 WHERE id=42");
       await request('/api/v1/bot-settings/tag-map', { token: ownerToken, expected: 403 });
+      await apiKeys.assertDenied(ownerToken);
       await request('/api/v1/bot-settings/tag-map', { token: ownerToken, method: 'PUT', body: [], expected: 403 });
       assert.equal(await fixtureSql("SELECT value FROM bot_settings WHERE key='tag_map'"), storedMap, 'configured-owner ban must prevent replacement');
     } finally {
@@ -173,7 +178,9 @@ export async function runAdminScenarios(context) {
     assert.notEqual(registeredBan, '');
     assert.notEqual(telegramBan, '');
 
+    await apiKeys.assertDenied(signedToken);
     await restartApp();
+    await apiKeys.assertPersisted();
     assert.equal(await fixtureSql("SELECT value FROM bot_settings WHERE key='bot_access_mode'"), 'approved_only', 'policy survives application restart');
     assert.deepEqual((await request('/api/v1/bot-settings/tag-map', { token: ownerToken, expected: 200 })).data, tagEntries, 'tag map survives restart');
     assert.deepEqual((await request('/api/v1/bot-settings/tag-map', { token: ownerToken, method: 'PUT', body: [], expected: 200 })).data, [], 'empty replacement clears mapping');
@@ -200,10 +207,11 @@ export async function runAdminScenarios(context) {
     await deniedDownload(registeredActor, 'grant-revoked');
   } finally {
     botApi.setExpectedUpload(null);
+    await apiKeys?.cleanup();
     if (savedTagMap) await fixtureSql(`UPDATE bot_settings SET value=${literal(savedTagMap)} WHERE key='tag_map'`);
     else await fixtureSql("DELETE FROM bot_settings WHERE key='tag_map'");
     if (savedPolicy) await fixtureSql(`UPDATE bot_settings SET value=${literal(savedPolicy)},updated_at=unixepoch('now')*1000000 WHERE key='bot_access_mode'`);
     else await fixtureSql("DELETE FROM bot_settings WHERE key='bot_access_mode'");
   }
-  return 'authenticated owner administration, validated tag-map replacement and catalog, approved-only registration, immediate role/grant/ban enforcement, persisted policy and localized Telegram behavior verified';
+  return 'authenticated administration, tag-map replacement and catalog, API-key generation/nonexposure/revocation/restart, approved-only registration, immediate role/grant/ban enforcement, persisted policy and localized Telegram behavior verified';
 }

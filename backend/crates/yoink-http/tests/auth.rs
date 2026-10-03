@@ -8,7 +8,7 @@ use axum::{
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 use yoink_application::SystemService;
 use yoink_auth::AuthConfig;
@@ -1144,6 +1144,206 @@ async fn tag_map_routes_match_legacy_contract_and_validate_atomically() {
             .0,
         StatusCode::FORBIDDEN
     );
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn api_key_management_matches_legacy_contract_and_rechecks_admin_authority() {
+    let (_directory, store, app) = fixture(false).await;
+    let owner = access_token(&app, 42).await;
+    let regular = access_token(&app, 43).await;
+    assert_eq!(
+        request(&app, "GET", "/api/v1/api-keys", None, Value::Null)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for (method, uri, body) in [
+        ("GET", "/api/v1/api-keys", Value::Null),
+        ("GET", "/api/v1/api-keys/scopes", Value::Null),
+        ("POST", "/api/v1/api-keys", json!({"name":"denied"})),
+        ("DELETE", "/api/v1/api-keys/1", Value::Null),
+    ] {
+        assert_eq!(
+            request(&app, method, uri, Some(&regular), body).await.0,
+            StatusCode::FORBIDDEN,
+            "{method} {uri}"
+        );
+    }
+    let (status, scope_result) = request(
+        &app,
+        "GET",
+        "/api/v1/api-keys/scopes",
+        Some(&owner),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(scope_result["scopes"][0], "users:read");
+    let expiry = "2024-01-02T03:04:05.123456Z";
+    let (status, created) = request(&app, "POST", "/api/v1/api-keys", Some(&owner), json!({"name":"\u{9375} \u{00e9}quipe","scopes":["users:read","groups:*"],"expires_at":expiry})).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let raw = created["key"].as_str().unwrap();
+    assert!(raw.starts_with("yoink_"));
+    assert_eq!(created["prefix"], raw.chars().take(8).collect::<String>());
+    assert_eq!(created["scopes"], json!(["users:read", "groups:*"]));
+    assert_eq!(created["expires_at"], expiry);
+    let id = created["id"].as_i64().unwrap();
+    let stored = yoink_db::query(include_str!("sql/api_key_hash.sql"))
+        .bind(id)
+        .fetch_one(store.database())
+        .await
+        .unwrap();
+    let hash: String = stored.try_get(0).unwrap();
+    let prefix: String = stored.try_get(1).unwrap();
+    let scopes: String = stored.try_get(2).unwrap();
+    assert_eq!(hash, format!("{:x}", sha2::Sha256::digest(raw.as_bytes())));
+    assert_eq!(prefix, created["prefix"]);
+    assert_eq!(scopes, r#"["users:read","groups:*"]"#);
+    let (status, listed) =
+        request(&app, "GET", "/api/v1/api-keys", Some(&owner), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let list_json = listed.to_string();
+    assert!(!list_json.contains(raw));
+    assert!(!list_json.contains(&hash));
+    assert_eq!(listed[0]["name"], "\u{9375} \u{00e9}quipe");
+    assert_eq!(listed[0]["created_by"], 42);
+    let (status, defaults) = request(
+        &app,
+        "POST",
+        "/api/v1/api-keys",
+        Some(&owner),
+        json!({"name":"default"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(defaults["scopes"], json!(["*"]));
+    assert!(defaults["expires_at"].is_null());
+    for body in [json!({"name":"bad","scopes":["unknown:read"]})] {
+        assert_eq!(
+            request(&app, "POST", "/api/v1/api-keys", Some(&owner), body)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    for body in [
+        json!({"name":"bad","scopes":[1]}),
+        json!({"name":"bad","expires_at":"not-a-date"}),
+        json!({"name":"bad","extra":true}),
+    ] {
+        assert_eq!(
+            request(&app, "POST", "/api/v1/api-keys", Some(&owner), body)
+                .await
+                .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "DELETE",
+            &format!("/api/v1/api-keys/{id}"),
+            Some(&owner),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(
+            &app,
+            "DELETE",
+            &format!("/api/v1/api-keys/{id}"),
+            Some(&owner),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(
+            &app,
+            "DELETE",
+            "/api/v1/api-keys/999999",
+            Some(&owner),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    assert_eq!(
+        request(
+            &app,
+            "PATCH",
+            "/api/v1/users/43",
+            Some(&owner),
+            json!({"role":"admin"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let stale_admin = access_token(&app, 43).await;
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/v1/api-keys",
+            Some(&stale_admin),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "PATCH",
+            "/api/v1/users/43",
+            Some(&owner),
+            json!({"role":"user"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let key_uri = format!("/api/v1/api-keys/{id}");
+    for (method, uri, body) in [
+        ("GET", "/api/v1/api-keys", Value::Null),
+        ("GET", "/api/v1/api-keys/scopes", Value::Null),
+        ("POST", "/api/v1/api-keys", json!({"name":"stale"})),
+        ("DELETE", key_uri.as_str(), Value::Null),
+    ] {
+        assert_eq!(
+            request(&app, method, uri, Some(&stale_admin), body).await.0,
+            StatusCode::FORBIDDEN,
+            "stale admin {method} {uri}"
+        );
+    }
+    yoink_db::query(include_str!("sql/set_role.sql"))
+        .bind("banned")
+        .bind(42_i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    for (method, uri, body) in [
+        ("GET", "/api/v1/api-keys", Value::Null),
+        ("GET", "/api/v1/api-keys/scopes", Value::Null),
+        ("POST", "/api/v1/api-keys", json!({"name":"banned-owner"})),
+        ("DELETE", key_uri.as_str(), Value::Null),
+    ] {
+        assert_eq!(
+            request(&app, method, uri, Some(&owner), body).await.0,
+            StatusCode::FORBIDDEN,
+            "banned configured owner {method} {uri}"
+        );
+    }
     store.close().await.unwrap();
 }
 

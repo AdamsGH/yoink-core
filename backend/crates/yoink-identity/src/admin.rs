@@ -21,6 +21,8 @@ pub enum AdminError {
     Conflict,
     #[error("invalid administration input")]
     InvalidInput,
+    #[error("invalid API key scope")]
+    InvalidScope,
     #[error("administration data is unavailable")]
     Unavailable,
 }
@@ -875,6 +877,7 @@ fn valid_ids(a: i64, t: i64) -> Result<(), AdminError> {
         Ok(())
     }
 }
+pub mod api_keys;
 pub mod groups;
 
 fn blocked(role: Role, ban: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
@@ -888,7 +891,7 @@ async fn now_db(tx: &Transaction<'_>) -> Result<DateTime<Utc>, AdminError> {
         .try_get(0)
         .map_err(|_| AdminError::Unavailable)
 }
-async fn admin_auth(
+pub(super) async fn admin_auth(
     tx: &Transaction<'_>,
     id: i64,
     owner: Option<i64>,
@@ -1012,7 +1015,10 @@ fn decode_user(
         dl_last_at: r.try_get(11).map_err(|_| AdminError::Unavailable)?,
     })
 }
-async fn finish_admin<T>(tx: Transaction<'_>, r: Result<T, AdminError>) -> Result<T, AdminError> {
+pub(super) async fn finish_admin<T>(
+    tx: Transaction<'_>,
+    r: Result<T, AdminError>,
+) -> Result<T, AdminError> {
     match r {
         Ok(v) => {
             tx.commit().await.map_err(|_| AdminError::Unavailable)?;

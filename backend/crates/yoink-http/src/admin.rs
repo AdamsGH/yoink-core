@@ -14,12 +14,21 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use yoink_access::Role;
-use yoink_identity::admin::{AdminError, AdminUserPatch, AdminUsersQuery};
+use yoink_identity::admin::{
+    AdminError, AdminUserPatch, AdminUsersQuery,
+    api_keys::{API_KEY_SCOPES, ApiKeyCreate},
+};
 
 use crate::auth::{ApiError, AuthState, authenticated_id, no_store};
 
 pub(crate) fn router() -> Router<AuthState> {
     Router::new()
+        .route("/api/v1/api-keys", get(api_keys_list).post(api_key_create))
+        .route("/api/v1/api-keys/scopes", get(api_key_scopes))
+        .route(
+            "/api/v1/api-keys/{key_id}",
+            axum::routing::delete(api_key_revoke),
+        )
         .route("/api/v1/users", get(list_users))
         .route("/api/v1/users/{id}", get(get_user).patch(update_user))
         .route("/api/v1/features", get(features))
@@ -56,6 +65,7 @@ impl From<AdminError> for ApiError {
             AdminError::NotFound => Self(StatusCode::NOT_FOUND, "Not found"),
             AdminError::Conflict => Self(StatusCode::CONFLICT, "Already exists"),
             AdminError::InvalidInput => invalid_request(),
+            AdminError::InvalidScope => Self(StatusCode::BAD_REQUEST, "Invalid API key scope"),
             AdminError::Unavailable => Self(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Identity service unavailable",
@@ -66,6 +76,94 @@ impl From<AdminError> for ApiError {
 
 fn invalid_request() -> ApiError {
     ApiError(StatusCode::UNPROCESSABLE_ENTITY, "Invalid request")
+}
+
+async fn api_key_scopes(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = state.service()?;
+    let actor = authenticated_id(service, &headers)?;
+    service.identities.api_keys_authorized(actor).await?;
+    Ok(no_store(serde_json::json!({"scopes": API_KEY_SCOPES})))
+}
+
+async fn api_keys_list(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = state.service()?;
+    let actor = authenticated_id(service, &headers)?;
+    Ok(no_store(service.identities.api_keys_list(actor).await?))
+}
+
+fn api_key_create_body(value: Value) -> Result<ApiKeyCreate, ApiError> {
+    let object = value.as_object().ok_or_else(invalid_request)?;
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "name" | "scopes" | "expires_at"))
+    {
+        return Err(invalid_request());
+    }
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid_request)?
+        .to_owned();
+    let scopes = match object.get("scopes") {
+        None => None,
+        Some(Value::Array(values)) => Some(
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(invalid_request)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        _ => return Err(invalid_request()),
+    };
+    let expires_at = match object.get("expires_at") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(
+            DateTime::parse_from_rfc3339(value)
+                .map_err(|_| invalid_request())?
+                .with_timezone(&Utc),
+        ),
+        _ => return Err(invalid_request()),
+    };
+    Ok(ApiKeyCreate {
+        name,
+        scopes,
+        expires_at,
+    })
+}
+
+async fn api_key_create(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = state.service()?;
+    let actor = authenticated_id(service, &headers)?;
+    let Json(body) = body.map_err(|_| invalid_request())?;
+    let input = api_key_create_body(body)?;
+    let created = service.identities.api_key_create(actor, &input).await?;
+    Ok((StatusCode::CREATED, no_store(created)))
+}
+
+async fn api_key_revoke(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    path: Result<Path<i64>, PathRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = state.service()?;
+    let actor = authenticated_id(service, &headers)?;
+    let Path(key_id) = path.map_err(|_| invalid_request())?;
+    service.identities.api_key_revoke(actor, key_id).await?;
+    Ok((StatusCode::NO_CONTENT, ()))
 }
 
 #[derive(Deserialize)]

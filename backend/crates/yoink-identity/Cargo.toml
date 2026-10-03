@@ -7,6 +7,9 @@ publish.workspace = true
 
 [dependencies]
 chrono.workspace = true
+base64 = "0.22"
+rand = "0.8"
+sha2 = "0.10"
 yoink-db.workspace = true
 turso = "=0.7.2"
 thiserror.workspace = true
