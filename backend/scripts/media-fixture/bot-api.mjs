@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { isoBmffMdatPayloads } from './media-format.mjs';
 import { parseMediaBody } from './multipart.mjs';
+import { CommandMenus } from './command-menus.mjs';
 
 export class BotApiFixture {
   #server;
@@ -26,6 +27,10 @@ export class BotApiFixture {
   #editFilter;
   #documentFiles = new Map();
   #downloadCalls = [];
+  #menuMode = 'success';
+  #menuChatId;
+  #menuGate;
+  commandMenus = new CommandMenus();
 
   constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024 }) {
     this.mediaBytes = mediaBytes;
@@ -57,6 +62,18 @@ export class BotApiFixture {
   setEditMode(mode, textIncludes) { this.#editMode = mode; this.#editFilter = textIncludes; }
   get progressMessages() { return [...this.#messages.values()]; }
   get downloadCalls() { return this.#downloadCalls; }
+  setMenuMode(mode, chatId) {
+    assert(['success', 'rate-limit-once', 'api-error-once', 'socket-drop-once', 'hold-once'].includes(mode), 'unsupported menu failure mode');
+    this.#menuMode = mode;
+    this.#menuChatId = chatId;
+  }
+  holdNextMenu(chatId) {
+    assert(!this.#menuGate, 'a command menu request is already held');
+    let release;
+    this.#menuGate = new Promise(resolve => { release = resolve; });
+    this.setMenuMode('hold-once', chatId);
+    return () => { release(); this.#menuGate = undefined; };
+  }
   enqueueDocument(actor, chat, caption, messageId, fileId, { filename = 'cookies.txt', size, language = 'en', ...routeFlags } = {}) {
     const message = this.#message(actor, chat, caption, messageId, undefined, routeFlags.thread);
     delete message.text;
@@ -176,6 +193,26 @@ export class BotApiFixture {
       const filePath = file.getFileMode === 'invalid-path' ? '../unsafe.txt' : file.getFileMode === 'redirect' ? 'https://example.invalid/cookie' : file.filePath;
       const fileSize = file.declaredSize ?? file.bytes.length;
       res.end(JSON.stringify({ ok: true, result: { file_id: data.file_id, file_unique_id: `unique-${data.file_id}`, file_path: filePath, file_size: fileSize } }));
+    } else if (['setmycommands', 'deletemycommands', 'getmycommands'].includes(method)) {
+      const data = JSON.parse(body.toString('utf8'));
+      const mode = this.#menuChatId === undefined || data.scope?.chat_id === this.#menuChatId ? this.#menuMode : 'success';
+      if (mode.endsWith('-once')) this.#menuMode = 'success';
+      this.#calls.push({ method, data, status: mode, receivedAt: performance.now() });
+      if (mode === 'hold-once') await this.#menuGate;
+      if (mode === 'rate-limit-once') {
+        res.statusCode = 429;
+        res.end(JSON.stringify({ ok: false, error_code: 429, description: 'Too Many Requests: retry after 2', parameters: { retry_after: 2 } }));
+        return;
+      }
+      if (mode === 'api-error-once') {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ ok: false, error_code: 500, description: 'Internal Server Error' }));
+        return;
+      }
+      if (method === 'setmycommands') this.commandMenus.set(data);
+      if (method === 'deletemycommands') this.commandMenus.delete(data);
+      if (mode === 'socket-drop-once') { res.destroy(); return; }
+      res.end(JSON.stringify({ ok: true, result: method === 'getmycommands' ? this.commandMenus.get(data) : true }));
     } else if (method === 'sendmessage') {
       const data = JSON.parse(body.toString('utf8'));
       const message = this.#message(123456, Number(data.chat_id), data.text, ++this.#nextMessageId, undefined, data.message_thread_id);

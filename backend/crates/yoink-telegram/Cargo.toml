@@ -21,6 +21,7 @@ yoink-downloads = { path = "../yoink-downloads" }
 yoink-executor = { path = "../yoink-executor" }
 yoink-storage.workspace = true
 yoink-identity.workspace = true
+yoink-access.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]

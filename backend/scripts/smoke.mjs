@@ -12,6 +12,7 @@ import net from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { CommandMenus } from './media-fixture/command-menus.mjs';
 
 const binary = fileURLToPath(new URL('../target/debug/yoink-server', import.meta.url));
 const fakeToken = '123456:smoke-secret-never-log';
@@ -189,6 +190,7 @@ test('native WebApp authentication, restart persistence and failed-startup isola
     assert.equal((await server.exit()).code, 0);
     let polls = 0;
     const sent = [];
+    const menus = new CommandMenus();
     const message = (id, actor, text) => ({
       message_id: id, date: 1700000000,
       from: { id: actor, is_bot: actor === fakeMe.id, first_name: 'Fixture', language_code: 'en' },
@@ -202,6 +204,13 @@ test('native WebApp authentication, restart persistence and failed-startup isola
       else if (method === 'getupdates') {
         result = ++polls === 1 ? [{ update_id: 1, message: message(1, 43, '/help') }] : [];
         await sleep(30);
+      } else if (['setmycommands', 'deletemycommands', 'getmycommands'].includes(method)) {
+        let body = '';
+        for await (const chunk of request) body += chunk;
+        const data = JSON.parse(body);
+        if (method === 'setmycommands') menus.set(data);
+        if (method === 'deletemycommands') menus.delete(data);
+        result = method === 'getmycommands' ? menus.get(data) : true;
       } else if (method === 'sendmessage') {
         let body = '';
         for await (const chunk of request) body += chunk;
@@ -221,6 +230,7 @@ test('native WebApp authentication, restart persistence and failed-startup isola
     server.child.kill('SIGTERM');
     assert.equal((await server.exit()).code, 0);
     assert.equal(sent.length, 1);
+    assert.deepEqual(menus.privateCommands(43, 'en').map(({ command }) => command).sort(), ['help', 'start'], 'media-disabled ordinary menu must omit unavailable handlers');
     assert.equal(Number(sent[0].chat_id), 43);
     assert.match(sent[0].text, /видео|загруз|аудио/i);
     assert.doesNotMatch(sent[0].text, /\/cookie|\/proxy|\/status/);
@@ -293,6 +303,9 @@ test('polling failure stops the process rather than leaving false readiness', as
     response.setHeader('content-type', 'application/json');
     if (request.url.toLowerCase().endsWith('/getme')) {
       response.end(JSON.stringify({ ok: true, result: fakeMe }));
+    } else if (/\/(setmycommands|deletemycommands)$/i.test(request.url)) {
+      request.resume();
+      response.end(JSON.stringify({ ok: true, result: true }));
     } else {
       response.writeHead(409);
       response.end(JSON.stringify({ ok: false, error_code: 409, description: `conflict ${fakeToken}` }));
@@ -323,6 +336,9 @@ test('Telegram polling remains driven during graceful shutdown', async t => {
       // Deliberately hold an in-flight poll across SIGTERM. Its completion must
       // not require dropping the dispatcher future or the shutdown deadline.
       setTimeout(() => response.end(JSON.stringify({ ok: true, result: [] })), 100);
+    } else if (['setmycommands', 'deletemycommands'].includes(method)) {
+      request.resume();
+      response.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'deletewebhook') {
       webhookCalls += 1;
       response.end(JSON.stringify({ ok: true, result: true }));
@@ -345,6 +361,7 @@ test('Telegram polling remains driven during graceful shutdown', async t => {
 test('actual dispatcher answers only the owner private chat in its language', async t => {
   let polls = 0;
   const sent = [];
+  const menus = new CommandMenus();
   const message = (id, actor, chat, text = '/status', language = 'ru') => ({
     message_id: id, date: 1700000000,
     from: { id: actor, is_bot: false, first_name: 'Fixture', language_code: language },
@@ -365,6 +382,13 @@ test('actual dispatcher answers only the owner private chat in its language', as
         { update_id: 4, message: message(4, 42, 42, '/status@another_bot') },
       ] : [];
       await sleep(30);
+    } else if (['setmycommands', 'deletemycommands', 'getmycommands'].includes(method)) {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      const data = JSON.parse(body);
+      if (method === 'setmycommands') menus.set(data);
+      if (method === 'deletemycommands') menus.delete(data);
+      result = method === 'getmycommands' ? menus.get(data) : true;
     } else if (method === 'sendmessage') {
       let body = '';
       for await (const chunk of request) body += chunk;
@@ -384,6 +408,8 @@ test('actual dispatcher answers only the owner private chat in its language', as
   process.child.kill('SIGTERM');
   assert.deepEqual(await process.exit(), { code: 0, signal: null });
   assert.equal(sent.length, 1);
+  assert.deepEqual(menus.privateCommands(42, 'en').map(({ command }) => command).sort(), ['help', 'start', 'status'], 'media-disabled owner menu retains diagnostics only');
+  assert(!menus.privateCommands(43, 'en').some(({ command }) => command === 'status'), 'owner controls cannot leak through global fallback');
   assert.equal(sent[0].chat_id, 42);
   assert.match(sent[0].text, /запланированы и пока недоступны/);
   assert(!process.output().includes(fakeToken));

@@ -67,6 +67,8 @@ impl IdentityStore {
                     .commit()
                     .await
                     .map_err(|_| IdentityError::Database)?;
+                drop(connection);
+                self.invalidate();
                 Ok(preference)
             }
             Err(error) => {

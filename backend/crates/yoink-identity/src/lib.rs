@@ -7,6 +7,7 @@ use yoink_access::{
 use yoink_db::{Database, query};
 
 pub mod admin;
+mod invalidation;
 mod language;
 pub mod m2m;
 mod profile;
@@ -70,6 +71,7 @@ pub struct IdentityStore {
     database: Database,
     owner_id: Option<i64>,
     insight_enabled: bool,
+    changes: tokio::sync::watch::Sender<()>,
 }
 
 impl IdentityStore {
@@ -83,6 +85,7 @@ impl IdentityStore {
             database,
             owner_id,
             insight_enabled,
+            changes: tokio::sync::watch::channel(()).0,
         }
     }
 

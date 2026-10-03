@@ -234,7 +234,12 @@ impl IdentityStore {
             decode_group(rows, vec![])
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
     pub async fn group_update(
         &self,
@@ -294,7 +299,12 @@ impl IdentityStore {
             decode_group(r, inline_threads(&tx, id).await?)
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
     pub async fn group_delete(&self, actor: i64, id: i64) -> Result<(), AdminError> {
         if id >= 0 {
@@ -322,7 +332,12 @@ impl IdentityStore {
             Ok(())
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
     pub async fn threads_list(&self, actor: i64, id: i64) -> Result<Vec<ThreadPolicy>, AdminError> {
         if id >= 0 {
@@ -410,7 +425,12 @@ impl IdentityStore {
             )
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
     pub async fn thread_delete(&self, actor: i64, gid: i64, pid: i64) -> Result<(), AdminError> {
         if gid >= 0 || pid <= 0 {
@@ -439,7 +459,12 @@ impl IdentityStore {
             Ok(())
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
     pub async fn members_list(&self, actor: i64, id: i64) -> Result<Vec<MemberPolicy>, AdminError> {
         if id >= 0 {
@@ -535,7 +560,12 @@ impl IdentityStore {
             )
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
     pub async fn member_delete(&self, actor: i64, gid: i64, uid: i64) -> Result<(), AdminError> {
         if gid >= 0 || uid <= 0 {
@@ -564,6 +594,11 @@ impl IdentityStore {
             Ok(())
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
 }

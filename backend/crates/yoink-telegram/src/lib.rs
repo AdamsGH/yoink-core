@@ -38,6 +38,8 @@ mod cookie_url;
 mod cut;
 mod lang;
 mod media_command;
+mod menus;
+pub use menus::MenuConfig;
 mod plain_url;
 mod progress;
 mod proxy;
@@ -104,6 +106,8 @@ pub struct TelegramAdapter {
     cookie_url: Option<CookieUrlConfig>,
     file_base: Url,
     http_client: reqwest::Client,
+    menu_config: MenuConfig,
+    menus: Option<menus::Menus>,
 }
 
 impl TelegramAdapter {
@@ -161,6 +165,8 @@ impl TelegramAdapter {
             cookie_url: None,
             file_base: cookie_upload::file_base(&api_origin, &token),
             http_client,
+            menu_config: MenuConfig::default(),
+            menus: None,
         })
     }
 
@@ -197,6 +203,14 @@ impl TelegramAdapter {
         self
     }
 
+    pub fn with_menu_config(mut self, config: MenuConfig) -> Result<Self, TelegramError> {
+        if !config.valid() {
+            return Err(TelegramError::BotInitializationFailed);
+        }
+        self.menu_config = config;
+        Ok(self)
+    }
+
     pub fn bot_username(&self) -> &str {
         &self.bot_username
     }
@@ -209,12 +223,34 @@ impl TelegramAdapter {
         })
     }
 
+    /// Reconciles persisted menus before the composition root declares readiness.
+    /// The caller must apply its startup deadline to this operation.
+    pub async fn initialize_menus(&mut self) {
+        let mut menus = menus::Menus::new(
+            self.bot.clone(),
+            self.identities.clone(),
+            self.owner_id,
+            self.downloads.is_some(),
+            self.groups_enabled,
+            self.menu_config,
+        );
+        menus.initialize().await;
+        self.menus = Some(menus);
+    }
+
     /// Polls until cancellation or the first polling failure.
-    pub async fn run(self, shutdown: CancellationToken) -> Result<(), TelegramError> {
+    pub async fn run(mut self, shutdown: CancellationToken) -> Result<(), TelegramError> {
         if shutdown.is_cancelled() {
             return Ok(());
         }
 
+        if self.menus.is_none() {
+            tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
+                _ = self.initialize_menus() => {},
+            }
+        }
+        let menus = self.menus.take().expect("initialized menus").run();
         let mut listener = Polling::builder(self.bot.clone())
             .timeout(self.poll_timeout)
             .build();
@@ -263,6 +299,7 @@ impl TelegramAdapter {
         tokio::pin!(dispatch);
 
         tokio::select! {
+            () = menus => unreachable!("menu loop runs until dropped"),
             () = progress => unreachable!("progress loop runs until dropped"),
             _ = shutdown.cancelled() => {
                 stop.stop();

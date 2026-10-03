@@ -105,7 +105,12 @@ impl IdentityStore {
             decode_profile(row)
         }
         .await;
-        finish(transaction, result).await
+        let result = finish(transaction, result).await;
+        drop(connection);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
 
     pub async fn current_profile(&self, user_id: i64) -> Result<UserProfile, IdentityError> {
@@ -195,7 +200,12 @@ impl IdentityStore {
             Ok((profile, settings))
         }
         .await;
-        finish(transaction, result).await
+        let result = finish(transaction, result).await;
+        drop(connection);
+        if result.is_ok() && (language.is_some() || theme.is_some()) {
+            self.invalidate();
+        }
+        result
     }
 }
 

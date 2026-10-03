@@ -23,6 +23,18 @@ The download service performs fresh read-only identity checks at admission, befo
 
 `/job <UUID>` and `/cancel <UUID>` require both actor ownership and the original bot/chat/topic. A query in another topic cannot reveal or cancel a job, even for its owner. Media uploads, albums, cached sends and admission replies retain that original destination. There is no private-chat or General-topic fallback. Private-delivery redirects, group registration and remaining legacy settings workflows are unimplemented.
 
+## Telegram command menus
+
+Startup reconciles native Bot API menus before readiness. Menus contain only implemented commands and follow the same owner, role, ban and group boundaries as handlers. Feature grants trigger a refresh but do not expose unimplemented commands or grant access to owner-only handlers. Global private fallback menus contain only `start` and `help`; global group fallbacks never advertise media.
+
+Private chat menus use persisted account language. Refresh removes stale `en` and `ru` overrides before replacing the base menu. Group member scopes reflect effective local roles, group enablement and global blocks; private-only commands are excluded. Telegram has no topic-specific command menu, so topic authorization remains an execution check. Deleting a group revokes its tracked member menus.
+
+Committed identity, language, role, ban, permission, tag-map and group-policy changes notify the adapter without an inbound Telegram message. The worker reloads committed state, serializes Bot API writes, honors `retry_after` and retries transient or applied-but-lost responses. Periodic reconciliation handles time-based expiry. Menu failure does not roll back account changes. Logs use fixed failure categories rather than credential-bearing API errors.
+
+Initial reconciliation includes persisted restricted and banned users and runs within the existing startup deadline. Large imported user/group sets require an appropriately configured deadline because reconciliation considers registered users in each known group. Menus are discoverability, not authorization; every handler and delivery stage retains its own fresh access checks.
+
+`just test-media menus` verifies private catalogs, HTTP-driven refresh, language overrides, transient failures, concurrent revocation and restart recovery. `just test-media group-admin` additionally verifies group member menus after grants, revocation, bans, disablement, restart and deletion.
+
 ## Frontend identity operations
 
 Signed WebApp registration applies persisted open/approved-only onboarding atomically. New configured-owner accounts receive the owner role; existing accounts preserve roles, timed bans, preferences and grants. Blocking checks precede registration updates and owner elevation. Authenticated profile/settings requests reload current identity, so stale JWT roles cannot restore revoked access. Settings and signed profile updates advance the shared microsecond revision, invalidating older Telegram language callbacks. See [configuration](configuration.md#optional-frontend-authentication) for activation, verification bounds and the dangerous development-only impersonation switch.

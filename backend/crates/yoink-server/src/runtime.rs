@@ -216,6 +216,9 @@ async fn run_impl(
             telegram = Some(adapter.with_downloads(service.clone()));
             downloads = Some(service);
         }
+        if let Some(adapter) = &mut telegram {
+            adapter.initialize_menus().await;
+        }
         Ok(telegram)
     };
     enum Startup {

@@ -341,7 +341,12 @@ impl IdentityStore {
             decode_user(row, self.owner_id, now_db(&tx).await?)
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
 
     pub async fn admin_permissions(
@@ -448,7 +453,12 @@ impl IdentityStore {
             decode_permission(row)
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
     pub async fn admin_revoke_permission(
         &self,
@@ -500,7 +510,12 @@ impl IdentityStore {
             Ok(())
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
 
     pub async fn admin_feature_access(
@@ -668,7 +683,12 @@ impl IdentityStore {
                 .collect())
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
 
     pub async fn admin_available_features(
@@ -805,7 +825,12 @@ impl IdentityStore {
             Ok(())
         }
         .await;
-        finish_admin(tx, result).await
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
     }
 }
 

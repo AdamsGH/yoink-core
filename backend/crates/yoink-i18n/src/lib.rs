@@ -44,6 +44,25 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    MenuStart => "telegram.menu_start";
+    MenuHelp => "telegram.menu_help";
+    MenuStatus => "telegram.menu_status";
+    MenuDownload => "telegram.menu_download";
+    MenuVideo => "telegram.menu_video";
+    MenuAudio => "telegram.menu_audio";
+    MenuImage => "telegram.menu_image";
+    MenuJob => "telegram.menu_job";
+    MenuCancel => "telegram.menu_cancel";
+    MenuPlaylist => "telegram.menu_playlist";
+    MenuList => "telegram.menu_list";
+    MenuCut => "telegram.menu_cut";
+    MenuSubs => "telegram.menu_subs";
+    MenuSettings => "telegram.menu_settings";
+    MenuQuality => "telegram.menu_quality";
+    MenuProxy => "telegram.menu_proxy";
+    MenuUncache => "telegram.menu_uncache";
+    MenuCookie => "telegram.menu_cookie";
+    MenuLang => "telegram.menu_lang";
     ProxyUsage => "telegram.proxy_usage";
     ProxyTitle => "telegram.proxy_title", ["status"];
     ProxyEnabled => "telegram.proxy_enabled";

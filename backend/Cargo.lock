@@ -5022,6 +5022,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "yoink-access",
  "yoink-application",
  "yoink-db",
  "yoink-domain",

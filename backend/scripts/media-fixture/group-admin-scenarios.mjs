@@ -30,6 +30,16 @@ export async function runGroupAdminScenarios(context) {
     const result = await request('/auth/token', { method: 'POST', body: { init_data: new URLSearchParams({ auth_date: authDate, user: profile, hash }).toString() } });
     return result.access_token;
   }
+  async function menu(allowed, label) {
+    const scope = { type: 'chat_member', chat_id: group, user_id: user };
+    await waitFor(() => {
+      const commands = botApi.commandMenus.get({ scope });
+      return botApi.commandMenus.has({ scope }) && (allowed ? commands.some(command => command.command === 'video') : commands.length === 0);
+    }, `group menu ${label}`);
+    const commands = botApi.commandMenus.get({ scope }).map(command => command.command);
+    for (const name of ['status', 'list', 'settings', 'format', 'quality', 'proxy', 'cookie', 'lang']) assert(!commands.includes(name), `${label}: private command ${name} must not appear in group menus`);
+    for (const language_code of ['en', 'ru']) assert(!botApi.commandMenus.has({ scope, language_code }), `${label}: stale language override`);
+  }
   async function denied(thread, label) {
     const operations = await fixtureSql('SELECT count(*) FROM runtime_operations');
     const start = botApi.calls.length;
@@ -75,6 +85,7 @@ export async function runGroupAdminScenarios(context) {
     await request(`/groups/${group}/members/${user}`, { token: owner, method: 'PUT', body: { role_override: 'user', allow_pm_override: true } });
     assert.equal((await request(`/groups/${group}/members`, { token: owner })).find(row => row.user_id === user)?.role_override, 'user');
     assert.deepEqual(await request(`/groups/${otherGroup}/members`, { token: owner }), [], 'overrides must be local to one group');
+    await menu(true, 'member-grant');
     await allowed(18, 'group-member-grant');
 
     const topic = await request(`/groups/${group}/threads`, { token: owner, method: 'POST', body: { thread_id: 18, name: 'Allowed topic', enabled: true }, status: 201 });
@@ -91,22 +102,28 @@ export async function runGroupAdminScenarios(context) {
     await request(`/groups/${group}/threads/${topic.id}`, { token: owner, method: 'DELETE', status: 204 });
     await allowed(19, 'group-no-positive-whitelist');
     await request(`/groups/${group}`, { token: owner, method: 'PATCH', body: { enabled: false } });
+    await menu(false, 'disabled-via-api');
     await denied(19, 'group-disabled-via-api');
     await request(`/groups/${group}`, { token: owner, method: 'PATCH', body: { enabled: true } });
     await request(`/groups/${group}/members/${user}`, { token: owner, method: 'DELETE', status: 204 });
+    await menu(false, 'member-revoked');
     await denied(19, 'group-member-revoked');
     await request(`/groups/${group}`, { token: owner, method: 'PATCH', body: { auto_grant_role: 'user' } });
+    await menu(true, 'default-grant');
     await allowed(19, 'group-default-grant');
     await request(`/users/${user}`, { token: owner, method: 'PATCH', body: { ban_until: new Date(Date.now() + 600_000).toISOString() } });
+    await menu(false, 'global-ban');
     await denied(19, 'global-ban-overrides-group-grant');
     await request(`/users/${user}`, { token: owner, method: 'PATCH', body: { ban_until: null } });
     await restartApp();
     const persisted = await request(`/groups/${group}`, { token: owner });
     assert.equal(persisted.auto_grant_role, 'user');
     assert(persisted.thread_policies.some(row => row.id === main.id && row.thread_id === null && row.enabled === false));
+    await menu(true, 'restart');
     await allowed(19, 'group-policy-persists-after-restart');
     await request(`/groups/${group}`, { token: owner, method: 'DELETE', status: 204 });
     await request(`/groups/${group}`, { token: owner, status: 404 });
+    await menu(false, 'deleted-group');
     await denied(19, 'group-deletion-revokes-admission');
     assert.equal(await fixtureSql(`SELECT count(*) FROM thread_policies WHERE group_id=${group}`), '0');
     assert.equal(await fixtureSql(`SELECT count(*) FROM user_group_policies WHERE group_id=${group}`), '0');
