@@ -88,13 +88,11 @@ impl IdentityStore {
             .bind(user_id)
             .bind(expected_revision)
             .bind(self.owner_id == Some(user_id))
-            .bind(chrono::Utc::now())
             .fetch_optional(&**transaction)
             .await?;
         let Some(row) = row else {
             let allowed = query(include_str!("language_authorized.sql"))
                 .bind(user_id)
-                .bind(chrono::Utc::now())
                 .bind(self.owner_id == Some(user_id))
                 .fetch_optional(&**transaction)
                 .await?;

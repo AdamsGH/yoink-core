@@ -55,6 +55,7 @@ pub struct TelegramConfig {
 
 #[derive(Debug)]
 pub struct Config {
+    pub auth: Option<crate::auth_config::AuthHttpConfig>,
     pub http_bind: SocketAddr,
     pub telegram: Option<TelegramConfig>,
     pub startup_timeout: Duration,
@@ -284,6 +285,7 @@ impl Config {
         } else {
             None
         };
+        let auth = crate::auth_config::AuthHttpConfig::from_lookup(&mut read, database.is_some())?;
         let media = if media_enabled {
             if telegram.is_none() || database.is_none() {
                 return Err(invalid(
@@ -299,6 +301,7 @@ impl Config {
             None
         };
         Ok(Self {
+            auth,
             http_bind,
             telegram,
             startup_timeout,

@@ -14,6 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "json", "migrate", "macros"] }
 yoink-access = { path = "crates/yoink-access" }
 yoink-identity = { path = "crates/yoink-identity" }
+yoink-auth = { path = "crates/yoink-auth" }
 yoink-storage = { path = "crates/yoink-storage" }
 yoink-db = { path = "crates/yoink-db" }
 yoink-executor = { path = "crates/yoink-executor" }

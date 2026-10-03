@@ -1,6 +1,6 @@
 # Configuration
 
-The native Rust server uses the embedded Turso 0.7.2 engine through the `turso` crate, not libsql. It does not use PostgreSQL or SQLx. Yoink reads explicit `YOINK_RUST_*` environment variables and does not load `.env` or legacy Python configuration. Python and Rust settings configure separate runtimes. Defaults keep Telegram, media, and database access disabled, with HTTP bound to loopback.
+The native Rust server uses the embedded Turso 0.7.2 engine through the `turso` crate, not libsql. It does not use PostgreSQL or SQLx. Yoink reads explicit `YOINK_RUST_*` environment variables and does not load `.env` or legacy Python configuration. Python and Rust settings configure separate runtimes. Defaults keep authentication, Telegram, media, and database access disabled, with HTTP bound to loopback.
 
 ## Server settings
 
@@ -27,6 +27,25 @@ Turso also needs writable scratch storage for query execution. In 0.7.2, tempora
 The legacy `DATABASE_URL`, `MAX_CONNECTIONS`, `YOINK_RUST_DATABASE_URL`, and database max-connection settings are rejected. There is no host PostgreSQL configuration path in this runtime.
 
 Run `yoink-server migrate` explicitly against the intended file to create a missing database and apply ordered, idempotent upgrades. It does not create the parent directory. `yoink-server check-schema` and ordinary startup are read-only and reject missing, malformed, drifted, unknown, or checksum-mismatched history. See [persistence](persistence.md) and [development](development.md).
+
+## Optional frontend authentication
+
+Authentication requires an existing migrated native database. It can run without Telegram polling. Enable it with explicit credentials for the same bot that supplies the frontend's WebApp initData. No secret is generated or inherited from the Python runtime.
+
+| Variable | Default | Supported value | Behavior |
+| --- | --- | --- | --- |
+| `YOINK_RUST_AUTH_ENABLED` | `false` | Exact `true` or `false` | Enables frontend identity/authentication routes. Requires database path, bot token, API secret and owner ID. |
+| `YOINK_RUST_API_SECRET_KEY` | unset | At least 32 UTF-8 bytes | Explicit HS256 signing secret. Keep private and stable across restarts. |
+| `YOINK_RUST_AUTH_INIT_DATA_MAX_AGE_SECS` | `86400` | 1 through 86400 seconds | Maximum age of signed WebApp data. |
+| `YOINK_RUST_AUTH_FUTURE_SKEW_SECS` | `30` | 0 through 300 seconds | Allowed future clock skew for WebApp data. |
+| `YOINK_RUST_API_TOKEN_EXPIRE_MINUTES` | `1440` | 1 through 10080 minutes | JWT lifetime. Tokens contain `sub`, `role` and `exp`. |
+| `YOINK_RUST_DEV_AUTH_ENABLED` | `false` | Exact `true` or `false` | Requires authentication enabled. Adds unauthenticated existing-account impersonation for local development. Never enable on an exposed listener. |
+
+`POST /api/v1/auth/token` accepts JSON with `init_data`. Verification decodes form values once, checks the Telegram WebAppData HMAC, requires `auth_date`, and bounds timestamps and payload size. Registration uses the persisted `bot_access_mode`: missing means `open`, `approved_only` creates restricted users, and invalid configured values fail closed. New configured-owner accounts persist the owner role. Existing accounts retain stored roles, bans, preferences and grants while signed profile metadata is refreshed; the configured owner is elevated in the returned profile only after blocking checks.
+
+Authenticated `GET /api/v1/users/me` and `GET/PATCH /api/v1/settings` use a bearer token and reload current database identity and ban state. Settings expose `user_id`, `language` and `theme`; updates accept `en`/`ru` and Catppuccin `latte`/`frappe`/`macchiato`/`mocha`. JWT role claims do not authorize operations. Auth routes reject requests while runtime readiness is false, including failed startup and shutdown. Successful responses and application errors use `Cache-Control: no-store`.
+
+With the separate dev flag, `POST /api/v1/auth/dev?user_id=ID` issues a token only for an existing unblocked account; a supplied role cannot elevate it. Without that flag the route does not exist. These routes are the authentication prerequisite, not complete frontend/API parity. User statistics, account administration and product endpoints remain separate work.
 
 ## Optional Telegram adapter
 
@@ -60,4 +79,4 @@ The supported download, timeout, workspace, proxy, credential, quota, retry, cac
 
 ## Localization and diagnostics
 
-Telegram replies use embedded English and Russian TOML catalogs. Update both catalogs together. HTTP endpoints are unauthenticated diagnostics without user data. Keep the loopback bind unless exposing diagnostics is intentional. Tokens are redacted in configuration diagnostics. Changes to embedded catalogs require a rebuild.
+Telegram replies use embedded English and Russian TOML catalogs. Update both catalogs together. Health and system diagnostics remain unauthenticated and contain no user data. Enabled auth routes expose the profile/settings contracts above. Keep the loopback bind unless exposure is intentional, use a trusted TLS reverse proxy for frontend traffic, and keep dev authentication disabled. Tokens are redacted in configuration diagnostics. Changes to embedded catalogs require a rebuild.

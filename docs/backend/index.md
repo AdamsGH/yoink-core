@@ -17,6 +17,6 @@ The Rust backend lives in `backend/`. It runs alongside the Python implementatio
 - [Architecture](architecture.md): crate responsibilities and ownership boundaries.
 - [Worker protocol](worker-protocol.md): frame bounds, attempt identity, sensitive payloads, and artifact trust boundaries.
 - [Persistence](persistence.md): admission, idempotency, leases, cancellation, delivery, and recovery.
-- [Access control](access-control.md): policy precedence, read-only identity snapshots, and runtime checks.
+- [Access control](access-control.md): policy precedence, shared registration/profile/settings, read-only authorization snapshots, and runtime checks.
 
 Commands in these pages are relative to the repository root unless they explicitly change directory. Diagnostics are not a measure of downloader or frontend compatibility, and no performance improvement is claimed.

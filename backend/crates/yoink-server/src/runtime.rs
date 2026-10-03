@@ -88,10 +88,15 @@ async fn run_impl(
     let address = listener.local_addr().map_err(|_| ServerError::Bind)?;
     tokio::pin!(shutdown_signal);
     let mut tasks = JoinSet::new();
+    let auth_state = config
+        .auth
+        .as_ref()
+        .map(|auth| yoink_http::AuthState::new(auth.dev_enabled));
+    let http_auth = auth_state.clone();
     let http_system = system.clone();
     let http_cancel = cancel.clone();
     tasks.spawn(async move {
-        yoink_http::serve(listener, http_system, http_cancel)
+        yoink_http::serve_with_auth(listener, http_system, http_auth, http_cancel)
             .await
             .map_err(|_| ServerError::Http)
     });
@@ -122,6 +127,22 @@ async fn run_impl(
             store
                 .verify_schema()
                 .await
+                .map_err(|_| ServerError::DatabaseStartup)?;
+        }
+        if let Some(auth) = config.auth {
+            let store = database.as_ref().ok_or(ServerError::DatabaseStartup)?;
+            let service = yoink_http::AuthService {
+                identities: Arc::new(yoink_identity::IdentityStore::new(
+                    store.database().clone(),
+                    Some(auth.owner_id),
+                    false,
+                )),
+                crypto: auth.crypto,
+            };
+            auth_state
+                .as_ref()
+                .ok_or(ServerError::DatabaseStartup)?
+                .install(service)
                 .map_err(|_| ServerError::DatabaseStartup)?;
         }
         let mut telegram = match config.telegram {

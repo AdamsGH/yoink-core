@@ -8,7 +8,9 @@ The server optionally starts diagnostics, Telegram, and database-backed services
 
 ```text
 yoink-server
-  -> yoink-http             diagnostics
+  -> yoink-http             diagnostics, opt-in frontend auth/profile/settings
+       -> yoink-auth       WebApp HMAC verification and HS256 tokens
+       -> yoink-identity   transactional registration and profile/settings
   -> yoink-telegram         owner-private commands, opt-in groups/topics and media delivery
        -> yoink-i18n        embedded EN/RU TOML catalogs
   -> yoink-downloads        admission, authorization and worker lifecycle
@@ -28,7 +30,7 @@ Migration v1 defines three runtime data tables plus the migration ledger. Migrat
 
 ## Credentials and security boundary
 
-Identity and settings are consumed as read-only snapshots. Snapshot APIs must not return credential contents. A local embedded database has no PostgreSQL column grants or role ACLs: the trusted server process can read all database contents. The operating-system account and private directory are the security boundary, not per-table privilege isolation. Do not describe this as equivalent to separate PostgreSQL runtime/migration roles.
+Media authorization consumes read-only identity snapshots. Frontend authentication uses shared transactional registration and profile/settings operations, with current database roles and bans authoritative rather than JWT claims. Registration preserves existing roles, bans, preferences and grants. Snapshot APIs must not return credential contents. A local embedded database has no PostgreSQL column grants or role ACLs: the trusted server process can read all database contents. The operating-system account and private directory are the security boundary, not per-table privilege isolation. Do not describe this as equivalent to separate PostgreSQL runtime/migration roles.
 
 Admission freezes opaque credential references and versions, not cookie contents or proxy passwords. Execution and each delivery unit recheck current authorization and resolve current valid references. Personal cookies remain distinct from shared pool cookies, which require a current grant. Proxy enablement and current references are checked without silently falling back to direct access. Cache identity includes actor, bot, request parameters, and credential versions. Only complete acknowledged batches are cached as opaque file IDs; cache hits still recheck authorization, credentials, limits, and fenced delivery.
 

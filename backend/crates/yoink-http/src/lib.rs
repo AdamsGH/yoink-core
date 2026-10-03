@@ -1,5 +1,8 @@
 //! Thin HTTP adapter for Yoink application services.
 
+mod auth;
+pub use auth::{AuthService, AuthState};
+
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use serde::Serialize;
 use tokio::net::TcpListener;
@@ -18,6 +21,25 @@ pub fn router(system: SystemService) -> Router {
         .route("/health/ready", get(ready))
         .route("/api/v1/system", get(system_snapshot))
         .with_state(system)
+}
+
+pub fn router_with_auth(system: SystemService, auth: Option<AuthState>) -> Router {
+    let diagnostics = router(system.clone());
+    match auth {
+        Some(state) => diagnostics.merge(auth::router(state, system)),
+        None => diagnostics,
+    }
+}
+
+pub async fn serve_with_auth(
+    listener: TcpListener,
+    system: SystemService,
+    auth: Option<AuthState>,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    axum::serve(listener, router_with_auth(system, auth))
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
 }
 
 async fn live() -> Json<HealthStatus> {

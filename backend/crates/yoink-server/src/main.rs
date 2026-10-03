@@ -1,3 +1,4 @@
+mod auth_config;
 mod config;
 mod media_config;
 mod runtime;

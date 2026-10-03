@@ -1,6 +1,6 @@
 # Access control and identity
 
-Policy rules are implemented as typed values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds read-only snapshots from selected legacy tables. The first media slice consumes these decisions, but this remains a narrow experimental workflow, not general authenticated business endpoints.
+Policy rules are implemented as typed values in [yoink-access](../../backend/crates/yoink-access/src/lib.rs). [yoink-identity](../../backend/crates/yoink-identity/src/lib.rs) builds read-only authorization snapshots and provides transactional registration, profile and settings operations. Opt-in frontend authentication uses these shared operations; media retains its separate command gates. Full account administration and product API parity remain pending.
 
 ## Global roles and blocks
 
@@ -22,6 +22,10 @@ Private commands remain restricted to the configured owner. Group commands requi
 The download service performs fresh read-only identity checks at admission, before a claimed operation starts, before artifact delivery and before progress edits. Checks apply the actual destination scope, minimum `user` role, group enablement, topic policy, role/block precedence and database-time expiry. Global blocking wins. Group enablement and topic rules apply to owners too. An explicit group role override takes precedence over an auto-grant, which only raises the effective local role. A changed or unavailable identity cannot inherit a prior decision. A revoked role, group or topic fails the operation before the next stage. Disabling the group opt-in also blocks persisted group jobs.
 
 `/job <UUID>` and `/cancel <UUID>` require both actor ownership and the original bot/chat/topic. A query in another topic cannot reveal or cancel a job, even for its owner. Media uploads, albums, cached sends and admission replies retain that original destination. There is no private-chat or General-topic fallback. Private-delivery redirects, user/group registration and legacy settings workflows remain unimplemented.
+
+## Frontend identity operations
+
+Signed WebApp registration applies persisted open/approved-only onboarding atomically. New configured-owner accounts receive the owner role; existing accounts preserve roles, timed bans, preferences and grants. Blocking checks precede registration updates and owner elevation. Authenticated profile/settings requests reload current identity, so stale JWT roles cannot restore revoked access. Settings and signed profile updates advance the shared microsecond revision, invalidating older Telegram language callbacks. See [configuration](configuration.md#optional-frontend-authentication) for activation, verification bounds and the dangerous development-only impersonation switch.
 
 ## Read-only snapshot boundary
 

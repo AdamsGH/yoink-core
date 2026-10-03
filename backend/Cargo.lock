@@ -805,6 +805,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer 0.10.4",
  "crypto-common 0.1.7",
+ "subtle",
 ]
 
 [[package]]
@@ -1252,6 +1253,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest 0.10.7",
+]
 
 [[package]]
 name = "hmac"
@@ -2341,7 +2351,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "fallible-iterator 0.2.0",
- "hmac",
+ "hmac 0.13.0",
  "md-5",
  "memchr",
  "rand 0.10.3",
@@ -4774,6 +4784,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "yoink-auth"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hmac 0.12.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "url",
+]
+
+[[package]]
 name = "yoink-db"
 version = "0.1.0"
 dependencies = [
@@ -4845,12 +4868,22 @@ name = "yoink-http"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
+ "hmac 0.12.1",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tower",
+ "url",
+ "yoink-access",
  "yoink-application",
+ "yoink-auth",
+ "yoink-db",
+ "yoink-identity",
+ "yoink-storage",
 ]
 
 [[package]]
@@ -4927,6 +4960,7 @@ dependencies = [
  "turso",
  "url",
  "yoink-application",
+ "yoink-auth",
  "yoink-downloads",
  "yoink-executor",
  "yoink-http",

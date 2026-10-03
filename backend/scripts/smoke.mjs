@@ -1,6 +1,11 @@
 // Process-level checks use only ephemeral loopback listeners and fake credentials.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { createHmac } from 'node:crypto';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
 import { once } from 'node:events';
 import http from 'node:http';
 import net from 'node:net';
@@ -96,10 +101,93 @@ test('HTTP diagnostics, planned catalog and clean SIGTERM', async t => {
   assert.equal(snapshot.ready, true);
   assert.deepEqual(snapshot.modules.map(m => m.id), ['downloads', 'inbox', 'insight', 'music', 'stats']);
   assert(snapshot.modules.every(m => m.status === 'planned'));
+  for (const endpoint of ['/api/v1/auth/token', '/api/v1/auth/dev']) {
+    assert.equal((await fetch(base + endpoint, { method: 'POST' })).status, 404);
+  }
+  for (const endpoint of ['/api/v1/users/me', '/api/v1/settings']) {
+    assert.equal((await fetch(base + endpoint)).status, 404);
+  }
   assert.equal((await fetch(base + '/missing')).status, 404);
   assert.equal((await fetch(base + '/health/live', { method: 'POST' })).status, 405);
   process.child.kill('SIGTERM');
   assert.deepEqual(await process.exit(), { code: 0, signal: null });
+});
+
+test('native WebApp authentication, restart persistence and failed-startup isolation', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'yoink-auth-smoke-'));
+  await chmod(directory, 0o700);
+  const secret = 'fixture-jwt-secret-at-least-32bytes';
+  const env = {
+    PATH: process.env.PATH,
+    YOINK_RUST_DATABASE_PATH: path.join(directory, 'auth.db'),
+    YOINK_RUST_TELEGRAM_ENABLED: 'false',
+    YOINK_RUST_AUTH_ENABLED: 'true',
+    YOINK_RUST_TELEGRAM_TOKEN: fakeToken,
+    YOINK_RUST_API_SECRET_KEY: secret,
+    YOINK_RUST_OWNER_ID: '42',
+  };
+  function signed(id) {
+    const date = String(Math.floor(Date.now() / 1000));
+    const user = JSON.stringify({ id, first_name: 'Native + %2F', username: 'fixture_user' });
+    const key = createHmac('sha256', 'WebAppData').update(fakeToken).digest();
+    const hash = createHmac('sha256', key).update(`auth_date=${date}\nuser=${user}`).digest('hex');
+    return new URLSearchParams({ auth_date: date, user, hash }).toString();
+  }
+  const postLogin = (base, data) => fetch(base + '/api/v1/auth/token', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ init_data: data }),
+  });
+  let server;
+  try {
+    await promisify(execFile)(binary, ['migrate'], { env, timeout: 15000 });
+    server = start(t, env);
+    let base = `http://${await server.address()}`;
+    assert.equal((await postLogin(base, 'hash=invalid')).status, 401);
+    const response = await postLogin(base, signed(42));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const login = await response.json();
+    assert.equal(login.role, 'owner');
+    assert.equal(login.token_type, 'bearer');
+    const headers = { authorization: `Bearer ${login.access_token}`, 'content-type': 'application/json' };
+    let profile = await (await fetch(base + '/api/v1/users/me', { headers })).json();
+    assert.equal(profile.id, 42);
+    assert.equal(profile.first_name, 'Native + %2F');
+    assert.equal((await fetch(base + '/api/v1/settings', { method: 'PATCH', headers, body: JSON.stringify({ language: 'ru', theme: 'mocha' }) })).status, 200);
+    assert.equal((await fetch(base + '/api/v1/auth/dev?user_id=42', { method: 'POST' })).status, 404);
+    server.child.kill('SIGTERM');
+    assert.equal((await server.exit()).code, 0);
+    assert(!server.output().includes(fakeToken));
+    assert(!server.output().includes(secret));
+    assert(!server.output().includes(login.access_token));
+
+    let preparing = false;
+    const api = http.createServer(() => { preparing = true; });
+    const apiAddress = await listen(t, api);
+    server = start(t, { ...env, ...telegramConfig(apiAddress), YOINK_RUST_STARTUP_TIMEOUT_SECS: '1' });
+    base = `http://${await server.address(false)}`;
+    await until(() => preparing, 'Telegram preparation entered');
+    assert.equal((await fetch(base + '/health/ready')).status, 503);
+    assert.equal((await postLogin(base, signed(43))).status, 503);
+    assert.equal((await fetch(base + '/api/v1/settings', { method: 'PATCH', headers, body: JSON.stringify({ language: 'en' }) })).status, 503);
+    assert.equal((await server.exit()).code, 1);
+    assert.match(server.output(), /initialization exceeded the configured deadline/);
+    assert(!server.output().includes(fakeToken));
+    assert(!server.output().includes(secret));
+
+    server = start(t, { ...env, YOINK_RUST_DEV_AUTH_ENABLED: 'true' });
+    base = `http://${await server.address()}`;
+    assert.deepEqual(await (await fetch(base + '/api/v1/settings', { headers })).json(), { user_id: 42, language: 'ru', theme: 'mocha' });
+    profile = await (await fetch(base + '/api/v1/users/me', { headers })).json();
+    assert.equal(profile.role, 'owner');
+    assert.equal((await fetch(base + '/api/v1/auth/dev?user_id=43&role=owner', { method: 'POST' })).status, 401);
+    assert.equal((await fetch(base + '/api/v1/auth/dev?user_id=42', { method: 'POST' })).status, 200);
+  } finally {
+    if (server) {
+      server.child.kill('SIGTERM');
+      await server.exit();
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('invalid configuration exits without printing supplied secrets', async t => {

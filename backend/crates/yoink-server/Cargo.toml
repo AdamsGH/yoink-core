@@ -27,6 +27,7 @@ yoink-http.workspace = true
 yoink-storage.workspace = true
 yoink-telegram.workspace = true
 yoink-identity.workspace = true
+yoink-auth.workspace = true
 yoink-downloads.workspace = true
 yoink-executor.workspace = true
 serde_json.workspace = true

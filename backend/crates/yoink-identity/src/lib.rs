@@ -7,7 +7,9 @@ use yoink_access::{
 use yoink_db::{Database, query};
 
 mod language;
+mod profile;
 pub use language::LanguagePreference;
+pub use profile::{TrustedProfile, UserProfile, UserSettings};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroupContext {
@@ -44,6 +46,16 @@ pub enum IdentityError {
     LanguageDenied,
     #[error("language revision cannot be advanced")]
     LanguageRevisionOverflow,
+    #[error("identity is not authorized")]
+    Unauthorized,
+    #[error("identity is blocked")]
+    Forbidden,
+    #[error("profile metadata is invalid")]
+    InvalidProfile,
+    #[error("theme must be latte, frappe, macchiato or mocha")]
+    InvalidTheme,
+    #[error("registration policy is invalid")]
+    InvalidPolicy,
 }
 
 impl From<yoink_db::Error> for IdentityError {
