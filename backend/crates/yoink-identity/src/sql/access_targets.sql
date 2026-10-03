@@ -1,8 +1,16 @@
 SELECT user_id, chat_id FROM (
     SELECT id AS user_id, id AS chat_id FROM users WHERE id > 0
-    UNION ALL
+    UNION
     SELECT u.id AS user_id, g.id AS chat_id
     FROM users u CROSS JOIN groups g WHERE u.id > 0 AND g.id < 0
+    UNION
+    SELECT u.id AS user_id, s.group_id AS chat_id
+    FROM users u CROSS JOIN membership_group_suppressions s WHERE u.id > 0
+    UNION
+    SELECT u.id AS user_id, b.group_id AS chat_id
+    FROM users u CROSS JOIN membership_bots b WHERE u.id > 0
+    UNION
+    SELECT user_id, group_id AS chat_id FROM membership_users
 )
 WHERE user_id > ?1 OR (user_id = ?1 AND chat_id > ?2)
 ORDER BY user_id, chat_id

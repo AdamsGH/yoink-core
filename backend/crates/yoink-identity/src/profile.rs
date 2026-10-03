@@ -5,7 +5,7 @@ use yoink_db::query;
 
 use crate::{IdentityError, IdentityStore};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct TrustedProfile {
     pub user_id: i64,
     pub username: Option<String>,
@@ -69,21 +69,7 @@ impl IdentityStore {
                 }
                 return Ok(profile);
             }
-            let policy_row = query(include_str!("registration_policy.sql"))
-                .fetch_optional(&*transaction)
-                .await?;
-            let policy = policy_row
-                .map(|row| {
-                    row.try_get::<Option<String>, _>(0)
-                        .map_err(|_| IdentityError::Database)
-                })
-                .transpose()?;
-            let role = match policy {
-                None => Role::User,
-                Some(Some(value)) if value == "open" => Role::User,
-                Some(Some(value)) if value == "approved_only" => Role::Restricted,
-                _ => return Err(IdentityError::InvalidPolicy),
-            };
+            let role = registration_role(&transaction).await?;
             let role = if self.owner_id == Some(profile.user_id) {
                 Role::Owner
             } else {
@@ -209,7 +195,7 @@ impl IdentityStore {
     }
 }
 
-fn validate_profile(profile: &TrustedProfile) -> Result<(), IdentityError> {
+pub(crate) fn validate_profile(profile: &TrustedProfile) -> Result<(), IdentityError> {
     if profile
         .username
         .as_ref()
@@ -318,5 +304,25 @@ async fn finish<T>(
             let _ = transaction.rollback().await;
             Err(error)
         }
+    }
+}
+
+pub(crate) async fn registration_role(
+    transaction: &Transaction<'_>,
+) -> Result<Role, IdentityError> {
+    let row = query(include_str!("registration_policy.sql"))
+        .fetch_optional(&**transaction)
+        .await?;
+    let policy = row
+        .map(|r| {
+            r.try_get::<Option<String>, _>(0)
+                .map_err(|_| IdentityError::Database)
+        })
+        .transpose()?;
+    match policy {
+        None => Ok(Role::User),
+        Some(Some(value)) if value == "open" => Ok(Role::User),
+        Some(Some(value)) if value == "approved_only" => Ok(Role::Restricted),
+        _ => Err(IdentityError::InvalidPolicy),
     }
 }

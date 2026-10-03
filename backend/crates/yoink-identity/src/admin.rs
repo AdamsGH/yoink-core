@@ -378,7 +378,27 @@ impl IdentityStore {
                 .fetch_all(&*tx)
                 .await
                 .map_err(|_| AdminError::Unavailable)?;
-            rows.into_iter().map(decode_permission).collect()
+            let mut permissions = rows
+                .into_iter()
+                .map(decode_permission)
+                .collect::<Result<Vec<_>, _>>()?;
+            let users = match target_id {
+                Some(id) => vec![id],
+                None => query(include_str!("sql/membership_list_users.sql"))
+                    .fetch_all(&*tx)
+                    .await
+                    .map_err(|_| AdminError::Unavailable)?
+                    .into_iter()
+                    .map(|r| r.try_get(0).map_err(|_| AdminError::Unavailable))
+                    .collect::<Result<Vec<i64>, _>>()?,
+            };
+            for id in users {
+                append_automatic_permissions(&tx, id, &mut permissions).await?;
+            }
+            permissions.sort_by(|a, b| {
+                (a.user_id, &a.plugin, &a.feature).cmp(&(b.user_id, &b.plugin, &b.feature))
+            });
+            Ok(permissions)
         }
         .await;
         finish_admin(tx, result).await
@@ -434,6 +454,19 @@ impl IdentityStore {
                     _ => return Err(AdminError::Unavailable),
                 }
             }
+            if old.is_none()
+                && role != Role::Owner
+                && has_automatic_permission(&tx, target_id, plugin, feature).await?
+            {
+                return Err(AdminError::Forbidden);
+            }
+            query(include_str!("sql/membership_feature_restore.sql"))
+                .bind(target_id)
+                .bind(plugin)
+                .bind(feature)
+                .execute(&*tx)
+                .await
+                .map_err(|_| AdminError::Unavailable)?;
             query(include_str!("admin_grant_upsert.sql"))
                 .bind(target_id)
                 .bind(plugin)
@@ -499,6 +532,21 @@ impl IdentityStore {
                     "tag" => return Err(AdminError::Forbidden),
                     _ => return Err(AdminError::Unavailable),
                 }
+            }
+            if old.is_none()
+                && role != Role::Owner
+                && has_automatic_permission(&tx, target_id, plugin, feature).await?
+            {
+                return Err(AdminError::Forbidden);
+            }
+            if role == Role::Owner {
+                query(include_str!("sql/membership_feature_suppress.sql"))
+                    .bind(target_id)
+                    .bind(plugin)
+                    .bind(feature)
+                    .execute(&*tx)
+                    .await
+                    .map_err(|_| AdminError::Unavailable)?;
             }
             query(include_str!("admin_revoke.sql"))
                 .bind(target_id)
@@ -864,7 +912,7 @@ fn validated_tag_map(entries: &[AdminTagMapEntry]) -> Option<BTreeMap<String, Ve
     Some(mapping)
 }
 
-fn decode_tag_map(raw: &str) -> Result<Vec<AdminTagMapEntry>, AdminError> {
+pub(crate) fn decode_tag_map(raw: &str) -> Result<Vec<AdminTagMapEntry>, AdminError> {
     let mapping: BTreeMap<String, Vec<String>> =
         serde_json::from_str(raw).map_err(|_| AdminError::Unavailable)?;
     let entries: Vec<_> = mapping
@@ -984,14 +1032,16 @@ async fn permission_list(
     tx: &Transaction<'_>,
     id: i64,
 ) -> Result<Vec<AdminPermission>, AdminError> {
-    query(include_str!("admin_permissions_user.sql"))
+    let mut permissions = query(include_str!("admin_permissions_user.sql"))
         .bind(id)
         .fetch_all(&**tx)
         .await
         .map_err(|_| AdminError::Unavailable)?
         .into_iter()
         .map(decode_permission)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    append_automatic_permissions(tx, id, &mut permissions).await?;
+    Ok(permissions)
 }
 fn decode_permission(r: yoink_db::Row) -> Result<AdminPermission, AdminError> {
     Ok(AdminPermission {
@@ -1054,6 +1104,64 @@ pub(super) async fn finish_admin<T>(
             Err(e)
         }
     }
+}
+
+async fn has_automatic_permission(
+    tx: &Transaction<'_>,
+    user: i64,
+    plugin: &str,
+    feature: &str,
+) -> Result<bool, AdminError> {
+    Ok(crate::membership::automatic_grants(tx, user)
+        .await
+        .map_err(|_| AdminError::Unavailable)?
+        .iter()
+        .any(|g| g.plugin == plugin && g.feature == feature))
+}
+
+/// Effective permission listing: a derived contribution has a stable negative
+/// virtual ID and source "tag"; it is not a user_permissions ledger row. The
+/// mutation API addresses (user, plugin, feature), never this display ID. Active
+/// indefinite stored rows take precedence; otherwise the indefinite automatic
+/// contribution replaces the same key, avoiding duplicate unique entries.
+async fn append_automatic_permissions(
+    tx: &Transaction<'_>,
+    user: i64,
+    out: &mut Vec<AdminPermission>,
+) -> Result<(), AdminError> {
+    use sha2::{Digest, Sha256};
+    for grant in crate::membership::automatic_grants(tx, user)
+        .await
+        .map_err(|_| AdminError::Unavailable)?
+    {
+        if out.iter().any(|p| {
+            p.user_id == user
+                && p.plugin == grant.plugin
+                && p.feature == grant.feature
+                && p.expires_at.is_none()
+        }) {
+            continue;
+        }
+        out.retain(|p| {
+            !(p.user_id == user && p.plugin == grant.plugin && p.feature == grant.feature)
+        });
+        let digest = Sha256::digest(format!("{user}:{}:{}", grant.plugin, grant.feature));
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&digest[..8]);
+        let id = -(i64::from_be_bytes(bytes) & i64::MAX).max(1);
+        out.push(AdminPermission {
+            id,
+            user_id: user,
+            plugin: grant.plugin,
+            feature: grant.feature,
+            granted_by: 0,
+            // Virtual grants do not assert a historical grantor or ledger date.
+            granted_at: DateTime::from_timestamp(0, 0).ok_or(AdminError::Unavailable)?,
+            expires_at: None,
+            grant_source: "tag".into(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

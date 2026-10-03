@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 13] = [
+const MIGRATIONS: [Migration; 14] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -75,6 +75,11 @@ const MIGRATIONS: [Migration; 13] = [
         version: 13,
         sql: include_str!("../migrations-turso/0013_cut_segments.sql"),
         expected_tables: 52,
+    },
+    Migration {
+        version: 14,
+        sql: include_str!("../migrations-turso/0014_native_membership.sql"),
+        expected_tables: 56,
     },
 ];
 
@@ -323,6 +328,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn membership_upgrade_preserves_imported_state_and_fingerprints_indexes() {
+        let (_directory, store) = version_one_store().await;
+        let before = {
+            let connection = store.database().connection().await.unwrap();
+            for migration in &MIGRATIONS[1..13] {
+                raw_sql(migration.sql).execute(&*connection).await.unwrap();
+                let fingerprint = schema_hash(&connection, migration.expected_tables)
+                    .await
+                    .unwrap();
+                query(include_str!("../sql/record_migration.sql"))
+                    .bind(migration.version)
+                    .bind(checksum(migration))
+                    .bind(fingerprint)
+                    .bind(chrono::Utc::now())
+                    .execute(&*connection)
+                    .await
+                    .unwrap();
+            }
+            raw_sql(include_str!("../sql/test_membership_upgrade_fixture.sql"))
+                .execute(&*connection)
+                .await
+                .unwrap();
+            query(include_str!("../sql/test_membership_upgrade_state.sql"))
+                .fetch_one(&*connection)
+                .await
+                .unwrap()
+                .try_get::<String, _>(0)
+                .unwrap()
+        };
+        store.migrate().await.unwrap();
+        store.migrate().await.unwrap();
+        store.verify_schema().await.unwrap();
+        let after = query(include_str!("../sql/test_membership_upgrade_state.sql"))
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get::<String, _>(0)
+            .unwrap();
+        assert_eq!(before, after);
+        let objects = query(include_str!("../sql/test_membership_upgrade_objects.sql"))
+            .fetch_all(store.database())
+            .await
+            .unwrap();
+        let names = objects
+            .iter()
+            .map(|r| r.try_get::<String, _>(0).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "membership_bots",
+                "membership_bots_group",
+                "membership_feature_suppressions",
+                "membership_group_suppressions",
+                "membership_users",
+                "membership_users_group",
+                "membership_users_user"
+            ]
+        );
+        raw_sql(include_str!("../sql/test_membership_drop_index.sql"))
+            .execute(store.database())
+            .await
+            .unwrap();
+        assert_eq!(store.verify_schema().await, Err(StoreError::Schema));
+        assert_eq!(store.migrate().await, Err(StoreError::Schema));
+    }
+
+    #[tokio::test]
     async fn migration_twelve_preserves_all_legacy_quality_and_cut_columns() {
         let (_directory, store) = version_one_store().await;
         let before_quality;
@@ -396,7 +469,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 13);
+        assert_eq!(versions.len(), 14);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
@@ -410,6 +483,7 @@ mod tests {
         assert_eq!(versions[10].try_get::<i64, _>("version").unwrap(), 11);
         assert_eq!(versions[11].try_get::<i64, _>("version").unwrap(), 12);
         assert_eq!(versions[12].try_get::<i64, _>("version").unwrap(), 13);
+        assert_eq!(versions[13].try_get::<i64, _>("version").unwrap(), 14);
     }
 
     #[tokio::test]

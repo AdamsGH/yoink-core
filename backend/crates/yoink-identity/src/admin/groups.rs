@@ -226,6 +226,11 @@ impl IdentityStore {
                 .execute(&*tx)
                 .await
                 .map_err(|_| AdminError::Unavailable)?;
+            query(include_str!("../sql/membership_group_restore.sql"))
+                .bind(p.id)
+                .execute(&*tx)
+                .await
+                .map_err(|_| AdminError::Unavailable)?;
             let rows = query(include_str!("../sql/admin_group_get.sql"))
                 .bind(p.id)
                 .fetch_one(&*tx)
@@ -329,6 +334,16 @@ impl IdentityStore {
             if n == 0 {
                 return Err(AdminError::NotFound);
             }
+            query(include_str!("../sql/membership_group_suppress.sql"))
+                .bind(id)
+                .execute(&*tx)
+                .await
+                .map_err(|_| AdminError::Unavailable)?;
+            query(include_str!("../sql/membership_group_fence.sql"))
+                .bind(id)
+                .execute(&*tx)
+                .await
+                .map_err(|_| AdminError::Unavailable)?;
             Ok(())
         }
         .await;

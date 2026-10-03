@@ -25,6 +25,7 @@ import { runOnboardingScenarios } from './media-fixture/onboarding-scenarios.mjs
 import { runAdminScenarios } from './media-fixture/admin-scenarios.mjs';
 import { runMenuScenarios } from './media-fixture/menu-scenarios.mjs';
 import { runGroupAdminScenarios } from './media-fixture/group-admin-scenarios.mjs';
+import { runMembershipScenarios } from './media-fixture/membership-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
 import { runCutSegmentsScenarios } from './media-fixture/cut-segments-scenarios.mjs';
 import { runQualityScenarios } from './media-fixture/quality-scenarios.mjs';
@@ -44,7 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -82,7 +83,7 @@ let downloadMaxAttempts;
 let downloadTimeoutSeconds = 3;
 let workerSocketTimeoutSeconds = 1;
 let cacheTtlSeconds;
-let groupsEnabled = scenario === 'group-admin';
+let groupsEnabled = ['group-admin', 'membership'].includes(scenario);
 let gallerySource;
 let galleryEnabled = false;
 let galleryTrusted = true;
@@ -191,7 +192,7 @@ async function launchApp() {
     '--env','YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT=/cookie-files/allowed',
     '--mount',`type=bind,source=${cookieFileDir},target=/cookie-files,readonly`,
     '--env','YOINK_RUST_TELEGRAM_ENABLED=true','--env',`YOINK_RUST_TELEGRAM_TOKEN=${token}`,'--env','YOINK_RUST_OWNER_ID=42',
-    ...(['admin', 'menus', 'group-admin'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
+    ...(['admin', 'menus', 'group-admin', 'membership'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
     '--env',`YOINK_RUST_TELEGRAM_GROUPS_ENABLED=${groupsEnabled}`,
     '--env',`YOINK_RUST_BOT_API_URL=http://127.0.0.1:${apiPort}`,'--env','TURSO_TMPDIR=/tmp/yoink-db','--env','TMPDIR=/tmp/yoink-db',
     '--env','YOINK_RUST_DATABASE_PATH=/state/private/state.db',
@@ -662,6 +663,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'admin') summaries.push(await runAdminScenarios({ ...commandContext, restartApp, appHttpPort, authSecret: fixtureAuthSecret, telegramToken: token }));
 if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
   if (scenario === 'group-admin') summaries.push(await runGroupAdminScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
+  if (scenario === 'membership') summaries.push(await runMembershipScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
   if (scenario === 'all' || scenario === 'cut') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut-quality') summaries.push(await runCutQualityScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'quality-cut') summaries.push(await runQualityCutScenarios({ ...commandContext, restartApp }));

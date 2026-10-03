@@ -273,6 +273,7 @@ fn worker(api: Fake, identities: Arc<IdentityStore>) -> Menus<Fake> {
             ..MenuConfig::default()
         },
         owner: 42,
+        source_id: 123456,
         downloads: true,
         groups: false,
         known_groups: Default::default(),
@@ -510,7 +511,7 @@ async fn group_deletion_revokes_member_scopes_using_only_retained_scope_ids() {
     menus.pass().await.unwrap();
     assert!(api.state.lock().unwrap().saved[&(scope, "".into())].is_empty());
     assert!(
-        menus.known_groups.is_empty(),
-        "successful revocation releases scope metadata"
+        menus.known_groups.contains(&-100),
+        "durable deletion targets retain cleanup scope across restarts"
     );
 }

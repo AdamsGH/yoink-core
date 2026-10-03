@@ -221,6 +221,7 @@ pub(crate) struct Menus<A = BotApi> {
     identities: Option<Arc<IdentityStore>>,
     changes: Option<watch::Receiver<()>>,
     owner: i64,
+    source_id: i64,
     downloads: bool,
     groups: bool,
     // Scope identifiers only, never role/locale snapshots. Keep deleted groups
@@ -232,6 +233,7 @@ impl Menus {
         bot: Bot,
         identities: Option<Arc<IdentityStore>>,
         owner: u64,
+        source_id: i64,
         downloads: bool,
         groups: bool,
         config: MenuConfig,
@@ -243,6 +245,7 @@ impl Menus {
             identities,
             changes,
             owner: owner as i64,
+            source_id,
             downloads,
             groups,
             known_groups: Default::default(),
@@ -282,6 +285,23 @@ impl<A: MenuApi> Menus<A> {
 
     async fn target(&self, user: i64, chat: i64) -> Result<(), Failure> {
         let group = chat < 0;
+        if group
+            && let Some(store) = &self.identities
+            && !store
+                .membership_eligible(self.source_id, chat, user)
+                .await
+                .map_err(|_| Failure::Retry(self.config.retry_delay))?
+        {
+            return personalized(
+                &self.api,
+                BotCommandScope::ChatMember {
+                    chat_id: Recipient::Id(ChatId(chat)),
+                    user_id: UserId(user as u64),
+                },
+                vec![],
+            )
+            .await;
+        }
         let (access, language) = match &self.identities {
             Some(store) => match store.snapshot(user, group.then_some((chat, None))).await {
                 Ok(Some(snapshot)) => (

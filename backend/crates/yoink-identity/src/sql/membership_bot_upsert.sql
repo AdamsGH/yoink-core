@@ -1,0 +1,1 @@
+INSERT INTO membership_bots (source_id, group_id, occurred_at, update_id, payload, present, generation) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(source_id,group_id) DO UPDATE SET occurred_at=excluded.occurred_at, update_id=excluded.update_id, payload=excluded.payload, present=excluded.present, generation=excluded.generation;

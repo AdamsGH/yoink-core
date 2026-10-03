@@ -1,0 +1,1 @@
+SELECT id FROM users WHERE id>0 ORDER BY id;

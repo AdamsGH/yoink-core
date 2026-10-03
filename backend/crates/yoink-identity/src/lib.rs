@@ -10,8 +10,12 @@ pub mod admin;
 mod invalidation;
 mod language;
 pub mod m2m;
+mod membership;
 mod profile;
 pub use language::LanguagePreference;
+pub use membership::{
+    MemberStatus, MembershipObservation, MembershipOutcome, MembershipSubject, ObservedTag,
+};
 pub use profile::{TrustedProfile, UserProfile, UserSettings};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,6 +63,10 @@ pub enum IdentityError {
     InvalidTheme,
     #[error("registration policy is invalid")]
     InvalidPolicy,
+    #[error("membership observation is invalid")]
+    InvalidMembership,
+    #[error("membership ordering key conflicts")]
+    MembershipConflict,
 }
 
 impl From<yoink_db::Error> for IdentityError {
@@ -185,6 +193,19 @@ impl IdentityStore {
                 feature: row.try_get(1).map_err(|_| IdentityError::Database)?,
                 expires_at: row.try_get(2).map_err(|_| IdentityError::Database)?,
             });
+        }
+
+        for grant in membership::automatic_grants(transaction, user_id).await? {
+            if let Some(existing) = grants
+                .iter_mut()
+                .find(|g| g.plugin == grant.plugin && g.feature == grant.feature)
+            {
+                // The effective union is indefinite while any auto contribution exists;
+                // no manual/imported expiry is modified in storage.
+                existing.expires_at = None;
+            } else {
+                grants.push(grant);
+            }
         }
 
         let mut providers = Vec::new();
@@ -442,6 +463,12 @@ mod tests {
             .execute(&db)
             .await
             .unwrap();
+        raw_sql(include_str!(
+            "../../yoink-storage/migrations-turso/0014_native_membership.sql"
+        ))
+        .execute(&db)
+        .await
+        .unwrap();
         let identity = IdentityStore::new(db.clone(), owner_id, insight_enabled);
         (dir, db, identity)
     }

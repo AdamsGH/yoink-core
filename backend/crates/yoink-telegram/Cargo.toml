@@ -7,7 +7,10 @@ publish.workspace = true
 
 [dependencies]
 teloxide.workspace = true
-reqwest.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+futures = "0.3"
+reqwest = { workspace = true, features = ["json"] }
 yoink-i18n = { path = "../yoink-i18n" }
 tokio.workspace = true
 tokio-util.workspace = true
@@ -25,7 +28,6 @@ yoink-access.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 yoink-db.workspace = true
 tempfile = "3"
 

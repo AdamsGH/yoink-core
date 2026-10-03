@@ -1,0 +1,2 @@
+SELECT json_object('id',u.id,'role',u.role,'username',u.username,'language',u.language,'theme',u.theme,'ban',u.ban_until,'updated',u.updated_at,'enabled',g.enabled,'local',p.role_override,'pm',p.allow_pm_override,'source',x.grant_source,'grantor',x.granted_by) AS snapshot
+FROM users u JOIN user_group_policies p ON p.user_id=u.id JOIN groups g ON g.id=p.group_id JOIN user_permissions x ON x.user_id=u.id WHERE u.id=91;

@@ -226,7 +226,9 @@ test('native WebApp authentication, restart persistence and failed-startup isola
     const botAddress = await listen(t, botApi);
     server = start(t, { ...env, ...telegramConfig(botAddress), YOINK_RUST_DOWNLOADS_ENABLED: 'false' });
     await server.address();
-    await until(() => sent.length > 0 && polls >= 2, 'media-disabled localized ordinary help');
+    await until(() => sent.length > 0 && polls >= 2, 'media-disabled localized ordinary help').catch(error => {
+      throw new Error(`${error.message}; polls=${polls}; sends=${sent.length}; ${server.output()}`);
+    });
     server.child.kill('SIGTERM');
     assert.equal((await server.exit()).code, 0);
     assert.equal(sent.length, 1);

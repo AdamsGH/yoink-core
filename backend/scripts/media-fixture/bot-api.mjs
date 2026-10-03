@@ -8,6 +8,7 @@ export class BotApiFixture {
   #server;
   #error;
   #updates = [];
+  #polls = [];
   #updateId = 1;
   #nextMessageId = 1000;
   #calls = [];
@@ -38,6 +39,7 @@ export class BotApiFixture {
   }
   get error() { return this.#error; }
   get calls() { return this.#calls; }
+  get polls() { return this.#polls; }
   get sendCalls() { return this.#sendCalls; }
   get uploadCalls() { return this.#uploadCalls; }
   get cachedCalls() { return this.#cachedCalls; }
@@ -127,6 +129,25 @@ export class BotApiFixture {
     message.from.language_code = language;
     this.#updates.push({ update_id: this.#updateId++, message });
   }
+  enqueueMembership(chat, subject, status, { bot = false, tag, date = Math.floor(Date.now() / 1000), oldStatus = 'left', present = true, title = 'Observed group' } = {}) {
+    const updateId = this.#updateId++;
+    const user = { id: subject, is_bot: bot, first_name: bot ? 'Fixture bot' : 'Observed member' };
+    const member = status => ({
+      user, status,
+      ...(status === 'restricted' ? { is_member: present, can_send_messages: present, can_send_audios: present, can_send_documents: present, can_send_photos: present, can_send_videos: present, can_send_video_notes: present, can_send_voice_notes: present, can_send_polls: present, can_send_other_messages: present, can_add_web_page_previews: present, can_change_info: false, can_invite_users: false, can_pin_messages: false, can_manage_topics: false, until_date: 0 } : {}),
+      ...(status === 'kicked' ? { until_date: 0 } : {}),
+      ...(status === 'administrator' ? { can_be_edited: false, is_anonymous: false, can_manage_chat: true, can_delete_messages: true, can_manage_video_chats: true, can_restrict_members: true, can_promote_members: false, can_change_info: true, can_invite_users: true, can_post_stories: false, can_edit_stories: false, can_delete_stories: false } : {}),
+      ...(status === 'creator' ? { is_anonymous: false } : {}),
+    });
+    const newMember = member(status);
+    if (tag !== undefined) newMember.tag = tag;
+    this.#updates.push({ update_id: updateId, [bot ? 'my_chat_member' : 'chat_member']: {
+      chat: { id: chat, type: 'supergroup', title },
+      from: { id: 42, is_bot: false, first_name: 'Actor' },
+      date, old_chat_member: member(oldStatus), new_chat_member: newMember,
+    } });
+    return updateId;
+  }
   enqueueCallback(actor, chat, messageId, data, { language = 'en', id, messagePatch = {}, isBot = false, inaccessible = false } = {}) {
     const updateId = this.#updateId++;
     const callbackId = id ?? `fixture-callback-${updateId}`;
@@ -178,8 +199,16 @@ export class BotApiFixture {
     } else if (method === 'getwebhookinfo') {
       res.end(JSON.stringify({ ok: true, result: { url: '', has_custom_certificate: false, pending_update_count: 0, allowed_updates: ['message', 'callback_query'] } }));
     } else if (method === 'getupdates') {
-      const batch = this.#updates;
-      this.#updates = [];
+      const data = JSON.parse(body.toString('utf8'));
+      const offset = data.offset ?? 0;
+      assert(Number.isInteger(offset) && offset >= 0, 'poll offset must be nonnegative');
+      const allowed = data.allowed_updates ?? ['message', 'callback_query', 'my_chat_member'];
+      assert(Array.isArray(allowed), 'allowed_updates must be an array');
+      this.#polls.push({ offset, allowed_updates: [...allowed] });
+      if (this.#polls.length > 256) this.#polls.shift();
+      this.#updates = this.#updates.filter(update => update.update_id >= offset);
+      const batch = this.#updates.filter(update => allowed.includes(Object.keys(update).find(key => key !== 'update_id'))).slice(0, data.limit ?? 100);
+      // Keep the batch until a subsequent offset acknowledges it, as Telegram does.
       res.end(JSON.stringify({ ok: true, result: batch }));
     } else if (method === 'getfile') {
       const data = JSON.parse(body.toString('utf8'));

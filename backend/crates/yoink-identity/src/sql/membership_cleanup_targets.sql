@@ -1,0 +1,1 @@
+SELECT user_id, group_id FROM membership_users WHERE source_id=?1 UNION SELECT u.id, s.group_id FROM membership_group_suppressions s CROSS JOIN users u UNION SELECT u.id, b.group_id FROM membership_bots b CROSS JOIN users u WHERE b.source_id=?1 AND b.present=0 ORDER BY 1,2;

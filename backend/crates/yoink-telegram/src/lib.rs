@@ -15,7 +15,7 @@ use teloxide::{
     Bot,
     prelude::*,
     types::{CallbackQuery, Message},
-    update_listeners::{Polling, UpdateListener},
+    update_listeners::UpdateListener,
 };
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -38,7 +38,9 @@ mod cookie_url;
 mod cut;
 mod lang;
 mod media_command;
+mod membership_update;
 mod menus;
+mod raw_polling;
 pub use menus::MenuConfig;
 mod plain_url;
 mod progress;
@@ -105,6 +107,7 @@ pub struct TelegramAdapter {
     cookie_upload: Option<CookieUploadConfig>,
     cookie_url: Option<CookieUrlConfig>,
     file_base: Url,
+    polling_endpoint: Url,
     http_client: reqwest::Client,
     menu_config: MenuConfig,
     menus: Option<menus::Menus>,
@@ -144,11 +147,19 @@ impl TelegramAdapter {
             .get_me()
             .await
             .map_err(|_| TelegramError::ReadinessCheckFailed)?;
+        if me.user.id.0 == 0 || me.user.id.0 > i64::MAX as u64 {
+            return Err(TelegramError::BotInitializationFailed);
+        }
         let bot_username = me
             .user
             .username
             .clone()
             .ok_or(TelegramError::BotInitializationFailed)?;
+
+        let mut polling_endpoint = api_origin.clone();
+        polling_endpoint.set_path(&format!("/bot{token}/getUpdates"));
+        polling_endpoint.set_query(None);
+        polling_endpoint.set_fragment(None);
 
         Ok(Self {
             bot,
@@ -164,6 +175,7 @@ impl TelegramAdapter {
             cookie_upload: None,
             cookie_url: None,
             file_base: cookie_upload::file_base(&api_origin, &token),
+            polling_endpoint,
             http_client,
             menu_config: MenuConfig::default(),
             menus: None,
@@ -230,6 +242,7 @@ impl TelegramAdapter {
             self.bot.clone(),
             self.identities.clone(),
             self.owner_id,
+            i64::try_from(self.bot_id).expect("validated bot identity"),
             self.downloads.is_some(),
             self.groups_enabled,
             self.menu_config,
@@ -251,9 +264,28 @@ impl TelegramAdapter {
             }
         }
         let menus = self.menus.take().expect("initialized menus").run();
-        let mut listener = Polling::builder(self.bot.clone())
-            .timeout(self.poll_timeout)
-            .build();
+        let observer = self.identities.clone().map(|identities| {
+            let source_id = i64::try_from(self.bot_id).expect("validated bot identity");
+            let observer: raw_polling::Observer = Arc::new(move |update| {
+                let identities = identities.clone();
+                Box::pin(async move {
+                    let observation = update.into_observation(source_id);
+                    identities
+                        .observe_membership(&observation)
+                        .await
+                        .map(|_| ())
+                        .map_err(|_| raw_polling::PollingError::MembershipCommit)
+                })
+            });
+            observer
+        });
+        let mut listener = raw_polling::RawPolling::new(
+            self.http_client.clone(),
+            self.polling_endpoint,
+            self.poll_timeout,
+            i64::try_from(self.bot_id).expect("validated bot identity"),
+            observer,
+        );
         let stop = listener.stop_token();
         let failed = Arc::new(AtomicBool::new(false));
         let progress = progress::run(self.bot.clone(), self.downloads.clone(), self.progress);
@@ -289,7 +321,8 @@ impl TelegramAdapter {
         let error_handler = {
             let stop = stop.clone();
             let failed = failed.clone();
-            Arc::new(move |_error: teloxide::RequestError| {
+            Arc::new(move |error: raw_polling::PollingError| {
+                tracing::error!(category = ?error, "Telegram polling stopped");
                 failed.store(true, Ordering::SeqCst);
                 stop.stop();
                 async {}

@@ -5011,6 +5011,8 @@ dependencies = [
 name = "yoink-telegram"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "futures",
  "reqwest",
  "rustix 1.1.5",
  "serde_json",
