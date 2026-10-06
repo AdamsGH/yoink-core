@@ -44,6 +44,11 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    NsfwMarked => "telegram.nsfw_marked";
+    NsfwUsage => "telegram.nsfw_usage";
+    NsfwReloaded => "telegram.nsfw_reloaded";
+    NsfwMenu => "telegram.nsfw_menu", ["status"];
+    NsfwMark => "telegram.nsfw_mark";
     NsfwBlocked => "telegram.nsfw_blocked";
     NsfwPolicyUnavailable => "telegram.nsfw_policy_unavailable";
     MenuStart => "telegram.menu_start";
@@ -60,6 +65,7 @@ define_keys! {
     MenuCut => "telegram.menu_cut";
     MenuSubs => "telegram.menu_subs";
     MenuSettings => "telegram.menu_settings";
+    MenuNsfw => "telegram.menu_nsfw";
     MenuQuality => "telegram.menu_quality";
     MenuProxy => "telegram.menu_proxy";
     MenuUncache => "telegram.menu_uncache";

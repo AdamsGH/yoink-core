@@ -29,6 +29,7 @@ pub fn media_cache_key(request: &DownloadRequest) -> Result<MediaCacheKey, Store
         .as_object_mut()
         .ok_or(StoreError::InvalidStoredData)?;
     object.remove("preference_overrides");
+    object.remove("force_nsfw");
     object.insert(
         "target".to_owned(),
         serde_json::json!({ "bot_id": target.bot_id() }),

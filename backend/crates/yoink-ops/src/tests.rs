@@ -104,6 +104,7 @@ async fn snapshot_schema_survives_rebuild_migrations() {
             include_str!("../../yoink-storage/sql/test_content_policy_operations_rows.sql"),
             include_str!("../../yoink-storage/sql/test_content_policy_units_rows.sql"),
             include_str!("../../yoink-storage/sql/test_content_policy_notices_rows.sql"),
+            include_str!("../sql/test_nsfw_mark_rows.sql"),
         ] {
             result.push(
                 query(sql)
@@ -133,6 +134,7 @@ async fn snapshot_schema_survives_rebuild_migrations() {
         })
         .collect()
     }
+    exec(&store, include_str!("../sql/test_nsfw_mark_fixture.sql")).await;
     let before_rows = runtime_rows(&store).await;
     let before_failures = failures(&store).await;
     assert!(

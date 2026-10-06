@@ -12,6 +12,8 @@ use network::NetworkSelectionData;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RequestData {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    force_nsfw: bool,
     actor_id: u64,
     source_url: String,
     media_mode: MediaModeData,
@@ -191,6 +193,7 @@ struct ClipRangeData {
 pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, StoreError> {
     let p = request.params();
     let data = RequestData {
+        force_nsfw: request.force_nsfw(),
         actor_id: request.actor_id(),
         source_url: request.source_url().as_str().to_owned(),
         media_mode: match request.media_mode() {
@@ -400,6 +403,7 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
         });
     }
     request
+        .with_force_nsfw(data.force_nsfw)
         .with_network(data.network.try_into()?)
         .map_err(|_| StoreError::InvalidStoredData)
 }

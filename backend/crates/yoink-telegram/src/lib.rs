@@ -382,6 +382,7 @@ enum Command {
     Help,
     Status,
     Settings(settings::Action),
+    Nsfw(settings::Action),
     Quality(bool),
     Subs,
     Proxy(proxy::Action),
@@ -406,6 +407,7 @@ impl std::fmt::Debug for Command {
             Self::Help => formatter.write_str("Help"),
             Self::Status => formatter.write_str("Status"),
             Self::Settings(_) => formatter.write_str("Settings"),
+            Self::Nsfw(_) => formatter.write_str("Nsfw"),
             Self::Quality(_) => formatter.write_str("Quality"),
             Self::Subs => formatter.write_str("Subs"),
             Self::Proxy(_) => formatter.write_str("Proxy"),
@@ -444,6 +446,9 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
     }
     if name == "lang" {
         return Some(Command::Lang(lang::command(&args)));
+    }
+    if name == "nsfw" {
+        return Some(Command::Nsfw(settings::nsfw_command(&args)));
     }
     if name == "settings" || name == "format" {
         return Some(settings::command(&args).map_or(
@@ -1050,8 +1055,8 @@ async fn handle_message(
         }
         return Ok(());
     }
-    if let Command::Settings(action) = command {
-        if target.chat_id() > 0 {
+    if let Command::Settings(action) | Command::Nsfw(action) = command {
+        if target.chat_id() > 0 || matches!(action, settings::Action::NsfwMark) {
             if let Some(service) = downloads.as_ref() {
                 settings::handle_command(
                     &bot, &message, service, actor_id, target, action, language,
@@ -1121,6 +1126,7 @@ async fn handle_message(
     let mut admitted = None;
     let reply = match command {
         Command::Settings(_)
+        | Command::Nsfw(_)
         | Command::Quality(_)
         | Command::Subs
         | Command::Proxy(_)

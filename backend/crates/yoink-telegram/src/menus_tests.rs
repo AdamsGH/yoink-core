@@ -75,7 +75,7 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
         group: false,
     };
     let expected = [
-        "start", "help", "lang", "download", "video", "audio", "image", "job", "cancel",
+        "start", "help", "lang", "download", "video", "audio", "image", "job", "cancel", "nsfw",
     ];
     for language in [Language::English, Language::Russian] {
         assert_eq!(names(&catalog(ordinary, language)), expected);
@@ -86,7 +86,7 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
             },
             language,
         );
-        assert_eq!(owner.len(), 20);
+        assert_eq!(owner.len(), 21);
         let mut unique = std::collections::HashSet::new();
         for command in &owner {
             assert!(unique.insert(&command.command));

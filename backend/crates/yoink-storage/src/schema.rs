@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 16] = [
+const MIGRATIONS: [Migration; 17] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -90,6 +90,11 @@ const MIGRATIONS: [Migration; 16] = [
         version: 16,
         sql: include_str!("../migrations-turso/0016_content_policy.sql"),
         expected_tables: 56,
+    },
+    Migration {
+        version: 17,
+        sql: include_str!("../migrations-turso/0017_nsfw_marks.sql"),
+        expected_tables: 58,
     },
 ];
 
@@ -335,6 +340,51 @@ mod tests {
             .unwrap();
         drop(connection);
         (directory, Store::from_database(database))
+    }
+
+    #[tokio::test]
+    async fn nsfw_mark_upgrade_from_16_preserves_operation_snapshots() {
+        let (_directory, store) = version_one_store().await;
+        {
+            let c = store.database().connection().await.unwrap();
+            for migration in &MIGRATIONS[1..16] {
+                raw_sql(migration.sql).execute(&*c).await.unwrap();
+                let fingerprint = schema_hash(&c, migration.expected_tables).await.unwrap();
+                query(include_str!("../sql/record_migration.sql"))
+                    .bind(migration.version)
+                    .bind(checksum(migration))
+                    .bind(fingerprint)
+                    .bind(chrono::Utc::now())
+                    .execute(&*c)
+                    .await
+                    .unwrap();
+            }
+        }
+        raw_sql(include_str!(
+            "../sql/test_content_policy_upgrade_fixture.sql"
+        ))
+        .execute(store.database())
+        .await
+        .unwrap();
+        let sql = include_str!("../sql/test_content_policy_operations_rows.sql");
+        let before = query(sql)
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("snapshot").unwrap())
+            .collect::<Vec<_>>();
+        store.migrate().await.unwrap();
+        store.verify_schema().await.unwrap();
+        let after = query(sql)
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("snapshot").unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(before, after);
+        store.migrate().await.unwrap();
     }
 
     #[tokio::test]
@@ -655,7 +705,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 16);
+        assert_eq!(versions.len(), 17);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);

@@ -92,6 +92,78 @@ pub struct EditableSettings {
 }
 
 impl DownloadService {
+    pub async fn mark_next_nsfw(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        message_id: i32,
+    ) -> Result<(), DownloadError> {
+        if message_id <= 0 {
+            return Err(DownloadError::InvalidPreferences);
+        }
+        self.authorize_chat(actor, target).await?;
+        let mut connection = self
+            .store
+            .database()
+            .connection()
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        if query(include_str!("nsfw_mark_authorize.sql"))
+            .bind(actor as i64)
+            .bind(chrono::Utc::now())
+            .bind(self.identities.is_configured_owner(actor as i64))
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?
+            .is_none()
+        {
+            return Err(DownloadError::Denied);
+        }
+        let event = query(include_str!("nsfw_mark_event.sql"))
+            .bind(actor as i64)
+            .bind(chrono::Utc::now())
+            .bind(self.identities.is_configured_owner(actor as i64))
+            .bind(target.bot_id())
+            .bind(target.chat_id())
+            .bind(message_id)
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        if event.is_none() {
+            // A duplicate is an idempotent success, but does not change the arm.
+            tx.commit().await.map_err(|_| DownloadError::Database)?;
+            return Ok(());
+        }
+        let row = query(include_str!("nsfw_mark.sql"))
+            .bind(actor as i64)
+            .bind(chrono::Utc::now())
+            .bind(self.identities.is_configured_owner(actor as i64))
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        if row.is_none() {
+            return Err(DownloadError::Denied);
+        }
+        tx.commit().await.map_err(|_| DownloadError::Database)?;
+        Ok(())
+    }
+
+    pub async fn reload_nsfw(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+    ) -> Result<(), DownloadError> {
+        self.authorize_settings(actor, target).await?;
+        self.identities
+            .nsfw_export(actor as i64)
+            .await
+            .map_err(|_| DownloadError::Denied)?;
+        Ok(())
+    }
+
     async fn authorize_settings(
         &self,
         actor: u64,

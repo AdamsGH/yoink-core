@@ -2,7 +2,7 @@
 
 ## Delivery boundary
 
-Rust owns authorization and classification. Every primary fresh-upload or cached-file-ID delivery unit reloads the native `nsfw_domains` / `nsfw_keywords` tables and current destination policy from a consistent database snapshot, after the existing identity and credential rechecks and before `begin_delivery_unit`. No policy verdict is persisted in request snapshots or accepted from Python.
+Rust owns authorization and classification. Every primary fresh-upload or cached-file-ID delivery unit reloads the native `nsfw_domains` / `nsfw_keywords` tables and current destination policy from a consistent database snapshot, after the existing identity and credential rechecks and before `begin_delivery_unit`. No rule-derived verdict is persisted in request snapshots or accepted from Python. The only persisted classification intent is the Rust-owned one-shot mark described below.
 
 Classification preserves the legacy checker's three layers:
 
@@ -40,7 +40,19 @@ Authentication extracts only the validated JWT subject. Every management read/wr
 
 List/export responses expose an `ETag` containing the global rule revision; writes optionally accept `If-Match`. Supplied stale revisions return 409. Absent revisions preserve the existing unversioned frontend contract. The revision lives in a dedicated `bot_settings` key, advances transactionally, and malformed/overflow revision state refuses mutations. There is no in-process rule cache or reload requirement.
 
-This work covers content-policy delivery compatibility and rule administration, not a full port of the legacy `/nsfw` command menu. The legacy one-shot `/nsfw mark` command is not added: it would require an explicitly snapshotted per-request override rather than untrusted worker classification or transient state affecting cache delivery. No forwarding, redirects, topics, providers, or service activation are added.
+## Legacy command and durable mark
+
+EN/RU `/nsfw` and `/nsfw menu` show private blur controls. `/nsfw on|off` changes only the caller's private blur preference, preserving other settings and credentials. Menu changes carry the current settings revision; stale buttons refuse mutation. `/nsfw reload` rechecks moderator/admin/owner authorization and reads current rules; there is no process-local rule cache to flush.
+
+`/nsfw mark` arms one actor-wide next-URL intent, including from an authorized group. Migration 17 adds canonical durable arm and Telegram message-watermark tables without changing migrations 1–16. Repeated marks still mean one arm. Telegram update/button retries and older messages cannot re-arm after consumption; watermarks are scoped by actor, bot and chat, retained after consumption, and updated transactionally with the arm. Callback origin, private chat, actor and bot checks remain enforced. Banned/restricted callers cannot mark. The configured owner's existing restricted-role elevation still applies.
+
+Only a new successful admission consumes the arm, inside the same IMMEDIATE transaction as quotas and operation insertion. Invalid input, denial, conflicting keys, capacity/quota rejection and replay leave it intact; insertion/commit failure rolls everything back. Concurrent admissions consume exactly once. Caller-supplied forced bits are stripped. The admitted immutable request stores `force_nsfw: true`; the new reader also accepts old/unmarked snapshots that omit it. Both arm-before-admission and queued-request restart retain intent.
+
+Migration 17 and forced request snapshots require a compatible backend binary. For rollback to the pre-mark binary, restore a pre-migration backup into a separate database and perform the normal ownership handoff. Do not open or downgrade the migrated database with the old binary.
+
+Forced requests still reload current rules, group allowance and private blur for each media unit. A mark never grants access or overrides a group ban; unavailable policy still fails closed. It does not enter worker requests, source metadata or cache keys. A clean source delivered under a mark therefore remains clean on a later unmarked cache hit. No forwarding, redirects, topics, provider routing or service activation are added.
+
+Fixture acceptance extends `just test-media nsfw` with the localized menu, stale callback, durable arm restart, duplicate mark update, replay and nonsticky cached send. Docker acceptance execution remains coordinator-owned.
 
 ## Focused checks
 

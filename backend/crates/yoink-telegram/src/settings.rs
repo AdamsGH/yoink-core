@@ -13,6 +13,11 @@ use crate::{DownloadsDependency, TelegramIdentity, download_error_response, tran
 pub(super) enum Action {
     Invalid,
     Menu,
+    NsfwInvalid,
+    NsfwMenu,
+    NsfwMark,
+    NsfwReload,
+    NsfwChange(bool, Option<i64>),
     Field(SettingField),
     Change(SettingChange, Option<i64>),
 }
@@ -28,7 +33,36 @@ pub(super) fn command(args: &[&str]) -> Option<Action> {
     }
 }
 
+pub(super) fn nsfw_command(args: &[&str]) -> Action {
+    match args {
+        [] | ["menu"] => Action::NsfwMenu,
+        ["on"] => Action::NsfwChange(true, None),
+        ["off"] => Action::NsfwChange(false, None),
+        ["mark"] => Action::NsfwMark,
+        ["reload"] => Action::NsfwReload,
+        _ => Action::NsfwInvalid,
+    }
+}
+
 fn callback(data: &str) -> Option<Action> {
+    if data == "nsfw:menu" {
+        return Some(Action::NsfwMenu);
+    }
+    if data == "nsfw:mark" {
+        return Some(Action::NsfwMark);
+    }
+    if let Some(rest) = data.strip_prefix("nsfw:") {
+        let (value, revision) = rest.split_once(':')?;
+        let revision = revision.parse::<i64>().ok()?;
+        if revision < 0 {
+            return None;
+        }
+        return match value {
+            "on" => Some(Action::NsfwChange(true, Some(revision))),
+            "off" => Some(Action::NsfwChange(false, Some(revision))),
+            _ => None,
+        };
+    }
     if data.len() > 64 {
         return None;
     }
@@ -146,8 +180,51 @@ async fn apply(
     target: DeliveryTarget,
     action: Action,
     language: Language,
+    message_id: i32,
 ) -> Result<(String, InlineKeyboardMarkup), String> {
+    let nsfw = matches!(action, Action::NsfwMenu | Action::NsfwChange(..));
     let page = match action {
+        Action::NsfwMark => {
+            service
+                .mark_next_nsfw(actor, target, message_id)
+                .await
+                .map_err(|e| download_error_response(e, language))?;
+            return Ok((
+                translate(language, Key::NsfwMarked, &[]),
+                InlineKeyboardMarkup::default(),
+            ));
+        }
+        Action::NsfwReload => {
+            service
+                .reload_nsfw(actor, target)
+                .await
+                .map_err(|e| download_error_response(e, language))?;
+            return Ok((
+                translate(language, Key::NsfwReloaded, &[]),
+                InlineKeyboardMarkup::default(),
+            ));
+        }
+        Action::NsfwMenu => Some(SettingField::NsfwBlur),
+        Action::NsfwChange(on, revision) => {
+            service
+                .change_setting(
+                    actor,
+                    target,
+                    SettingChange::new(SettingField::NsfwBlur, if on { "true" } else { "false" })
+                        .unwrap(),
+                    revision,
+                )
+                .await
+                .map_err(|e| {
+                    if matches!(e, yoink_downloads::DownloadError::Conflict) {
+                        translate(language, Key::SettingsStale, &[])
+                    } else {
+                        download_error_response(e, language)
+                    }
+                })?;
+            Some(SettingField::NsfwBlur)
+        }
+        Action::NsfwInvalid => return Err(translate(language, Key::NsfwUsage, &[])),
         Action::Invalid => return Err(translate(language, Key::SettingsUsage, &[])),
         Action::Menu => None,
         Action::Field(field) => Some(field),
@@ -169,6 +246,37 @@ async fn apply(
         .settings(actor, target)
         .await
         .map_err(|e| download_error_response(e, language))?;
+    if nsfw {
+        let blur = settings
+            .values
+            .iter()
+            .find(|(f, _)| *f == SettingField::NsfwBlur)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("true");
+        return Ok((
+            translate(
+                language,
+                Key::NsfwMenu,
+                &[("status", &value_label(blur, language))],
+            ),
+            InlineKeyboardMarkup::new(vec![
+                vec![
+                    InlineKeyboardButton::callback(
+                        translate(language, Key::SettingsOn, &[]),
+                        format!("nsfw:on:{}", settings.revision),
+                    ),
+                    InlineKeyboardButton::callback(
+                        translate(language, Key::SettingsOff, &[]),
+                        format!("nsfw:off:{}", settings.revision),
+                    ),
+                ],
+                vec![InlineKeyboardButton::callback(
+                    translate(language, Key::NsfwMark, &[]),
+                    "nsfw:mark",
+                )],
+            ]),
+        ));
+    }
     Ok(render(&settings, page, language))
 }
 
@@ -181,7 +289,7 @@ pub(super) async fn handle_command(
     action: Action,
     language: Language,
 ) {
-    match apply(service, actor, target, action, language).await {
+    match apply(service, actor, target, action, language, message.id.0).await {
         Ok((text, keyboard)) => {
             let _ = bot
                 .send_message(message.chat.id, text)
@@ -203,7 +311,7 @@ pub(super) async fn handle_callback(
     let Some(data) = query.data.as_deref() else {
         return Ok(());
     };
-    if !data.starts_with("prefs:") {
+    if !data.starts_with("prefs:") && !data.starts_with("nsfw:") {
         return Ok(());
     }
     // Answer once, including revoked, stale and invalid callbacks. Never echo input.
@@ -216,7 +324,7 @@ pub(super) async fn handle_callback(
         return Ok(());
     };
     if query.from.is_bot
-        || query.from.id.0 != identity.owner_id
+        || (query.from.id.0 != identity.owner_id && !data.starts_with("nsfw:"))
         || !message.chat.is_private()
         || message.chat.id.0 <= 0
         || message.chat.id.0 as u64 != query.from.id.0
@@ -257,7 +365,16 @@ pub(super) async fn handle_callback(
         let _ = bot.answer_callback_query(query.id).await;
         return Ok(());
     };
-    match apply(service, query.from.id.0, target, action, language).await {
+    match apply(
+        service,
+        query.from.id.0,
+        target,
+        action,
+        language,
+        message.id.0,
+    )
+    .await
+    {
         Ok((text, keyboard)) => {
             let _ = bot.answer_callback_query(query.id).await;
             let _ = bot
@@ -279,6 +396,34 @@ pub(super) async fn handle_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nsfw_command_and_callback_grammar_is_closed() {
+        assert_eq!(nsfw_command(&[]), Action::NsfwMenu);
+        for (word, action) in [
+            ("menu", Action::NsfwMenu),
+            ("mark", Action::NsfwMark),
+            ("reload", Action::NsfwReload),
+            ("on", Action::NsfwChange(true, None)),
+            ("off", Action::NsfwChange(false, None)),
+        ] {
+            assert_eq!(nsfw_command(&[word]), action);
+        }
+        assert_eq!(nsfw_command(&["mark", "true"]), Action::NsfwInvalid);
+        assert_eq!(callback("nsfw:mark"), Some(Action::NsfwMark));
+        assert_eq!(
+            callback("nsfw:on:123"),
+            Some(Action::NsfwChange(true, Some(123)))
+        );
+        for bad in [
+            "nsfw:on",
+            "nsfw:on:-1",
+            "nsfw:off:0:extra",
+            "nsfw:reload",
+            "nsfw:mark:1",
+        ] {
+            assert_eq!(callback(bad), None);
+        }
+    }
     #[test]
     fn callback_and_command_grammar_is_closed() {
         assert_eq!(callback("prefs:menu"), Some(Action::Menu));

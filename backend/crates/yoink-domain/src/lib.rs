@@ -428,6 +428,7 @@ pub struct DownloadRequest {
     target: Option<DeliveryTarget>,
     network: NetworkSelection,
     preference_overrides: Option<DownloadPreferenceOverrides>,
+    force_nsfw: bool,
 }
 
 impl DownloadRequest {
@@ -472,7 +473,18 @@ impl DownloadRequest {
             target: None,
             network: NetworkSelection::NONE,
             preference_overrides: None,
+            force_nsfw: false,
         })
+    }
+
+    /// Rust-owned admission intent; never sent to workers or stored in cache metadata.
+    pub const fn force_nsfw(&self) -> bool {
+        self.force_nsfw
+    }
+
+    pub fn with_force_nsfw(mut self, forced: bool) -> Self {
+        self.force_nsfw = forced;
+        self
     }
 
     pub const fn actor_id(&self) -> u64 {

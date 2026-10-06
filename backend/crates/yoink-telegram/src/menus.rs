@@ -61,6 +61,7 @@ const MEDIA: &[(&str, Key)] = &[
     ("image", Key::MenuImage),
     ("job", Key::MenuJob),
     ("cancel", Key::MenuCancel),
+    ("nsfw", Key::MenuNsfw),
 ];
 const EXTENDED: &[(&str, Key)] = &[
     ("playlist", Key::MenuPlaylist),

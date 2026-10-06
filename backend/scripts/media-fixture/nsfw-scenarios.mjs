@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFile } from "node:fs/promises";
+import { withRussianPreference } from "./language-fixture.mjs";
 import { createHmac } from 'node:crypto';
 import { commandHarness } from './command-harness.mjs';
 
@@ -203,5 +205,95 @@ export async function runNsfwScenarios(context) {
     else await fixtureSql(`UPDATE dl_user_settings SET nsfw_blur=${Number(oldSettings)} WHERE user_id=${actor}`);
     await restartGroups(false);
   }
-  return 'NSFW domain/URL/metadata rules, fresh/cache blur, rule changes, group policy revocation, replay and restart passed';
+  await runNsfwMarkScenarios(context);
+  return 'NSFW domain/URL/metadata rules, fresh/cache blur, rule changes, group revocation, durable one-shot mark consumption, duplicate/replayed updates, queued restart and nonsticky cached delivery passed';
+}
+
+
+// Disposable fixture only. No classification is supplied by this controller.
+async function runNsfwMarkScenarios(context) {
+  const { botApi, fixtureSql, sourcePort, sourceFixture, queryJob, waitFor, restartApp } = context;
+  const h = commandHarness(context, 22000);
+  const stateSql = await readFile(new URL('./nsfw-state.sql', import.meta.url), 'utf8');
+  const cleanupSql = await readFile(new URL('./nsfw-cleanup.sql', import.meta.url), 'utf8');
+  const settingsSql = await readFile(new URL('./nsfw-settings-snapshot.sql', import.meta.url), 'utf8');
+  const oldSettings = await fixtureSql(settingsSql);
+  let next = 23000;
+  async function command(text, prefix, messageId = next++) {
+    const start = botApi.calls.length;
+    botApi.enqueue(42, 42, text, messageId);
+    return waitFor(() => botApi.calls.slice(start).find(c => c.method === 'sendmessage' && c.data.text.startsWith(prefix)), `NSFW ${text}`);
+  }
+  const url = `http://127.0.0.1:${sourcePort}/media.mp4?case=nsfw-mark`;
+  try {
+    await command('/settings send_as_file false', 'Download settings');
+    await command('/settings quality best', 'Download settings');
+    await command('/settings codec avc1', 'Download settings');
+    await command('/settings container mp4', 'Download settings');
+    await command('/nsfw on', 'Private NSFW blur:');
+    const menu = await command('/nsfw menu', 'Private NSFW blur:');
+    const off = menu.data.reply_markup.inline_keyboard.flat().find(b => b.callback_data.startsWith('nsfw:off:'));
+    assert(off);
+    await command('/nsfw off', 'Private NSFW blur:');
+    const start = botApi.calls.length;
+    const id = botApi.enqueueCallback(42, 42, menu.messageId, off.callback_data);
+    const ack = await waitFor(() => botApi.calls.slice(start).find(c => c.method === 'answercallbackquery' && c.data.callback_query_id === id), 'stale NSFW button');
+    assert.equal(ack.data.show_alert, true);
+    await command('/nsfw on', 'Private NSFW blur:');
+    await withRussianPreference(fixtureSql, () => command('/nsfw menu', 'Размытие NSFW'));
+    await command('/nsfw reload', 'NSFW rules are current.');
+    const markId = next++;
+    await command('/nsfw mark', 'The next admitted URL', markId);
+    assert.equal(await fixtureSql(stateSql), '1');
+    await restartApp();
+    assert.equal(await fixtureSql(stateSql), '1', 'arm survives restart before admission');
+    const first = await h.execute('forced clean source', `/video ${url}`, 'sendvideo',
+      { video: true, audio: true }, { filename: 'media.mp4', mimeType: 'video/mp4' });
+    assert.equal((await h.request(first.operationId)).force_nsfw, true);
+    const forcedSend = botApi.calls.slice(first.callStart).find(c => c.method === 'sendvideo');
+    assert.equal(String(forcedSend.has_spoiler), 'true');
+    const fetched = sourceFixture.mediaRequests;
+    assert.equal(await fixtureSql(stateSql), '0');
+    await command('/nsfw mark', 'The next admitted URL', markId);
+    assert.equal(await fixtureSql(stateSql), '0', 'old mark update cannot re-arm');
+    await h.replay(`/video ${url}`, first);
+    await restartApp();
+    assert.equal((await h.request(first.operationId)).force_nsfw, true, 'admitted intent remains immutable');
+    const second = await h.submit(`/video ${url}`);
+    await h.succeeded(second.operationId);
+    assert.equal((await h.request(second.operationId)).force_nsfw, undefined);
+    const cleanSend = botApi.calls.slice(second.callStart).find(c => c.method === 'sendvideo');
+    assert(cleanSend);
+    assert.equal(cleanSend.cached, true, 'unmarked repeat uses the marked operation cache entry');
+    assert.equal(sourceFixture.mediaRequests, fetched, 'unmarked cache hit cannot refetch media');
+    assert.notEqual(String(cleanSend.has_spoiler), 'true', 'forced classification cannot stick in shared cache');
+    sourceFixture.closeProgressGate();
+    const blocker = await h.submit('/video http://127.0.0.1:' + sourcePort + '/progress.mp4?case=nsfw-blocker');
+    await waitFor(() => botApi.calls.slice(blocker.callStart).some(c => c.method === 'editmessagetext' && /Downloading\. \d+%/.test(c.data.text)), 'NSFW queued restart blocker');
+    await command('/nsfw mark', 'The next admitted URL');
+    const queued = await h.submit('/video ' + url + '-queued');
+    assert((await queryJob(queued.operationId)).startsWith('queued|'));
+    assert.equal((await h.request(queued.operationId)).force_nsfw, true);
+    await restartApp();
+    assert.equal((await h.request(queued.operationId)).force_nsfw, true, 'queued marked request survives process restart');
+    sourceFixture.releaseProgressResponses();
+    await h.succeeded(blocker.operationId);
+    await h.succeeded(queued.operationId);
+    const queuedSend = botApi.calls.slice(queued.callStart).find(c => c.method === 'sendvideo' && c.has_spoiler);
+    assert(queuedSend, 'queued marked clean media still receives a spoiler after restart');
+  } finally {
+    sourceFixture.releaseProgressResponses();
+    await fixtureSql(cleanupSql);
+    if (oldSettings.trim()) {
+      const old = JSON.parse(oldSettings);
+      let restore = await readFile(new URL('./nsfw-settings-restore.sql', import.meta.url), 'utf8');
+      for (const [key, value] of Object.entries(old)) {
+        const literal = typeof value === 'number' ? String(value) : "'" + value.replaceAll("'", "''") + "'";
+        restore = restore.replace('{' + key + '}', literal);
+      }
+      await fixtureSql(restore);
+    } else await fixtureSql(await readFile(new URL('./nsfw-settings-delete.sql', import.meta.url), 'utf8'));
+    botApi.setExpectedUpload(null);
+  }
+  return 'NSFW EN/RU menu, on/off revision fencing, reload, durable mark restart, duplicate update fencing, immutable admitted intent and clean cached delivery passed';
 }

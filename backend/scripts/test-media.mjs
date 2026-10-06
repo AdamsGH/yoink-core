@@ -673,7 +673,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'onboarding') summaries.push(await runOnboardingScenarios({ ...commandContext, restartApp }));
   if (scenario === 'quotas') summaries.push(await runQuotaScenarios({ ...commandContext, restartApp }));
-  if (scenario === 'nsfw') summaries.push(await runNsfwScenarios({ ...commandContext, appHttpPort, telegramToken: token, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
+  if (scenario === 'nsfw') summaries.push(await runNsfwScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
   if (scenario === 'admin') summaries.push(await runAdminScenarios({ ...commandContext, restartApp, appHttpPort, authSecret: fixtureAuthSecret, telegramToken: token }));
 if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
   if (scenario === 'group-admin') summaries.push(await runGroupAdminScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));

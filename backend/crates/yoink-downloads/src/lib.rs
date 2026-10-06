@@ -826,11 +826,12 @@ impl DownloadService {
                 })
             } else if let Some(metadata) = content_metadata.as_ref() {
                 self.identities
-                    .content_policy(
+                    .content_policy_for_request(
                         claim.request.actor_id() as i64,
                         target.chat_id(),
                         claim.request.source_url().as_str(),
                         metadata,
+                        claim.request.force_nsfw(),
                     )
                     .await
             } else {

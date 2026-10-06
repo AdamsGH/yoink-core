@@ -168,7 +168,8 @@ impl Store {
     ) -> Result<Admission, StoreError> {
         validate_key(idempotency_key)?;
         validate_policy(policy)?;
-        let request_json = codec::encode(request)?;
+        // The caller cannot supply a forced classification. Only durable marks below can.
+        let request = &request.clone().with_force_nsfw(false);
         let cache_key = request
             .target()
             .map(|_| crate::cache_key::media_cache_key(request))
@@ -194,7 +195,7 @@ impl Store {
             let same_intent = if preserve_first_network {
                 same_request_intent(&current, request)?
             } else {
-                current == *request
+                current.with_force_nsfw(false) == *request
             };
             if !same_intent {
                 return Err(StoreError::Conflict);
@@ -239,6 +240,15 @@ impl Store {
             now,
         )
         .await?;
+        // Only a new successfully inserted URL admission consumes a mark. Everything
+        // above (replay/conflict, capacity, quota) leaves it intact; rollback restores it.
+        let forced = query(include_str!("../sql/nsfw_mark_consume.sql"))
+            .bind(request.actor_id() as i64)
+            .fetch_optional(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?
+            .is_some();
+        let request_json = codec::encode(&request.clone().with_force_nsfw(forced))?;
         let id = query(include_str!("../sql/admit_insert.sql"))
             .bind(request.actor_id() as i64)
             .bind(idempotency_key)
@@ -963,6 +973,7 @@ fn validate_policy(policy: AdmissionPolicy) -> Result<(), StoreError> {
 fn without_network(request: &DownloadRequest) -> Result<DownloadRequest, StoreError> {
     request
         .clone()
+        .with_force_nsfw(false)
         .with_network(NetworkSelection::NONE)
         .map_err(|_| StoreError::InvalidInput)
 }

@@ -303,6 +303,18 @@ impl IdentityStore {
         source: &str,
         metadata: &[ContentMetadata],
     ) -> Result<ContentDecision, AdminError> {
+        self.content_policy_for_request(actor, chat, source, metadata, false)
+            .await
+    }
+
+    pub async fn content_policy_for_request(
+        &self,
+        actor: i64,
+        chat: i64,
+        source: &str,
+        metadata: &[ContentMetadata],
+        force_nsfw: bool,
+    ) -> Result<ContentDecision, AdminError> {
         let mut c = self
             .database
             .connection()
@@ -312,7 +324,8 @@ impl IdentityStore {
             .await
             .map_err(|_| AdminError::Unavailable)?;
         let result = async {
-            let classified = rules(&tx).await?.check(source, metadata)?.is_nsfw;
+            // Read/validate policy even for forced requests: unavailable policy fails closed.
+            let classified = rules(&tx).await?.check(source, metadata)?.is_nsfw || force_nsfw;
             let row = query(include_str!("nsfw_policy.sql"))
                 .bind(actor)
                 .bind(chat)

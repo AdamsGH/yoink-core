@@ -361,3 +361,163 @@ async fn nsfw_blur_setting_is_current_versioned_and_preserves_cache_and_preferen
             .spoiler
     );
 }
+
+#[tokio::test]
+async fn nsfw_mark_command_replay_denial_and_clean_cached_forced_delivery() {
+    use yoink_downloads::DownloadError;
+    for chat in [-100, 44] {
+        let (_dir, store, delivery, service) = fixture(false).await;
+        warm(&store, &service, true, 1).await;
+        // Cache metadata is now unclassified. The arm, not metadata, forces policy.
+        yoink_db::raw_sql(include_str!("nsfw_clean_rules.sql"))
+            .execute(store.database())
+            .await
+            .unwrap();
+        let target = DeliveryTarget::new(123456, chat, None, None).unwrap();
+        assert_eq!(
+            service.mark_next_nsfw(45, target, 1).await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service.mark_next_nsfw(44, target, 0).await,
+            Err(DownloadError::InvalidPreferences)
+        );
+        service.mark_next_nsfw(44, target, 10).await.unwrap();
+        service.mark_next_nsfw(44, target, 10).await.unwrap();
+        let req = request(chat);
+        assert!(
+            service
+                .submit_request(&request(-101), "denied-target")
+                .await
+                .is_err()
+        );
+        assert!(service.submit_request(&req, "").await.is_err());
+        let pending: i64 = yoink_db::query(include_str!("nsfw_mark_state.sql"))
+            .bind(44_i64)
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+        assert_eq!(
+            pending, 1,
+            "denied and invalid service admissions leave the arm intact"
+        );
+        let first = service
+            .submit_request(&req, "mark-admission")
+            .await
+            .unwrap();
+        assert!(
+            !service
+                .submit_request(&req, "mark-admission")
+                .await
+                .unwrap()
+                .created
+        );
+        // An old Telegram update, retried after consumption, must not re-arm.
+        service.mark_next_nsfw(44, target, 10).await.unwrap();
+        service.mark_next_nsfw(44, target, 9).await.unwrap();
+        let count: i64 = yoink_db::query(include_str!("nsfw_mark_state.sql"))
+            .bind(44_i64)
+            .fetch_one(store.database())
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+        assert_eq!(count, 0);
+        // Re-arm with genuinely newer intent; the pending first request remains forced.
+        service.mark_next_nsfw(44, target, 11).await.unwrap();
+        let record = finish(&store, service, chat).await;
+        if chat < 0 {
+            assert_eq!(record.content_failure.as_deref(), Some("nsfw_blocked"));
+            assert_eq!(delivery.calls.load(Ordering::SeqCst), 0);
+        } else {
+            assert_eq!(record.status, OperationStatus::Succeeded);
+            assert_eq!(delivery.calls.load(Ordering::SeqCst), 2);
+        }
+        assert!(store.get(44, first.operation_id).await.unwrap().is_some());
+        let cached = store.lookup_media_cache(&req).await.unwrap().unwrap();
+        assert!(cached.media.iter().all(|m| m.metadata().is_some()));
+    }
+}
+
+#[tokio::test]
+async fn nsfw_mark_forces_fresh_clean_metadata_and_current_group_policy_between_units() {
+    for fresh in [true, false] {
+        let (_dir, store, delivery, service) = fixture_worker(!fresh, fresh).await;
+        if !fresh {
+            warm(&store, &service, true, 11).await;
+            yoink_db::query(include_str!(
+                "../../yoink-identity/tests/nsfw_change_group.sql"
+            ))
+            .bind(true)
+            .execute(store.database())
+            .await
+            .unwrap();
+        }
+        yoink_db::raw_sql(include_str!("nsfw_clean_rules.sql"))
+            .execute(store.database())
+            .await
+            .unwrap();
+        let chat = if fresh { 44 } else { -100 };
+        let target = DeliveryTarget::new(123456, chat, None, None).unwrap();
+        service.mark_next_nsfw(44, target, 1).await.unwrap();
+        let record = finish(&store, service, chat).await;
+        if fresh {
+            assert_eq!(record.status, OperationStatus::Succeeded);
+        } else {
+            assert_eq!(record.status, OperationStatus::DeliveryPartial);
+            assert_eq!(record.delivered_artifact_count, 10);
+            assert_eq!(record.content_failure.as_deref(), Some("nsfw_blocked"));
+        }
+        assert_eq!(delivery.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn nsfw_reload_current_role_and_forced_intent_never_overrides_private_blur() {
+    let (_dir, store, _delivery, service) = fixture(false).await;
+    let target = |actor| DeliveryTarget::new(123456, actor, None, None).unwrap();
+    assert!(service.reload_nsfw(44, target(44)).await.is_err());
+    service.reload_nsfw(43, target(43)).await.unwrap();
+    yoink_db::raw_sql(include_str!("../../yoink-identity/tests/nsfw_demote.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    assert!(service.reload_nsfw(43, target(43)).await.is_err());
+    service
+        .change_setting(
+            44,
+            target(44),
+            yoink_downloads::SettingChange::new(yoink_downloads::SettingField::NsfwBlur, "false")
+                .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let identities = IdentityStore::new(store.database().clone(), Some(42), false);
+    let decision = identities
+        .content_policy_for_request(
+            44,
+            44,
+            "https://clean.example/test",
+            &[ContentMetadata::default()],
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(!decision.spoiler);
+    assert!(
+        identities
+            .content_policy_for_request(
+                44,
+                -100,
+                "https://clean.example/test",
+                &[ContentMetadata::default()],
+                true
+            )
+            .await
+            .unwrap()
+            .blocked
+    );
+}
