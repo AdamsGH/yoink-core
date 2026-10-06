@@ -38,6 +38,11 @@ yoink-http = { path = "crates/yoink-http" }
 yoink-telegram = { path = "crates/yoink-telegram" }
 yoink-worker-protocol = { path = "crates/yoink-worker-protocol" }
 
+# Retain assertions and overflow checks without multi-gigabyte debug/incremental artifacts.
+[profile.dev]
+debug = 0
+incremental = false
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

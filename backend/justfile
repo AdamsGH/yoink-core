@@ -4,6 +4,16 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
+check-build-space:
+    node scripts/build-resources.mjs check
+
+# Stop all builds in this worktree first. Reports and source changes are retained.
+clean-builds:
+    node scripts/build-resources.mjs clean
+
+test-build-resources:
+    node --test scripts/build-resources.test.mjs
+
 # Resolve new dependencies when intentionally updating Cargo.lock.
 fetch:
     cargo fetch
@@ -31,7 +41,7 @@ verify-turso-container:
     docker build --progress=plain -f Dockerfile.turso-probe -t yoink/turso-probe:experimental .
 
 # Native embedded-engine contracts. Only disposable test databases are opened.
-verify-turso:
+verify-turso: check-build-space
     cargo fmt --manifest-path experiments/turso/Cargo.toml -- --check
     cargo clippy --manifest-path experiments/turso/Cargo.toml --target-dir target/turso-probe --locked --all-targets -- -D warnings
     cargo test --manifest-path experiments/turso/Cargo.toml --target-dir target/turso-probe --locked --no-run
@@ -47,18 +57,21 @@ format:
 fmt:
     cargo fmt --all -- --check
 
-lint:
+lint: check-build-space
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    node scripts/build-resources.mjs check
 
-test:
+test: check-build-space
     cargo test --workspace --all-features --locked
+    node scripts/build-resources.mjs check
 
 # Focused contracts or adapter verification while other crates are being integrated.
-test-crate crate:
+test-crate crate: check-build-space
     cargo test --locked --message-format short -p {{quote(crate)}}
 
-build:
+build: check-build-space
     cargo build --workspace --locked
+    node scripts/build-resources.mjs check
 
 smoke: build
     node --test scripts/smoke.mjs
@@ -76,11 +89,11 @@ inspect-worker-symbol module symbol='':
     docker run --rm --pull never --network none --entrypoint python yoink/rust-worker:experimental -B -c 'import importlib, inspect, functools, sys; m = importlib.import_module(sys.argv[1]); print(inspect.getsource(functools.reduce(getattr, sys.argv[2].split("."), m)) if sys.argv[2] else "\n".join(sorted(k for k,v in vars(m).items() if inspect.isfunction(v) or inspect.isclass(v))))' {{quote(module)}} {{quote(symbol)}}
 
 # Run storage DB regressions independently while adapter integration is in flight.
-test-storage-db:
+test-storage-db: check-build-space
     node scripts/test-db.mjs --storage-only
 
 # Native profile/credential contracts without rebuilding transport adapters.
-test-profile-db:
+test-profile-db: check-build-space
     node scripts/test-db.mjs --profiles-only
 
 # Native disk databases and production process lifecycle, all in private temporary directories.
@@ -97,7 +110,7 @@ verify-stats-search-container:
     docker build --target stats-search-tests -t yoink/rust-stats-search-tests:experimental .
 
 # Offline import utility. PostgreSQL client dependencies stay outside yoink-server.
-build-import:
+build-import: check-build-space
     cargo build --locked -p yoink-import
 
 # Requires explicit YOINK_IMPORT_SOURCE_URL and a new destination in a private directory.
@@ -118,7 +131,7 @@ build-import-image:
 verify-import: verify build-import-image (test-import "yoink/rust-importer:experimental")
 
 # Safe operator commands require explicit source and new destination paths.
-build-ops:
+build-ops: check-build-space
     cargo build --locked -p yoink-ops
 
 backup source destination: build-ops
@@ -166,42 +179,42 @@ check-scripts:
 test-media-fixtures:
     node --test scripts/media-fixture/*.test.mjs
 
-verify: fmt lint test smoke check-scripts check-schema-source test-media-fixtures check-docs
+verify: fmt lint test smoke check-scripts check-schema-source test-media-fixtures test-build-resources check-docs
 
 verify-db: verify test-db
 
-run:
+run: check-build-space
     cargo run --locked -p yoink-server
 
 # Explicitly mutating. Requires a deliberately supplied private database path.
-migrate:
+migrate: check-build-space
     cargo run --locked -p yoink-server -- migrate
 
-check-schema:
+check-schema: check-build-space
     cargo run --locked -p yoink-server -- check-schema
 
 # Focused quota/storage/admission/config/transport contracts on disposable native DBs.
 # One Cargo invocation keeps dependency feature resolution consistent across crates.
-test-quota:
+test-quota: check-build-space
     cargo test --locked --message-format short --lib --bin yoink-server --test saved_preference_admission -p yoink-storage -p yoink-downloads -p yoink-server -p yoink-telegram -p yoink-i18n
 
-check-quota:
+check-quota: check-build-space
     cargo clippy --locked --all-targets -p yoink-storage -p yoink-downloads -p yoink-server -p yoink-telegram -p yoink-i18n -- -D warnings
 
 # Focused content-policy tests; no deployment builds, services or production DBs.
-test-nsfw:
+test-nsfw: check-build-space
     cargo test --locked --message-format short -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n nsfw
 
 # Existing isolated worker image, source mounted read-only; no host Python or network.
 test-nsfw-worker pattern='test_nsfw_metadata.py':
     docker run --rm --pull never --network none --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-worker:experimental -B -m unittest discover -s /worker -p {{quote(pattern)}}
 
-check-nsfw:
+check-nsfw: check-build-space
     cargo clippy --locked --all-targets -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n -- -D warnings
 
 format-nsfw:
     cargo fmt -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n
 
 # Changed-crate regression suite, not coordinator workspace/build/deployment gates.
-test-nsfw-regression:
+test-nsfw-regression: check-build-space
     cargo test --locked --message-format short -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n
