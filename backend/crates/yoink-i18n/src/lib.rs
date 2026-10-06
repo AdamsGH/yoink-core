@@ -44,6 +44,15 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    InlineHelp => "telegram.inline_help";
+    InlineShort => "telegram.inline_short";
+    InlineInvalid => "telegram.inline_invalid";
+    InlineUnavailable => "telegram.inline_unavailable";
+    InlineEmpty => "telegram.inline_empty";
+    InlineBusy => "telegram.inline_busy";
+    InlineUrlTitle => "telegram.inline_url_title";
+    InlineUnknownTitle => "telegram.inline_unknown_title";
+    InlineViews => "telegram.inline_views", ["count"];
     MediaArmed => "telegram.media_armed", ["mode"];
     NsfwMarked => "telegram.nsfw_marked";
     NsfwUsage => "telegram.nsfw_usage";
@@ -179,6 +188,7 @@ define_keys! {
     ReadinessReady => "telegram.readiness_ready";
     ReadinessNotReady => "telegram.readiness_not_ready";
     ErrorDenied => "telegram.error_denied";
+    ErrorPersonalCookieCapacity => "telegram.error_personal_cookie_capacity";
     ErrorCapacity => "telegram.error_capacity";
     ErrorQuota => "telegram.error_quota", ["seconds"];
     ErrorConflict => "telegram.error_conflict";

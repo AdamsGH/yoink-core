@@ -8,6 +8,9 @@
 //! before opening or consuming it. Lexical validation does not guarantee
 //! symlink safety, including for paths created by an untrusted executor.
 
+mod search;
+pub use search::*;
+
 use std::fmt;
 use std::path::Path;
 
@@ -467,6 +470,7 @@ pub enum ProgressStage {
 pub enum WorkerEventKind {
     Progress { percent: f32, stage: ProgressStage },
     Completed { artifacts: Vec<ArtifactDescriptor> },
+    SearchCompleted { entries: Vec<SearchEntry> },
     Failure { class: FailureClass },
     CancellationAcknowledged,
 }
@@ -512,6 +516,7 @@ impl WorkerEvent {
             {
                 Err(ProtocolError::InvalidEvent)
             }
+            WorkerEventKind::SearchCompleted { entries } => validate_entries(entries),
             WorkerEventKind::Completed { artifacts } => {
                 if artifacts.is_empty() {
                     return Err(ProtocolError::InvalidEvent);
@@ -533,6 +538,10 @@ pub enum ProtocolError {
     FrameTooLarge,
     #[error("invalid worker request")]
     InvalidRequest,
+    #[error(
+        "invalid search request: use version 2, nonzero ID/attempt and a 2..=256-character youtube_search query; source_url/options/cookies are unsupported"
+    )]
+    InvalidSearchRequest,
     #[error("invalid worker event")]
     InvalidEvent,
     #[error("invalid worker protocol message")]

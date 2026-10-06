@@ -25,9 +25,11 @@ yoink-executor = { path = "../yoink-executor" }
 yoink-storage.workspace = true
 yoink-identity.workspace = true
 yoink-access.workspace = true
+yoink-worker-protocol.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 yoink-db.workspace = true
 tempfile = "3"
 

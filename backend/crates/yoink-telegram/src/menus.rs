@@ -73,12 +73,10 @@ const PRIVATE_CONTROLS: &[(&str, Key)] = &[
     ("settings", Key::MenuSettings),
     ("format", Key::MenuSettings),
     ("quality", Key::MenuQuality),
-];
-const OWNER_CONTROLS: &[(&str, Key)] = &[
-    ("proxy", Key::MenuProxy),
-    ("uncache", Key::MenuUncache),
     ("cookie", Key::MenuCookie),
+    ("proxy", Key::MenuProxy),
 ];
+const OWNER_CONTROLS: &[(&str, Key)] = &[("uncache", Key::MenuUncache)];
 
 fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
     if !access.approved {

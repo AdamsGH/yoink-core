@@ -5037,6 +5037,7 @@ dependencies = [
  "yoink-i18n",
  "yoink-identity",
  "yoink-storage",
+ "yoink-worker-protocol",
 ]
 
 [[package]]

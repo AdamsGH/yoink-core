@@ -87,7 +87,7 @@ export async function runCookieScenarios(context) {
       await click(menu, nextPage.callback_data, options);
     }
     const beforeSilent = botApi.calls.filter(c => c.method === 'sendmessage').length;
-    for (const [actor, chat, text] of [[99, 99, '/cookie clear'], [42, -10042, '/cookie clear'], [42, 42, '/cookie@other_bot clear']]) botApi.enqueue(actor, chat, text, next++);
+    for (const [actor, chat, text] of [[99, 42, '/cookie clear'], [42, -10042, '/cookie clear'], [42, 42, '/cookie@other_bot clear']]) botApi.enqueue(actor, chat, text, next++);
     await command('/help');
     await sleep(300);
     assert.equal(botApi.calls.filter(c => c.method === 'sendmessage').length, beforeSilent + 1);

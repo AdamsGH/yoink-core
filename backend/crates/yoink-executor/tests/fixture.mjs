@@ -49,7 +49,18 @@ const spawnMarkerWriter = (marker) => spawn(process.execPath, ["-e", `
   setInterval(() => fs.appendFileSync(marker, "x"), 10);
 `, marker], { detached: false, stdio: "ignore" });
 
-if (mode === "hang" || mode === "stdout-partial-hang" || mode === "stdin-hang" || mode === "cancel" || mode === "timeout-descendant") {
+if (mode.startsWith("search-")) {
+  if (request.task.kind !== 'youtube_search' || Object.hasOwn(request,'source_url') || Object.hasOwn(request,'options') || request.network?.cookie_jar) throw new Error('invalid search envelope');
+  const entry = {url:'https://www.youtube.com/watch?v=fixture0000',title:'Fixture',channel:'Channel',duration_seconds:1,view_count:1};
+  if (mode === 'search-artifact') await writeArtifact('unexpected.mp4');
+  if (mode === 'search-overflow') process.stdout.write('x'.repeat(33000));
+  else if (mode === 'search-denial') emit({type:'failure',class:'source_unavailable'});
+  else if (mode === 'search-exit') process.exitCode = 7;
+  else {
+    if (mode === 'search-url') entry.url = 'https://evil.example/secret';
+    emit({type:'search_completed',entries: mode === 'search-zero' ? [] : mode === 'search-duplicate' ? [entry,entry] : [entry]});
+  }
+} else if (mode === "hang" || mode === "stdout-partial-hang" || mode === "stdin-hang" || mode === "cancel" || mode === "timeout-descendant") {
   if (mode === "stdout-partial-hang") process.stdout.write('{"version":');
   if (mode === "stdin-hang") {
     process.stdin.pause();

@@ -121,7 +121,7 @@ fn utf16_boundary(text: &str, offset: usize) -> Option<usize> {
     (units == offset).then_some(text.len())
 }
 
-fn reserved_music_host(host: &str) -> bool {
+pub(super) fn reserved_music_host(host: &str) -> bool {
     let host = host.trim_end_matches('.');
     // These providers belong to yoink-music, not implicit video downloads.
     const HOSTS: &[&str] = &[

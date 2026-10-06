@@ -110,6 +110,8 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     def reject_constant(_value: str) -> Any:
         raise ValueError("invalid request")
     request = json.loads(raw, parse_constant=reject_constant, object_pairs_hook=_unique_object)
+    if isinstance(request, dict) and isinstance(request.get("task"), dict) and request["task"].get("kind") == "youtube_search":
+        return _validate_search_request(request, len(raw))
     required = {"version", "operation_id", "attempt", "source_url", "task"}
     if not isinstance(request, dict) or not required.issubset(request) or set(request) - required - {"options", "network"}:
         raise ValueError("invalid request")
@@ -199,6 +201,46 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     return request
 
 
+def _validate_search_request(request, frame_bytes):
+    from search_engine import validate_query, MAX_SEARCH_FRAME_BYTES
+    if (frame_bytes > MAX_SEARCH_FRAME_BYTES or set(request) - {"version", "operation_id", "attempt", "task", "network"}
+            or not {"version", "operation_id", "attempt", "task"}.issubset(request)
+            or type(request["version"]) is not int or request["version"] != PROTOCOL_VERSION
+            or not isinstance(request["operation_id"], str) or not _UUID_RE.fullmatch(request["operation_id"])
+            or request["operation_id"].lower() == "00000000-0000-0000-0000-000000000000"
+            or type(request["attempt"]) is not int or not 1 <= request["attempt"] <= 0xFFFFFFFF
+            or set(request["task"]) != {"kind", "query"}):
+        raise ValueError("search requires version, nonzero request ID/attempt and youtube_search query; source_url/options/cookies are unsupported")
+    validate_query(request["task"]["query"])
+    network = request.get("network")
+    if network is not None:
+        if not isinstance(network, dict) or set(network) - {"proxy_url"}:
+            raise ValueError("search network accepts only operator proxy_url; cookies are unsupported")
+        proxy = network.get("proxy_url")
+        if proxy is not None:
+            from network_guard import _parse_http_url
+            if not isinstance(proxy, str) or not proxy or len(proxy.encode()) > 4096 or any(ord(c) < 32 for c in proxy):
+                raise ValueError("invalid search proxy")
+            parsed = _parse_http_url(proxy, "invalid search proxy", allow_credentials=True)
+            if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+                raise ValueError("invalid search proxy")
+    return request
+
+
+def _search(request, settings):
+    from search_engine import search
+    try:
+        with guard_context(settings.allowed_private_origins, settings.allowed_proxy_origins):
+            network = request.get("network") or {}
+            configure_proxy(network.get("proxy_url"))
+            with proxy_route(network.get("proxy_url"), settings.socket_timeout_secs) as proxy:
+                routed = {**request, "network": {"proxy_url": proxy}}
+                entries = search(routed, settings)
+        _emit({**_event_prefix(request), "event": {"type": "search_completed", "entries": entries}})
+    except BaseException as exc:
+        _failure(request, _classify_error(exc))
+
+
 def _download(request: dict[str, Any], settings: Settings) -> None:
     last = (-1, "")
 
@@ -233,8 +275,12 @@ def main() -> int:
         request = _validate_request(raw)
         settings = Settings.from_env()
     except BaseException:
+        sys.stderr.write("invalid worker request or settings: use version 2 download/content with source_url, or youtube_search with a bounded query and no source_url/options/cookies\n")
         return 2
-    _download(request, settings)
+    if request["task"]["kind"] == "youtube_search":
+        _search(request, settings)
+    else:
+        _download(request, settings)
     return 0
 
 

@@ -153,7 +153,7 @@ export async function runCookieUploadScenarios(context) {
     }
 
     for (const [actor, chat, caption, options] of [
-      [99, 99, '/cookie', { expectedSilent: true }],
+      [99, 42, '/cookie', { expectedSilent: true }],
       [42, -10042, '/cookie', { chatType: 'group', expectedSilent: true }],
       [42, 42, '/cookie@other_bot', { expectedSilent: true }],
     ]) {

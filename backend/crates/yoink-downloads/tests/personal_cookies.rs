@@ -272,7 +272,6 @@ async fn authorization_denies_bans_roles_and_wrong_delivery_context_for_reads_an
         .await
         .unwrap();
     for (actor, destination) in [
-        (FOREIGN, target(FOREIGN as i64, None, BOT)),
         (OWNER, target(FOREIGN as i64, None, BOT)),
         (OWNER, target(-10042, None, BOT)),
         (OWNER, target(OWNER as i64, Some(7), BOT)),
@@ -782,4 +781,485 @@ async fn deletion_is_scoped_atomic_and_stale_replays_never_delete_replacements()
         .unwrap()
         .map(|row| row.try_get(0).unwrap());
     assert_eq!(watermark, Some(102));
+}
+
+#[tokio::test]
+async fn ordinary_user_capacity_is_atomic_isolated_and_replay_safe() {
+    use yoink_downloads::PersonalCookieLimits;
+    let (_dir, store, service) = setup().await;
+    let service = service.with_network_config(
+        DownloadNetworkConfig::new(None, vec![])
+            .unwrap()
+            .with_personal_cookie_limits(PersonalCookieLimits {
+                domains: 1,
+                actor_bytes: jar().len() as u64,
+                global_bytes: jar().len() as u64 * 2,
+            })
+            .unwrap(),
+    );
+    let own = target(FOREIGN as i64, None, BOT);
+    let a = CookieDomain::parse("a.example").unwrap();
+    let b = CookieDomain::parse("b.example").unwrap();
+    let (one, two) = tokio::join!(
+        service.store_personal_cookie(FOREIGN, own, 900, &a, jar()),
+        service.store_personal_cookie(FOREIGN, own, 901, &b, jar())
+    );
+    assert!(matches!(one, Ok(Some(_))) || matches!(two, Ok(Some(_))));
+    assert_eq!(
+        service
+            .personal_cookies(FOREIGN, own, None)
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    assert!(
+        service
+            .personal_cookies(OWNER, target(OWNER as i64, None, BOT), None)
+            .await
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert_eq!(
+        service
+            .store_personal_cookie(
+                FOREIGN,
+                own,
+                902,
+                &a,
+                &format!("{}# extra UTF-8: Ж\n", jar())
+            )
+            .await,
+        Err(DownloadError::PersonalCookieCapacity)
+    );
+    service
+        .remove_personal_cookies(FOREIGN, own, 903, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .store_personal_cookie(FOREIGN, own, 902, &a, jar())
+            .await,
+        Ok(None)
+    );
+    assert!(
+        service
+            .store_personal_cookie(FOREIGN, own, 904, &a, jar())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    add_cookie(
+        &store,
+        90000,
+        FOREIGN as i64,
+        "import.example",
+        jar(),
+        true,
+        false,
+    )
+    .await;
+    add_cookie(
+        &store,
+        90001,
+        OWNER as i64,
+        "pool.example",
+        jar(),
+        true,
+        true,
+    )
+    .await;
+    // Lower limits below imported usage: replacement and clear must still work.
+    let service = service.with_network_config(
+        DownloadNetworkConfig::new(None, vec![])
+            .unwrap()
+            .with_personal_cookie_limits(PersonalCookieLimits {
+                domains: 1,
+                actor_bytes: 1,
+                global_bytes: 1,
+            })
+            .unwrap(),
+    );
+    assert!(
+        service
+            .store_personal_cookie(FOREIGN, own, 905, &a, jar())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        service
+            .store_personal_cookie(FOREIGN, own, 906, &b, jar())
+            .await,
+        Err(DownloadError::PersonalCookieCapacity)
+    );
+    assert_eq!(
+        service
+            .remove_personal_cookies(FOREIGN, own, 907, None)
+            .await,
+        Ok(Some(2))
+    );
+}
+
+#[tokio::test]
+async fn global_capacity_races_exclude_pool_and_count_utf8_bytes() {
+    use yoink_downloads::PersonalCookieLimits;
+    let (_dir, store, service) = setup().await;
+    let content = format!("{}# Ж\n", jar());
+    let service = service.with_network_config(
+        DownloadNetworkConfig::new(None, vec![])
+            .unwrap()
+            .with_personal_cookie_limits(PersonalCookieLimits {
+                domains: 128,
+                actor_bytes: 67108864,
+                global_bytes: content.len() as u64,
+            })
+            .unwrap(),
+    );
+    add_cookie(
+        &store,
+        90010,
+        OWNER as i64,
+        "pool.example",
+        &content,
+        true,
+        true,
+    )
+    .await;
+    let domain = CookieDomain::parse("example.com").unwrap();
+    let owner = target(OWNER as i64, None, BOT);
+    let user = target(FOREIGN as i64, None, BOT);
+    let (a, b) = tokio::join!(
+        service.store_personal_cookie(OWNER, owner, 1000, &domain, &content),
+        service.store_personal_cookie(FOREIGN, user, 1000, &domain, &content)
+    );
+    assert!(matches!(
+        (a, b),
+        (Ok(Some(_)), Err(DownloadError::PersonalCookieCapacity))
+            | (Err(DownloadError::PersonalCookieCapacity), Ok(Some(_)))
+    ));
+    service
+        .remove_personal_cookies(OWNER, owner, 1001, None)
+        .await
+        .unwrap();
+    service
+        .remove_personal_cookies(FOREIGN, user, 1001, None)
+        .await
+        .unwrap();
+    assert!(
+        service
+            .store_personal_cookie(FOREIGN, user, 1002, &domain, &content)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let bigger = format!("{content}# Ж\n");
+    assert_eq!(
+        service
+            .store_personal_cookie(FOREIGN, user, 1003, &domain, &bigger)
+            .await,
+        Err(DownloadError::PersonalCookieCapacity)
+    );
+    // Smaller replacement frees global bytes for the other actor.
+    assert!(
+        service
+            .store_personal_cookie(FOREIGN, user, 1004, &domain, jar())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    service
+        .remove_personal_cookies(FOREIGN, user, 1005, None)
+        .await
+        .unwrap();
+    assert!(
+        service
+            .store_personal_cookie(OWNER, owner, 1006, &domain, jar())
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn ordinary_personal_controls_recheck_role_and_ban_without_owner_exception() {
+    let (_dir, store, service) = setup().await;
+    let own = target(FOREIGN as i64, None, BOT);
+    let domain = CookieDomain::parse("example.com").unwrap();
+    assert!(
+        service
+            .store_personal_cookie(FOREIGN, own, 2000, &domain, jar())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    for (role, ban) in [
+        ("restricted", None),
+        ("banned", None),
+        ("user", Some(4102444800000000_i64)),
+    ] {
+        yoink_db::query(include_str!("sql/update_user_role.sql"))
+            .bind(FOREIGN as i64)
+            .bind(role)
+            .bind(ban)
+            .execute(store.database())
+            .await
+            .unwrap();
+        assert_eq!(
+            service.personal_cookies(FOREIGN, own, None).await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service
+                .store_personal_cookie(FOREIGN, own, 2001, &domain, jar())
+                .await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service
+                .remove_personal_cookies(FOREIGN, own, 2001, None)
+                .await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service.proxy_settings(FOREIGN, own).await,
+            Err(DownloadError::Denied)
+        );
+        assert_eq!(
+            service.change_proxy_setting(FOREIGN, own, false, 0).await,
+            Err(DownloadError::Denied)
+        );
+    }
+}
+
+#[tokio::test]
+async fn malformed_imports_consume_each_personal_limit_without_counting_pools() {
+    use yoink_downloads::PersonalCookieLimits;
+
+    // Exercise each bound independently, so one working bound cannot mask another.
+    for bound in ["domains", "actor_bytes", "global_bytes"] {
+        let (_dir, store, service) = setup().await;
+        let own = target(FOREIGN as i64, None, BOT);
+        let foreign_content = "foreign malformed Ж🍪";
+        let multibyte_content = "malformed personal Ж🍪";
+        let pool_content = "pool Ж🍪".repeat(4096);
+        assert!(CookieDomain::parse("not/a/domain").is_err());
+        let seeds = [
+            (91000, FOREIGN, "not/a/domain", jar(), true, false),
+            (
+                91001,
+                FOREIGN,
+                "invalid-content.example",
+                "not Netscape",
+                true,
+                false,
+            ),
+            (91002, FOREIGN, "invalid-flag.example", jar(), false, false),
+            (
+                91003,
+                FOREIGN,
+                "multibyte.example",
+                multibyte_content,
+                true,
+                false,
+            ),
+            (
+                91004,
+                OWNER,
+                "foreign-import.example",
+                foreign_content,
+                false,
+                false,
+            ),
+            (
+                91005,
+                FOREIGN,
+                "own-pool.example",
+                pool_content.as_str(),
+                false,
+                true,
+            ),
+            (
+                91006,
+                OWNER,
+                "foreign-pool.example",
+                pool_content.as_str(),
+                true,
+                true,
+            ),
+        ];
+        for &(id, actor, domain, content, valid, pool) in &seeds {
+            add_cookie(&store, id, actor as i64, domain, content, valid, pool).await;
+        }
+        let actor_bytes = (jar().len() * 2 + "not Netscape".len() + multibyte_content.len()) as u64;
+        let global_bytes = actor_bytes + foreign_content.len() as u64;
+        assert!(multibyte_content.len() > multibyte_content.chars().count());
+        let domain = CookieDomain::parse("new.example").unwrap();
+        let usage = yoink_db::query(include_str!("../src/personal_cookies_usage.sql"))
+            .bind(FOREIGN as i64)
+            .bind(domain.as_str())
+            .fetch_one(store.database())
+            .await
+            .unwrap();
+        assert_eq!(usage.try_get::<i64, _>("actor_domains").unwrap(), 4);
+        assert_eq!(
+            usage.try_get::<i64, _>("actor_bytes").unwrap(),
+            actor_bytes as i64
+        );
+        assert_eq!(
+            usage.try_get::<i64, _>("global_bytes").unwrap(),
+            global_bytes as i64
+        );
+        assert_eq!(usage.try_get::<i64, _>("replaced_domains").unwrap(), 0);
+        assert_eq!(usage.try_get::<i64, _>("replaced_bytes").unwrap(), 0);
+        let limits = PersonalCookieLimits {
+            domains: if bound == "domains" { 4 } else { 128 },
+            actor_bytes: if bound == "actor_bytes" {
+                actor_bytes + jar().len() as u64 - 1
+            } else {
+                67108864
+            },
+            global_bytes: if bound == "global_bytes" {
+                global_bytes + jar().len() as u64 - 1
+            } else {
+                1073741824
+            },
+        };
+        let service = service.with_network_config(
+            DownloadNetworkConfig::new(None, vec![])
+                .unwrap()
+                .with_personal_cookie_limits(limits)
+                .unwrap(),
+        );
+        assert_eq!(
+            service
+                .store_personal_cookie(FOREIGN, own, 4000, &domain, jar())
+                .await,
+            Err(DownloadError::PersonalCookieCapacity),
+            "{bound}"
+        );
+        // A rejected growth event retains its watermark, not a credential write.
+        assert_eq!(
+            service
+                .store_personal_cookie(FOREIGN, own, 4000, &domain, jar())
+                .await,
+            Ok(None)
+        );
+        let watermark = yoink_db::query(include_str!("sql/get_watermark.sql"))
+            .bind(FOREIGN as i64)
+            .fetch_one(store.database())
+            .await
+            .unwrap();
+        assert_eq!(watermark.try_get::<i64, _>(0).unwrap(), 4000);
+        let after_rejection = yoink_db::query(include_str!("../src/personal_cookies_usage.sql"))
+            .bind(FOREIGN as i64)
+            .bind(domain.as_str())
+            .fetch_one(store.database())
+            .await
+            .unwrap();
+        for key in [
+            "actor_domains",
+            "actor_bytes",
+            "global_bytes",
+            "replaced_domains",
+            "replaced_bytes",
+        ] {
+            assert_eq!(
+                after_rejection.try_get::<i64, _>(key).unwrap(),
+                usage.try_get::<i64, _>(key).unwrap()
+            );
+        }
+        for raw_domain in [
+            "invalid-content.example",
+            "invalid-flag.example",
+            "multibyte.example",
+        ] {
+            assert_eq!(
+                service
+                    .personal_cookie_status(FOREIGN, own, &CookieDomain::parse(raw_domain).unwrap())
+                    .await,
+                Ok(PersonalCookieStatus::Invalid)
+            );
+        }
+        for &(id, actor, raw_domain, content, _, pool) in &seeds {
+            let rows = yoink_db::query(include_str!("sql/upload_cookie_rows.sql"))
+                .bind(FOREIGN as i64)
+                .bind(OWNER as i64)
+                .bind(raw_domain)
+                .fetch_all(store.database())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            let row = &rows[0];
+            assert_eq!(row.try_get::<i64, _>("id").unwrap(), id);
+            assert_eq!(row.try_get::<i64, _>("user_id").unwrap(), actor as i64);
+            assert_eq!(row.try_get::<String, _>("domain").unwrap(), raw_domain);
+            assert!(
+                row.try_get::<String, _>("content").unwrap() == content,
+                "imported content preserved"
+            );
+            assert_eq!(row.try_get::<bool, _>("is_pool").unwrap(), pool);
+            assert_eq!(row.try_get::<i64, _>("created_at").unwrap(), 1);
+            assert_eq!(row.try_get::<i64, _>("updated_at").unwrap(), 1);
+        }
+        // Clear is permitted even with all three bounds below imported usage.
+        let service = service.with_network_config(
+            DownloadNetworkConfig::new(None, vec![])
+                .unwrap()
+                .with_personal_cookie_limits(PersonalCookieLimits {
+                    domains: 1,
+                    actor_bytes: 1,
+                    global_bytes: 1,
+                })
+                .unwrap(),
+        );
+        assert_eq!(
+            service
+                .store_personal_cookie(FOREIGN, own, 4001, &domain, jar())
+                .await,
+            Err(DownloadError::PersonalCookieCapacity)
+        );
+        assert_eq!(
+            service
+                .remove_personal_cookies(FOREIGN, own, 4002, None)
+                .await,
+            Ok(Some(4))
+        );
+        let usage = yoink_db::query(include_str!("../src/personal_cookies_usage.sql"))
+            .bind(FOREIGN as i64)
+            .bind(domain.as_str())
+            .fetch_one(store.database())
+            .await
+            .unwrap();
+        assert_eq!(usage.try_get::<i64, _>("actor_domains").unwrap(), 0);
+        assert_eq!(usage.try_get::<i64, _>("actor_bytes").unwrap(), 0);
+        assert_eq!(
+            usage.try_get::<i64, _>("global_bytes").unwrap(),
+            foreign_content.len() as i64
+        );
+        let watermark = yoink_db::query(include_str!("sql/get_watermark.sql"))
+            .bind(FOREIGN as i64)
+            .fetch_one(store.database())
+            .await
+            .unwrap();
+        assert_eq!(watermark.try_get::<i64, _>(0).unwrap(), 4002);
+        // Both pools and the other actor's malformed personal row survive clear.
+        for &(id, actor, raw_domain, content, _, _) in &seeds[4..] {
+            let row = yoink_db::query(include_str!("sql/upload_cookie_rows.sql"))
+                .bind(FOREIGN as i64)
+                .bind(OWNER as i64)
+                .bind(raw_domain)
+                .fetch_one(store.database())
+                .await
+                .unwrap();
+            assert_eq!(row.try_get::<i64, _>("id").unwrap(), id);
+            assert_eq!(row.try_get::<i64, _>("user_id").unwrap(), actor as i64);
+            assert!(
+                row.try_get::<String, _>("content").unwrap() == content,
+                "foreign/pool content preserved"
+            );
+        }
+    }
 }

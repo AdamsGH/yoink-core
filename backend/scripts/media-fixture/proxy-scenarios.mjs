@@ -91,7 +91,7 @@ export async function runProxyScenarios(context) {
       assert.equal(buttons(invalid).length, 0);
     }
     const beforeSilent = botApi.calls.filter(c => c.method === 'sendmessage').length;
-    for (const [actor, chat, text] of [[99, 99, '/proxy'], [42, -10042, '/proxy'], [42, 42, '/proxy@other_bot']]) botApi.enqueue(actor, chat, text, next++);
+    for (const [actor, chat, text] of [[42, -10042, '/proxy'], [42, 42, '/proxy@other_bot']]) botApi.enqueue(actor, chat, text, next++);
     await command('/help');
     await sleep(300);
     assert.equal(botApi.calls.filter(c => c.method === 'sendmessage').length, beforeSilent + 1);

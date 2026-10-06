@@ -29,3 +29,27 @@ The [Stats search component](../docs/backend/stats-search.md) uses a separate Ta
 The standalone [Turso evaluation](experiments/turso/README.md) and [decision 0002](../docs/decisions/0002-turso-evaluation.md) retain the original feasibility checks. The Rust runtime now uses native Turso. The running Python deployment and its PostgreSQL database are unchanged.
 
 Do not share the production bot token with this poller. Competing `getUpdates` consumers can consume updates and interrupt the Python service.
+
+### Personal credential controls
+
+Approved, unbanned users can manage only their own non-pool cookies and toggle
+only their selected proxy in their own positive private, non-threaded chat.
+Operational proxy URL editing and shared cookie pool administration are unchanged.
+Personal cookie writes have finite configurable bounds:
+`YOINK_RUST_PERSONAL_COOKIE_DOMAINS` (128),
+`YOINK_RUST_PERSONAL_COOKIE_ACTOR_BYTES` (67108864, 128 × 512 KiB), and
+`YOINK_RUST_PERSONAL_COOKIE_GLOBAL_BYTES` (1073741824, conservative 1 GiB).
+These count UTF-8 content bytes, exclude pool rows, and are checked under the
+same immediate transaction as canonical-domain replacement and replay watermark.
+Domain capacity conservatively counts physical rows (including malformed imports).
+Lowering limits never removes imported data or blocks reads/deletes/clear or
+non-growing replacements. Rejected growth consumes its message watermark so a
+replay cannot install credentials after capacity is freed. No schema change is needed.
+Legacy `/cookie` token/browser-extension synchronization and WebApp links remain
+absent separate workflows; this is not complete cookie/downloader parity.
+
+Coordinator-only opt-in native acceptance: `node scripts/test-media.mjs personal-controls`
+against already built fixture/backend images. This scenario is deliberately not part
+of `all`: it exercises a nonowner actual cookie file upload, URL import, owned
+cookie extraction, selected proxy on/off routing, callback context denials,
+role/ban revocation, immutable replay and secret-free replies on disposable state.

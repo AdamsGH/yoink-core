@@ -5,10 +5,15 @@ mod media_config;
 mod runtime;
 
 use std::{
+    collections::BTreeSet,
     future::Future,
     io::{self, Read},
+    path::Path,
     process::ExitCode,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -109,9 +114,24 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         let _stopped = NotifyOnDrop(stopped);
         fixture_control::serve(listener, task_store, token, task_shutdown).await
     });
+    let workspace = config
+        .media
+        .as_ref()
+        .map(|media| media.executor.workspace_root.clone());
+    let signal_workspace = workspace.clone();
+    let signaled = Arc::new(AtomicBool::new(false));
+    let signal_seen = signaled.clone();
     let runtime_signal = async move {
         tokio::select! {
-            result = signal => result,
+            result = signal => {
+                let kind = result?;
+                // Snapshot at the actual signal boundary, before runtime cancellation.
+                // This is fixture-only, not a public production diagnostics API.
+                let (children, workspaces) = cleanup_snapshot(signal_workspace.as_deref(), Path::new("/proc/self/task"))?;
+                eprintln!("fixture shutdown signal {kind}: worker_children={children}, workspaces={workspaces}");
+                signal_seen.store(true, Ordering::SeqCst);
+                Ok(())
+            },
             _ = controller_stopped.cancelled() => Ok(()),
         }
     };
@@ -135,7 +155,20 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = runtime_result {
         return Err(error.into());
     }
-    controller_result.map_err(Into::into)
+    controller_result?;
+    if signaled.load(Ordering::SeqCst) {
+        // run_with_store returned successfully only after all adapter tasks drained.
+        // Check the original process and workspace before exit destroys its tmpfs.
+        let (children, workspaces) =
+            cleanup_snapshot(workspace.as_deref(), Path::new("/proc/self/task"))?;
+        if children != 0 || workspaces != 0 {
+            return Err("fixture graceful shutdown left worker children or workspaces".into());
+        }
+        eprintln!(
+            "fixture graceful shutdown verified: adapters drained, worker_children=0, workspaces=0"
+        );
+    }
+    Ok(())
 }
 
 async fn sql() -> Result<(), Box<dyn std::error::Error>> {
@@ -164,17 +197,78 @@ async fn sql() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(unix)]
-fn termination_signal() -> io::Result<impl Future<Output = io::Result<()>>> {
+fn termination_signal() -> io::Result<impl Future<Output = io::Result<&'static str>>> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     Ok(async move {
         tokio::select! {
-            result = tokio::signal::ctrl_c() => result,
-            _ = terminate.recv() => Ok(()),
+            result = tokio::signal::ctrl_c() => result.map(|()| "SIGINT"),
+            _ = terminate.recv() => Ok("SIGTERM"),
         }
     })
 }
 
 #[cfg(not(unix))]
-fn termination_signal() -> io::Result<impl Future<Output = io::Result<()>>> {
-    Ok(tokio::signal::ctrl_c())
+fn termination_signal() -> io::Result<impl Future<Output = io::Result<&'static str>>> {
+    Ok(async { tokio::signal::ctrl_c().await.map(|()| "SIGINT") })
+}
+
+// /proc children covers every executor thread and reparented children when the
+// fixture is PID 1. No process is inferred from a replacement container.
+fn cleanup_snapshot(workspace: Option<&Path>, tasks: &Path) -> io::Result<(usize, usize)> {
+    let mut children = BTreeSet::new();
+    for task in std::fs::read_dir(tasks)? {
+        let path = task?.path().join("children");
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue, // exiting thread
+            Err(error) => return Err(error),
+        };
+        for pid in text.split_whitespace() {
+            children.insert(
+                pid.parse::<u32>()
+                    .map_err(|_| io::Error::other("invalid fixture child PID"))?,
+            );
+        }
+    }
+    let workspaces = match workspace {
+        Some(path) => std::fs::read_dir(path)?
+            .collect::<Result<Vec<_>, _>>()?
+            .len(),
+        None => 0,
+    };
+    Ok((children.len(), workspaces))
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    #[test]
+    fn original_workspace_and_all_thread_children_are_observed_before_exit() {
+        let root =
+            std::env::temp_dir().join(format!("yoink-shutdown-proof-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let work = root.join("work");
+        let tasks = root.join("tasks");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::create_dir(&tasks).unwrap();
+        for thread in ["1", "2"] {
+            std::fs::create_dir(tasks.join(thread)).unwrap();
+        }
+        std::fs::write(tasks.join("1/children"), "17 18").unwrap();
+        std::fs::write(tasks.join("2/children"), "18 19").unwrap();
+        std::fs::create_dir(work.join("held-worker")).unwrap();
+        assert_eq!(cleanup_snapshot(Some(&work), &tasks).unwrap(), (3, 1));
+        std::fs::remove_dir(work.join("held-worker")).unwrap();
+        assert_eq!(
+            cleanup_snapshot(Some(&work), &tasks).unwrap(),
+            (3, 0),
+            "empty workspace alone is not process cleanup"
+        );
+        for thread in ["1", "2"] {
+            std::fs::write(tasks.join(thread).join("children"), "").unwrap();
+        }
+        assert_eq!(cleanup_snapshot(Some(&work), &tasks).unwrap(), (0, 0));
+        assert!(cleanup_snapshot(Some(&root.join("missing")), &tasks).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

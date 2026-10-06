@@ -1,6 +1,6 @@
 use std::{fmt, path::PathBuf, time::Duration};
 
-use yoink_downloads::{DownloadConfig, DownloadNetworkConfig};
+use yoink_downloads::{DownloadConfig, DownloadNetworkConfig, PersonalCookieLimits};
 use yoink_executor::ExecutorConfig;
 use yoink_storage::{AdmissionPolicy, ClaimPolicy, QuotaLimits};
 
@@ -90,27 +90,54 @@ impl MediaConfig {
                 "must not exceed DOWNLOAD_TIMEOUT_SECS",
             ));
         }
-        let system_proxy = read("YOINK_RUST_DOWNLOAD_PROXY_URL")?;
+        // The Config consumer already adds YOINK_RUST_. Retain the old
+        // doubled-prefix spelling as an alias, rejecting conflicting authority.
+        let system_proxy = network_setting(read, "DOWNLOAD_PROXY_URL")?;
         let no_cookie_domains: Vec<String> = serde_json::from_str(
-            &read("YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON")?.unwrap_or_else(|| "[]".into()),
+            &network_setting(read, "DOWNLOAD_NO_COOKIE_DOMAINS_JSON")?
+                .unwrap_or_else(|| "[]".into()),
         )
         .map_err(|_| {
             invalid(
-                "YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON",
+                "DOWNLOAD_NO_COOKIE_DOMAINS_JSON",
                 "expected a bounded JSON array of hostnames",
             )
         })?;
         if no_cookie_domains.len() > 64 {
             return Err(invalid(
-                "YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON",
+                "DOWNLOAD_NO_COOKIE_DOMAINS_JSON",
                 "at most sixty-four domains are allowed",
             ));
         }
-        let network =
-            DownloadNetworkConfig::new(system_proxy, no_cookie_domains).map_err(|_| {
+        let limits = PersonalCookieLimits {
+            domains: number(read, "YOINK_RUST_PERSONAL_COOKIE_DOMAINS", 128, 1, 1000000)?,
+            actor_bytes: number(
+                read,
+                "YOINK_RUST_PERSONAL_COOKIE_ACTOR_BYTES",
+                64 * 1024 * 1024,
+                1,
+                i64::MAX as u64,
+            )?,
+            global_bytes: number(
+                read,
+                "YOINK_RUST_PERSONAL_COOKIE_GLOBAL_BYTES",
+                1024 * 1024 * 1024,
+                1,
+                i64::MAX as u64,
+            )?,
+        };
+        let network = DownloadNetworkConfig::new(system_proxy, no_cookie_domains)
+            .map_err(|_| {
                 invalid(
-                    "YOINK_RUST_DOWNLOAD_PROXY_URL",
+                    "DOWNLOAD_PROXY_URL",
                     "proxy or no-cookie domain configuration is invalid",
+                )
+            })?
+            .with_personal_cookie_limits(limits)
+            .map_err(|_| {
+                invalid(
+                    "YOINK_RUST_PERSONAL_COOKIE_GLOBAL_BYTES",
+                    "invalid personal cookie storage limits",
                 )
             })?;
         Ok(Self {
@@ -181,6 +208,25 @@ impl MediaConfig {
     }
 }
 
+fn network_setting(
+    read: &mut impl FnMut(&str) -> Result<Option<String>, ConfigError>,
+    key: &str,
+) -> Result<Option<String>, ConfigError> {
+    let current = read(key)?;
+    let legacy = read(&format!("YOINK_RUST_{key}"))?;
+    if current
+        .as_ref()
+        .zip(legacy.as_ref())
+        .is_some_and(|(a, b)| a != b)
+    {
+        return Err(invalid(
+            key,
+            "conflicting current and legacy network configuration; set only one spelling",
+        ));
+    }
+    Ok(current.or(legacy))
+}
+
 fn origins(
     read: &mut impl FnMut(&str) -> Result<Option<String>, ConfigError>,
     key: &str,
@@ -246,6 +292,28 @@ mod tests {
             },
             Duration::from_secs(60),
         )
+    }
+
+    #[test]
+    fn personal_cookie_limits_are_finite_configurable_and_secret_free() {
+        assert!(
+            parse(&[
+                ("YOINK_RUST_PERSONAL_COOKIE_DOMAINS", "2"),
+                ("YOINK_RUST_PERSONAL_COOKIE_ACTOR_BYTES", "1024"),
+                ("YOINK_RUST_PERSONAL_COOKIE_GLOBAL_BYTES", "2048")
+            ])
+            .is_ok()
+        );
+        for key in [
+            "YOINK_RUST_PERSONAL_COOKIE_DOMAINS",
+            "YOINK_RUST_PERSONAL_COOKIE_ACTOR_BYTES",
+            "YOINK_RUST_PERSONAL_COOKIE_GLOBAL_BYTES",
+        ] {
+            for bad in ["0", "-1", "9223372036854775808", "secret-cookie-value"] {
+                let error = parse(&[(key, bad)]).unwrap_err();
+                assert!(!format!("{error:?}").contains("secret-cookie-value"));
+            }
+        }
     }
 
     #[test]

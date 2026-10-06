@@ -19,8 +19,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use yoink_worker_protocol::{
-    FailureClass, MAX_FRAME_BYTES, WorkerEvent, WorkerEventKind, WorkerRequest, decode_event_frame,
-    encode_request,
+    FailureClass, MAX_FRAME_BYTES, SearchEntry, SearchRequest, WorkerEvent, WorkerEventKind,
+    WorkerRequest, decode_event_frame, encode_request, encode_search_request,
 };
 
 const MAX_ARTIFACT: u64 = 2 * 1024 * 1024 * 1024;
@@ -171,6 +171,30 @@ pub enum ExecutorError {
     Io,
 }
 
+enum ExecutionRequest<'a> {
+    Media(&'a WorkerRequest),
+    Search(&'a SearchRequest),
+}
+enum ExecutionOutput {
+    Media(Vec<ValidatedArtifact>),
+    Search(Vec<SearchEntry>),
+}
+impl ExecutionRequest<'_> {
+    fn identity(&self) -> (u16, uuid::Uuid, u32) {
+        match self {
+            Self::Media(r) => (r.version, r.operation_id, r.attempt),
+            Self::Search(r) => (r.version, r.operation_id, r.attempt),
+        }
+    }
+    fn frame(&self) -> Result<Vec<u8>, ExecutorError> {
+        match self {
+            Self::Media(r) => encode_request(r),
+            Self::Search(r) => encode_search_request(r),
+        }
+        .map_err(|_| ExecutorError::Protocol)
+    }
+}
+
 impl Executor {
     /// Returns the immutable limits enforced by this executor instance.
     pub fn artifact_limits(&self) -> ArtifactLimits {
@@ -223,8 +247,49 @@ impl Executor {
         cancel: CancellationToken,
         progress: Option<tokio::sync::watch::Sender<Option<WorkerProgress>>>,
     ) -> Result<Vec<ValidatedArtifact>, ExecutorError> {
-        request.validate().map_err(|_| ExecutorError::Protocol)?;
-        let prefix = format!("{}-{}-", request.operation_id, request.attempt);
+        match self
+            .execute_inner(ExecutionRequest::Media(request), cancel, progress)
+            .await?
+        {
+            ExecutionOutput::Media(artifacts) => Ok(artifacts),
+            ExecutionOutput::Search(_) => Err(ExecutorError::Protocol),
+        }
+    }
+
+    /// Search shares launch, confinement, bounded IO, deadline and child cleanup with media.
+    pub async fn execute_search(
+        &self,
+        request: &SearchRequest,
+        cancel: CancellationToken,
+        timeout: Duration,
+    ) -> Result<Vec<SearchEntry>, ExecutorError> {
+        // Admission budgets include DB/HTTP time, so remaining time can be fractional.
+        if timeout.is_zero() || timeout > Duration::from_secs(120) {
+            return Err(ExecutorError::InvalidConfig);
+        }
+        let mut executor = self.clone();
+        executor.config.timeout = timeout.min(self.config.timeout);
+        match executor
+            .execute_inner(ExecutionRequest::Search(request), cancel, None)
+            .await?
+        {
+            ExecutionOutput::Search(entries) => Ok(entries),
+            ExecutionOutput::Media(_) => Err(ExecutorError::Protocol),
+        }
+    }
+
+    async fn execute_inner(
+        &self,
+        request: ExecutionRequest<'_>,
+        cancel: CancellationToken,
+        progress: Option<tokio::sync::watch::Sender<Option<WorkerProgress>>>,
+    ) -> Result<ExecutionOutput, ExecutorError> {
+        if cancel.is_cancelled() {
+            return Err(ExecutorError::Cancelled);
+        }
+        let frame = request.frame()?;
+        let (version, operation_id, attempt) = request.identity();
+        let prefix = format!("{}-{}-", operation_id, attempt);
         let workspace_root = self.config.workspace_root.clone();
         let temp = tokio::task::spawn_blocking(move || {
             tempfile::Builder::new()
@@ -235,6 +300,9 @@ impl Executor {
         .await
         .map_err(|_| ExecutorError::Io)?
         .map_err(|_| ExecutorError::Io)?;
+        if cancel.is_cancelled() {
+            return Err(ExecutorError::Cancelled);
+        }
         let workspace = temp.path().to_path_buf();
 
         let mut command = Command::new(&self.config.program);
@@ -290,17 +358,17 @@ impl Executor {
         let stdin = child.stdin.take().ok_or(ExecutorError::Spawn)?;
         let stdout = child.stdout.take().ok_or(ExecutorError::Spawn)?;
         let stderr = child.stderr.take().ok_or(ExecutorError::Spawn)?;
-        let frame = encode_request(request).map_err(|_| ExecutorError::Protocol)?;
+
         let write_task = AbortOnDropHandle::new(tokio::spawn(async move {
             let mut stdin = stdin;
             stdin.write_all(&frame).await.map_err(|_| ())?;
             stdin.write_all(b"\n").await.map_err(|_| ())?;
             stdin.shutdown().await.map_err(|_| ())
         }));
-        let max_out = self.config.max_output_bytes;
-        let expected_version = request.version;
-        let expected_operation_id = request.operation_id;
-        let expected_attempt = request.attempt;
+        let max_out = if matches!(request, ExecutionRequest::Search(_)) { self.config.max_output_bytes.min(yoink_worker_protocol::MAX_SEARCH_FRAME_BYTES) } else { self.config.max_output_bytes };
+        let expected_version = version;
+        let expected_operation_id = operation_id;
+        let expected_attempt = attempt;
         let progress_sender = progress.clone();
         let out_task = AbortOnDropHandle::new(tokio::spawn(async move {
             let result = read_frames(
@@ -404,7 +472,7 @@ impl Executor {
         terminate_group(pid);
         let mut terminal = None;
         for event in &events {
-            check_event_identity(event, request)?;
+            if (event.version, event.operation_id, event.attempt) != (version, operation_id, attempt) { return Err(ExecutorError::Protocol); }
             if event.event.is_terminal() {
                 if terminal.is_some() {
                     return Err(ExecutorError::Protocol);
@@ -415,6 +483,18 @@ impl Executor {
             }
         }
         let event = terminal.ok_or(ExecutorError::Protocol)?;
+        if matches!(request, ExecutionRequest::Search(_)) {
+            return match event {
+                WorkerEventKind::SearchCompleted { entries } => {
+                    // A metadata-only worker must leave no media or other artifacts.
+                    if std::fs::read_dir(&workspace).map_err(|_| ExecutorError::Io)?.next().is_some() { return Err(ExecutorError::UnsafeArtifact); }
+                    Ok(ExecutionOutput::Search(entries))
+                }
+                WorkerEventKind::Failure { class } => Err(ExecutorError::Worker(class)),
+                WorkerEventKind::CancellationAcknowledged => Err(ExecutorError::Cancelled),
+                _ => Err(ExecutorError::Protocol),
+            };
+        }
         let WorkerEventKind::Completed { artifacts } = event else {
             return match event {
                 WorkerEventKind::Failure { class } => Err(ExecutorError::Worker(class)),
@@ -440,10 +520,10 @@ impl Executor {
         let limit = self.config.max_artifact_bytes;
         let workspace_limit = self.config.max_workspace_bytes;
         let formats_report = matches!(
-            &request.task,
-            yoink_worker_protocol::TaskKind::Download {
+            &request,
+            ExecutionRequest::Media(WorkerRequest { task: yoink_worker_protocol::TaskKind::Download {
                 media_mode: yoink_worker_protocol::MediaMode::Formats
-            }
+            }, .. })
         );
         let artifact_task = tokio::task::spawn_blocking(move || {
             let mut validated = Vec::with_capacity(artifacts.len());
@@ -472,23 +552,13 @@ impl Executor {
             }
             result = artifact_task => result.map_err(|_| ExecutorError::Io)??,
         };
-        Ok(artifacts)
+        Ok(ExecutionOutput::Media(artifacts))
         }.await;
         terminate_group(pid);
         let _ = child.wait().await;
         guard.0 = None;
         result
     }
-}
-
-fn check_event_identity(event: &WorkerEvent, request: &WorkerRequest) -> Result<(), ExecutorError> {
-    if event.version != request.version
-        || event.operation_id != request.operation_id
-        || event.attempt != request.attempt
-    {
-        return Err(ExecutorError::Protocol);
-    }
-    Ok(())
 }
 
 async fn read_frames<R: tokio::io::AsyncRead + Unpin>(
@@ -1197,6 +1267,83 @@ mod tests {
             options: yoink_worker_protocol::DownloadOptions::default(),
             network: None,
         }
+    }
+
+    fn search_request() -> yoink_worker_protocol::SearchRequest {
+        yoink_worker_protocol::SearchRequest {
+            version: yoink_worker_protocol::PROTOCOL_VERSION,
+            operation_id: uuid::Uuid::new_v4(),
+            attempt: 1,
+            task: yoink_worker_protocol::SearchTask::YoutubeSearch {
+                query: "secret-query-marker".into(),
+            },
+            network: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_search_bounds_failures_and_empty_result_use_same_cleanup() {
+        for (mode, expected) in [
+            ("search-url", ExecutorError::Protocol),
+            ("search-duplicate", ExecutorError::Protocol),
+            ("search-artifact", ExecutorError::UnsafeArtifact),
+            ("search-overflow", ExecutorError::ResourceLimit),
+            ("search-exit", ExecutorError::Exited(Some(7))),
+            (
+                "search-denial",
+                ExecutorError::Worker(yoink_worker_protocol::FailureClass::SourceUnavailable),
+            ),
+            ("hang", ExecutorError::Timeout),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let error = process_executor_args(mode, temp.path(), Duration::from_secs(1), vec![])
+                .execute_search(
+                    &search_request(),
+                    CancellationToken::new(),
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error, expected, "{mode}");
+            assert!(!format!("{error:?} {error}").contains("secret-query-marker"));
+            assert!(temp.path().read_dir().unwrap().next().is_none());
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let entries = process_executor("search-zero", temp.path())
+            .execute_search(
+                &search_request(),
+                CancellationToken::new(),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert!(entries.is_empty());
+        assert!(temp.path().read_dir().unwrap().next().is_none());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert_eq!(
+            process_executor("hang", temp.path())
+                .execute_search(&search_request(), cancel, Duration::from_secs(1))
+                .await
+                .unwrap_err(),
+            ExecutorError::Cancelled
+        );
+        assert!(temp.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn fractional_remaining_search_budget_still_reaps_timed_out_worker() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = process_executor("hang", temp.path())
+            .execute_search(
+                &search_request(),
+                CancellationToken::new(),
+                Duration::from_millis(150),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error, ExecutorError::Timeout);
+        assert!(temp.path().read_dir().unwrap().next().is_none());
     }
 
     #[tokio::test]

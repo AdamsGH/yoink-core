@@ -31,6 +31,7 @@ export class BotApiFixture {
   #menuMode = 'success';
   #menuChatId;
   #menuGate;
+  #inlineMode = 'success';
   commandMenus = new CommandMenus();
 
   constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024 }) {
@@ -59,6 +60,11 @@ export class BotApiFixture {
       assert.equal(typeof contract.mimeType, 'string', 'expected upload contract needs a MIME type');
     }
     this.#expectedUpload = contract;
+  }
+  setInlineMode(mode) { assert(['success', 'failure-once'].includes(mode)); this.#inlineMode = mode; }
+  enqueueInline(actor, query, { id = 'inline-' + this.#updateId, language = 'en', chatType = 'private', isBot = false } = {}) {
+    this.#updates.push({ update_id: this.#updateId++, inline_query: { id, from: { id: actor, is_bot: isBot, first_name: 'Fixture', language_code: language }, query, offset: '', chat_type: chatType } });
+    return id;
   }
   setSendMode(mode) { this.#sendMode = mode; }
   setEditMode(mode, textIncludes) { this.#editMode = mode; this.#editFilter = textIncludes; }
@@ -193,7 +199,7 @@ export class BotApiFixture {
     const body = Buffer.concat(chunks);
     res.setHeader('content-type', 'application/json');
     if (method === 'getme') {
-      res.end(JSON.stringify({ ok: true, result: { id: 123456, is_bot: true, first_name: 'Fixture', username: 'yoink_fixture_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false, has_main_web_app: false } }));
+      res.end(JSON.stringify({ ok: true, result: { id: 123456, is_bot: true, first_name: 'Fixture', username: 'yoink_fixture_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: true, has_main_web_app: false } }));
     } else if (method === 'deletewebhook') {
       res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'getwebhookinfo') {
@@ -249,6 +255,22 @@ export class BotApiFixture {
       this.#messages.set(`${message.chat.id}:${message.message_id}`, message);
       this.#calls.push({ method, data, messageId: message.message_id });
       res.end(JSON.stringify({ ok: true, result: message }));
+    } else if (method === 'answerinlinequery') {
+      const data = JSON.parse(body.toString('utf8'));
+      assert.equal(typeof data.inline_query_id, 'string');
+      assert.equal(data.cache_time, 0); assert.equal(data.is_personal, true);
+      const results = typeof data.results === 'string' ? JSON.parse(data.results) : data.results;
+      assert(Array.isArray(results) && results.length <= 8);
+      for (const result of results) {
+        assert.equal(result.type, 'article');
+        assert.equal(result.input_message_content.link_preview_options.is_disabled, true);
+        for (const key of ['thumbnail_url', 'video_file_id', 'video_url', 'photo_url']) assert(!Object.hasOwn(result,key));
+        assert(/^https?:/.test(result.input_message_content.message_text));
+      }
+      data.results = results;
+      this.#calls.push({ method, data });
+      if (this.#inlineMode === 'failure-once') { this.#inlineMode = 'success'; res.writeHead(500); res.end(JSON.stringify({ ok: false, error_code: 500, description: 'fixture inline failure' })); }
+      else res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'answercallbackquery') {
       const data = JSON.parse(body.toString('utf8'));
       assert.equal(typeof data.callback_query_id, 'string');

@@ -160,6 +160,7 @@ pub struct DownloadService {
 pub struct DownloadNetworkConfig {
     system_proxy: Option<String>,
     no_cookie_domains: Vec<String>,
+    personal_cookie_limits: PersonalCookieLimits,
 }
 
 impl std::fmt::Debug for DownloadNetworkConfig {
@@ -174,7 +175,37 @@ impl std::fmt::Debug for DownloadNetworkConfig {
     }
 }
 
+/// Finite personal-only storage bounds; pooled credentials are accounted separately.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersonalCookieLimits {
+    pub domains: u64,
+    pub actor_bytes: u64,
+    pub global_bytes: u64,
+}
+impl Default for PersonalCookieLimits {
+    fn default() -> Self {
+        Self {
+            domains: 128,
+            actor_bytes: 128 * 512 * 1024,
+            global_bytes: 1024 * 1024 * 1024,
+        }
+    }
+}
 impl DownloadNetworkConfig {
+    pub fn with_personal_cookie_limits(
+        mut self,
+        limits: PersonalCookieLimits,
+    ) -> Result<Self, DownloadError> {
+        if [limits.domains, limits.actor_bytes, limits.global_bytes]
+            .into_iter()
+            .any(|v| v == 0 || v > i64::MAX as u64)
+        {
+            return Err(DownloadError::InvalidConfig);
+        }
+        self.personal_cookie_limits = limits;
+        Ok(self)
+    }
+
     pub fn new(
         system_proxy: Option<String>,
         no_cookie_domains: Vec<String>,
@@ -208,6 +239,7 @@ impl DownloadNetworkConfig {
         Ok(Self {
             system_proxy,
             no_cookie_domains: normalized,
+            personal_cookie_limits: PersonalCookieLimits::default(),
         })
     }
 }
@@ -230,6 +262,8 @@ pub enum DownloadError {
     InvalidConfig,
     #[error("actor is not authorized")]
     Denied,
+    #[error("personal cookie storage limit reached")]
+    PersonalCookieCapacity,
     #[error("download capacity has been reached")]
     Capacity,
     #[error("download time quota exceeded; retry in {retry_after_secs} seconds")]
@@ -293,6 +327,30 @@ impl DownloadService {
             network_config,
             groups_enabled: false,
         })
+    }
+
+    /// Stateless inline lookup. The operator's shared network configuration is
+    /// the only authority: no destination, user proxy, cookies, quota or cache.
+    pub async fn search_youtube(
+        &self,
+        query: &str,
+        cancel: CancellationToken,
+        timeout: Duration,
+    ) -> Result<Vec<yoink_worker_protocol::SearchEntry>, yoink_executor::ExecutorError> {
+        let request = yoink_worker_protocol::SearchRequest {
+            version: yoink_worker_protocol::PROTOCOL_VERSION,
+            operation_id: Uuid::new_v4(),
+            attempt: 1,
+            task: yoink_worker_protocol::SearchTask::YoutubeSearch {
+                query: query.to_owned(),
+            },
+            network: Some(yoink_worker_protocol::SearchNetwork {
+                proxy_url: self.network_config.system_proxy.clone(),
+            }),
+        };
+        self.executor
+            .execute_search(&request, cancel, timeout)
+            .await
     }
 
     pub fn with_network_config(mut self, config: DownloadNetworkConfig) -> Self {

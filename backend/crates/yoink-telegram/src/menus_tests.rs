@@ -76,7 +76,7 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
     };
     let expected = [
         "start", "help", "lang", "download", "video", "audio", "image", "job", "cancel", "nsfw",
-        "playlist", "cut", "subs", "list", "settings", "format", "quality",
+        "playlist", "cut", "subs", "list", "settings", "format", "quality", "cookie", "proxy",
     ];
     for language in [Language::English, Language::Russian] {
         assert_eq!(names(&catalog(ordinary, language)), expected);

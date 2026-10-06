@@ -166,6 +166,8 @@ async fn run_impl(
                 )
                 .await
                 .map_err(|_| ServerError::TelegramStartup)?
+                .with_inline_search(telegram.inline_search)
+                .map_err(|_| ServerError::TelegramStartup)?
                 .with_progress(telegram.progress)
                 .with_cookie_upload(telegram.cookie_upload)
                 .with_cookie_url(telegram.cookie_url)

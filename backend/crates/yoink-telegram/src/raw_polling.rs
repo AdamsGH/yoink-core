@@ -70,7 +70,7 @@ impl RawPolling {
                 "offset": self.offset,
                 "limit": 100,
                 "timeout": self.timeout.as_secs(),
-                "allowed_updates": ["message", "callback_query", "my_chat_member", "chat_member"]
+                "allowed_updates": ["message", "callback_query", "inline_query", "my_chat_member", "chat_member"]
             }))
             .send()
             .await
@@ -126,7 +126,24 @@ impl RawPolling {
                 observer(observation).await?;
             }
             next_offset = next_offset.max(i64::from(update.id.0) + 1);
-            decoded.push_back(update);
+            // Malformed inline payloads decode to Error; do not dispatch them.
+            // Actor validation is repeated in the handler before identity lookup.
+            let valid_inline = match &update.kind {
+                teloxide::types::UpdateKind::InlineQuery(query) => {
+                    !query.from.is_bot
+                        && query.from.id.0 > 0
+                        && query.from.id.0 <= i64::MAX as u64
+                        && !query.id.0.is_empty()
+                        && query.id.0.len() <= 256
+                }
+                teloxide::types::UpdateKind::Error(_) if value.get("inline_query").is_some() => {
+                    false
+                }
+                _ => true,
+            };
+            if valid_inline {
+                decoded.push_back(update);
+            }
         }
         // A failed batch leaves the previous offset intact. Committed observations
         // can replay after restart; membership ordering makes those replays harmless.
@@ -265,6 +282,79 @@ mod tests {
         listener.ingest(vec![membership(42)]).await.unwrap();
         assert_eq!(listener.offset, 43);
         assert_eq!(listener.pending.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn own_inline_selection_preserves_real_private_group_topic_and_url_intent() {
+        let source = "https://example.com/video";
+        let text = format!("{source} 10 20");
+        let identity = crate::TelegramIdentity {
+            owner_id: 42,
+            bot_id: 7,
+            groups_enabled: true,
+            identity_enabled: true,
+        };
+        for (chat, thread) in [
+            (
+                json!({"id": 43, "type": "private", "first_name": "User"}),
+                None,
+            ),
+            (
+                json!({"id": -77, "type": "supergroup", "title": "Group", "is_forum": true}),
+                Some(18),
+            ),
+        ] {
+            let mut value = json!({"update_id": 60, "message": {
+                "message_id": 10, "date": 1700000000, "chat": chat,
+                "from": {"id": 43, "is_bot": false, "first_name": "User"},
+                "via_bot": {"id": 7, "is_bot": true, "first_name": "Bot"},
+                "text": text, "entities": [{"type": "url", "offset": 0, "length": source.len()}]
+            }});
+            if let Some(thread) = thread {
+                value["message"]["message_thread_id"] = json!(thread);
+            }
+            let mut listener = listener(None);
+            listener.ingest(vec![value]).await.unwrap();
+            let teloxide::types::UpdateKind::Message(message) = &listener.pending[0].kind else {
+                panic!("message not decoded");
+            };
+            let (actor, target) = crate::incoming_route(identity, message).unwrap();
+            assert_eq!(actor, 43);
+            assert_eq!(target.chat_id(), message.chat.id.0);
+            assert_eq!(target.thread_id(), thread);
+            let Some(Ok(crate::plain_url::Action::Download(media))) =
+                crate::plain_url::parse(message, 7)
+            else {
+                panic!("selection not parsed");
+            };
+            assert_eq!(media.url, source);
+            assert_eq!(media.clip.unwrap().end_seconds(), 30.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_inline_decodes_real_actor_without_destination_and_skips_bad_actors() {
+        let query = json!({"update_id": 50, "inline_query": {
+            "id": "fixture-query", "from": {"id": 43, "is_bot": false, "first_name": "User"},
+            "query": "https://example.com/a", "offset": "", "chat_type": "supergroup"
+        }});
+        let mut listener = listener(None);
+        listener.ingest(vec![query.clone()]).await.unwrap();
+        assert!(
+            matches!(&listener.pending[0].kind, teloxide::types::UpdateKind::InlineQuery(q) if q.from.id.0 == 43 && q.query == "https://example.com/a")
+        );
+        for actor in [
+            json!({"id": 43, "is_bot": true, "first_name": "Bot"}),
+            json!({"id": 0, "is_bot": false, "first_name": "Bad"}),
+            Value::Null,
+        ] {
+            let mut bad = query.clone();
+            bad["update_id"] = 51.into();
+            bad["inline_query"]["from"] = actor;
+            listener.ingest(vec![bad]).await.unwrap();
+            assert!(listener.pending.is_empty());
+            assert_eq!(listener.offset, 52);
+        }
     }
 
     #[tokio::test]

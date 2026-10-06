@@ -124,7 +124,7 @@ export async function runCookieUrlScenarios(context) {
     sourceFixture.setCookieImportResponse(path('redirect-loop'), { redirect: path('redirect-loop') });
     assertNoMutation(await send(`${origin}${path('redirect-loop')}`, undefined, { preserveRoute: true, fetch: 6 }));
     for (const route of [
-      { actor: 99, chat: 99, silent: true }, { actor: 42, chat: -1800000, silent: true, route: { chatType: 'group' } },
+      { actor: 99, chat: 42, silent: true }, { actor: 42, chat: -1800000, silent: true, route: { chatType: 'group' } },
       { silent: true, route: { isBot: true } }, { silent: true, route: { senderChat: { id: -1001, title: 'Fixture channel', type: 'channel' } } }, { silent: true, route: { thread: 7 } },
     ]) assertNoMutation(await send(`${origin}${path('denied')}`, undefined, { sourcePath: 'denied', ...route, fetch: false }));
     const viaBotPrivate = await send(`${origin}${path('via-bot-private')}`, undefined, { route: { viaBot: 123456 } });

@@ -127,13 +127,14 @@ async fn admission_no_row_defaults_and_enable_creates_settings_only_with_proxy()
             .await,
         Err(DownloadError::Denied)
     );
-    assert_eq!(
-        service.proxy_settings(43, target(43, None, BOT)).await,
-        Err(DownloadError::Denied)
+    assert!(
+        service
+            .proxy_settings(43, target(43, None, BOT))
+            .await
+            .is_ok()
     );
 
     for (actor, destination) in [
-        (43, target(43, None, BOT)),
         (OWNER, target(43, None, BOT)),
         (OWNER, target(-10042, None, BOT)),
         (OWNER, target(OWNER as i64, Some(2), BOT)),
@@ -423,4 +424,150 @@ async fn proxy_toggle_preserves_other_settings_credentials_and_download_history(
             > before.try_get::<i64, _>("updated_at").unwrap()
     );
     assert!(after.try_get::<bool, _>("proxy_enabled").unwrap());
+}
+
+#[tokio::test]
+async fn ordinary_user_own_proxy_enable_disable_cas_preserves_credentials_and_isolation() {
+    async fn invariant(store: &Store, actor: u64) -> (String, i64, i64, i64) {
+        let row = yoink_db::query(include_str!("sql/proxy_state.sql"))
+            .bind(actor as i64)
+            .fetch_one(store.database())
+            .await
+            .unwrap();
+        (
+            row.try_get("proxy_url").unwrap(),
+            row.try_get("created_at").unwrap(),
+            row.try_get("cookie_count").unwrap(),
+            row.try_get("download_count").unwrap(),
+        )
+    }
+    let (_dir, store, service) = setup(Some("http://system.example:8080")).await;
+    let actor = 43;
+    let own = target(actor as i64, None, BOT);
+    let foreign = target(OWNER as i64, None, BOT);
+    seed(&store, Some("http://foreign.example:8080"), true, 100).await;
+    yoink_db::query(include_str!("sql/proxy_seed.sql"))
+        .bind(actor as i64)
+        .bind(false)
+        .bind("http://ordinary:private@example.com:8080")
+        .bind(200_i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    // Seed nondefault unrelated preferences through the same approved-user service.
+    for (field, value) in [
+        (SettingField::Codec, "vp09"),
+        (SettingField::GalleryZip, "true"),
+    ] {
+        let revision = service.settings(actor, own).await.unwrap().revision;
+        service
+            .change_setting(
+                actor,
+                own,
+                SettingChange::new(field, value).unwrap(),
+                Some(revision),
+            )
+            .await
+            .unwrap();
+    }
+    let preferences = service.settings(actor, own).await.unwrap();
+    let credentials = invariant(&store, actor).await;
+    let foreign_preferences = service.settings(OWNER, foreign).await.unwrap();
+    let foreign_proxy = service.proxy_settings(OWNER, foreign).await.unwrap();
+    let foreign_credentials = invariant(&store, OWNER).await;
+    let before = service.proxy_settings(actor, own).await.unwrap();
+    assert!(before.configured && !before.enabled);
+    service
+        .change_proxy_setting(actor, own, true, before.revision)
+        .await
+        .unwrap();
+    let enabled = service.proxy_settings(actor, own).await.unwrap();
+    assert!(enabled.configured && enabled.enabled);
+    assert!(enabled.revision > before.revision);
+    assert_eq!(
+        service.settings(actor, own).await.unwrap().values,
+        preferences.values
+    );
+    assert!(
+        invariant(&store, actor).await == credentials,
+        "own credentials/history unchanged by enable"
+    );
+    assert_eq!(
+        service
+            .change_proxy_setting(actor, own, false, before.revision)
+            .await,
+        Err(DownloadError::Conflict)
+    );
+    assert_eq!(service.proxy_settings(actor, own).await.unwrap(), enabled);
+    // Another preference write shares the revision and invalidates an old proxy button.
+    service
+        .change_setting(
+            actor,
+            own,
+            SettingChange::new(SettingField::Quality, "720").unwrap(),
+            Some(enabled.revision),
+        )
+        .await
+        .unwrap();
+    let changed_preferences = service.settings(actor, own).await.unwrap();
+    assert!(changed_preferences.revision > enabled.revision);
+    for (field, value) in &preferences.values {
+        let expected = if *field == SettingField::Quality {
+            "720"
+        } else {
+            value.as_str()
+        };
+        assert_eq!(
+            changed_preferences
+                .values
+                .iter()
+                .find(|(candidate, _)| candidate == field)
+                .unwrap()
+                .1,
+            expected
+        );
+    }
+    assert_eq!(
+        service
+            .change_proxy_setting(actor, own, false, enabled.revision)
+            .await,
+        Err(DownloadError::Conflict)
+    );
+    let after_preference = service.proxy_settings(actor, own).await.unwrap();
+    assert!(after_preference.enabled);
+    assert_eq!(after_preference.revision, changed_preferences.revision);
+    service
+        .change_proxy_setting(actor, own, false, after_preference.revision)
+        .await
+        .unwrap();
+    let disabled = service.proxy_settings(actor, own).await.unwrap();
+    assert!(disabled.configured && !disabled.enabled);
+    assert!(disabled.revision > after_preference.revision);
+    assert_eq!(
+        service
+            .change_proxy_setting(actor, own, true, after_preference.revision)
+            .await,
+        Err(DownloadError::Conflict)
+    );
+    assert_eq!(service.proxy_settings(actor, own).await.unwrap(), disabled);
+    assert_eq!(
+        service.settings(actor, own).await.unwrap().values,
+        changed_preferences.values
+    );
+    assert!(
+        invariant(&store, actor).await == credentials,
+        "own URL/history unchanged by toggles/preferences"
+    );
+    assert_eq!(
+        service.settings(OWNER, foreign).await.unwrap(),
+        foreign_preferences
+    );
+    assert_eq!(
+        service.proxy_settings(OWNER, foreign).await.unwrap(),
+        foreign_proxy
+    );
+    assert!(
+        invariant(&store, OWNER).await == foreign_credentials,
+        "foreign actor state unchanged"
+    );
 }

@@ -77,7 +77,6 @@ impl DownloadService {
     ) -> Result<(), DownloadError> {
         if actor == 0
             || actor > i64::MAX as u64
-            || !self.identities.is_configured_owner(actor as i64)
             || target.chat_id() != actor as i64
             || target.chat_id() <= 0
             || target.thread_id().is_some()
@@ -172,6 +171,40 @@ impl DownloadService {
         if advanced.is_none() {
             tx.commit().await.map_err(|_| DownloadError::Database)?;
             return Ok(None);
+        }
+        let usage = query(include_str!("personal_cookies_usage.sql"))
+            .bind(actor as i64)
+            .bind(domain.as_str())
+            .fetch_one(&*tx)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        let value = |key: &str| {
+            usage
+                .try_get::<i64, _>(key)
+                .map_err(|_| DownloadError::Database)
+        };
+        let domains = value("actor_domains")?;
+        let removed = value("replaced_domains")?;
+        let bytes = value("actor_bytes")?;
+        let global = value("global_bytes")?;
+        let replaced = value("replaced_bytes")?;
+        let limits = self.network_config.personal_cookie_limits;
+        let growth_exceeds = |old: i64, new: i64, limit: u64| new > old && new as u64 > limit;
+        if growth_exceeds(domains, domains - removed + 1, limits.domains)
+            || growth_exceeds(
+                bytes,
+                bytes - replaced + content.len() as i64,
+                limits.actor_bytes,
+            )
+            || growth_exceeds(
+                global,
+                global - replaced + content.len() as i64,
+                limits.global_bytes,
+            )
+        {
+            // Keep the watermark even on rejection: a replay cannot later install credentials.
+            tx.commit().await.map_err(|_| DownloadError::Database)?;
+            return Err(DownloadError::PersonalCookieCapacity);
         }
         query(include_str!("personal_cookies_upload_delete.sql"))
             .bind(actor as i64)

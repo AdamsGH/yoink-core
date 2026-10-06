@@ -1172,17 +1172,8 @@ async fn ordinary_user_settings_selected_format_and_ask_keep_credentials_and_oth
             .unwrap(),
         other
     );
-    assert_eq!(
-        service.proxy_settings(ACTOR, target).await.unwrap_err(),
-        DownloadError::Denied
-    );
-    assert_eq!(
-        service
-            .personal_cookies(ACTOR, target, None)
-            .await
-            .unwrap_err(),
-        DownloadError::Denied
-    );
+    assert!(service.proxy_settings(ACTOR, target).await.is_ok());
+    assert!(service.personal_cookies(ACTOR, target, None).await.is_ok());
     assert_eq!(
         service
             .clear_media_cache(ACTOR, target, 2900, URL)

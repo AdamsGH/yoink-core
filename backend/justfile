@@ -269,3 +269,21 @@ test-private-user-fixture: check-build-space
 # Existing coordinator-built images only; disposable DB and fake Bot API.
 test-private-user-media: check-build-space
     node scripts/test-media.mjs private-user
+
+# Inline-only contracts, source-mounted pinned worker image; no image builds.
+test-inline-worker:
+    docker run --rm --pull never --network none --memory 512m --cpus 2 --pids-limit 128 --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-backend:experimental -B -m unittest discover -s /worker -p test_search_engine.py
+
+test-inline: check-build-space
+    cargo test --locked --message-format short -p yoink-worker-protocol -p yoink-executor -p yoink-telegram -p yoink-i18n
+
+check-inline: check-build-space
+    cargo clippy --locked --message-format short -p yoink-worker-protocol -p yoink-executor -p yoink-downloads -p yoink-telegram -p yoink-i18n -p yoink-server --all-targets -- -D warnings
+
+test-inline-wire: check-build-space
+    YOINK_SEARCH_WIRE_DOCKER=1 cargo test --locked --message-format short -p yoink-executor --test search_wire -- --ignored
+
+# Scoped fixture-server lifecycle proof and native shutdown verifier; no images.
+test-inline-shutdown: check-build-space
+    cargo test --locked --message-format short -p yoink-server --features test-fixtures --bin yoink-fixture-server
+    node --test scripts/media-fixture/graceful-shutdown.test.mjs

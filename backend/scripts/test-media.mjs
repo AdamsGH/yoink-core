@@ -37,9 +37,13 @@ import { runQualityScenarios } from './media-fixture/quality-scenarios.mjs';
 import { runCutQualityScenarios } from './media-fixture/cut-quality-scenarios.mjs';
 import { runQualityCutScenarios } from './media-fixture/quality-cut-scenarios.mjs';
 import { runDeferredMediaScenarios } from './media-fixture/deferred-media-scenarios.mjs';
+import { runInlineScenarios } from './media-fixture/inline-scenarios.mjs';
+import { InlineSource } from './media-fixture/inline-source.mjs';
+import { stopInlineAppGracefully } from './media-fixture/graceful-shutdown.mjs';
 import { runPlainUrlScenarios } from './media-fixture/plain-url-scenarios.mjs';
 import { runUncacheScenarios } from './media-fixture/uncache-scenarios.mjs';
 import { runProxyScenarios } from './media-fixture/proxy-scenarios.mjs';
+import { runPersonalControlsScenarios } from './media-fixture/personal-controls-scenarios.mjs';
 import { runCookieScenarios } from './media-fixture/cookie-scenarios.mjs';
 import { runCookieUploadScenarios } from './media-fixture/cookie-upload-scenarios.mjs';
 import { runCookieUrlScenarios } from './media-fixture/cookie-url-scenarios.mjs';
@@ -51,7 +55,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'private-user', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|private-user|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'personal-controls', 'private-user', 'inline', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|personal-controls|private-user|inline|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -89,9 +93,10 @@ let downloadMaxAttempts;
 let downloadTimeoutSeconds = scenario === 'provider-routing' ? 180 : 3;
 let workerSocketTimeoutSeconds = scenario === 'provider-routing' ? 120 : 1;
 let cacheTtlSeconds;
-let groupsEnabled = ['group-admin', 'membership'].includes(scenario);
+let groupsEnabled = ['group-admin', 'membership', 'inline'].includes(scenario);
 let gallerySource;
 let providerSource;
+let inlineSource;
 let galleryEnabled = false;
 let galleryTrusted = true;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
@@ -101,7 +106,7 @@ const { startContainer } = containerLifecycle;
 // Explicit test-driver-only opt-in: existing images, current fixture executable and worker source.
 // This never changes production configuration or worker strategy selection.
 const localProviderSources = process.env.YOINK_MEDIA_PROVIDER_SOURCE_MOUNT === '1';
-assert(!localProviderSources || scenario === 'provider-routing', 'source mounts are restricted to the focused provider-routing fixture');
+assert(!localProviderSources || ['provider-routing', 'inline'].includes(scenario), 'source mounts are restricted to focused provider-routing/inline fixtures');
 const providerSourceArgs = localProviderSources ? [
   '--mount', `type=bind,source=${path.join(workspace, 'target/debug/yoink-server')},target=/usr/local/bin/yoink-server,readonly`,
   '--mount', `type=bind,source=${path.join(workspace, 'target/debug/yoink-fixture-server')},target=/usr/local/bin/yoink-fixture-server,readonly`,
@@ -118,6 +123,7 @@ async function cleanup() {
   containers.clear();
   if (volumeCreated) { try { await docker(['volume', 'rm', volumeName], { timeout: 15000 }); } catch (error) { failures.push(error); } volumeCreated = false; }
   providerSource?.releaseAll();
+  inlineSource?.releaseAll();
   for (const fixture of [botApi, sourceFixture, proxyFixture, gallerySource]) { if (!fixture) continue; try { await fixture.close(); } catch (error) { failures.push(error); } }
   try { await rm(tempRoot, { recursive: true, force: true }); } catch (error) { failures.push(error); }
   if (failures.length) throw new AggregateError(failures, 'one or more fixture cleanup actions failed');
@@ -219,16 +225,17 @@ async function launchApp() {
     '--env',`YOINK_FIXTURE_BIND=127.0.0.1:${fixturePort}`,'--env',`YOINK_FIXTURE_TOKEN=${fixtureToken}`,
     '--mount',`type=volume,source=${volumeName},target=/state`,
     ...providerSourceArgs,
+    ...(scenario === 'inline' ? ['--env',`YOINK_RUST_DOWNLOAD_PROXY_URL=http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}`, '--env','YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON=["youtube.com"]', '--env','YOINK_RUST_TELEGRAM_INLINE_TIMEOUT_SECS=4','--env','YOINK_RUST_TELEGRAM_INLINE_ACTOR_INTERVAL_MS=50','--env','YOINK_RUST_TELEGRAM_INLINE_REQUESTS_PER_SECOND=100'] : []),
     '--env','YOINK_RUST_DOWNLOADS_ENABLED=true','--env',`YOINK_RUST_HTTP_BIND=127.0.0.1:${appHttpPort}`,
     ...(galleryEnabled ? (galleryTrusted ? gallerySource.dockerArgs : gallerySource.untrustedDockerArgs) : []),
-    '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=${JSON.stringify([`http://127.0.0.1:${sourcePort}`, ...(galleryEnabled ? ['https://imgbox.com', 'https://boards.4chan.org', 'https://a.4cdn.org', 'https://i.4cdn.org', 'https://instagram.com', 'https://www.instagram.com'] : [])])}`,
+    '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=${JSON.stringify([`http://127.0.0.1:${sourcePort}`, ...(scenario === 'inline' && galleryEnabled ? ['https://www.youtube.com', 'https://youtube.com'] : []), ...(galleryEnabled ? ['https://imgbox.com', 'https://boards.4chan.org', 'https://a.4cdn.org', 'https://i.4cdn.org', 'https://instagram.com', 'https://www.instagram.com'] : [])])}`,
     '--env',`YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=["http://127.0.0.1:${proxyPort}"]`,
     '--env','YOINK_RUST_DOWNLOAD_LEASE_SECS=6','--env','YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1','--env','YOINK_RUST_DELIVERY_TIMEOUT_SECS=2',
     '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env',`YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=${workerSocketTimeoutSeconds}`,
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
-    ...(['all', 'private-user', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
+    ...(['all', 'private-user', 'inline', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
     ...(scenario === 'provider-routing' ? ['--env','YOINK_RUST_DOWNLOAD_MAX_BYTES=65536','--env','YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES=196608','--env','YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=1'] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
@@ -250,6 +257,18 @@ async function stopApp() {
   appContainerId=undefined;
 }
 async function restartApp() { await stopApp(); await launchApp(); }
+async function waitForInlineWorkspaceClean() {
+  await waitFor(async () => (await docker(['exec', appName, 'sh', '-c', 'if test -z "$(ls -A /tmp/yoink-work)"; then echo clean; else echo busy; fi'])).trim() === 'clean', 'absolute inline deadline worker cleanup');
+}
+async function restartInlineAppGracefully() {
+  assert(appContainerId);
+  await stopInlineAppGracefully({ docker, id: appContainerId, assertNoSecret });
+  // Removal is deliberately after normal exit and original-process cleanup proof.
+  await docker(['rm', appContainerId]);
+  containers.delete(appContainerId);
+  appContainerId = undefined;
+  await launchApp();
+}
 async function operationForReply(fromIndex) {
   return await waitFor(() => {
     const reply=botApi.calls.slice(fromIndex).find(call=>call.method==='sendmessage'&&/[0-9a-f]{8}-[0-9a-f-]{27}/i.test(call.data.text));
@@ -713,9 +732,17 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
   if (scenario === 'all' || scenario === 'uncache') summaries.push(await runUncacheScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'proxy') summaries.push(await runProxyScenarios({ ...commandContext, restartApp, proxyFixture,
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
+  if (scenario === 'personal-controls') summaries.push(await runPersonalControlsScenarios({ ...commandContext, restartApp, cookieSecret, proxyFixture, proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'cookies') summaries.push(await runCookieScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'all' || scenario === 'cookie-uploads') summaries.push(await runCookieUploadScenarios({ ...commandContext, restartApp, cookieSecret, prepareLocalCookieFiles }));
   if (scenario === 'all' || scenario === 'cookie-urls') summaries.push(await runCookieUrlScenarios({ ...commandContext, restartApp, cookieSecret }));
+  if (scenario === 'inline') {
+    inlineSource = new InlineSource({ mediaBytes, mediaUrl: `http://127.0.0.1:${sourcePort}/media?case=inline-youtube` });
+    gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image, extraHosts: ['www.youtube.com','youtube.com'], providerResponse: (...args) => inlineSource.response(...args) });
+    galleryEnabled = true; galleryTrusted = true; proxyFixture.galleryPort = gallerySource.port;
+    await restartApp();
+    summaries.push(await runInlineScenarios({ ...commandContext, inlineSource, restartInlineAppGracefully, waitForInlineWorkspaceClean }));
+  }
   if (scenario === 'deferred-media') {
     gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image });
     summaries.push(await runDeferredMediaScenarios({ ...commandContext, restartApp, proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}`,

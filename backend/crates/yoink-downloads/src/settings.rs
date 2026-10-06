@@ -242,9 +242,8 @@ impl DownloadService {
         actor: u64,
         target: DeliveryTarget,
     ) -> Result<(), DownloadError> {
-        if !self
-            .identities
-            .is_configured_owner(i64::try_from(actor).map_err(|_| DownloadError::Denied)?)
+        if actor == 0
+            || actor > i64::MAX as u64
             || target.chat_id() <= 0
             || target.chat_id() as u64 != actor
             || target.thread_id().is_some()

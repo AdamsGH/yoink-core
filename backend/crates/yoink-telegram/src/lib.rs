@@ -36,6 +36,9 @@ mod cookie;
 mod cookie_upload;
 mod cookie_url;
 mod cut;
+mod inline;
+mod inline_search;
+pub use inline_search::InlineSearchConfig;
 mod lang;
 mod media_command;
 mod membership_update;
@@ -106,6 +109,7 @@ pub struct TelegramAdapter {
     identities: Option<Arc<IdentityStore>>,
     cookie_upload: Option<CookieUploadConfig>,
     cookie_url: Option<CookieUrlConfig>,
+    inline_search: InlineSearchConfig,
     file_base: Url,
     polling_endpoint: Url,
     http_client: reqwest::Client,
@@ -174,6 +178,7 @@ impl TelegramAdapter {
             identities: None,
             cookie_upload: None,
             cookie_url: None,
+            inline_search: InlineSearchConfig::default(),
             file_base: cookie_upload::file_base(&api_origin, &token),
             polling_endpoint,
             http_client,
@@ -208,6 +213,14 @@ impl TelegramAdapter {
     pub fn with_identity_store(mut self, identities: Arc<IdentityStore>) -> Self {
         self.identities = Some(identities);
         self
+    }
+
+    pub fn with_inline_search(mut self, config: InlineSearchConfig) -> Result<Self, TelegramError> {
+        if !config.valid() {
+            return Err(TelegramError::BotInitializationFailed);
+        }
+        self.inline_search = config;
+        Ok(self)
     }
 
     pub fn with_progress(mut self, config: ProgressConfig) -> Self {
@@ -263,6 +276,8 @@ impl TelegramAdapter {
                 _ = self.initialize_menus() => {},
             }
         }
+        let searches = inline_search::Searches::new(self.inline_search, shutdown.child_token());
+        let _search_stop = searches.stop.clone().drop_guard();
         let menus = self.menus.take().expect("initialized menus").run();
         let observer = self.identities.clone().map(|identities| {
             let source_id = i64::try_from(self.bot_id).expect("validated bot identity");
@@ -291,7 +306,8 @@ impl TelegramAdapter {
         let progress = progress::run(self.bot.clone(), self.downloads.clone(), self.progress);
         let handler = dptree::entry()
             .branch(Update::filter_message().endpoint(handle_message))
-            .branch(Update::filter_callback_query().endpoint(handle_callback));
+            .branch(Update::filter_callback_query().endpoint(handle_callback))
+            .branch(Update::filter_inline_query().endpoint(inline::handle));
         let mut dispatcher = Dispatcher::builder(self.bot.clone(), handler)
             .dependencies(dptree::deps![
                 TelegramIdentity {
@@ -300,6 +316,7 @@ impl TelegramAdapter {
                     groups_enabled: self.groups_enabled,
                     identity_enabled: self.identities.is_some(),
                 },
+                searches.clone(),
                 self.bot_username,
                 self.system,
                 DownloadsDependency(self.downloads.clone()),
@@ -343,11 +360,13 @@ impl TelegramAdapter {
             result = &mut dispatch => {
                 result.map_err(|_| TelegramError::PollingFailed)?;
                 if !shutdown.is_cancelled() {
+                    searches.shutdown().await;
                     return Err(TelegramError::PollingFailed);
                 }
             }
         }
 
+        searches.shutdown().await;
         if failed.load(Ordering::SeqCst) {
             return Err(TelegramError::PollingFailed);
         }
@@ -423,6 +442,24 @@ impl std::fmt::Debug for Command {
             Self::Lang(_) => formatter.write_str("Lang"),
         }
     }
+}
+
+fn inline_help_command(text: &str, own_username: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let Some(token) = words.next() else {
+        return false;
+    };
+    let Some(command) = token.strip_prefix('/') else {
+        return false;
+    };
+    let name = match command.split_once('@') {
+        Some((name, suffix)) if suffix.eq_ignore_ascii_case(own_username) => name,
+        Some(_) => return false,
+        None => command,
+    };
+    name.eq_ignore_ascii_case("start")
+        && words.next() == Some("search_help")
+        && words.next().is_none()
 }
 
 fn parse_command(text: &str, own_username: &str) -> Option<Command> {
@@ -636,14 +673,7 @@ fn private_access_for_role(role: &str, actor: u64, configured_owner: u64) -> Pri
 }
 
 fn owner_only_command(command: &Command, _text: &str) -> bool {
-    matches!(
-        command,
-        Command::Status
-            | Command::Proxy(_)
-            | Command::Uncache(_)
-            | Command::Cookie(_)
-            | Command::CookieUrl(_)
-    )
+    matches!(command, Command::Status | Command::Uncache(_))
 }
 
 fn translate(language: Language, key: Key, parameters: &[(&str, &str)]) -> String {
@@ -742,6 +772,7 @@ fn download_error_response(error: DownloadError, language: Language) -> String {
             );
         }
         DownloadError::Denied => Key::ErrorDenied,
+        DownloadError::PersonalCookieCapacity => Key::ErrorPersonalCookieCapacity,
         DownloadError::Capacity => Key::ErrorCapacity,
         DownloadError::Conflict => Key::ErrorConflict,
         DownloadError::InvalidInput => Key::ErrorInvalidInput,
@@ -834,6 +865,32 @@ async fn handle_message(
         return Ok(());
     }
     let private = message.chat.is_private();
+    // Inline-granted restricted users can read help without registering or
+    // acquiring any normal-message media authority.
+    if private
+        && message
+            .text()
+            .is_some_and(|text| inline_help_command(text, &bot_username))
+    {
+        let language = reply_language_with_identity(
+            downloads.as_ref(),
+            dependencies.identities.as_deref(),
+            actor_id,
+            message
+                .from
+                .as_ref()
+                .and_then(|user| user.language_code.as_deref()),
+        )
+        .await;
+        let reply = if inline::authorized_actor(dependencies.identities.as_deref(), actor_id).await
+        {
+            inline::help(language)
+        } else {
+            translate(language, Key::ErrorDenied, &[])
+        };
+        let _ = bot.send_message(message.chat.id, reply).await;
+        return Ok(());
+    }
     let access = if private {
         private_access(
             dependencies.identities.as_deref(),
@@ -886,9 +943,6 @@ async fn handle_message(
     let is_owner = access == PrivateAccess::Owner;
 
     if message.document().is_some() && target.chat_id() > 0 {
-        if !is_owner {
-            return Ok(());
-        }
         cookie_upload::handle_document(
             &bot,
             &message,
@@ -1578,17 +1632,18 @@ mod tests {
     }
 
     #[test]
-    fn private_control_dispatch_keeps_only_credentials_and_admin_owner_only() {
+    fn private_control_dispatch_keeps_only_operational_commands_owner_only() {
         let text_and_commands = [
             ("/status", Command::Status),
-            ("/proxy", Command::Proxy(proxy::Action::Menu)),
             ("/uncache https://example.test", Command::Uncache(None)),
-            ("/cookie", Command::Cookie(cookie::Action::List(None))),
         ];
         for (text, command) in text_and_commands {
             assert!(owner_only_command(&command, text), "{text}");
         }
         for text in [
+            "/cookie",
+            "/proxy",
+            "/cookie https://example.test/cookies.txt",
             "/settings",
             "/format",
             "/quality",
@@ -1939,6 +1994,7 @@ mod tests {
         let errors = [
             DownloadError::Denied,
             DownloadError::Capacity,
+            DownloadError::PersonalCookieCapacity,
             DownloadError::QuotaExceeded {
                 retry_after_secs: 60,
             },

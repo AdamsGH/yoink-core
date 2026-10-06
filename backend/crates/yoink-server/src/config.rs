@@ -48,6 +48,7 @@ pub struct TelegramConfig {
     pub api_url: Option<Url>,
     pub poll_timeout: Duration,
     pub progress: yoink_telegram::ProgressConfig,
+    pub inline_search: yoink_telegram::InlineSearchConfig,
     pub cookie_upload: yoink_telegram::CookieUploadConfig,
     pub cookie_url: yoink_telegram::CookieUrlConfig,
     pub groups_enabled: bool,
@@ -159,6 +160,52 @@ impl Config {
                     "expected seconds in range 1..=50",
                 ));
             }
+            let inline_number = |key: &str,
+                                 value: Option<String>,
+                                 default: u64,
+                                 min: u64,
+                                 max: u64|
+             -> Result<u64, ConfigError> {
+                let value = value
+                    .map(|value| value.parse::<u64>())
+                    .transpose()
+                    .map_err(|_| invalid(key, "expected a bounded integer"))?
+                    .unwrap_or(default);
+                if !(min..=max).contains(&value) {
+                    return Err(invalid(key, "integer is outside the supported range"));
+                }
+                Ok(value)
+            };
+            let inline_search = yoink_telegram::InlineSearchConfig {
+                concurrency: inline_number(
+                    "TELEGRAM_INLINE_CONCURRENCY",
+                    read("TELEGRAM_INLINE_CONCURRENCY")?,
+                    3,
+                    1,
+                    8,
+                )? as usize,
+                timeout: Duration::from_secs(inline_number(
+                    "TELEGRAM_INLINE_TIMEOUT_SECS",
+                    read("TELEGRAM_INLINE_TIMEOUT_SECS")?,
+                    20,
+                    1,
+                    120,
+                )?),
+                requests_per_second: inline_number(
+                    "TELEGRAM_INLINE_REQUESTS_PER_SECOND",
+                    read("TELEGRAM_INLINE_REQUESTS_PER_SECOND")?,
+                    10,
+                    1,
+                    100,
+                )? as u32,
+                actor_interval: Duration::from_millis(inline_number(
+                    "TELEGRAM_INLINE_ACTOR_INTERVAL_MS",
+                    read("TELEGRAM_INLINE_ACTOR_INTERVAL_MS")?,
+                    300,
+                    1,
+                    10000,
+                )?),
+            };
             let progress_interval = timeout(
                 read("TELEGRAM_PROGRESS_INTERVAL_SECS")?,
                 "TELEGRAM_PROGRESS_INTERVAL_SECS",
@@ -254,6 +301,7 @@ impl Config {
                 api_url,
                 poll_timeout,
                 progress,
+                inline_search,
                 cookie_upload,
                 cookie_url,
                 groups_enabled,
@@ -561,6 +609,51 @@ mod tests {
         let printed = format!("{error:?} {error}");
         assert!(!printed.contains("password"));
         assert!(!printed.contains("sensitive-token"));
+    }
+
+    #[test]
+    fn inline_example_uses_real_consumer_and_invalid_values_fail_closed() {
+        let values: Vec<_> = include_str!("../../../docs/inline-search.env.example")
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.split_once('=').unwrap())
+            .collect();
+        let parsed = config(&values).unwrap();
+        let search = parsed.telegram.unwrap().inline_search;
+        assert_eq!(search.concurrency, 3);
+        assert_eq!(search.timeout, Duration::from_secs(20));
+        assert_eq!(search.requests_per_second, 10);
+        assert_eq!(search.actor_interval, Duration::from_millis(300));
+        for (key, bad) in [
+            ("YOINK_RUST_TELEGRAM_INLINE_CONCURRENCY", "0"),
+            ("YOINK_RUST_TELEGRAM_INLINE_TIMEOUT_SECS", "121"),
+            ("YOINK_RUST_TELEGRAM_INLINE_REQUESTS_PER_SECOND", "101"),
+            (
+                "YOINK_RUST_TELEGRAM_INLINE_ACTOR_INTERVAL_MS",
+                "secret-value",
+            ),
+        ] {
+            let mut invalid = values.clone();
+            invalid.retain(|(old, _)| *old != key);
+            invalid.push((key, bad));
+            let error = config(&invalid).unwrap_err();
+            assert!(!format!("{error:?} {error}").contains("secret-value"));
+        }
+        let mut proxy = values.clone();
+        proxy.push((
+            "YOINK_RUST_DOWNLOAD_PROXY_URL",
+            "http://user:secret@127.0.0.1:8080",
+        ));
+        let parsed = config(&proxy).unwrap();
+        assert!(!format!("{parsed:?}").contains("secret@"));
+        proxy.push((
+            "YOINK_RUST_YOINK_RUST_DOWNLOAD_PROXY_URL",
+            "http://different.example:8080",
+        ));
+        assert!(
+            config(&proxy).is_err(),
+            "conflicting operator network authorities must fail closed"
+        );
     }
 
     #[test]
