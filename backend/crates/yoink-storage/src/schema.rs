@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 17] = [
+const MIGRATIONS: [Migration; 18] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -95,6 +95,11 @@ const MIGRATIONS: [Migration; 17] = [
         version: 17,
         sql: include_str!("../migrations-turso/0017_nsfw_marks.sql"),
         expected_tables: 58,
+    },
+    Migration {
+        version: 18,
+        sql: include_str!("../migrations-turso/0018_deferred_media.sql"),
+        expected_tables: 61,
     },
 ];
 
@@ -705,7 +710,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 17);
+        assert_eq!(versions.len(), 18);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);

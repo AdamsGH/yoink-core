@@ -44,7 +44,9 @@ async fn admit(
     key: &str,
     now: i64,
 ) -> Result<Admission, StoreError> {
-    store.admit_inner(req, key, policy(), true, Some(now)).await
+    store
+        .admit_inner(req, key, policy(), true, Some(now), None)
+        .await
 }
 async fn counters(store: &Store, actor: u64) -> Vec<(String, i64, i64)> {
     query("SELECT \"window\",count,reset_at FROM rate_limits WHERE user_id=?1 ORDER BY \"window\"")
@@ -299,12 +301,14 @@ async fn quota_capacity_invalid_input_failed_insert_and_malformed_import_do_not_
         ..policy()
     };
     store
-        .admit_inner(&req, "one", tight, true, Some(NOW))
+        .admit_inner(&req, "one", tight, true, Some(NOW), None)
         .await
         .unwrap();
     let before = counters(&store, 7).await;
     assert_eq!(
-        store.admit_inner(&req, "two", tight, true, Some(NOW)).await,
+        store
+            .admit_inner(&req, "two", tight, true, Some(NOW), None)
+            .await,
         Err(StoreError::Capacity)
     );
     assert_eq!(counters(&store, 7).await, before);

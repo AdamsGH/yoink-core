@@ -136,6 +136,37 @@ impl Store {
         }))
     }
 
+    pub async fn replay_telegram_media(
+        &self,
+        original: &DownloadRequest,
+        key: &str,
+    ) -> Result<Option<Admission>, StoreError> {
+        validate_key(key)?;
+        if let Some(row) = query(include_str!("../sql/telegram_media_intent_read.sql"))
+            .bind(original.actor_id() as i64)
+            .bind(key)
+            .fetch_optional(&self.database)
+            .await
+            .map_err(|_| StoreError::Database)?
+        {
+            if codec::decode(row.try_get("intent").map_err(|_| StoreError::Database)?)? != *original
+            {
+                return Err(StoreError::Conflict);
+            }
+            let row = query(include_str!("../sql/admit_existing.sql"))
+                .bind(original.actor_id() as i64)
+                .bind(key)
+                .fetch_one(&self.database)
+                .await
+                .map_err(|_| StoreError::Database)?;
+            return Ok(Some(Admission {
+                operation_id: row.try_get("id").map_err(|_| StoreError::Database)?,
+                created: false,
+            }));
+        }
+        self.replay_network_admission(original, key).await
+    }
+
     /// Atomically keep the first network snapshot when identical raw admissions race.
     /// All non-network fields remain part of the idempotency contract.
     pub async fn admit_network_snapshot(
@@ -144,7 +175,7 @@ impl Store {
         idempotency_key: &str,
         policy: AdmissionPolicy,
     ) -> Result<Admission, StoreError> {
-        self.admit_inner(request, idempotency_key, policy, true, None)
+        self.admit_inner(request, idempotency_key, policy, true, None, None)
             .await
     }
 
@@ -154,7 +185,18 @@ impl Store {
         idempotency_key: &str,
         policy: AdmissionPolicy,
     ) -> Result<Admission, StoreError> {
-        self.admit_inner(request, idempotency_key, policy, false, None)
+        self.admit_inner(request, idempotency_key, policy, false, None, None)
+            .await
+    }
+
+    pub async fn admit_telegram_media_snapshot(
+        &self,
+        request: &DownloadRequest,
+        key: &str,
+        policy: AdmissionPolicy,
+        context: &crate::TelegramMediaAdmission,
+    ) -> Result<Admission, StoreError> {
+        self.admit_inner(request, key, policy, true, None, Some(context))
             .await
     }
 
@@ -165,6 +207,7 @@ impl Store {
         policy: AdmissionPolicy,
         preserve_first_network: bool,
         now_override: Option<i64>,
+        telegram: Option<&crate::TelegramMediaAdmission>,
     ) -> Result<Admission, StoreError> {
         validate_key(idempotency_key)?;
         validate_policy(policy)?;
@@ -192,7 +235,17 @@ impl Store {
             let current: serde_json::Value =
                 row.try_get("request").map_err(|_| StoreError::Database)?;
             let current = codec::decode(current)?;
-            let same_intent = if preserve_first_network {
+            let same_intent = if let Some(context) = telegram {
+                let row = query(include_str!("../sql/telegram_media_intent_read.sql"))
+                    .bind(request.actor_id() as i64)
+                    .bind(idempotency_key)
+                    .fetch_optional(&*tx)
+                    .await
+                    .map_err(|_| StoreError::Database)?
+                    .ok_or(StoreError::Conflict)?;
+                codec::decode(row.try_get("intent").map_err(|_| StoreError::Database)?)?
+                    == context.original
+            } else if preserve_first_network {
                 same_request_intent(&current, request)?
             } else {
                 current.with_force_nsfw(false) == *request
@@ -206,6 +259,34 @@ impl Store {
             };
             tx.commit().await.map_err(|_| StoreError::Database)?;
             return Ok(admission);
+        }
+        if let Some(context) = telegram {
+            let target = request.target().copied().ok_or(StoreError::InvalidInput)?;
+            if target.chat_id() != request.actor_id() as i64 || target.thread_id().is_some() {
+                return Err(StoreError::InvalidInput);
+            }
+            if context.original.actor_id() != request.actor_id()
+                || context.original.target() != request.target()
+                || context.message_id <= 0
+            {
+                return Err(StoreError::InvalidInput);
+            }
+            if crate::deferred_media::read_state(&*tx, request.actor_id(), target).await?
+                != context.expected
+            {
+                return Err(StoreError::Conflict);
+            }
+            if query(include_str!("../sql/deferred_media_authorize.sql"))
+                .bind(request.actor_id() as i64)
+                .bind(chrono::Utc::now())
+                .bind(self.quota_owner_id == Some(request.actor_id() as i64))
+                .fetch_optional(&*tx)
+                .await
+                .map_err(|_| StoreError::Database)?
+                .is_none()
+            {
+                return Err(StoreError::Unauthorized);
+            }
         }
         let counts = query(include_str!("../sql/admit_counts.sql"))
             .bind(request.actor_id() as i64)
@@ -262,6 +343,23 @@ impl Store {
             .map_err(|_| StoreError::Database)?
             .try_get("id")
             .map_err(|_| StoreError::Database)?;
+        if let Some(context) = telegram {
+            let target = request.target().copied().ok_or(StoreError::InvalidInput)?;
+            query(include_str!("../sql/deferred_media_consume.sql"))
+                .bind(request.actor_id() as i64)
+                .bind(target.bot_id())
+                .bind(target.chat_id())
+                .bind(context.message_id)
+                .execute(&*tx)
+                .await
+                .map_err(|_| StoreError::Database)?;
+            query(include_str!("../sql/telegram_media_intent_insert.sql"))
+                .bind(id)
+                .bind(codec::encode(&context.original)?)
+                .execute(&*tx)
+                .await
+                .map_err(|_| StoreError::Database)?;
+        }
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(Admission {
             operation_id: id,

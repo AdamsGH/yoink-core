@@ -44,6 +44,7 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    MediaArmed => "telegram.media_armed", ["mode"];
     NsfwMarked => "telegram.nsfw_marked";
     NsfwUsage => "telegram.nsfw_usage";
     NsfwReloaded => "telegram.nsfw_reloaded";

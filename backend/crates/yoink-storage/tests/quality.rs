@@ -792,3 +792,323 @@ async fn draft_roundtrip_preserves_clips_playlist_engine_and_explicit_intent() {
         );
     }
 }
+
+#[tokio::test]
+async fn quality_original_supersession_is_scoped_and_preserves_current_id_revisions() {
+    let store = common::store().await;
+    let first_request = request(10, "https://example.com/first-original");
+    let first = store
+        .quality_begin_media(ACTOR, target(), 10, &first_request, Some(&first_request))
+        .await
+        .unwrap();
+    let other_actor = 43;
+    let other_bot = BOT + 1;
+    let scopes = [(other_actor, BOT), (ACTOR, other_bot)];
+    let mut others = Vec::new();
+    for (actor, bot) in scopes {
+        let scope = DeliveryTarget::new(bot, actor as i64, None, Some(10)).unwrap();
+        let original = DownloadRequest::new(
+            actor,
+            "https://example.com/other-original",
+            MediaMode::Video,
+            None,
+            DownloadParams::default(),
+        )
+        .unwrap()
+        .with_target(scope)
+        .unwrap();
+        let session = store
+            .quality_begin_media(actor, scope, 10, &original, Some(&original))
+            .await
+            .unwrap();
+        others.push((session, original));
+    }
+    // An idempotent begin and a same-ID revision transition keep the exact original.
+    assert_eq!(
+        store
+            .quality_begin_media(ACTOR, target(), 10, &first_request, Some(&first_request))
+            .await
+            .unwrap()
+            .id,
+        first.id
+    );
+    let cancelled = store
+        .quality_cancel(ACTOR, target(), first.id, first.revision)
+        .await
+        .unwrap();
+    assert_eq!(cancelled.id, first.id);
+    assert!(cancelled.revision > first.revision);
+    assert_eq!(
+        store.quality_media_intent(first.id).await.unwrap(),
+        Some(first_request)
+    );
+    let replacement_request = request(11, "https://example.com/replacement-original");
+    let replacement = store
+        .quality_begin_media(
+            ACTOR,
+            target(),
+            11,
+            &replacement_request,
+            Some(&replacement_request),
+        )
+        .await
+        .unwrap();
+    assert_ne!(replacement.id, first.id);
+    assert!(
+        store
+            .quality_media_intent(first.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store.quality_media_intent(replacement.id).await.unwrap(),
+        Some(replacement_request)
+    );
+    for (session, original) in others {
+        assert_eq!(
+            store.quality_media_intent(session.id).await.unwrap(),
+            Some(original)
+        );
+    }
+    // A new non-deferred quality draft must clean its predecessor as well.
+    store
+        .quality_begin(
+            ACTOR,
+            target(),
+            12,
+            &request(12, "https://example.com/plain"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .quality_media_intent(replacement.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn superseding_quality_keeps_original_needed_by_surviving_cut_handoff() {
+    let store = common::store().await;
+    let original = DownloadRequest::new(
+        ACTOR,
+        "https://example.com/cut-original",
+        MediaMode::Video,
+        Some(ClipRange::new(1.0, 2.0).unwrap()),
+        DownloadParams::default(),
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(BOT, ACTOR as i64, None, Some(10)).unwrap())
+    .unwrap();
+    let first = store
+        .quality_begin_media(ACTOR, target(), 10, &original, Some(&original))
+        .await
+        .unwrap();
+    let cut = store
+        .quality_cut(ACTOR, target(), first.id, first.revision)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.quality_media_intent(first.id).await.unwrap(),
+        Some(original.clone())
+    );
+    let replacement_request = request(11, "https://example.com/replacement");
+    let replacement = store
+        .quality_begin_media(
+            ACTOR,
+            target(),
+            11,
+            &replacement_request,
+            Some(&replacement_request),
+        )
+        .await
+        .unwrap();
+    assert_ne!(replacement.id, first.id);
+    // The existing cut is independently current and claimable after quality replacement.
+    let claimed = store
+        .cut_claim(ACTOR, target(), cut.id, cut.revision)
+        .await
+        .unwrap();
+    assert_eq!(claimed.linked_quality_id(), Some(first.id));
+    assert_eq!(claimed.original_request(), Some(&original));
+    assert_eq!(
+        store.quality_media_intent(first.id).await.unwrap(),
+        Some(original)
+    );
+    assert_eq!(
+        store.quality_media_intent(replacement.id).await.unwrap(),
+        Some(replacement_request)
+    );
+}
+
+fn linked_original(actor: u64, bot: i64, message: i32) -> DownloadRequest {
+    DownloadRequest::new(
+        actor,
+        &format!("https://example.com/lifecycle/{actor}/{bot}/{message}"),
+        MediaMode::Video,
+        Some(ClipRange::new(1.0, 2.0).unwrap()),
+        DownloadParams::default(),
+    )
+    .unwrap()
+    .with_target(DeliveryTarget::new(bot, actor as i64, None, Some(message)).unwrap())
+    .unwrap()
+}
+
+#[tokio::test]
+async fn replacing_last_cut_reference_reclaims_only_its_obsolete_quality_original() {
+    let store = common::store().await;
+    let mut other_scopes = Vec::new();
+    for (actor, bot) in [(ACTOR + 1, BOT), (ACTOR, BOT + 1)] {
+        let original = linked_original(actor, bot, 10);
+        let scope = *original.target().unwrap();
+        let quality = store
+            .quality_begin_media(actor, scope, 10, &original, Some(&original))
+            .await
+            .unwrap();
+        store
+            .quality_cut(actor, scope, quality.id, quality.revision)
+            .await
+            .unwrap();
+        other_scopes.push((quality.id, original));
+    }
+    let original = linked_original(ACTOR, BOT, 10);
+    let mut quality = store
+        .quality_begin_media(ACTOR, target(), 10, &original, Some(&original))
+        .await
+        .unwrap();
+    let mut cut = store
+        .quality_cut(ACTOR, target(), quality.id, quality.revision)
+        .await
+        .unwrap();
+    // Repeated qualityA -> cutA -> qualityB -> cutB workflows must not accumulate A.
+    for message in 11..15 {
+        let claimed = store
+            .cut_claim(ACTOR, target(), cut.id, cut.revision)
+            .await
+            .unwrap();
+        let submitted = store
+            .cut_submitted(ACTOR, target(), cut.id, claimed.revision, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(
+            store
+                .quality_media_intent(quality.id)
+                .await
+                .unwrap()
+                .is_some(),
+            "same-ID cut revisions must retain the original"
+        );
+        let old_quality = quality.id;
+        let old_cut = cut.id;
+        let original = linked_original(ACTOR, BOT, message);
+        quality = store
+            .quality_begin_media(ACTOR, target(), message, &original, Some(&original))
+            .await
+            .unwrap();
+        assert!(
+            store
+                .quality_media_intent(old_quality)
+                .await
+                .unwrap()
+                .is_some(),
+            "submitted cut remains replayable until replaced"
+        );
+        assert_eq!(
+            store
+                .cut_claim(ACTOR, target(), old_cut, submitted.revision)
+                .await
+                .unwrap()
+                .id,
+            old_cut
+        );
+        cut = store
+            .quality_cut(ACTOR, target(), quality.id, quality.revision)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .quality_media_intent(old_quality)
+                .await
+                .unwrap()
+                .is_none(),
+            "no consumer remains after cut supersession"
+        );
+        assert_eq!(
+            store.quality_media_intent(quality.id).await.unwrap(),
+            Some(original)
+        );
+        assert_eq!(
+            store
+                .cut_claim(ACTOR, target(), old_cut, submitted.revision)
+                .await,
+            Err(StoreError::Conflict)
+        );
+        for (id, original) in &other_scopes {
+            assert_eq!(
+                store.quality_media_intent(*id).await.unwrap(),
+                Some(original.clone())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelling_last_cut_reference_reclaims_original_unless_quality_still_needs_it() {
+    for supersede_quality in [false, true] {
+        let store = common::store().await;
+        let original = linked_original(ACTOR, BOT, 10);
+        let quality = store
+            .quality_begin_media(ACTOR, target(), 10, &original, Some(&original))
+            .await
+            .unwrap();
+        let cut = store
+            .quality_cut(ACTOR, target(), quality.id, quality.revision)
+            .await
+            .unwrap();
+        let replacement = if supersede_quality {
+            let request = linked_original(ACTOR, BOT, 11);
+            Some(
+                store
+                    .quality_begin_media(ACTOR, target(), 11, &request, Some(&request))
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        store
+            .cut_cancel(ACTOR, target(), cut.id, cut.revision, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .quality_media_intent(quality.id)
+                .await
+                .unwrap()
+                .is_none(),
+            supersede_quality
+        );
+        if let Some(replacement) = replacement {
+            assert!(
+                store
+                    .quality_media_intent(replacement.id)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        } else {
+            assert_eq!(
+                store
+                    .quality_current(ACTOR, target())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                quality.id
+            );
+        }
+    }
+}

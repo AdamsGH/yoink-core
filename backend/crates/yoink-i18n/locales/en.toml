@@ -1,4 +1,5 @@
 [telegram]
+media_armed = "{mode} selected for the next accepted URL in this private chat."
 nsfw_marked = "The next admitted URL will be treated as NSFW. Private blur and group policy still apply."
 nsfw_usage = "Use /nsfw on|off|menu|mark|reload. On/off control private blur; mark affects only the next admitted URL."
 nsfw_reloaded = "NSFW rules are current. Rules are read from the database for every media unit."

@@ -383,6 +383,7 @@ enum Command {
     Status,
     Settings(settings::Action),
     Nsfw(settings::Action),
+    ArmMedia(DomainMediaMode),
     Quality(bool),
     Subs,
     Proxy(proxy::Action),
@@ -407,6 +408,7 @@ impl std::fmt::Debug for Command {
             Self::Help => formatter.write_str("Help"),
             Self::Status => formatter.write_str("Status"),
             Self::Settings(_) => formatter.write_str("Settings"),
+            Self::ArmMedia(mode) => formatter.debug_tuple("ArmMedia").field(mode).finish(),
             Self::Nsfw(_) => formatter.write_str("Nsfw"),
             Self::Quality(_) => formatter.write_str("Quality"),
             Self::Subs => formatter.write_str("Subs"),
@@ -464,6 +466,13 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
     }
     if name == "proxy" {
         return Some(Command::Proxy(proxy::command(&args)));
+    }
+    if args.is_empty() && matches!(name.as_str(), "audio" | "image" | "video") {
+        return Some(Command::ArmMedia(match name.as_str() {
+            "audio" => DomainMediaMode::Audio,
+            "image" => DomainMediaMode::Image,
+            _ => DomainMediaMode::Video,
+        }));
     }
     if let Some(parsed) = media_command::parse(&name, &args) {
         return Some(parsed.map_or(Command::Invalid, Command::Media));
@@ -959,6 +968,7 @@ async fn handle_message(
     {
         return Ok(());
     }
+    let plain_media = parsed_command.is_none();
     let command = match parsed_command {
         Some(command) => command,
         None => match plain_url::parse(&message, bot_id) {
@@ -994,6 +1004,34 @@ async fn handle_message(
         return Ok(());
     }
 
+    if let Command::ArmMedia(mode) = command {
+        let reply = if !private {
+            translate(language, Key::UsageDownload, &[])
+        } else if let Some(service) = downloads.as_ref() {
+            match service
+                .arm_media(actor_id, target, message.id.0, mode)
+                .await
+            {
+                Ok(()) => {
+                    let label = translate(
+                        language,
+                        match mode {
+                            DomainMediaMode::Audio => Key::MenuAudio,
+                            DomainMediaMode::Image => Key::MenuImage,
+                            _ => Key::MenuVideo,
+                        },
+                        &[],
+                    );
+                    translate(language, Key::MediaArmed, &[("mode", &label)])
+                }
+                Err(error) => download_error_response(error, language).to_owned(),
+            }
+        } else {
+            media_unavailable_response(language)
+        };
+        let _ = bot.send_message(message.chat.id, reply).await;
+        return Ok(());
+    }
     if let Command::Uncache(source) = command {
         if target.chat_id() > 0 {
             if let Some(service) = downloads.as_ref() {
@@ -1125,7 +1163,8 @@ async fn handle_message(
     }
     let mut admitted = None;
     let reply = match command {
-        Command::Settings(_)
+        Command::ArmMedia(_)
+        | Command::Settings(_)
         | Command::Nsfw(_)
         | Command::Quality(_)
         | Command::Subs
@@ -1179,10 +1218,11 @@ async fn handle_message(
             };
             match request {
                 Ok(request) => match service
-                    .submit_telegram_request(
+                    .submit_telegram_media(
                         &request,
                         message.id.0,
                         DownloadPreferenceOverrides::default(),
+                        false,
                     )
                     .await
                 {
@@ -1219,7 +1259,7 @@ async fn handle_message(
                     .map_err(|_| DownloadError::InvalidInput);
             match request {
                 Ok(request) => match service
-                    .submit_telegram_request(&request, message.id.0, media.overrides)
+                    .submit_telegram_media(&request, message.id.0, media.overrides, plain_media)
                     .await
                 {
                     Ok(TelegramSubmission::Admitted(admission)) => {
@@ -1968,6 +2008,23 @@ mod tests {
                 classify_delivery_error(&RequestError::Api(ApiError::Unknown(text.into()))),
                 DeliveryError::Unknown
             );
+        }
+    }
+    #[test]
+    fn private_media_intent_commands_parse_without_breaking_immediate_urls() {
+        for (name, mode) in [
+            ("audio", DomainMediaMode::Audio),
+            ("image", DomainMediaMode::Image),
+            ("video", DomainMediaMode::Video),
+        ] {
+            assert_eq!(
+                parse_command(&format!("/{name}"), "yoink"),
+                Some(Command::ArmMedia(mode))
+            );
+            assert!(
+                matches!(parse_command(&format!("/{name} https://example.com/media"), "yoink"), Some(Command::Media(media)) if media.mode == mode)
+            );
+            assert_eq!(parse_command(&format!("/{name}@other"), "yoink"), None);
         }
     }
 }

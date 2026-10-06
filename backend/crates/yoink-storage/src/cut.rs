@@ -693,6 +693,15 @@ async fn require(
     Ok(s)
 }
 async fn put(tx: &turso::transaction::Transaction<'_>, s: &CutSession) -> Result<(), StoreError> {
+    // Capture only this scope's outgoing reference before the UPSERT replaces it.
+    // Cleanup after the save observes both current quality and cut consumers in
+    // the same transaction, so revisions/admission replay keep needed originals.
+    let prior_quality: Option<String> = get(tx, s.actor_id, s.target)
+        .await?
+        .map(|row| row.try_get::<Option<String>, _>("linked_quality_id"))
+        .transpose()
+        .map_err(|_| StoreError::Database)?
+        .flatten();
     query(include_str!("../sql/cut_put.sql"))
         .bind(s.actor_id as i64)
         .bind(s.target.bot_id())
@@ -728,6 +737,15 @@ async fn put(tx: &turso::transaction::Transaction<'_>, s: &CutSession) -> Result
         .execute(&**tx)
         .await
         .map_err(|_| StoreError::Database)?;
+    if let Some(prior_quality) = prior_quality {
+        query(include_str!(
+            "../sql/quality_media_intent_cut_released_delete.sql"
+        ))
+        .bind(prior_quality)
+        .execute(&**tx)
+        .await
+        .map_err(|_| StoreError::Database)?;
+    }
     Ok(())
 }
 fn decode(row: Row) -> Result<CutSession, StoreError> {

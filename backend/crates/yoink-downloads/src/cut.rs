@@ -294,9 +294,19 @@ impl DownloadService {
         if let Some(choice) = session.selected {
             overrides.max_height = Some(choice.max_height());
         }
-        let admission = self
-            .submit_preferred_request(&request, &key, overrides)
-            .await?;
+        let admission = if let Some(quality_id) = session.linked_quality_id() {
+            self.submit_quality_media(
+                &request,
+                &key,
+                overrides,
+                quality_id,
+                session.origin_message_id,
+            )
+            .await?
+        } else {
+            self.submit_preferred_request(&request, &key, overrides)
+                .await?
+        };
         self.store
             .cut_submitted(actor, target, id, revision, admission.operation_id)
             .await

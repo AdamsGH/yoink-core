@@ -5,6 +5,7 @@ mod cut;
 mod language;
 pub use cut::{CutSession, CutStage, CutSubmission};
 pub use yoink_identity::LanguagePreference;
+mod deferred_media;
 mod personal_cookies;
 pub mod profile;
 mod progress;
@@ -334,6 +335,17 @@ impl DownloadService {
         idempotency_key: &str,
         overrides: DownloadPreferenceOverrides,
     ) -> Result<Admission, DownloadError> {
+        self.submit_preferred_context(request, idempotency_key, overrides, None)
+            .await
+    }
+
+    async fn submit_preferred_context(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+        overrides: DownloadPreferenceOverrides,
+        telegram: Option<&yoink_storage::TelegramMediaAdmission>,
+    ) -> Result<Admission, DownloadError> {
         if !request_format_defaults(request)
             || (request.media_mode() == DomainMediaMode::Formats
                 && overrides != DownloadPreferenceOverrides::default())
@@ -348,11 +360,12 @@ impl DownloadService {
         }
         let intent = request.clone().with_preference_overrides(overrides.clone());
         let identity = self.authorize_request(request).await?;
-        if let Some(admission) = self
-            .store
-            .replay_network_admission(&intent, idempotency_key)
-            .await
-            .map_err(map_store)?
+        if telegram.is_none()
+            && let Some(admission) = self
+                .store
+                .replay_network_admission(&intent, idempotency_key)
+                .await
+                .map_err(map_store)?
         {
             return Ok(admission);
         }
@@ -384,7 +397,7 @@ impl DownloadService {
         let prepared_intent = intent
             .with_params(params)
             .map_err(|_| DownloadError::InvalidInput)?;
-        self.admit_network_request(&prepared_intent, idempotency_key, &identity)
+        self.admit_network_context(&prepared_intent, idempotency_key, &identity, telegram)
             .await
     }
 
@@ -423,6 +436,17 @@ impl DownloadService {
         idempotency_key: &str,
         identity: &yoink_identity::IdentitySnapshot,
     ) -> Result<Admission, DownloadError> {
+        self.admit_network_context(request, idempotency_key, identity, None)
+            .await
+    }
+
+    async fn admit_network_context(
+        &self,
+        request: &DownloadRequest,
+        idempotency_key: &str,
+        identity: &yoink_identity::IdentitySnapshot,
+        telegram: Option<&yoink_storage::TelegramMediaAdmission>,
+    ) -> Result<Admission, DownloadError> {
         let domain = request
             .source_url()
             .host_str()
@@ -441,10 +465,22 @@ impl DownloadService {
             .freeze_provider_routing()
             .with_network(selection)
             .map_err(|_| DownloadError::InvalidInput)?;
-        self.store
-            .admit_network_snapshot(&prepared, idempotency_key, self.config.admission)
-            .await
-            .map_err(map_store)
+        if let Some(context) = telegram {
+            self.store
+                .admit_telegram_media_snapshot(
+                    &prepared,
+                    idempotency_key,
+                    self.config.admission,
+                    context,
+                )
+                .await
+                .map_err(map_store)
+        } else {
+            self.store
+                .admit_network_snapshot(&prepared, idempotency_key, self.config.admission)
+                .await
+                .map_err(map_store)
+        }
     }
 
     pub async fn status(

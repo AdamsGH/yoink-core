@@ -1096,3 +1096,6 @@ async fn time_quota_uses_configured_id_not_owner_role_and_all_public_admission_p
         .unwrap();
     assert_eq!(n, 0);
 }
+
+#[path = "cases/deferred_media.rs"]
+mod deferred_media_cases;

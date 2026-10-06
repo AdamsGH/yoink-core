@@ -256,6 +256,18 @@ impl Store {
         message: i32,
         request: &DownloadRequest,
     ) -> Result<QualitySession, StoreError> {
+        self.quality_begin_media(actor, target, message, request, None)
+            .await
+    }
+
+    pub async fn quality_begin_media(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        message: i32,
+        request: &DownloadRequest,
+        original: Option<&DownloadRequest>,
+    ) -> Result<QualitySession, StoreError> {
         validate(actor, target)?;
         if message <= 0
             || request.actor_id() != actor
@@ -318,6 +330,14 @@ impl Store {
             last_message_id: message,
         };
         put(&tx, actor, &s).await?;
+        if let Some(original) = original {
+            query(include_str!("../sql/quality_media_intent_put.sql"))
+                .bind(s.id)
+                .bind(codec::encode(original)?)
+                .execute(&*tx)
+                .await
+                .map_err(|_| StoreError::Database)?;
+        }
         tx.commit().await.map_err(|_| StoreError::Database)?;
         Ok(s)
     }
@@ -491,6 +511,18 @@ async fn get(
 }
 async fn put(tx: &turso::Connection, actor: u64, s: &QualitySession) -> Result<(), StoreError> {
     let request = codec::encode(&s.request)?;
+    // Delete the old scoped UUID before the UPSERT replaces it, within the same
+    // save transaction. Current-ID revisions and live cut references survive.
+    query(include_str!(
+        "../sql/quality_media_intent_superseded_delete.sql"
+    ))
+    .bind(actor as i64)
+    .bind(s.target.bot_id())
+    .bind(s.target.chat_id())
+    .bind(s.id.to_string())
+    .execute(tx)
+    .await
+    .map_err(|_| StoreError::Database)?;
     query(include_str!("../sql/quality_put.sql"))
         .bind(actor as i64)
         .bind(s.target.bot_id())

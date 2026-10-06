@@ -35,6 +35,7 @@ import { runCutSegmentsScenarios } from './media-fixture/cut-segments-scenarios.
 import { runQualityScenarios } from './media-fixture/quality-scenarios.mjs';
 import { runCutQualityScenarios } from './media-fixture/cut-quality-scenarios.mjs';
 import { runQualityCutScenarios } from './media-fixture/quality-cut-scenarios.mjs';
+import { runDeferredMediaScenarios } from './media-fixture/deferred-media-scenarios.mjs';
 import { runPlainUrlScenarios } from './media-fixture/plain-url-scenarios.mjs';
 import { runUncacheScenarios } from './media-fixture/uncache-scenarios.mjs';
 import { runProxyScenarios } from './media-fixture/proxy-scenarios.mjs';
@@ -49,7 +50,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'provider-routing', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|provider-routing|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -713,7 +714,12 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
   if (scenario === 'all' || scenario === 'cookies') summaries.push(await runCookieScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'all' || scenario === 'cookie-uploads') summaries.push(await runCookieUploadScenarios({ ...commandContext, restartApp, cookieSecret, prepareLocalCookieFiles }));
   if (scenario === 'all' || scenario === 'cookie-urls') summaries.push(await runCookieUrlScenarios({ ...commandContext, restartApp, cookieSecret }));
-  if (scenario === 'all' || scenario === 'gallery' || scenario === 'provider-routing') {
+  if (scenario === 'deferred-media') {
+    gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image });
+    summaries.push(await runDeferredMediaScenarios({ ...commandContext, restartApp, proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}`,
+      restartGallery: async (enabled) => { galleryEnabled = enabled; galleryTrusted = true; proxyFixture.galleryPort = enabled ? gallerySource.port : undefined; await restartApp(); } }));
+  }
+    if (scenario === 'all' || scenario === 'gallery' || scenario === 'provider-routing') {
   providerSource = scenario === 'provider-routing' ? new ProviderRoutingSource({ mediaBytes, primaryBytes: playlistMedia[1], cookieSecret }) : undefined;
   gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image, providerResponse: providerSource ? (...args) => providerSource.response(...args) : undefined });
   const gallerySummary = await (scenario === 'provider-routing' ? runProviderRoutingScenarios : runGalleryScenarios)({ ...commandContext, gallerySource, mediaBytes, primaryBytes: playlistMedia[1], providerSource, cookieSecret,

@@ -70,6 +70,16 @@ impl DownloadService {
         message_id: i32,
         overrides: DownloadPreferenceOverrides,
     ) -> Result<TelegramSubmission, DownloadError> {
+        self.submit_telegram_context(request, message_id, overrides, None)
+            .await
+    }
+
+    pub(crate) fn validate_telegram_request(
+        &self,
+        request: &DownloadRequest,
+        message_id: i32,
+        overrides: &DownloadPreferenceOverrides,
+    ) -> Result<(), DownloadError> {
         if message_id <= 0 {
             return Err(DownloadError::InvalidInput);
         }
@@ -92,9 +102,24 @@ impl DownloadService {
             return Err(DownloadError::InvalidInput);
         }
         if request.media_mode() != MediaMode::Formats {
-            crate::profile::resolve_format_values(request.media_mode(), None, &overrides)
+            crate::profile::resolve_format_values(request.media_mode(), None, overrides)
                 .map_err(map_profile)?;
         }
+        Ok(())
+    }
+
+    pub(crate) async fn submit_telegram_context(
+        &self,
+        request: &DownloadRequest,
+        message_id: i32,
+        overrides: DownloadPreferenceOverrides,
+        telegram: Option<&yoink_storage::TelegramMediaAdmission>,
+    ) -> Result<TelegramSubmission, DownloadError> {
+        self.validate_telegram_request(request, message_id, &overrides)?;
+        let target = request
+            .target()
+            .copied()
+            .ok_or(DownloadError::InvalidInput)?;
         let intent_key = format!("tg:{}:{}:{}", target.bot_id(), target.chat_id(), message_id);
         self.authorize_request(request).await?;
         let intent = request.clone().with_preference_overrides(overrides.clone());
@@ -106,6 +131,13 @@ impl DownloadService {
         if request.media_mode() == MediaMode::Formats {
             if !private_owner || overrides != DownloadPreferenceOverrides::default() {
                 return Err(DownloadError::Denied);
+            }
+            if let Some(context) = telegram {
+                let identity = self.authorize_request(request).await?;
+                return self
+                    .admit_network_context(request, &intent_key, &identity, Some(context))
+                    .await
+                    .map(TelegramSubmission::Admitted);
             }
             return self
                 .submit_request(request, &intent_key)
@@ -135,11 +167,12 @@ impl DownloadService {
                 return Err(DownloadError::Conflict);
             }
         }
-        if let Some(admission) = self
-            .store
-            .replay_network_admission(&intent, &intent_key)
-            .await
-            .map_err(map_quality_error)?
+        if telegram.is_none()
+            && let Some(admission) = self
+                .store
+                .replay_network_admission(&intent, &intent_key)
+                .await
+                .map_err(map_quality_error)?
         {
             return Ok(TelegramSubmission::Admitted(admission));
         }
@@ -161,15 +194,21 @@ impl DownloadService {
                 crate::profile::resolve_format_values(request.media_mode(), Some(&saved), &check)
                     .map_err(map_profile)?;
                 let draft = request.clone().with_preference_overrides(overrides);
-                return self
+                let session = self
                     .store
-                    .quality_begin(request.actor_id(), target, message_id, &draft)
+                    .quality_begin_media(
+                        request.actor_id(),
+                        target,
+                        message_id,
+                        &draft,
+                        telegram.map(|c| &c.original),
+                    )
                     .await
-                    .map(|session| TelegramSubmission::Quality(Box::new(session)))
-                    .map_err(map_quality_error);
+                    .map_err(map_quality_error)?;
+                return Ok(TelegramSubmission::Quality(Box::new(session)));
             }
         }
-        self.submit_preferred_request(request, &intent_key, overrides)
+        self.submit_preferred_context(request, &intent_key, overrides, telegram)
             .await
             .map(TelegramSubmission::Admitted)
     }
@@ -211,7 +250,7 @@ impl DownloadService {
                 current.origin_message_id
             );
             return self
-                .submit_preferred_request(&original, &key, overrides)
+                .submit_quality_media(&original, &key, overrides, id, current.origin_message_id)
                 .await;
         }
         let s = self
@@ -227,7 +266,7 @@ impl DownloadService {
             s.origin_message_id
         );
         let admission = self
-            .submit_preferred_request(&original, &key, overrides)
+            .submit_quality_media(&original, &key, overrides, id, s.origin_message_id)
             .await?;
         self.store
             .quality_submitted(actor, target, id, s.revision, admission.operation_id)
@@ -235,6 +274,50 @@ impl DownloadService {
             .map_err(map_quality_error)?;
         Ok(admission)
     }
+    pub(crate) async fn submit_quality_media(
+        &self,
+        request: &DownloadRequest,
+        key: &str,
+        overrides: DownloadPreferenceOverrides,
+        id: Uuid,
+        message_id: i32,
+    ) -> Result<Admission, DownloadError> {
+        if let Some(original) = self
+            .store
+            .quality_media_intent(id)
+            .await
+            .map_err(map_quality_error)?
+        {
+            self.authorize_request(request).await?;
+            if let Some(admission) = self
+                .store
+                .replay_telegram_media(&original, key)
+                .await
+                .map_err(map_quality_error)?
+            {
+                return Ok(admission);
+            }
+            let target = request
+                .target()
+                .copied()
+                .ok_or(DownloadError::InvalidInput)?;
+            let expected = self
+                .store
+                .deferred_media_state(request.actor_id(), target)
+                .await
+                .map_err(map_quality_error)?;
+            let context = yoink_storage::TelegramMediaAdmission {
+                original,
+                message_id,
+                expected,
+            };
+            self.submit_preferred_context(request, key, overrides, Some(&context))
+                .await
+        } else {
+            self.submit_preferred_request(request, key, overrides).await
+        }
+    }
+
     pub async fn quality_cancel(
         &self,
         actor: u64,
