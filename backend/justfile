@@ -187,3 +187,21 @@ test-quota:
 
 check-quota:
     cargo clippy --locked --all-targets -p yoink-storage -p yoink-downloads -p yoink-server -p yoink-telegram -p yoink-i18n -- -D warnings
+
+# Focused content-policy tests; no deployment builds, services or production DBs.
+test-nsfw:
+    cargo test --locked --message-format short -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n nsfw
+
+# Existing isolated worker image, source mounted read-only; no host Python or network.
+test-nsfw-worker pattern='test_nsfw_metadata.py':
+    docker run --rm --pull never --network none --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-worker:experimental -B -m unittest discover -s /worker -p {{quote(pattern)}}
+
+check-nsfw:
+    cargo clippy --locked --all-targets -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n -- -D warnings
+
+format-nsfw:
+    cargo fmt -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n
+
+# Changed-crate regression suite, not coordinator workspace/build/deployment gates.
+test-nsfw-regression:
+    cargo test --locked --message-format short -p yoink-domain -p yoink-worker-protocol -p yoink-executor -p yoink-identity -p yoink-storage -p yoink-downloads -p yoink-http -p yoink-telegram -p yoink-i18n

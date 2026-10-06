@@ -1,0 +1,1 @@
+SELECT json_object('rowid',rowid,'operation_id',operation_id,'actor_id',actor_id,'bot_id',bot_id,'chat_id',chat_id,'message_id',message_id,'language',language,'last_text',last_text,'finished',finished,'next_attempt_at',next_attempt_at) AS snapshot FROM runtime_progress_notices ORDER BY rowid;

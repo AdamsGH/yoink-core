@@ -4860,6 +4860,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "yoink-domain",
  "yoink-worker-protocol",
 ]
 
@@ -4900,6 +4901,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "rand 0.8.8",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4907,9 +4909,11 @@ dependencies = [
  "thiserror",
  "tokio",
  "turso",
+ "url",
  "uuid",
  "yoink-access",
  "yoink-db",
+ "yoink-domain",
  "yoink-storage",
 ]
 
@@ -5052,6 +5056,7 @@ dependencies = [
  "thiserror",
  "url",
  "uuid",
+ "yoink-domain",
 ]
 
 [[package]]

@@ -73,6 +73,7 @@ mod formats_report_tests {
         let bytes = format!("{HEADER}137\tmp4\t1920\t1080\t29.970\th264\taac\thttps\n");
         std::fs::write(temp.path().join("formats.txt"), bytes.as_bytes()).unwrap();
         let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+            metadata: None,
             path: yoink_worker_protocol::ArtifactPath::parse("formats.txt").unwrap(),
             size_bytes: bytes.len() as u64,
             media_type: "text/plain".into(),
@@ -118,6 +119,7 @@ pub struct ValidatedArtifact {
     pub filename: String,
     pub media_type: String,
     pub size_bytes: u64,
+    pub metadata: Option<yoink_domain::ContentMetadata>,
 }
 
 impl ValidatedArtifact {
@@ -716,6 +718,7 @@ fn load_artifact(
             filename: "formats.txt".into(),
             media_type: "text/plain".into(),
             size_bytes: descriptor.size_bytes,
+            metadata: descriptor.metadata.clone(),
         });
     }
     let mut header = [0u8; MAX_SNIFF_BYTES];
@@ -822,6 +825,7 @@ fn load_artifact(
         filename: filename.into(),
         media_type: media_type.into(),
         size_bytes: descriptor.size_bytes,
+        metadata: descriptor.metadata.clone(),
     })
 }
 
@@ -1045,6 +1049,7 @@ mod tests {
             );
             std::fs::write(temp.path().join(&name), bytes.as_bytes()).unwrap();
             let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+                metadata: None,
                 path: yoink_worker_protocol::ArtifactPath::parse(&name).unwrap(),
                 size_bytes: bytes.len() as u64,
                 media_type: "text/x-ssa".into(),
@@ -1091,6 +1096,7 @@ mod tests {
         ] {
             std::fs::write(temp.path().join(name), bytes).unwrap();
             let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+                metadata: None,
                 path: yoink_worker_protocol::ArtifactPath::parse(name).unwrap(),
                 size_bytes: bytes.len() as u64,
                 media_type: mime.into(),
@@ -1108,6 +1114,7 @@ mod tests {
     #[test]
     fn artifact_debug_does_not_include_payload() {
         let artifact = ValidatedArtifact {
+            metadata: None,
             file: File::open("/dev/null").unwrap(),
             filename: "media.mp4".into(),
             media_type: "video/mp4".into(),
@@ -1235,6 +1242,7 @@ mod tests {
         source.set_len(1024 * 1024 * 1024).unwrap();
         drop(source);
         let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+            metadata: None,
             path: yoink_worker_protocol::ArtifactPath::parse("large.mp4").unwrap(),
             size_bytes: 1024 * 1024 * 1024,
             media_type: "video/mp4".into(),

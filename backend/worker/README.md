@@ -12,6 +12,14 @@ Source format reports require `media_mode: "formats"`; all other media-selection
 
 Adaptive VOD fixtures cover HLS MPEG-TS and separate-stream DASH downloads. yt-dlp retrieves segments through the guarded HTTP layer, with unavailable-fragment skipping disabled. FFmpeg/ffprobe can read downloaded local MPEG-TS, but cannot open HLS/DASH/concat manifests or use network protocols. `just test-media adaptive` verifies full-length video, extracted audio, cache/restart and failure before delivery for missing fragments, private redirects and private HLS keys. Live streams, successful encrypted playback and DRM are not covered.
 
+## Source prose and content policy
+
+Media descriptors also carry `metadata: {title, description, tags, categories}` from actual extractor info dictionaries. `content_metadata.py` supplies bounds, not NSFW classification: there are no rules, policy decisions, role claims, or trusted `is_nsfw` flags in the worker. The Rust protocol rejects unknown metadata fields and independently checks bounds. Metadata Debug output is redacted.
+
+Title is bounded to 2000 Unicode characters; description has the legacy 2000-character cap. Tags and categories each allow at most 100 strings of at most 128 characters. Multi-item batches conservatively retain the combined, deduplicated source prose for all outputs (including clips and gallery ZIPs). Aggregate overflow fails with `resource_limit`; it never silently drops a later item's classification evidence. Missing extractor metadata fails rather than claiming a safe result. Standalone subtitle descriptors carry the same source prose. Fixed-schema source format reports remain outside media-content classification.
+
+Rust retains this metadata with confirmed cached Telegram file IDs and reevaluates current rules and destination policy before each delivery unit. Old workers and caches lacking metadata cannot silently bypass the policy: old caches are misses/refetched, and fresh media without metadata is refused. See [native content policy](../docs/nsfw-policy.md).
+
 ## Isolation and networking
 
 The experimental runtime launches `/usr/local/bin/yoink-worker-launcher`, which requires Linux Landlock ABI 6 or newer. It grants write access only to the attempt workspace, read access to required runtime paths, and restricts signals and abstract Unix sockets. Unsupported kernels fail closed. This is filesystem and IPC confinement, not a kernel network sandbox.
@@ -46,12 +54,7 @@ just test-worker test_gallery_integration.py
 just test-worker test_proxy_tunnel.py
 just test-worker test_subtitle_engine.py
 just test-worker test_format_engine.py
+# Existing image only; does not rebuild a shared image tag:
+just test-nsfw-worker
+just test-nsfw-worker 'test_*.py'
 ```
-
-After rebuilding both images with `just build-media` and `just build-media-fixture`, `just test-worker-launcher` checks the exact default launcher and isolated Python imports inside the read-only, noexec, capability-dropped deployment profile. `just test-media` exercises real processing and native Bot API uploads under that same profile.
-
-`just test-media subtitles` exercises real generic-extractor track parsing, SRT/VTT document uploads, exact language/original-track selection, saved preference snapshots and cache recovery/restart. Missing or invalid tracks, chunked oversized text and private redirects fail without partial sends. Worker unit tests separately exercise automatic fallback using real yt-dlp selection over synthetic metadata. No live provider compatibility is claimed.
-
-`test_format_engine.py` exercises sanitized metadata mapping, metadata-only yt-dlp configuration, mode validation, playlist/live rejection, and row and byte ceilings. It uses synthetic extractor metadata and makes no live-provider compatibility claim.
-
-The gallery tests exercise the pinned gallery-dl download/write path, per-file and aggregate limits, partial-source failures, ZIP ordering and protocol-only subprocess stdout. `just test-media gallery` adds the unchanged Imgbox extractor, synthetic multi-page HTTPS source, native photo/document albums, mixed photo/ZIP sends, small-image cache recovery and durable partial delivery. The fixture checks both rejected untrusted TLS and successful trusted TLS. Its DNS and certificate overrides exist only in disposable test containers. Worker tests do not replace the Rust executor, confinement, native database or Bot API integration gates.

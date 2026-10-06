@@ -88,6 +88,63 @@ async fn snapshot_schema_survives_rebuild_migrations() {
             .map(|row| (row.try_get("name").unwrap(), row.try_get("sql").unwrap()))
             .collect()
     }
+    exec(
+        &store,
+        include_str!("../../yoink-storage/sql/test_content_policy_upgrade_fixture.sql"),
+    )
+    .await;
+    exec(
+        &store,
+        include_str!("../sql/test_content_policy_snapshot_failures.sql"),
+    )
+    .await;
+    async fn runtime_rows(store: &Store) -> Vec<Vec<String>> {
+        let mut result = Vec::new();
+        for sql in [
+            include_str!("../../yoink-storage/sql/test_content_policy_operations_rows.sql"),
+            include_str!("../../yoink-storage/sql/test_content_policy_units_rows.sql"),
+            include_str!("../../yoink-storage/sql/test_content_policy_notices_rows.sql"),
+        ] {
+            result.push(
+                query(sql)
+                    .fetch_all(store.database())
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|row| row.try_get("snapshot").unwrap())
+                    .collect(),
+            );
+        }
+        result
+    }
+    async fn failures(store: &Store) -> Vec<(String, Option<String>)> {
+        query(include_str!(
+            "../../yoink-storage/sql/test_content_policy_failures.sql"
+        ))
+        .fetch_all(store.database())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row.try_get("id").unwrap(),
+                row.try_get("content_failure").unwrap(),
+            )
+        })
+        .collect()
+    }
+    let before_rows = runtime_rows(&store).await;
+    let before_failures = failures(&store).await;
+    assert!(
+        before_failures
+            .iter()
+            .any(|(_, f)| f.as_deref() == Some("nsfw_blocked"))
+    );
+    assert!(
+        before_failures
+            .iter()
+            .any(|(_, f)| f.as_deref() == Some("nsfw_policy_unavailable"))
+    );
     let before = schema(&store).await;
     let destination = dir.path().join("snapshot.db");
     let path = destination.to_str().unwrap();
@@ -110,6 +167,8 @@ async fn snapshot_schema_survives_rebuild_migrations() {
         );
     }
     snapshot.verify_schema().await.unwrap();
+    assert_eq!(runtime_rows(&snapshot).await, before_rows);
+    assert_eq!(failures(&snapshot).await, before_failures);
     snapshot.close().await.unwrap();
     store.close().await.unwrap();
 }

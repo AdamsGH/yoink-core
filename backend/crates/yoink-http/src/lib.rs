@@ -4,6 +4,7 @@ mod admin;
 mod auth;
 mod groups;
 mod m2m;
+mod nsfw;
 pub use auth::{AuthService, AuthState};
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};

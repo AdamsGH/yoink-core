@@ -661,3 +661,47 @@ async fn cache_clear_rechecks_global_ban_before_advancing_watermark() {
     );
     disk.store.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn nsfw_cached_metadata_survives_disk_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = dir.path().join("nsfw.db");
+    let store = Store::open(&path, true, Duration::from_secs(2))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let request = request(73_020, 821, "https://example.com/metadata");
+    let claim = delivered_claim(&store, &request).await;
+    let metadata = yoink_domain::ContentMetadata {
+        title: "metadata-only-sensitive".into(),
+        description: "private prose".into(),
+        tags: vec!["tag".into()],
+        categories: vec!["category".into()],
+    };
+    let media = CachedMedia::new(CachedMediaKind::Video, "metadata-id".into(), 1024)
+        .unwrap()
+        .with_metadata(metadata.clone())
+        .unwrap();
+    assert!(
+        store
+            .publish_media_cache(&claim, &[media], Duration::from_secs(120))
+            .await
+            .unwrap()
+    );
+    drop(store);
+    let reopened = Store::open(&path, false, Duration::from_secs(2))
+        .await
+        .unwrap();
+    let batch = reopened
+        .lookup_media_cache(&request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(batch.media[0].metadata(), Some(&metadata));
+    assert!(!format!("{batch:?}").contains("private prose"));
+}

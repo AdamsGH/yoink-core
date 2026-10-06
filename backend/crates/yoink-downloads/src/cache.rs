@@ -20,7 +20,8 @@ pub(super) fn valid_cached_media(
         let size = item.size_bytes();
         // CachedMedia already rejects zero bytes. Valid PNGs and other confirmed
         // uploads can be smaller than 1 KiB, just like their fresh-upload path.
-        if size > limits.max_artifact_bytes
+        if item.metadata().is_none()
+            || size > limits.max_artifact_bytes
             || (send_as_file && item.kind() != CachedMediaKind::Document)
         {
             return false;
@@ -101,7 +102,10 @@ mod tests {
     }
 
     fn media(kind: CachedMediaKind, size: u64) -> CachedMedia {
-        CachedMedia::new(kind, "opaque-id".into(), size).unwrap()
+        CachedMedia::new(kind, "opaque-id".into(), size)
+            .unwrap()
+            .with_metadata(Default::default())
+            .unwrap()
     }
 
     #[test]

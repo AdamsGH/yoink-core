@@ -68,6 +68,7 @@ fn label(field: SettingField) -> Key {
         SettingField::GalleryZip => Key::SettingsGalleryZip,
         SettingField::SubtitleLanguage => Key::SettingsSubtitleLanguage,
         SettingField::SubtitleAutomatic => Key::SettingsSubtitleAutomatic,
+        SettingField::NsfwBlur => Key::SettingsNsfwBlur,
     }
 }
 

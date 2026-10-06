@@ -1,0 +1,1 @@
+INSERT INTO bot_settings(key,value,updated_at) VALUES('nsfw_rules_revision','1',CAST(unixepoch('subsec')*1000000 AS INTEGER)) ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(bot_settings.value AS INTEGER)+1 AS TEXT),updated_at=max(bot_settings.updated_at+1,excluded.updated_at);

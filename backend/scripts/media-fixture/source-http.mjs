@@ -104,6 +104,11 @@ export class SourceHttpFixture {
         this.#sendMedia(res);
         return;
       }
+      if (url.pathname === '/content-page.html') {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<html><head><title>Fixture sensitivecontent sample</title><meta name="description" content="A bounded classification fixture"></head><body><video controls src="/media?case=content-page"></video></body></html>');
+        return;
+      }
       if (url.pathname === '/playlist.html') {
         const count = Number(url.searchParams.get('count') ?? 2);
         if (!Number.isInteger(count) || count < 1 || count > 21) { res.writeHead(400); res.end(); return; }

@@ -45,6 +45,17 @@ pub(super) fn render(record: &OperationRecord, language: Language) -> String {
         record.delivered_message_id,
         language,
     );
+    if let Some(failure) = record.content_failure.as_deref() {
+        text.push_str(&translate(
+            language,
+            if failure == "nsfw_blocked" {
+                Key::NsfwBlocked
+            } else {
+                Key::NsfwPolicyUnavailable
+            },
+            &[],
+        ));
+    }
     if record.status == OperationStatus::Running {
         if let Some(stage) = record.progress_stage {
             let key = match stage {
@@ -194,10 +205,31 @@ pub(super) async fn run(bot: Bot, service: Option<DownloadService>, config: Prog
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nsfw_failures_are_durable_classified_and_localized() {
+        for (failure, en, ru) in [
+            (
+                "nsfw_blocked",
+                "NSFW content is not allowed",
+                "Контент NSFW запрещён",
+            ),
+            (
+                "nsfw_policy_unavailable",
+                "Content policy is unavailable",
+                "Политика контента недоступна",
+            ),
+        ] {
+            let mut record = record(OperationStatus::Failed);
+            record.content_failure = Some(failure.into());
+            assert!(render(&record, Language::English).contains(en));
+            assert!(render(&record, Language::Russian).contains(ru));
+        }
+    }
     use super::*;
 
     fn record(status: OperationStatus) -> OperationRecord {
         OperationRecord {
+            content_failure: None,
             operation_id: uuid::Uuid::nil(),
             actor_id: 42,
             target: None,

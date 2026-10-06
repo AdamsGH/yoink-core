@@ -17,6 +17,7 @@ pub struct CachedMedia {
     kind: CachedMediaKind,
     file_id: String,
     size_bytes: u64,
+    metadata: Option<crate::ContentMetadata>,
 }
 
 impl CachedMedia {
@@ -45,7 +46,22 @@ impl CachedMedia {
             kind,
             file_id,
             size_bytes,
+            metadata: None,
         })
+    }
+
+    pub fn with_metadata(
+        mut self,
+        metadata: crate::ContentMetadata,
+    ) -> Result<Self, CachedMediaError> {
+        if !metadata.valid() {
+            return Err(CachedMediaError::InvalidMetadata);
+        }
+        self.metadata = Some(metadata);
+        Ok(self)
+    }
+    pub fn metadata(&self) -> Option<&crate::ContentMetadata> {
+        self.metadata.as_ref()
     }
 
     pub const fn kind(&self) -> CachedMediaKind {
@@ -75,6 +91,8 @@ impl fmt::Debug for CachedMedia {
 /// Static validation failures for cached media.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum CachedMediaError {
+    #[error("cached content metadata is invalid")]
+    InvalidMetadata,
     #[error("cached media file ID is invalid")]
     InvalidFileId,
     #[error("cached media size is invalid")]

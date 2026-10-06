@@ -1,7 +1,7 @@
 //! Versioned wire contracts for isolated media/content executors.
 //!
-//! These are deliberately independent of domain types. Keep the JSON envelope
-//! versioned even when the application model evolves independently.
+//! Request envelopes remain independent of application intent and authorization.
+//! Shared bounded source prose carries no policy or trusted classification.
 //!
 //! Artifact paths are lexically constrained to relative paths. An executor/host
 //! MUST canonicalize each artifact beneath its assigned operation workspace
@@ -411,12 +411,18 @@ impl<'de> Deserialize<'de> for ArtifactPath {
 pub struct ArtifactDescriptor {
     pub path: ArtifactPath,
     pub size_bytes: u64,
-    /// MIME media type, e.g. "video/mp4". No executor-provided prose is carried.
+    /// Bounded prose only; Rust owns classification and authorization.
+    #[serde(default)]
+    pub metadata: Option<yoink_domain::ContentMetadata>,
+    /// MIME media type, e.g. "video/mp4".
     pub media_type: String,
 }
 
 impl ArtifactDescriptor {
     fn validate(&self) -> Result<(), ProtocolError> {
+        if self.metadata.as_ref().is_some_and(|m| !m.valid()) {
+            return Err(ProtocolError::InvalidEvent);
+        }
         let mut parts = self.media_type.split('/');
         let valid_token = |part: &str| {
             !part.is_empty()
@@ -566,6 +572,20 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ProtocolError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nsfw_source_metadata_bounds_and_no_worker_classification_field() {
+        let mut descriptor = ArtifactDescriptor {
+            path: ArtifactPath::parse("media.mp4").unwrap(),
+            size_bytes: 1,
+            media_type: "video/mp4".into(),
+            metadata: Some(yoink_domain::ContentMetadata::default()),
+        };
+        assert!(descriptor.validate().is_ok());
+        descriptor.metadata.as_mut().unwrap().description = "x".repeat(2001);
+        assert!(descriptor.validate().is_err());
+        let value = serde_json::json!({"path":"media.mp4","size_bytes":1,"media_type":"video/mp4","metadata":{"title":"safe","description":"","tags":[],"categories":[],"is_nsfw":false}});
+        assert!(serde_json::from_value::<ArtifactDescriptor>(value).is_err());
+    }
     use super::*;
 
     fn request() -> WorkerRequest {
@@ -599,6 +619,7 @@ mod tests {
 
         let source = event(WorkerEventKind::Completed {
             artifacts: vec![ArtifactDescriptor {
+                metadata: None,
                 path: ArtifactPath::parse("media/audio.m4a").unwrap(),
                 size_bytes: 42,
                 media_type: "audio/mp4".into(),
@@ -887,6 +908,7 @@ mod tests {
         };
         let complete = WorkerEventKind::Completed {
             artifacts: vec![ArtifactDescriptor {
+                metadata: None,
                 path: ArtifactPath::parse("result.bin").unwrap(),
                 size_bytes: 1,
                 media_type: "application/octet-stream".into(),

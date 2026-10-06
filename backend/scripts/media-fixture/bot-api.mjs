@@ -364,7 +364,7 @@ export class BotApiFixture {
     assert(Number.isSafeInteger(chat), 'media payload must carry chat_id');
     const threadId = data.message_thread_id === undefined ? undefined : Number(data.message_thread_id);
     const reply = typeof data.reply_parameters === 'string' ? JSON.parse(data.reply_parameters) : data.reply_parameters;
-    this.#calls.push({ method, status: this.#sendMode, cached: !!cachedFileId, uploadLength: filePart?.value.length ?? 0, chat_id: chat, message_thread_id: threadId, reply_to_message_id: reply?.message_id, receivedAt: performance.now() });
+    this.#calls.push({ method, status: this.#sendMode, cached: !!cachedFileId, uploadLength: filePart?.value.length ?? 0, chat_id: chat, message_thread_id: threadId, reply_to_message_id: reply?.message_id, has_spoiler: data.has_spoiler === true || data.has_spoiler === 'true', receivedAt: performance.now() });
     if (this.#sendMode === 'invalid-file-id-once') {
       assert(cachedFileId, 'invalid-ID fixture must target a cached send');
       this.#sendMode = 'success';
@@ -459,7 +459,7 @@ export class BotApiFixture {
     });
     assert.equal(used.size, files.size, 'album must not contain unreferenced files');
     if (cached) this.#cachedCalls++; else this.#uploadCalls++;
-    this.#calls.push({ method: 'sendmediagroup', status: this.#sendMode, cached, uploadLength: this.#lastGroupBytes.reduce((n, b) => n + b.length, 0), itemCount: media.length, chat_id: chat, message_thread_id: threadId, receivedAt: performance.now() });
+    this.#calls.push({ method: 'sendmediagroup', status: this.#sendMode, cached, uploadLength: this.#lastGroupBytes.reduce((n, b) => n + b.length, 0), itemCount: media.length, chat_id: chat, message_thread_id: threadId, has_spoilers: media.map(item => item.has_spoiler === true), receivedAt: performance.now() });
     if (this.#sendMode === 'socket-drop') { res.destroy(); return; }
     if (['api-error', 'api-ambiguous', 'rate-limit-once', 'invalid-file-id-once'].includes(this.#sendMode)) {
       const mode = this.#sendMode;

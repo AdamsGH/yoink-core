@@ -1,4 +1,7 @@
 [telegram]
+settings_nsfw_blur = "Private NSFW blur"
+nsfw_blocked = "\nNSFW content is not allowed in this group."
+nsfw_policy_unavailable = "\nContent policy is unavailable; media was not sent."
 menu_start = "Start using the bot"
 menu_help = "Show available commands"
 menu_status = "Runtime status"

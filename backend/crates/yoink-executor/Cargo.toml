@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+yoink-domain.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "fs", "sync"] }
 tokio-util.workspace = true
 yoink-worker-protocol.workspace = true

@@ -1,4 +1,7 @@
 [telegram]
+settings_nsfw_blur = "Размытие NSFW в личном чате"
+nsfw_blocked = "\nКонтент NSFW запрещён в этой группе."
+nsfw_policy_unavailable = "\nПолитика контента недоступна; медиа не отправлено."
 menu_start = "Начало работы"
 menu_help = "Доступные команды"
 menu_status = "Состояние бота"

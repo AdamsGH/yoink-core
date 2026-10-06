@@ -11,6 +11,7 @@ mod invalidation;
 mod language;
 pub mod m2m;
 mod membership;
+pub mod nsfw;
 mod profile;
 pub use language::LanguagePreference;
 pub use membership::{

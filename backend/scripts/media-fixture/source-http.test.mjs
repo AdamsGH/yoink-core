@@ -27,6 +27,22 @@ test('source fixture exposes bounded real playlist entries and an independent im
   assert.equal(fixture.error, undefined);
 });
 
+test('classification fixture keeps the NSFW keyword in metadata, not the URL', async t => {
+  const bytes = Buffer.alloc(128, 7);
+  const fixture = new SourceHttpFixture({ mediaBytes: bytes, cookieSecret: 'fixture' });
+  const port = await fixture.start();
+  t.after(() => fixture.close());
+  const url = `http://127.0.0.1:${port}/content-page.html?case=classification-cache`;
+  assert(!url.includes('sensitivecontent'));
+  const page = await fetch(url);
+  assert.equal(page.headers.get('content-type'), 'text/html');
+  const html = await page.text();
+  assert.match(html, /<title>Fixture sensitivecontent sample<\/title>/);
+  const media = await fetch(new URL(html.match(/src="([^"]+)"/)[1], url));
+  assert.equal(media.headers.get('content-type'), 'video/mp4');
+  assert.deepEqual(Buffer.from(await media.arrayBuffer()), bytes);
+});
+
 test('source fixture records cookie URL request headers and serves configurable bounded responses', async t => {
   const fixture = new SourceHttpFixture({ mediaBytes: Buffer.alloc(8), cookieSecret: 'fixture' });
   const port = await fixture.start();

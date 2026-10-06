@@ -604,6 +604,9 @@ impl Store {
                     .map_err(|_| StoreError::Database)?
                     .map(|v| u8::try_from(v).map_err(|_| StoreError::InvalidStoredData))
                     .transpose()?,
+                content_failure: row
+                    .try_get("content_failure")
+                    .map_err(|_| StoreError::InvalidStoredData)?,
                 progress_stage: row
                     .try_get::<Option<String>, _>("progress_stage")
                     .map_err(|_| StoreError::Database)?
@@ -849,6 +852,8 @@ impl Store {
         let reason = match reason {
             StopDeliveryReason::Cancel => "cancel",
             StopDeliveryReason::Denied => "denied",
+            StopDeliveryReason::NsfwBlocked => "nsfw_blocked",
+            StopDeliveryReason::NsfwPolicyUnavailable => "nsfw_policy_unavailable",
             StopDeliveryReason::Shutdown => "shutdown",
         };
         let mut connection = self
@@ -889,6 +894,8 @@ fn fenced_query(sql: &str, claim: &Claim) -> yoink_db::Query {
 pub enum StopDeliveryReason {
     Cancel,
     Denied,
+    NsfwBlocked,
+    NsfwPolicyUnavailable,
     Shutdown,
 }
 

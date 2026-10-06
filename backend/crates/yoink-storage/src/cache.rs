@@ -361,6 +361,7 @@ fn encode_media(media: &[CachedMedia]) -> Result<Value, StoreError> {
                 },
                 "file_id": item.file_id(),
                 "size_bytes": item.size_bytes(),
+                "metadata": item.metadata(),
             })
         })
         .collect();
@@ -388,7 +389,11 @@ fn decode_media(value: Value) -> Result<Vec<CachedMedia>, StoreError> {
         .iter()
         .map(|value| {
             let object = value.as_object().ok_or(StoreError::InvalidStoredData)?;
-            if object.len() != 3 {
+            if (object.len() != 3 && object.len() != 4)
+                || object.keys().any(|key| {
+                    !["kind", "file_id", "size_bytes", "metadata"].contains(&key.as_str())
+                })
+            {
                 return Err(StoreError::InvalidStoredData);
             }
             let kind = match object.get("kind").and_then(Value::as_str) {
@@ -406,8 +411,17 @@ fn decode_media(value: Value) -> Result<Vec<CachedMedia>, StoreError> {
                 .get("size_bytes")
                 .and_then(Value::as_u64)
                 .ok_or(StoreError::InvalidStoredData)?;
-            CachedMedia::new(kind, file_id.to_owned(), size_bytes)
-                .map_err(|_| StoreError::InvalidStoredData)
+            let media = CachedMedia::new(kind, file_id.to_owned(), size_bytes)
+                .map_err(|_| StoreError::InvalidStoredData)?;
+            match object.get("metadata") {
+                None | Some(Value::Null) => Ok(media),
+                Some(value) => media
+                    .with_metadata(
+                        serde_json::from_value(value.clone())
+                            .map_err(|_| StoreError::InvalidStoredData)?,
+                    )
+                    .map_err(|_| StoreError::InvalidStoredData),
+            }
         })
         .collect()
 }

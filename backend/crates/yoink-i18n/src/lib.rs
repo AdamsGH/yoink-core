@@ -44,6 +44,8 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    NsfwBlocked => "telegram.nsfw_blocked";
+    NsfwPolicyUnavailable => "telegram.nsfw_policy_unavailable";
     MenuStart => "telegram.menu_start";
     MenuHelp => "telegram.menu_help";
     MenuStatus => "telegram.menu_status";
@@ -125,6 +127,7 @@ define_keys! {
     SettingsGalleryZip => "telegram.settings_gallery_zip";
     SettingsSubtitleLanguage => "telegram.settings_subtitle_language";
     SettingsSubtitleAutomatic => "telegram.settings_subtitle_automatic";
+    SettingsNsfwBlur => "telegram.settings_nsfw_blur";
     SettingsOn => "telegram.settings_on";
     SettingsOff => "telegram.settings_off";
     SettingsBest => "telegram.settings_best";

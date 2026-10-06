@@ -133,11 +133,19 @@ fn input_file(artifact: DeliveryArtifact) -> InputFile {
     }
 }
 
-fn input_media(kind: MediaKind, artifact: DeliveryArtifact) -> InputMedia {
+fn input_media(kind: MediaKind, artifact: DeliveryArtifact, spoiler: bool) -> InputMedia {
     let file = input_file(artifact);
     match kind {
-        MediaKind::Photo => InputMedia::Photo(InputMediaPhoto::new(file)),
-        MediaKind::Video => InputMedia::Video(InputMediaVideo::new(file)),
+        MediaKind::Photo => {
+            let mut media = InputMediaPhoto::new(file);
+            media.has_spoiler = spoiler;
+            InputMedia::Photo(media)
+        }
+        MediaKind::Video => {
+            let mut media = InputMediaVideo::new(file);
+            media.has_spoiler = spoiler;
+            InputMedia::Video(media)
+        }
         MediaKind::Audio => InputMedia::Audio(InputMediaAudio::new(file)),
         MediaKind::Document => InputMedia::Document(InputMediaDocument::new(file)),
     }
@@ -196,6 +204,7 @@ async fn send_single(
     kind: MediaKind,
     artifact: DeliveryArtifact,
     thread: Option<ThreadId>,
+    spoiler: bool,
 ) -> Result<Message, RequestError> {
     let chat = ChatId(target.chat_id());
     let file = input_file(artifact);
@@ -215,8 +224,8 @@ async fn send_single(
         }};
     }
     match kind {
-        MediaKind::Photo => configure!(bot.send_photo(chat, file)),
-        MediaKind::Video => configure!(bot.send_video(chat, file)),
+        MediaKind::Photo => configure!(bot.send_photo(chat, file).has_spoiler(spoiler)),
+        MediaKind::Video => configure!(bot.send_video(chat, file).has_spoiler(spoiler)),
         MediaKind::Audio => configure!(bot.send_audio(chat, file)),
         MediaKind::Document => configure!(bot.send_document(chat, file)),
     }
@@ -228,12 +237,13 @@ async fn send_group(
     kinds: &[MediaKind],
     artifacts: Vec<DeliveryArtifact>,
     thread: Option<ThreadId>,
+    spoiler: bool,
 ) -> Result<Vec<Message>, RequestError> {
     let media: Vec<InputMedia> = kinds
         .iter()
         .copied()
         .zip(artifacts)
-        .map(|(kind, artifact)| input_media(kind, artifact))
+        .map(|(kind, artifact)| input_media(kind, artifact, spoiler))
         .collect();
     let mut request = bot.send_media_group(ChatId(target.chat_id()), media);
     if let Some(thread) = thread {
@@ -257,6 +267,15 @@ impl yoink_downloads::Delivery for TelegramDelivery {
         &self,
         target: DeliveryTarget,
         send_as_file: bool,
+        artifacts: Vec<DeliveryArtifact>,
+    ) -> DeliveryFuture<'_> {
+        self.deliver_with_policy(target, send_as_file, false, artifacts)
+    }
+    fn deliver_with_policy(
+        &self,
+        target: DeliveryTarget,
+        send_as_file: bool,
+        spoiler: bool,
         artifacts: Vec<DeliveryArtifact>,
     ) -> DeliveryFuture<'_> {
         let bot = self.bot.clone();
@@ -284,6 +303,9 @@ impl yoink_downloads::Delivery for TelegramDelivery {
                     .collect::<Vec<_>>();
                 preflight(&media_types, send_as_file)?
             };
+            if spoiler && target.chat_id() < 0 {
+                return Err(DeliveryError::Rejected);
+            }
             let thread = thread_id(target)?;
             if artifacts.len() == 1 {
                 let message = send_single(
@@ -295,12 +317,13 @@ impl yoink_downloads::Delivery for TelegramDelivery {
                         .next()
                         .ok_or(DeliveryError::Rejected)?,
                     thread,
+                    spoiler,
                 )
                 .await
                 .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
                 validate_messages(vec![message], &kinds, target.chat_id(), thread)
             } else {
-                let messages = send_group(&bot, target, &kinds, artifacts, thread)
+                let messages = send_group(&bot, target, &kinds, artifacts, thread, spoiler)
                     .await
                     .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
                 validate_messages(messages, &kinds, target.chat_id(), thread)
@@ -335,6 +358,35 @@ fn classify_delivery_error_for_origin(error: &RequestError, cached: bool) -> Del
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nsfw_spoiler_applies_only_to_supported_photo_video_input_media() {
+        for kind in [
+            MediaKind::Photo,
+            MediaKind::Video,
+            MediaKind::Audio,
+            MediaKind::Document,
+        ] {
+            let cached = yoink_domain::CachedMedia::new(
+                match kind {
+                    MediaKind::Photo => CachedMediaKind::Photo,
+                    MediaKind::Video => CachedMediaKind::Video,
+                    MediaKind::Audio => CachedMediaKind::Audio,
+                    MediaKind::Document => CachedMediaKind::Document,
+                },
+                "opaque_id".into(),
+                1024,
+            )
+            .unwrap();
+            let value =
+                serde_json::to_value(input_media(kind, DeliveryArtifact::Cached(cached), true))
+                    .unwrap();
+            if matches!(kind, MediaKind::Photo | MediaKind::Video) {
+                assert_eq!(value["has_spoiler"], true);
+            } else {
+                assert!(value.get("has_spoiler").is_none());
+            }
+        }
+    }
     use super::*;
 
     fn cached(kind: CachedMediaKind, id: &str, size: u64) -> DeliveryArtifact {

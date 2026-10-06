@@ -1,6 +1,6 @@
 -- One statement preserves unrelated fields and rechecks global blocking at the write boundary.
 INSERT INTO dl_user_settings
- (user_id, quality, codec, container, audio_codec, send_as_file, gallery_zip, subs_lang, subs_auto, created_at, updated_at)
+ (user_id, quality, codec, container, audio_codec, send_as_file, gallery_zip, subs_lang, subs_auto, nsfw_blur, created_at, updated_at)
 SELECT id,
  CASE WHEN ?2 = 'quality' THEN ?3 ELSE 'best' END,
  CASE WHEN ?2 = 'codec' THEN ?3 ELSE 'avc1' END,
@@ -10,6 +10,7 @@ SELECT id,
  CASE WHEN ?2 = 'gallery_zip' AND ?3 = 'true' THEN 1 ELSE 0 END,
  CASE WHEN ?2 = 'subs_lang' THEN ?3 ELSE 'en' END,
  CASE WHEN ?2 = 'subs_auto' AND ?3 = 'true' THEN 1 ELSE 0 END,
+ CASE WHEN ?2 = 'nsfw_blur' AND ?3 = 'false' THEN 0 ELSE 1 END,
  ?4, ?4
 FROM users
 WHERE id = ?1 AND (role IN ('user', 'moderator', 'admin', 'owner') OR (?6 = 1 AND role = 'restricted'))
@@ -24,5 +25,6 @@ ON CONFLICT(user_id) DO UPDATE SET
  gallery_zip = CASE WHEN ?2 = 'gallery_zip' THEN excluded.gallery_zip ELSE dl_user_settings.gallery_zip END,
  subs_lang = CASE WHEN ?2 = 'subs_lang' THEN excluded.subs_lang ELSE dl_user_settings.subs_lang END,
  subs_auto = CASE WHEN ?2 = 'subs_auto' THEN excluded.subs_auto ELSE dl_user_settings.subs_auto END,
+ nsfw_blur = CASE WHEN ?2 = 'nsfw_blur' THEN excluded.nsfw_blur ELSE dl_user_settings.nsfw_blur END,
  updated_at = max(excluded.updated_at, dl_user_settings.updated_at + 1)
 RETURNING user_id;

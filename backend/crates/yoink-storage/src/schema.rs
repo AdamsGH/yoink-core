@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 15] = [
+const MIGRATIONS: [Migration; 16] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -84,6 +84,11 @@ const MIGRATIONS: [Migration; 15] = [
     Migration {
         version: 15,
         sql: include_str!("../migrations-turso/0015_download_quotas.sql"),
+        expected_tables: 56,
+    },
+    Migration {
+        version: 16,
+        sql: include_str!("../migrations-turso/0016_content_policy.sql"),
         expected_tables: 56,
     },
 ];
@@ -333,6 +338,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn content_policy_rebuild_preserves_runtime_data_children_indexes_and_fks() {
+        let (_directory, store) = version_one_store().await;
+        {
+            let connection = store.database().connection().await.unwrap();
+            for migration in &MIGRATIONS[1..15] {
+                raw_sql(migration.sql).execute(&*connection).await.unwrap();
+                let fingerprint = schema_hash(&connection, migration.expected_tables)
+                    .await
+                    .unwrap();
+                query(include_str!("../sql/record_migration.sql"))
+                    .bind(migration.version)
+                    .bind(checksum(migration))
+                    .bind(fingerprint)
+                    .bind(chrono::Utc::now())
+                    .execute(&*connection)
+                    .await
+                    .unwrap();
+            }
+        }
+        raw_sql(include_str!(
+            "../sql/test_content_policy_upgrade_fixture.sql"
+        ))
+        .execute(store.database())
+        .await
+        .unwrap();
+        async fn rows(store: &Store, sql: &str) -> Vec<String> {
+            query(sql)
+                .fetch_all(store.database())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.try_get("snapshot").unwrap())
+                .collect()
+        }
+        async fn indexes(store: &Store) -> Vec<(String, Option<String>)> {
+            query(include_str!("../sql/test_content_policy_indexes.sql"))
+                .fetch_all(store.database())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.try_get("name").unwrap(), r.try_get("sql").unwrap()))
+                .collect()
+        }
+        let queries = [
+            include_str!("../sql/test_content_policy_operations_rows.sql"),
+            include_str!("../sql/test_content_policy_units_rows.sql"),
+            include_str!("../sql/test_content_policy_notices_rows.sql"),
+        ];
+        let mut before = Vec::new();
+        for sql in queries {
+            before.push(rows(&store, sql).await);
+        }
+        let before_indexes = indexes(&store).await;
+        assert_eq!(before[0].len(), 8);
+        assert_eq!(before[1].len(), 32);
+        assert_eq!(before[2].len(), 8);
+        assert_eq!(
+            before_indexes
+                .iter()
+                .filter(|(_, sql)| sql.is_some())
+                .count(),
+            6
+        );
+        store.migrate().await.unwrap();
+        store.migrate().await.unwrap();
+        store.verify_schema().await.unwrap();
+        for (sql, expected) in queries.into_iter().zip(&before) {
+            assert_eq!(&rows(&store, sql).await, expected);
+        }
+        assert_eq!(indexes(&store).await, before_indexes);
+        for row in query(include_str!("../sql/test_content_policy_failures.sql"))
+            .fetch_all(store.database())
+            .await
+            .unwrap()
+        {
+            assert_eq!(
+                row.try_get::<Option<String>, _>("content_failure").unwrap(),
+                None
+            );
+        }
+        for failure in ["nsfw_blocked", "nsfw_policy_unavailable"] {
+            query(include_str!("../sql/test_content_policy_set_failure.sql"))
+                .bind(failure)
+                .execute(store.database())
+                .await
+                .unwrap();
+        }
+        assert!(
+            query(include_str!("../sql/test_content_policy_set_failure.sql"))
+                .bind("invalid")
+                .execute(store.database())
+                .await
+                .is_err()
+        );
+        assert!(
+            raw_sql(include_str!("../sql/test_content_policy_update_parent.sql"))
+                .execute(store.database())
+                .await
+                .is_err(),
+            "parent updates must not orphan FK children"
+        );
+        raw_sql(include_str!("../sql/test_content_policy_delete_parent.sql"))
+            .execute(store.database())
+            .await
+            .unwrap();
+        assert_eq!(rows(&store, queries[0]).await.len(), 7);
+        assert_eq!(rows(&store, queries[1]).await.len(), 28);
+        assert_eq!(rows(&store, queries[2]).await.len(), 7);
+        store.verify_schema().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn quota_upgrade_preserves_operations_and_imported_counters_and_fingerprints_index() {
         let (_dir, store) = version_one_store().await;
         {
@@ -538,7 +655,7 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 15);
+        assert_eq!(versions.len(), 16);
         assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
         assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
         assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);

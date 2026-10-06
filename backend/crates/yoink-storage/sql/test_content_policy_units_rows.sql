@@ -1,0 +1,1 @@
+SELECT json_object('rowid',rowid,'operation_id',operation_id,'attempt',attempt,'ordinal',ordinal,'artifact_count',artifact_count,'status',status,'message_ids',message_ids,'created_at',created_at,'updated_at',updated_at) AS snapshot FROM runtime_delivery_units ORDER BY rowid;

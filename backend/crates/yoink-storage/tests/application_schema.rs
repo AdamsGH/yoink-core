@@ -52,7 +52,7 @@ async fn migration_is_idempotent_and_verification_is_read_only() {
         .unwrap()
         .try_get("count")
         .unwrap();
-    assert_eq!(version_count, 15);
+    assert_eq!(version_count, 16);
     let table_count: i64 = query(
         "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB '__turso_internal_*' AND name <> 'runtime_migrations'",
     ).fetch_one(fixture.database()).await.unwrap().try_get("count").unwrap();
@@ -101,7 +101,7 @@ async fn migration_and_verification_reject_runtime_ledger_drift_without_mutation
         .try_get("count")
         .unwrap();
     assert_eq!(unexpected_columns, 1);
-    assert_eq!(versions, 15);
+    assert_eq!(versions, 16);
 }
 
 #[tokio::test]

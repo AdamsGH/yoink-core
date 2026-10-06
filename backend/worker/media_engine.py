@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import tool_guard
+from content_metadata import MetadataCollector
 from failures import MediaFailure, classify_error
 from format_engine import download_format_report
 from subtitle_engine import download_subtitles
@@ -221,7 +222,7 @@ def _bounded_transfer_write(handle: Any, data: bytes, file_size: int, total_size
 
 def _gallery_download(url: str, workspace: Path, progress: Callable[[float], None],
                       cookie_file: str | None, proxy: str, max_bytes: int,
-                      max_total: int, max_items: int, timeout: int) -> None:
+                      max_total: int, max_items: int, timeout: int, metadata=None) -> None:
     try:
         from gallery_dl import config, job
         import builtins
@@ -280,6 +281,10 @@ def _gallery_download(url: str, workspace: Path, progress: Callable[[float], Non
         try:
             class StrictDownloadJob(job.DownloadJob):
                 failure = None
+                def handle_url(self, url, kwdict):
+                    if metadata is not None:
+                        metadata.add(kwdict)
+                    return super().handle_url(url, kwdict)
                 def dispatch(self, extractor):
                     try:
                         return super().dispatch(extractor)
@@ -372,6 +377,7 @@ def download_media(request: dict[str, Any], settings: Any,
     except ValueError as exc:
         raise MediaFailure("unsupported_source") from exc
     ffmpeg, ffprobe, wrapper_dir = _tools(workspace)
+    metadata = MetadataCollector()
     try:
         if cookie_text:
             if not cookie_text.startswith("# Netscape"):
@@ -382,7 +388,7 @@ def download_media(request: dict[str, Any], settings: Any,
         if mode == "image":
             if engine == "yt_dlp":
                 raise MediaFailure("unsupported_source")
-            _gallery_download(request["source_url"], workspace, emit_progress, cookie_file, proxy, max_bytes, max_total, max_items, socket_timeout)
+            _gallery_download(request["source_url"], workspace, emit_progress, cookie_file, proxy, max_bytes, max_total, max_items, socket_timeout, metadata)
         else:
             try:
                 import yt_dlp
@@ -395,6 +401,8 @@ def download_media(request: dict[str, Any], settings: Any,
                 def error(self, _message): pass
             downloaded_by_file: dict[str, int] = {}
             def hook(status: dict[str, Any]) -> None:
+                if status.get("status") == "finished" and isinstance(status.get("info_dict"), dict):
+                    metadata.add(status["info_dict"])
                 filename = str(status.get("filename") or "current")
                 current = int(status.get("downloaded_bytes") or 0)
                 downloaded_by_file[filename] = max(downloaded_by_file.get(filename, 0), current)
@@ -407,6 +415,8 @@ def download_media(request: dict[str, Any], settings: Any,
                 if status.get("status") == "downloading" and estimate:
                     emit_progress(min(70.0, downloaded * 70.0 / estimate))
             def match_filter(info, *, incomplete=False):
+                if not incomplete:
+                    metadata.add(info)
                 known_size = info.get("filesize") or info.get("filesize_approx")
                 if known_size is not None and int(known_size) > max_bytes:
                     raise MediaFailure("resource_limit")
@@ -520,7 +530,7 @@ def download_media(request: dict[str, Any], settings: Any,
             else:
                 probed, format_name = _probe(path, ffprobe, timeout)
                 media_type = _media_type(probed, format_name)
-            result.append({"path": path.name, "size_bytes": size, "media_type": media_type})
+            result.append({"path": path.name, "size_bytes": size, "media_type": media_type, "metadata": metadata.finish()})
         if not result:
             raise MediaFailure("invalid_media")
         emit_progress(100.0)

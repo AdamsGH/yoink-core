@@ -5,7 +5,7 @@ import { withRussianPreference } from './language-fixture.mjs';
 export async function runSettingsScenarios(context) {
   const { botApi, fixtureSql, sourcePort, waitFor, restartApp } = context;
   const h = commandHarness(context, 5000);
-  const fields = ['quality', 'codec', 'container', 'audio_codec', 'send_as_file', 'gallery_zip', 'subs_lang', 'subs_auto', 'updated_at'];
+  const fields = ['quality', 'codec', 'container', 'audio_codec', 'send_as_file', 'gallery_zip', 'subs_lang', 'subs_auto', 'nsfw_blur', 'updated_at'];
   const snapshot = () => fixtureSql(`SELECT json_object(${fields.map(f => `'${f}',${f}`).join(',')}) FROM dl_user_settings WHERE user_id=42`);
   const old = await snapshot();
   const role = await fixtureSql('SELECT role FROM users WHERE id=42');
@@ -35,7 +35,8 @@ export async function runSettingsScenarios(context) {
   try {
     const operations = await fixtureSql('SELECT count(*) FROM runtime_operations');
     let menu = await command('/settings');
-    assert.equal(menu.data.reply_markup.inline_keyboard.length, 8);
+    assert.deepEqual(menu.data.reply_markup.inline_keyboard.map(row => row[0].callback_data).sort(),
+      fields.filter(field => field !== 'updated_at').map(field => `prefs:${field}:_menu`).sort());
     assert(!JSON.stringify(menu).includes('proxy_url'));
     await click(menu, 'prefs:quality:_menu');
     const submenu = botApi.calls.filter(c => c.method === 'editmessagetext' && c.data.message_id === menu.messageId).at(-1);

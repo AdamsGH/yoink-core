@@ -27,6 +27,7 @@ import { runMenuScenarios } from './media-fixture/menu-scenarios.mjs';
 import { runGroupAdminScenarios } from './media-fixture/group-admin-scenarios.mjs';
 import { runMembershipScenarios } from './media-fixture/membership-scenarios.mjs';
 import { runQuotaScenarios } from './media-fixture/quota-scenarios.mjs';
+import { runNsfwScenarios } from './media-fixture/nsfw-scenarios.mjs';
 import { runCutScenarios } from './media-fixture/cut-scenarios.mjs';
 import { runCutSegmentsScenarios } from './media-fixture/cut-segments-scenarios.mjs';
 import { runQualityScenarios } from './media-fixture/quality-scenarios.mjs';
@@ -46,7 +47,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -193,7 +194,7 @@ async function launchApp() {
     '--env','YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT=/cookie-files/allowed',
     '--mount',`type=bind,source=${cookieFileDir},target=/cookie-files,readonly`,
     '--env','YOINK_RUST_TELEGRAM_ENABLED=true','--env',`YOINK_RUST_TELEGRAM_TOKEN=${token}`,'--env','YOINK_RUST_OWNER_ID=42',
-    ...(['admin', 'menus', 'group-admin', 'membership'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
+    ...(['admin', 'menus', 'group-admin', 'membership', 'nsfw'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
     '--env',`YOINK_RUST_TELEGRAM_GROUPS_ENABLED=${groupsEnabled}`,
     '--env',`YOINK_RUST_BOT_API_URL=http://127.0.0.1:${apiPort}`,'--env','TURSO_TMPDIR=/tmp/yoink-db','--env','TMPDIR=/tmp/yoink-db',
     '--env','YOINK_RUST_DATABASE_PATH=/state/private/state.db',
@@ -208,7 +209,7 @@ async function launchApp() {
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
-    ...(scenario === 'all' ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
+    ...(['all', 'nsfw'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
     '--entrypoint','yoink-fixture-server',fixtureImage]);
@@ -216,6 +217,10 @@ async function launchApp() {
     try { return (await nativeQuery('SELECT 1')).trim() === '1'; }
     catch (error) { if (error.code === 'ECONNREFUSED') return false; throw error; }
   }, 'native fixture SQL listener after launch');
+  await waitFor(async () => {
+    try { return (await fetch(`http://127.0.0.1:${appHttpPort}/health/ready`)).status === 200; }
+    catch (error) { if (error.cause?.code === 'ECONNREFUSED') return false; throw error; }
+  }, 'application readiness after launch');
 }
 async function stopApp() {
   if (!appContainerId) return;
@@ -668,6 +673,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'onboarding') summaries.push(await runOnboardingScenarios({ ...commandContext, restartApp }));
   if (scenario === 'quotas') summaries.push(await runQuotaScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'nsfw') summaries.push(await runNsfwScenarios({ ...commandContext, appHttpPort, telegramToken: token, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
   if (scenario === 'admin') summaries.push(await runAdminScenarios({ ...commandContext, restartApp, appHttpPort, authSecret: fixtureAuthSecret, telegramToken: token }));
 if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
   if (scenario === 'group-admin') summaries.push(await runGroupAdminScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));

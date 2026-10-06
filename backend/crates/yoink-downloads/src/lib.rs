@@ -60,6 +60,20 @@ impl std::fmt::Debug for DeliveredMedia {
 }
 
 pub trait Delivery: Send + Sync {
+    /// Adapters must explicitly support spoilers; never silently downgrade policy.
+    fn deliver_with_policy(
+        &self,
+        target: DeliveryTarget,
+        send_as_file: bool,
+        spoiler: bool,
+        artifacts: Vec<DeliveryArtifact>,
+    ) -> DeliveryFuture<'_> {
+        if spoiler {
+            Box::pin(async { Err(DeliveryError::Rejected) })
+        } else {
+            self.deliver(target, send_as_file, artifacts)
+        }
+    }
     fn bot_id(&self) -> i64;
     fn deliver(
         &self,
@@ -699,6 +713,13 @@ impl DownloadService {
             .iter()
             .map(|artifact| cache_metadata(artifact, send_as_file))
             .collect::<Vec<_>>();
+        let content_metadata = artifacts
+            .iter()
+            .map(|artifact| match artifact {
+                DeliveryArtifact::Upload(upload) => upload.metadata.clone(),
+                DeliveryArtifact::Cached(cached) => cached.metadata().cloned(),
+            })
+            .collect::<Option<Vec<_>>>();
         let units = plan_delivery_units(&artifacts, send_as_file);
         let mut artifacts: Vec<Option<DeliveryArtifact>> =
             artifacts.into_iter().map(Some).collect();
@@ -798,6 +819,38 @@ impl DownloadService {
                     break;
                 }
             }
+            let decision = if is_formats {
+                Ok(yoink_identity::nsfw::ContentDecision {
+                    blocked: false,
+                    spoiler: false,
+                })
+            } else if let Some(metadata) = content_metadata.as_ref() {
+                self.identities
+                    .content_policy(
+                        claim.request.actor_id() as i64,
+                        target.chat_id(),
+                        claim.request.source_url().as_str(),
+                        metadata,
+                    )
+                    .await
+            } else {
+                Err(yoink_identity::admin::AdminError::Unavailable)
+            };
+            let spoiler = match decision {
+                Ok(decision) if !decision.blocked => decision.spoiler,
+                outcome => {
+                    self.stop_delivery(
+                        &claim,
+                        if outcome.is_ok() {
+                            yoink_storage::StopDeliveryReason::NsfwBlocked
+                        } else {
+                            yoink_storage::StopDeliveryReason::NsfwPolicyUnavailable
+                        },
+                    )
+                    .await?;
+                    break;
+                }
+            };
             if !self
                 .store
                 .begin_delivery_unit(&claim, ordinal, unit.len() as u32)
@@ -810,9 +863,12 @@ impl DownloadService {
                 .iter()
                 .filter_map(|index| artifacts[*index].take())
                 .collect();
-            let delivery =
-                self.delivery
-                    .deliver(target, claim.request.params().send_as_file(), media);
+            let delivery = self.delivery.deliver_with_policy(
+                target,
+                claim.request.params().send_as_file(),
+                spoiler,
+                media,
+            );
             tokio::pin!(delivery);
             let deadline = time::sleep(self.config.delivery_timeout);
             tokio::pin!(deadline);
@@ -967,6 +1023,12 @@ impl DownloadService {
             && confirmed_file_ids.len() == source_metadata.len()
             && confirmed_file_ids.len() == artifacts.len()
             && let Some(media) = cache::build_cached_media(&source_metadata, confirmed_file_ids)
+            && let Some(metadata) = content_metadata
+            && let Some(media) = media
+                .into_iter()
+                .zip(metadata)
+                .map(|(item, metadata)| item.with_metadata(metadata).ok())
+                .collect::<Option<Vec<_>>>()
             && self
                 .store
                 .publish_media_cache(&claim, &media, self.config.cache_ttl)

@@ -15,10 +15,11 @@ pub enum SettingField {
     GalleryZip,
     SubtitleLanguage,
     SubtitleAutomatic,
+    NsfwBlur,
 }
 
 impl SettingField {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Quality,
         Self::Codec,
         Self::Container,
@@ -27,6 +28,7 @@ impl SettingField {
         Self::GalleryZip,
         Self::SubtitleLanguage,
         Self::SubtitleAutomatic,
+        Self::NsfwBlur,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -38,6 +40,7 @@ impl SettingField {
             Self::GalleryZip => "gallery_zip",
             Self::SubtitleLanguage => "subs_lang",
             Self::SubtitleAutomatic => "subs_auto",
+            Self::NsfwBlur => "nsfw_blur",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -51,7 +54,9 @@ impl SettingField {
             Self::Codec => &["avc1", "av01", "vp09"],
             Self::Container => &["mp4", "mkv"],
             Self::AudioCodec => &["best", "mp4a", "opus", "mp3"],
-            Self::SendAsFile | Self::GalleryZip | Self::SubtitleAutomatic => &["false", "true"],
+            Self::SendAsFile | Self::GalleryZip | Self::SubtitleAutomatic | Self::NsfwBlur => {
+                &["false", "true"]
+            }
             Self::SubtitleLanguage => &["en", "ru", "de", "fr", "es", "zh-Hans"],
         }
     }
@@ -118,7 +123,9 @@ impl DownloadService {
         }
         Ok(EditableSettings {
             values: fields,
-            revision: row.try_get(8).map_err(|_| DownloadError::Database)?,
+            revision: row
+                .try_get(SettingField::ALL.len())
+                .map_err(|_| DownloadError::Database)?,
         })
     }
 

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from content_metadata import bounded_metadata
 from failures import MediaFailure
 
 # Text is decoded for validation, so bound it independently of the media-file budget.
@@ -171,5 +172,5 @@ def download_subtitles(request: dict[str, Any], base_options: dict[str, Any], wo
             path.write_bytes(data)
             media_type = ("text/vtt" if extension == "vtt" else
                           "text/x-ssa" if extension in ("ass", "ssa") else "application/x-subrip")
-            result.append({"path": path.name, "size_bytes": len(data), "media_type": media_type})
+            result.append({"path": path.name, "size_bytes": len(data), "media_type": media_type, "metadata": bounded_metadata(info)})
     return result
