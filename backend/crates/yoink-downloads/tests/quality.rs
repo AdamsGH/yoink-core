@@ -53,7 +53,11 @@ async fn setup() -> (tempfile::TempDir, Arc<Store>, DownloadService) {
         .await
         .unwrap();
     let store = Arc::new(store);
-    let service = service_for(Arc::clone(&store), workspace, Some(ACTOR as i64));
+    yoink_db::raw_sql("UPDATE users SET role='user' WHERE id=42")
+        .execute(store.database())
+        .await
+        .unwrap();
+    let service = service_for(Arc::clone(&store), workspace, Some(43));
     (dir, store, service)
 }
 
@@ -170,6 +174,10 @@ async fn quality_cut_service_replays_link_without_admission_and_survives_reopen(
         .await
         .unwrap(),
     );
+    yoink_db::raw_sql("UPDATE users SET role='user' WHERE id=42")
+        .execute(reopened.database())
+        .await
+        .unwrap();
     let service = service_for(
         Arc::clone(&reopened),
         dir.path().join("workspace"),
@@ -183,7 +191,7 @@ async fn quality_cut_service_replays_link_without_admission_and_survives_reopen(
 }
 
 #[tokio::test]
-async fn quality_cut_service_auth_matrix_denies_non_owner_wrong_chat_bot_thread_and_ban() {
+async fn quality_cut_service_auth_matrix_denies_revoked_role_wrong_chat_bot_thread_and_ban() {
     let (_dir, store, service) = setup().await;
     ask(&store).await;
     let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
@@ -214,6 +222,10 @@ async fn quality_cut_service_auth_matrix_denies_non_owner_wrong_chat_bot_thread_
             Err(DownloadError::Denied)
         );
     }
+    yoink_db::raw_sql("UPDATE users SET role='restricted' WHERE id=42")
+        .execute(store.database())
+        .await
+        .unwrap();
     let non_owner = service_for(Arc::clone(&store), _dir.path().join("workspace"), None);
     assert_eq!(
         non_owner
@@ -221,6 +233,10 @@ async fn quality_cut_service_auth_matrix_denies_non_owner_wrong_chat_bot_thread_
             .await,
         Err(DownloadError::Denied)
     );
+    yoink_db::raw_sql("UPDATE users SET role='user' WHERE id=42")
+        .execute(store.database())
+        .await
+        .unwrap();
     yoink_db::query(include_str!("sql/language_ban.sql"))
         .bind(ACTOR as i64)
         .execute(store.database())
@@ -947,7 +963,7 @@ async fn audio_quality_replay_and_actions_recheck_ban_private_chat_and_current_b
 }
 
 #[tokio::test]
-async fn audio_crash_recovery_reopens_frozen_request_and_rechecks_configured_owner() {
+async fn audio_crash_recovery_reopens_frozen_request_and_rechecks_current_role() {
     let (dir, store, service) = setup().await;
     ask(&store).await;
     let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
@@ -1006,6 +1022,10 @@ async fn audio_crash_recovery_reopens_frozen_request_and_rechecks_configured_own
         .unwrap(),
     );
     reopened.migrate().await.unwrap();
+    yoink_db::raw_sql("UPDATE users SET role='restricted' WHERE id=42")
+        .execute(reopened.database())
+        .await
+        .unwrap();
     let foreign_owner = service_for(
         Arc::clone(&reopened),
         dir.path().join("workspace"),
@@ -1099,5 +1119,214 @@ async fn audio_crash_recovery_reopens_frozen_request_and_rechecks_configured_own
             )
             .await,
         Err(DownloadError::Denied)
+    );
+}
+
+#[tokio::test]
+async fn ordinary_user_settings_selected_format_and_ask_keep_credentials_and_other_actor_isolated()
+{
+    use yoink_downloads::{SettingChange, SettingField};
+    let (_dir, store, service) = setup().await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
+    let other = service
+        .settings(43, DeliveryTarget::new(BOT, 43, None, None).unwrap())
+        .await
+        .unwrap();
+    for (field, value) in [
+        (SettingField::Quality, "360"),
+        (SettingField::Codec, "avc1"),
+        (SettingField::Container, "mp4"),
+        (SettingField::AudioCodec, "mp3"),
+        (SettingField::SendAsFile, "false"),
+        (SettingField::GalleryZip, "false"),
+        (SettingField::SubtitleLanguage, "en"),
+        (SettingField::SubtitleAutomatic, "false"),
+        (SettingField::NsfwBlur, "true"),
+    ] {
+        let revision = service.settings(ACTOR, target).await.unwrap().revision;
+        service
+            .change_setting(
+                ACTOR,
+                target,
+                SettingChange::new(field, value).unwrap(),
+                Some(revision),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .change_setting(
+                    ACTOR,
+                    target,
+                    SettingChange::new(field, value).unwrap(),
+                    Some(revision)
+                )
+                .await,
+            Err(DownloadError::Conflict)
+        );
+    }
+    assert_eq!(
+        service
+            .settings(43, DeliveryTarget::new(BOT, 43, None, None).unwrap())
+            .await
+            .unwrap(),
+        other
+    );
+    assert_eq!(
+        service.proxy_settings(ACTOR, target).await.unwrap_err(),
+        DownloadError::Denied
+    );
+    assert_eq!(
+        service
+            .personal_cookies(ACTOR, target, None)
+            .await
+            .unwrap_err(),
+        DownloadError::Denied
+    );
+    assert_eq!(
+        service
+            .clear_media_cache(ACTOR, target, 2900, URL)
+            .await
+            .unwrap_err(),
+        DownloadError::Denied
+    );
+    let TelegramSubmission::Admitted(selected) = service
+        .submit_telegram_request(
+            &request(URL, 2901),
+            2901,
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("saved height must admit");
+    };
+    assert_eq!(
+        persisted_request(&store, selected.operation_id).await["params"]["max_height"],
+        360
+    );
+    service
+        .change_setting(
+            ACTOR,
+            target,
+            SettingChange::new(SettingField::Quality, "ask").unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let TelegramSubmission::Quality(draft) = service
+        .submit_telegram_request(
+            &request(URL, 2902),
+            2902,
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("saved ask must prompt");
+    };
+    assert!(
+        service
+            .quality_current(43, DeliveryTarget::new(BOT, 43, None, None).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .quality_confirm(
+                43,
+                DeliveryTarget::new(BOT, 43, None, None).unwrap(),
+                draft.id,
+                draft.revision,
+                QualityChoice::Best
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        service
+            .quality_current(ACTOR, target)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        draft.id
+    );
+}
+
+#[tokio::test]
+async fn dialog_write_lock_rechecks_revocation_even_after_a_valid_service_read() {
+    let (_dir, store, service) = setup().await;
+    let target = DeliveryTarget::new(BOT, ACTOR as i64, None, None).unwrap();
+    ask(&store).await;
+    let TelegramSubmission::Quality(draft) = service
+        .submit_telegram_request(
+            &request(URL, 2950),
+            2950,
+            DownloadPreferenceOverrides::default(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("ask prompt");
+    };
+    let cut = service
+        .cut_begin(ACTOR, target, 2951, URL, None)
+        .await
+        .unwrap();
+    let protected =
+        Store::from_database(store.database().clone()).with_dialog_authorization(Some(43));
+    for role in ["restricted", "banned"] {
+        yoink_db::query("UPDATE users SET role=?1 WHERE id=42")
+            .bind(role)
+            .execute(store.database())
+            .await
+            .unwrap();
+        assert_eq!(
+            protected
+                .quality_claim(ACTOR, target, draft.id, draft.revision, QualityChoice::Best)
+                .await,
+            Err(yoink_storage::StoreError::Unauthorized)
+        );
+        assert_eq!(
+            protected
+                .quality_cut(ACTOR, target, draft.id, draft.revision)
+                .await,
+            Err(yoink_storage::StoreError::Unauthorized)
+        );
+        assert_eq!(
+            store.quality_current(ACTOR, target).await.unwrap().unwrap(),
+            *draft
+        );
+        assert_eq!(
+            protected.cut_input(ACTOR, target, 2952, 0.2, true).await,
+            Err(yoink_storage::StoreError::Unauthorized)
+        );
+        assert_eq!(
+            store.cut_current(ACTOR, target).await.unwrap().unwrap(),
+            cut
+        );
+    }
+    yoink_db::raw_sql("UPDATE users SET role='user' WHERE id=42")
+        .execute(store.database())
+        .await
+        .unwrap();
+    yoink_db::query(include_str!("sql/language_ban.sql"))
+        .bind(ACTOR as i64)
+        .execute(store.database())
+        .await
+        .unwrap();
+    let owner = Store::from_database(store.database().clone())
+        .with_dialog_authorization(Some(ACTOR as i64));
+    assert_eq!(
+        owner
+            .quality_claim(ACTOR, target, draft.id, draft.revision, QualityChoice::Best)
+            .await,
+        Err(yoink_storage::StoreError::Unauthorized)
+    );
+    assert_eq!(
+        owner.cut_input(ACTOR, target, 2952, 0.2, true).await,
+        Err(yoink_storage::StoreError::Unauthorized)
     );
 }

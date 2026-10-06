@@ -151,6 +151,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         if let Some(row) = get(&tx, actor, target).await? {
             let old = decode(row)?;
             if message_id <= old.last_message_id {
@@ -217,6 +218,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let Some(row) = get(&tx, actor, target).await? else {
             tx.commit().await.map_err(|_| StoreError::Database)?;
             return Ok(None);
@@ -282,6 +284,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         if !matches!(s.stage, CutStage::Ready | CutStage::Quality) {
             return Err(StoreError::Conflict);
@@ -338,6 +341,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         if !matches!(s.stage, CutStage::Ready | CutStage::Quality) {
             return Err(StoreError::Conflict);
@@ -377,6 +381,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         if !matches!(s.stage, CutStage::Ready | CutStage::Quality) {
             return Err(StoreError::Conflict);
@@ -418,6 +423,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         if !matches!(s.stage, CutStage::Start | CutStage::End) || s.clips.is_empty() {
             return Err(StoreError::Conflict);
@@ -449,6 +455,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         if s.stage == CutStage::Cancelled {
             tx.commit().await.map_err(|_| StoreError::Database)?;
@@ -497,6 +504,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         match s.stage {
             CutStage::Ready => s.stage = CutStage::Confirming,
@@ -527,6 +535,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         if s.stage != CutStage::Ready {
             return Err(StoreError::Conflict);
@@ -557,6 +566,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require_choice_replay(&tx, actor, target, id, revision).await?;
         if matches!(s.stage, CutStage::Confirming | CutStage::Submitted)
             && s.selected == Some(choice)
@@ -592,6 +602,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = require(&tx, actor, target, id, revision).await?;
         if s.stage == CutStage::Submitted {
             if s.operation_id == Some(operation_id) {

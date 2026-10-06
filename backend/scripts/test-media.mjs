@@ -21,6 +21,7 @@ import { createAdaptiveSource } from './media-fixture/adaptive-source.mjs';
 import { runAdaptiveScenarios } from './media-fixture/adaptive-scenarios.mjs';
 import { FormatSource } from './media-fixture/format-source.mjs';
 import { runFormatScenarios } from './media-fixture/format-scenarios.mjs';
+import { runPrivateUserScenarios } from './media-fixture/private-user-scenarios.mjs';
 import { runSettingsScenarios } from './media-fixture/settings-scenarios.mjs';
 import { runLanguageScenarios } from './media-fixture/language-scenarios.mjs';
 import { runOnboardingScenarios } from './media-fixture/onboarding-scenarios.mjs';
@@ -50,7 +51,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'private-user', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|private-user|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -227,7 +228,7 @@ async function launchApp() {
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
-    ...(['all', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
+    ...(['all', 'private-user', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
     ...(scenario === 'provider-routing' ? ['--env','YOINK_RUST_DOWNLOAD_MAX_BYTES=65536','--env','YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES=196608','--env','YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=1'] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
@@ -693,6 +694,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'adaptive') summaries.push(await runAdaptiveScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'formats') summaries.push(await runFormatScenarios({ ...commandContext, restartApp, cookieSecret, proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
+  if (scenario === 'private-user') summaries.push(await runPrivateUserScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'settings') summaries.push(await runSettingsScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'onboarding') summaries.push(await runOnboardingScenarios({ ...commandContext, restartApp }));

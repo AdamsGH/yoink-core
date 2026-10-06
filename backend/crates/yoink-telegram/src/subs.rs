@@ -191,7 +191,6 @@ pub(super) async fn handle_command(
 
 fn authorized(query: &CallbackQuery, message: &Message, identity: TelegramIdentity) -> bool {
     !query.from.is_bot
-        && query.from.id.0 == identity.owner_id
         && message.chat.is_private()
         && message.chat.id.0 > 0
         && message.chat.id.0 as u64 == query.from.id.0
@@ -411,9 +410,9 @@ mod tests {
     }
 
     #[test]
-    fn callback_authorization_requires_owner_private_non_thread_user_and_current_bot_message() {
+    fn callback_authorization_requires_actor_private_non_thread_user_and_current_bot_message() {
         let identity = TelegramIdentity {
-            owner_id: 42,
+            owner_id: 99,
             bot_id: 123,
             groups_enabled: false,
             identity_enabled: false,
@@ -434,7 +433,7 @@ mod tests {
         let mut cases = Vec::new();
         let mut changed = query_json.clone();
         changed["from"]["id"] = 43.into();
-        cases.push((changed, message_json.clone())); // non-owner
+        cases.push((changed, message_json.clone())); // cross-user
         let mut changed = query_json.clone();
         changed["from"]["is_bot"] = true.into();
         cases.push((changed, message_json.clone())); // current bot as callback actor

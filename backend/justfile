@@ -256,3 +256,16 @@ test-deferred-media: check-build-space
 check-deferred-media: check-build-space
     cargo clippy --locked --all-targets -p yoink-storage -p yoink-downloads -p yoink-telegram -p yoink-i18n -- -D warnings
     node scripts/build-resources.mjs check
+
+# Focused ordinary-user media fixture contracts; no images or providers.
+test-private-user-fixture: check-build-space
+    node --test scripts/media-fixture/private-user.test.mjs
+    node --check scripts/media-fixture/private-user-scenarios.mjs
+    node --check scripts/media-fixture/menu-scenarios.mjs
+    node --check scripts/media-fixture/format-scenarios.mjs
+    node --check scripts/media-fixture/onboarding-scenarios.mjs
+    node --check scripts/test-media.mjs
+
+# Existing coordinator-built images only; disposable DB and fake Bot API.
+test-private-user-media: check-build-space
+    node scripts/test-media.mjs private-user

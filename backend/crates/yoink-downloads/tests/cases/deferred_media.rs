@@ -35,6 +35,10 @@ async fn audio_image_one_shot_video_reset_and_original_replay() {
         },
     )
     .await;
+    yoink_db::raw_sql("UPDATE users SET role='user' WHERE id=42")
+        .execute(store.database())
+        .await
+        .unwrap();
     for (index, mode) in [MediaMode::Audio, MediaMode::Image].into_iter().enumerate() {
         let id = 100 + index as i32 * 10;
         service
@@ -487,8 +491,12 @@ async fn capacity_rejection_preserves_intent() {
     );
 }
 #[tokio::test]
-async fn owner_quality_draft_preserves_arm_until_confirmation_and_replay() {
-    let (_dir, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
+async fn user_quality_draft_preserves_arm_until_confirmation_and_replay() {
+    let (_dir, store, service) = setup_with_owner(Some(43)).await;
+    yoink_db::raw_sql("UPDATE users SET role='user' WHERE id=42")
+        .execute(store.database())
+        .await
+        .unwrap();
     let change =
         yoink_downloads::SettingChange::new(yoink_downloads::SettingField::Quality, "ask").unwrap();
     service
@@ -827,8 +835,12 @@ async fn superseded_quality_original_is_removed_without_losing_operation_replay(
 }
 
 #[tokio::test]
-async fn superseded_quality_cut_original_still_supports_admission_and_replay() {
-    let (_dir, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
+async fn user_superseded_quality_cut_original_still_supports_admission_and_replay() {
+    let (_dir, store, service) = setup_with_owner(Some(43)).await;
+    yoink_db::raw_sql("UPDATE users SET role='user' WHERE id=42")
+        .execute(store.database())
+        .await
+        .unwrap();
     let change =
         yoink_downloads::SettingChange::new(yoink_downloads::SettingField::Quality, "ask").unwrap();
     service

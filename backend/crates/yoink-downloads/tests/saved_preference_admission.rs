@@ -176,7 +176,7 @@ async fn cut_confirmation_replays_frozen_preferences_and_checks_authorization() 
 }
 
 #[tokio::test]
-async fn formats_submission_ignores_saved_quality_and_enforces_private_owner_target() {
+async fn formats_submission_ignores_saved_quality_and_enforces_private_actor_target() {
     use yoink_downloads::TelegramSubmission;
 
     let (_directory, store, service) = setup_with_owner(Some(ACTOR as i64)).await;
@@ -280,14 +280,14 @@ async fn formats_submission_ignores_saved_quality_and_enforces_private_owner_tar
             .unwrap_err(),
         DownloadError::Denied
     );
-    // A stored owner role does not open the experimental command without configured ownership.
+    // Configured ownership is not required for authorized actor-private formats.
     let (_unconfigured_directory, _unconfigured_store, unconfigured_service) = setup().await;
-    assert_eq!(
+    assert!(
         unconfigured_service
-            .submit_request(&request, "formats-unconfigured-owner")
+            .submit_request(&request, "formats-authorized-user")
             .await
-            .unwrap_err(),
-        DownloadError::Denied
+            .unwrap()
+            .created
     );
     let wrong_bot_request = DownloadRequest::new(
         ACTOR,

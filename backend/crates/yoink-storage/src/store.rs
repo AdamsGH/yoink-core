@@ -19,6 +19,7 @@ pub struct Store {
     pub(crate) database: Database,
     quota_limits: QuotaLimits,
     quota_owner_id: Option<i64>,
+    dialog_authorization: Option<Option<i64>>,
 }
 
 impl Store {
@@ -41,6 +42,7 @@ impl Store {
             database,
             quota_limits: QuotaLimits::default(),
             quota_owner_id: None,
+            dialog_authorization: None,
         }
     }
 
@@ -58,6 +60,32 @@ impl Store {
         self.quota_limits = limits;
         self.quota_owner_id = owner_id;
         Ok(self)
+    }
+
+    pub fn with_dialog_authorization(mut self, owner: Option<i64>) -> Self {
+        self.dialog_authorization = Some(owner);
+        self
+    }
+
+    // Runtime dialog mutations recheck current role and ban under the write lock.
+    pub(crate) async fn authorize_dialog(
+        &self,
+        tx: &Transaction<'_>,
+        actor: u64,
+    ) -> Result<(), StoreError> {
+        if let Some(owner) = self.dialog_authorization
+            && query(include_str!("../sql/deferred_media_authorize.sql"))
+                .bind(actor as i64)
+                .bind(Utc::now())
+                .bind(owner == Some(actor as i64))
+                .fetch_optional(&**tx)
+                .await
+                .map_err(|_| StoreError::Database)?
+                .is_none()
+        {
+            return Err(StoreError::Unauthorized);
+        }
+        Ok(())
     }
 
     pub async fn migrate(&self) -> Result<(), StoreError> {

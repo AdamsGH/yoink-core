@@ -448,7 +448,6 @@ pub(super) async fn handle_command(
 fn authorized(query: &CallbackQuery, message: &Message, identity: TelegramIdentity) -> bool {
     callback_context_allowed(
         !query.from.is_bot,
-        query.from.id.0 == identity.owner_id,
         message.chat.is_private(),
         message.chat.id.0 > 0 && message.chat.id.0 as u64 == query.from.id.0,
         message.thread_id.is_none(),
@@ -462,20 +461,13 @@ fn authorized(query: &CallbackQuery, message: &Message, identity: TelegramIdenti
 
 fn callback_context_allowed(
     from_human: bool,
-    owner: bool,
     private: bool,
     chat_matches_sender: bool,
     no_thread: bool,
     no_sender_chat: bool,
     sent_by_this_bot: bool,
 ) -> bool {
-    from_human
-        && owner
-        && private
-        && chat_matches_sender
-        && no_thread
-        && no_sender_chat
-        && sent_by_this_bot
+    from_human && private && chat_matches_sender && no_thread && no_sender_chat && sent_by_this_bot
 }
 
 pub(super) async fn handle_callback(
@@ -1009,16 +1001,16 @@ mod tests {
     }
 
     #[test]
-    fn callback_context_requires_owner_private_bot_message_without_thread_or_sender_chat() {
-        let allowed = [true; 7];
+    fn callback_context_requires_actor_private_bot_message_without_thread_or_sender_chat() {
+        let allowed = [true; 6];
         assert!(callback_context_allowed(
-            allowed[0], allowed[1], allowed[2], allowed[3], allowed[4], allowed[5], allowed[6]
+            allowed[0], allowed[1], allowed[2], allowed[3], allowed[4], allowed[5]
         ));
         for rejected in 0..allowed.len() {
             let mut context = allowed;
             context[rejected] = false;
             assert!(!callback_context_allowed(
-                context[0], context[1], context[2], context[3], context[4], context[5], context[6]
+                context[0], context[1], context[2], context[3], context[4], context[5]
             ));
         }
     }

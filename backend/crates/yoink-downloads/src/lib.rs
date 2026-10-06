@@ -278,6 +278,7 @@ impl DownloadService {
         // or a flag in a DownloadRequest. All admission paths share this Store view.
         let store = Arc::new(
             Store::from_database(store.database().clone())
+                .with_dialog_authorization(identities.configured_owner_id())
                 .with_quotas(config.quotas, identities.configured_owner_id())
                 .map_err(|_| DownloadError::InvalidConfig)?,
         );
@@ -511,14 +512,11 @@ impl DownloadService {
         request: &DownloadRequest,
     ) -> Result<yoink_identity::IdentitySnapshot, DownloadError> {
         if request.media_mode() == DomainMediaMode::Formats
-            && (!self
-                .identities
-                .is_configured_owner(request.actor_id() as i64)
-                || request.target().is_none_or(|target| {
-                    target.bot_id() != self.delivery.bot_id()
-                        || target.chat_id() != request.actor_id() as i64
-                        || target.thread_id().is_some()
-                }))
+            && request.target().is_none_or(|target| {
+                target.bot_id() != self.delivery.bot_id()
+                    || target.chat_id() != request.actor_id() as i64
+                    || target.thread_id().is_some()
+            })
         {
             return Err(DownloadError::Denied);
         }

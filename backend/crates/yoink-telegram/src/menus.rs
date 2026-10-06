@@ -73,6 +73,8 @@ const PRIVATE_CONTROLS: &[(&str, Key)] = &[
     ("settings", Key::MenuSettings),
     ("format", Key::MenuSettings),
     ("quality", Key::MenuQuality),
+];
+const OWNER_CONTROLS: &[(&str, Key)] = &[
     ("proxy", Key::MenuProxy),
     ("uncache", Key::MenuUncache),
     ("cookie", Key::MenuCookie),
@@ -91,11 +93,12 @@ fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
             entries.push(("lang", Key::MenuLang));
         }
         entries.extend_from_slice(MEDIA);
-        if access.owner || access.group {
-            entries.extend_from_slice(EXTENDED);
-        }
-        if access.owner && !access.group {
+        entries.extend_from_slice(EXTENDED);
+        if !access.group {
             entries.extend_from_slice(PRIVATE_CONTROLS);
+            if access.owner {
+                entries.extend_from_slice(OWNER_CONTROLS);
+            }
         }
     }
     entries

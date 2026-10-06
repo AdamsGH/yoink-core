@@ -27,12 +27,7 @@ fn map_quality_error(error: StoreError) -> DownloadError {
 
 impl DownloadService {
     fn authorize_quality(&self, actor: u64, target: DeliveryTarget) -> Result<(), DownloadError> {
-        if !self
-            .identities
-            .is_configured_owner(i64::try_from(actor).map_err(|_| DownloadError::Denied)?)
-            || target.chat_id() <= 0
-            || target.chat_id() as u64 != actor
-            || target.thread_id().is_some()
+        if target.chat_id() <= 0 || target.chat_id() as u64 != actor || target.thread_id().is_some()
         {
             return Err(DownloadError::Denied);
         }
@@ -123,13 +118,10 @@ impl DownloadService {
         let intent_key = format!("tg:{}:{}:{}", target.bot_id(), target.chat_id(), message_id);
         self.authorize_request(request).await?;
         let intent = request.clone().with_preference_overrides(overrides.clone());
-        let private_owner = self
-            .identities
-            .is_configured_owner(request.actor_id() as i64)
-            && target.chat_id() == request.actor_id() as i64
-            && target.thread_id().is_none();
+        let private_actor =
+            target.chat_id() == request.actor_id() as i64 && target.thread_id().is_none();
         if request.media_mode() == MediaMode::Formats {
-            if !private_owner || overrides != DownloadPreferenceOverrides::default() {
+            if !private_actor || overrides != DownloadPreferenceOverrides::default() {
                 return Err(DownloadError::Denied);
             }
             if let Some(context) = telegram {
@@ -144,10 +136,10 @@ impl DownloadService {
                 .await
                 .map(TelegramSubmission::Admitted);
         }
-        let private_owner_video = private_owner && request.media_mode() == MediaMode::Video;
-        // Quality state exists only for the owner-private interactive flow. Group submissions
+        let private_actor_video = private_actor && request.media_mode() == MediaMode::Video;
+        // Quality state is scoped to the authorized actor-private interactive flow. Group submissions
         // retain the ordinary admission path and never query private quality state.
-        if private_owner
+        if private_actor
             && let Some(current) = self
                 .store
                 .quality_current(request.actor_id(), target)
@@ -176,7 +168,7 @@ impl DownloadService {
         {
             return Ok(TelegramSubmission::Admitted(admission));
         }
-        if private_owner_video && overrides.max_height.is_none() {
+        if private_actor_video && overrides.max_height.is_none() {
             let mut check = overrides.clone();
             check.max_height = Some(None);
             let saved = self

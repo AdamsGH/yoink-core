@@ -103,7 +103,7 @@ export async function runFormatScenarios(context) {
       assert.equal(await count(), operations);
     }
     const silence = botApi.calls.length, operations = await count(), requests = source.requests.length;
-    botApi.enqueue(43, 43, `/list ${url}`);
+    botApi.enqueue(43, 42, `/list ${url}`);
     botApi.enqueue(42, -10042, `/list ${url}`);
     botApi.enqueue(42, 42, `/list@foreign_bot ${url}`);
     // A supported barrier guarantees the preceding updates were dispatched.

@@ -16,12 +16,7 @@ use crate::{DownloadError, DownloadService, map_store};
 
 impl DownloadService {
     async fn authorize_cut(&self, actor: u64, target: DeliveryTarget) -> Result<(), DownloadError> {
-        if !self
-            .identities
-            .is_configured_owner(i64::try_from(actor).map_err(|_| DownloadError::Denied)?)
-            || target.chat_id() <= 0
-            || target.chat_id() as u64 != actor
-            || target.thread_id().is_some()
+        if target.chat_id() <= 0 || target.chat_id() as u64 != actor || target.thread_id().is_some()
         {
             return Err(DownloadError::Denied);
         }

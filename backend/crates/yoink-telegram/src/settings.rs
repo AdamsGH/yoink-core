@@ -324,7 +324,6 @@ pub(super) async fn handle_callback(
         return Ok(());
     };
     if query.from.is_bot
-        || (query.from.id.0 != identity.owner_id && !data.starts_with("nsfw:"))
         || !message.chat.is_private()
         || message.chat.id.0 <= 0
         || message.chat.id.0 as u64 != query.from.id.0

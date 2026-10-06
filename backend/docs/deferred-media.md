@@ -7,7 +7,7 @@ an earlier audio/image arm. Immediate URL commands retain their explicit mode.
 Groups require a URL and never write or read this private arm. No expiry is added.
 
 Migration 18 adds a private actor/bot/chat watermark with a nullable pending mode,
-original Telegram operation intents, and original owner-quality draft intents.
+original Telegram operation intents, and original actor-private quality draft intents.
 The watermark survives consumption: duplicate/older commands cannot re-arm or
 replace newer commands. An older URL cannot consume a newer command. A successful
 new explicit URL admission clears only obsolete intent, not a command newer than
@@ -27,7 +27,7 @@ Replay checks the original raw Telegram request before pending state/preferences
 are consulted. The existing ordinary admission comparison remains unchanged for
 non-Telegram calls and pre-migration operations. Quality dialogs keep the original
 Telegram intent durably and do not consume an arm until successful admission;
-the existing owner-only callbacks, choices, cut handoff and cancel fences remain.
+the existing actor-private callbacks, choices, cut handoff and cancel fences remain. Authorized ordinary users and the configured owner use the same caller-owned workflow.
 Superseding a quality draft removes its original unless a surviving cut still uses
 that UUID. Cut cancellation or replacement removes the outgoing original only when
 neither a current quality draft nor a replayable cut needs it. Both removals occur

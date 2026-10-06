@@ -687,8 +687,7 @@ pub(super) async fn handle_callback(
         answer_alert(&bot, query.id, translate(language, Key::ErrorDenied, &[])).await;
         return Ok(());
     };
-    let valid_owner = !query.from.is_bot
-        && query.from.id.0 == identity.owner_id
+    let valid_actor = !query.from.is_bot
         && message.chat.is_private()
         && message.chat.id.0 > 0
         && message.chat.id.0 as u64 == query.from.id.0
@@ -698,7 +697,7 @@ pub(super) async fn handle_callback(
             .from
             .as_ref()
             .is_some_and(|u| u.is_bot && u.id.0 == identity.bot_id);
-    if !valid_owner {
+    if !valid_actor {
         answer_alert(&bot, query.id, translate(language, Key::ErrorDenied, &[])).await;
         return Ok(());
     }

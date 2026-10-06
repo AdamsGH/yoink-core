@@ -22,7 +22,7 @@ export async function runOnboardingScenarios(context) {
     await policy('open');
     const welcome = await send(openActor, '/start');
     assert.match(welcome.data.text, /download|video|audio/i);
-    assert.doesNotMatch(welcome.data.text, /\/cookie|\/proxy|\/cut|\/quality|\/uncache|\/formats|\/status(?:\s|$)|\/runtime/i);
+    assert.doesNotMatch(welcome.data.text, /\/cookie|\/proxy|\/uncache|\/status(?:\s|$)|\/runtime/i);
     assert.match(await row(openActor), /^user\|/);
     assert.equal(await fixtureSql(`SELECT first_name FROM users WHERE id=${openActor}`), 'Fixture');
     await fixtureSql(`UPDATE users SET language='ru',theme='mocha' WHERE id=${openActor}`);
@@ -86,17 +86,16 @@ export async function runOnboardingScenarios(context) {
     const settings = await fixtureSql(`SELECT * FROM dl_user_settings WHERE user_id=${openActor}`);
     const controlStart = botApi.calls.length;
     for (const command of [
-      `/list http://127.0.0.1:${sourcePort}/media?case=ordinary-list-denied`,
-      '/settings', '/status', '/quality', '/cut', '/uncache', '/proxy', '/cookie',
+      '/status', '/uncache', '/proxy', '/cookie',
     ]) {
       botApi.enqueue(openActor, openActor, command, messageId++);
     }
     await send(openActor, '/help');
-    assert.equal(await operations(), controlCount, 'ordinary users cannot admit owner-only format discovery or controls');
+    assert.equal(await operations(), controlCount, 'ordinary users cannot admit credential or admin operations');
     assert.equal(await fixtureSql('SELECT * FROM cookies ORDER BY id'), cookies);
     assert.equal(await fixtureSql(`SELECT * FROM dl_user_settings WHERE user_id=${openActor}`), settings);
     const controlReplies = botApi.calls.slice(controlStart).filter(c => c.method === 'sendmessage');
-    assert.equal(controlReplies.length, 1, 'ordinary-user format and owner-control commands must be silent');
+    assert.equal(controlReplies.length, 1, 'ordinary-user credential and admin commands must be silent');
     assert(!botApi.calls.slice(controlStart).some(c => c.data?.reply_markup), 'owner-private controls must not expose menus');
     assert.equal(await fixtureSql(`SELECT count(*) FROM runtime_cut_sessions WHERE actor_id=${openActor}`), '0');
 

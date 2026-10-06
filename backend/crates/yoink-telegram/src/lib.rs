@@ -635,37 +635,15 @@ fn private_access_for_role(role: &str, actor: u64, configured_owner: u64) -> Pri
     }
 }
 
-fn owner_only_command(command: &Command, text: &str) -> bool {
+fn owner_only_command(command: &Command, _text: &str) -> bool {
     matches!(
         command,
         Command::Status
-            | Command::Settings(_)
-            | Command::Quality(_)
-            | Command::Subs
             | Command::Proxy(_)
             | Command::Uncache(_)
             | Command::Cookie(_)
             | Command::CookieUrl(_)
-    ) || matches!(
-        command,
-        Command::Media(media)
-            if (media.mode != DomainMediaMode::Video
-                && media.mode != DomainMediaMode::Audio
-                && media.mode != DomainMediaMode::Image)
-                || media.clip.is_some()
-                || media.playlist.is_some()
-                || media.overrides != DownloadPreferenceOverrides::default()
-    ) || text.split_whitespace().next().is_some_and(|word| {
-        matches!(
-            word.split('@')
-                .next()
-                .unwrap_or_default()
-                .trim_start_matches('/')
-                .to_ascii_lowercase()
-                .as_str(),
-            "cut" | "list"
-        )
-    })
+    )
 }
 
 fn translate(language: Language, key: Key, parameters: &[(&str, &str)]) -> String {
@@ -954,17 +932,16 @@ async fn handle_message(
     {
         return Ok(());
     }
-    if (!private || is_owner)
-        && cut::try_handle_message(
-            &bot,
-            &message,
-            &bot_username,
-            actor_id,
-            target,
-            downloads.as_ref(),
-            language,
-        )
-        .await
+    if cut::try_handle_message(
+        &bot,
+        &message,
+        &bot_username,
+        actor_id,
+        target,
+        downloads.as_ref(),
+        language,
+    )
+    .await
     {
         return Ok(());
     }
@@ -975,9 +952,6 @@ async fn handle_message(
             None => return Ok(()),
             Some(Err(())) => Command::InvalidUrl,
             Some(Ok(plain_url::Action::Download(media))) => Command::Media(media),
-            Some(Ok(plain_url::Action::AskEnd { .. })) if private && !is_owner => {
-                return Ok(());
-            }
             Some(Ok(plain_url::Action::AskEnd { media, start })) => {
                 // The parser only offers a dialog in a private chat. Its storage,
                 // authorization and recovery are shared with explicit /cut.
@@ -1124,7 +1098,10 @@ async fn handle_message(
         return Ok(());
     }
     if let Command::Subs = command {
-        if target.chat_id() > 0 && actor_id == identity.owner_id && message.thread_id.is_none() {
+        if target.chat_id() > 0
+            && target.chat_id() as u64 == actor_id
+            && message.thread_id.is_none()
+        {
             subs::handle_command(
                 &bot,
                 &message,
@@ -1573,9 +1550,6 @@ mod tests {
             for text in [&enabled, &basic, &pending] {
                 for forbidden in [
                     "/status",
-                    "/list",
-                    "/cut",
-                    "/quality",
                     "/uncache",
                     "/cookie",
                     "/proxy",
@@ -1588,31 +1562,46 @@ mod tests {
             assert!(enabled.contains("/video"));
             assert!(enabled.contains("/audio"));
             assert!(enabled.contains("/image"));
+            for supported in [
+                "/settings",
+                "/format",
+                "/quality",
+                "/list",
+                "/cut",
+                "/playlist",
+                "/subs",
+            ] {
+                assert!(enabled.contains(supported));
+            }
             assert!(basic.contains("/start"));
         }
     }
 
     #[test]
-    fn private_control_dispatch_is_owner_only() {
+    fn private_control_dispatch_keeps_only_credentials_and_admin_owner_only() {
         let text_and_commands = [
             ("/status", Command::Status),
-            ("/settings", Command::Settings(settings::Action::Menu)),
-            ("/quality", Command::Quality(true)),
             ("/proxy", Command::Proxy(proxy::Action::Menu)),
             ("/uncache https://example.test", Command::Uncache(None)),
             ("/cookie", Command::Cookie(cookie::Action::List(None))),
-            (
-                "/list https://example.test",
-                Command::Media(
-                    media_command::parse("list", &["https://example.test"])
-                        .unwrap()
-                        .unwrap(),
-                ),
-            ),
-            ("/cut", Command::Invalid),
         ];
         for (text, command) in text_and_commands {
             assert!(owner_only_command(&command, text), "{text}");
+        }
+        for text in [
+            "/settings",
+            "/format",
+            "/quality",
+            "/subs",
+            "/cut",
+            "/list https://example.test",
+            "/playlist https://example.test",
+            "/video https://example.test --quality 360",
+        ] {
+            assert!(!owner_only_command(
+                &parse_command(text, "yoink_bot").unwrap(),
+                text
+            ));
         }
         assert!(!owner_only_command(
             &Command::Lang(lang::Action::Menu),

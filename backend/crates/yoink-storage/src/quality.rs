@@ -131,6 +131,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let row = query(include_str!("../sql/quality_get_for_target.sql"))
             .bind(actor as i64)
             .bind(target.bot_id())
@@ -292,6 +293,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let old = query(
             "SELECT * FROM runtime_quality_sessions WHERE actor_id=?1 AND bot_id=?2 AND chat_id=?3",
         )
@@ -362,6 +364,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = get(&tx, actor, target, id, revision).await?;
         if s.stage == QualityStage::Confirming
             && s.selected == Some(choice)
@@ -396,6 +399,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = get(&tx, actor, target, id, revision).await?;
         if s.stage == QualityStage::Cancelled && revision == s.revision - 1 {
             tx.commit().await.map_err(|_| StoreError::Database)?;
@@ -427,6 +431,7 @@ impl Store {
         let tx = Transaction::new(&mut conn, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
+        self.authorize_dialog(&tx, actor).await?;
         let mut s = get(&tx, actor, target, id, revision).await?;
         if s.stage == QualityStage::Submitted && s.operation_id == Some(operation) {
             tx.commit().await.map_err(|_| StoreError::Database)?;
@@ -444,7 +449,7 @@ impl Store {
     }
 }
 // Structural selections belong to the original request. Format overrides remain
-// separate until the owner chooses a height and the service resolves preferences.
+// separate until the actor chooses a height and the service resolves preferences.
 fn is_quality_draft(request: &DownloadRequest) -> bool {
     let params = request.params();
     let defaults = DownloadParams::default()
