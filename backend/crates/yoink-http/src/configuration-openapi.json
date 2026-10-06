@@ -1,0 +1,310 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Yoink native core configuration",
+    "version": "1",
+    "description": "Core configuration contracts. Product API documentation is not included."
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/bot-settings": {
+      "get": {
+        "summary": "Read bot settings including imported keys (admin/owner)",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid input; detail identifies the incompatible setting"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Partial core bot-settings update (owner)",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid input; detail identifies the incompatible setting"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "bot_access_mode": {
+                    "enum": [
+                      "open",
+                      "approved_only",
+                      null
+                    ]
+                  },
+                  "browser_cookies_min_role": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "inline_storage_chat_id": {
+                    "type": [
+                      "integer",
+                      "string",
+                      "null"
+                    ],
+                    "description": "Negative Telegram chat ID; decimal strings accepted. Null leaves existing value unchanged."
+                  },
+                  "inline_storage_thread_id": {
+                    "type": [
+                      "integer",
+                      "string",
+                      "null"
+                    ],
+                    "description": "Positive thread ID; decimal strings accepted. Null leaves existing value unchanged."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "summary": "Read personal language and theme",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid input; detail identifies the incompatible setting"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update personal settings",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid input; detail identifies the incompatible setting"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "language": {
+                    "enum": [
+                      "en",
+                      "ru",
+                      null
+                    ]
+                  },
+                  "theme": {
+                    "enum": [
+                      "latte",
+                      "frappe",
+                      "macchiato",
+                      "mocha",
+                      null
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bot-settings/tag-map": {
+      "get": {
+        "summary": "Read tag mapping (admin/owner)",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid input; detail identifies the incompatible setting"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "put": {
+        "summary": "Replace tag mapping (owner)",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid input; detail identifies the incompatible setting"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "tag",
+                    "features"
+                  ],
+                  "properties": {
+                    "tag": {
+                      "type": "string"
+                    },
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bot-settings/available-features": {
+      "get": {
+        "summary": "Read available features (admin/owner)",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid input; detail identifies the incompatible setting"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/threads/status": {
+      "get": {
+        "summary": "Read user-mode session availability (admin/owner)",
+        "responses": {
+          "200": {
+            "description": "Native runtime returns available: false"
+          },
+          "403": {
+            "description": "Current role or ban denies access"
+          }
+        }
+      }
+    },
+    "/api/v1/threads/scan/{group_id}": {
+      "post": {
+        "summary": "Scan topics (owner); native user-session adapter unavailable",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": -1
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "description": "Current role or ban denies access"
+          },
+          "422": {
+            "description": "Invalid group ID"
+          },
+          "503": {
+            "description": "Native user-mode session adapter unavailable"
+          }
+        }
+      }
+    }
+  }
+}

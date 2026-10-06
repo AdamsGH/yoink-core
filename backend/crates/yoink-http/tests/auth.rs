@@ -1391,3 +1391,189 @@ async fn rejection_and_body_limit_responses_keep_security_headers() {
     );
     store.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn core_configuration_frontend_strings_defaults_atomic_validation_and_stale_roles() {
+    let (_directory, store, app) = fixture(false).await;
+    let owner = access_token(&app, 42).await;
+    let user = access_token(&app, 43).await;
+    let uri = "/api/v1/bot-settings";
+    let (status, defaults) = request(&app, "GET", uri, Some(&owner), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(defaults["inline_storage_chat_id"].is_null());
+    let body = json!({"inline_storage_chat_id":"-100123", "inline_storage_thread_id":"42"});
+    assert_eq!(
+        request(&app, "PATCH", uri, Some(&user), body.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&app, "PATCH", uri, Some(&owner), body).await,
+        (StatusCode::OK, json!({"ok":true}))
+    );
+    let saved = request(&app, "GET", uri, Some(&owner), Value::Null).await.1;
+    assert_eq!(saved["inline_storage_chat_id"], "-100123");
+    for body in [
+        json!({"inline_storage_chat_id":"-100456", "inline_storage_thread_id":true}),
+        json!({"unknown":null}),
+    ] {
+        let (status, error) = request(&app, "PATCH", uri, Some(&owner), body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_ne!(error["detail"], "Invalid request");
+        assert_eq!(
+            request(&app, "GET", uri, Some(&owner), Value::Null).await.1,
+            saved
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "PATCH",
+            uri,
+            Some(&owner),
+            json!({"inline_storage_chat_id":null})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&app, "GET", uri, Some(&owner), Value::Null).await.1,
+        saved
+    );
+    // A previously minted owner token cannot bypass a database ban.
+    let connection = store.database().connection().await.unwrap();
+    yoink_db::query(include_str!("sql/configuration_ban_owner.sql"))
+        .execute(&*connection)
+        .await
+        .unwrap();
+    drop(connection);
+    assert_eq!(
+        request(
+            &app,
+            "PATCH",
+            uri,
+            Some(&owner),
+            json!({"bot_access_mode":"approved_only"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn configuration_metadata_requires_current_admin_role() {
+    let (_directory, store, app) = fixture(false).await;
+    let owner = access_token(&app, 42).await;
+    let user = access_token(&app, 43).await;
+    let uri = "/api/v1/_meta/openapi.json";
+    assert_eq!(
+        request(&app, "GET", uri, None, Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&app, "GET", uri, Some(&user), Value::Null).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, schema) = request(&app, "GET", uri, Some(&owner), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(schema["openapi"], "3.1.0");
+    assert!(schema["paths"]["/api/v1/bot-settings"]["patch"].is_object());
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn thread_session_status_is_read_only_and_scan_is_explicitly_unavailable() {
+    let (_directory, store, app) = fixture(false).await;
+    let owner = access_token(&app, 42).await;
+    let user = access_token(&app, 43).await;
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/v1/threads/status",
+            Some(&owner),
+            Value::Null
+        )
+        .await,
+        (StatusCode::OK, json!({"available":false}))
+    );
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/v1/threads/status",
+            Some(&user),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/v1/threads/scan/-100123",
+            Some(&owner),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/v1/threads/scan/-100123",
+            Some(&user),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/v1/threads/scan/bad",
+            Some(&owner),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_health_is_public_http_200_and_probes_actual_database() {
+    let (directory, store, app) = fixture(false).await;
+    assert!(!directory.path().starts_with("/app/data"));
+    let (status, health) = request(&app, "GET", "/health", None, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(matches!(health["status"].as_str(), Some("ok" | "degraded")));
+    assert_eq!(health["checks"]["db"]["status"], "ok");
+    assert!(health["checks"]["db"]["latency_ms"].is_number());
+    assert_eq!(health["checks"]["bot"]["message"], "standalone API mode");
+    assert_eq!(health["checks"]["disk"]["status"], "ok");
+    assert!(health["checks"]["disk"]["free_gb"].is_number());
+    assert!(health["checks"]["disk"]["total_gb"].as_f64().unwrap() > 0.0);
+    assert!(health["checks"]["disk"]["used_pct"].is_number());
+    assert!(
+        !health
+            .to_string()
+            .contains(directory.path().to_str().unwrap())
+    );
+    assert_eq!(
+        request(&app, "POST", "/health", None, Value::Null).await.0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    store.close().await.unwrap();
+}

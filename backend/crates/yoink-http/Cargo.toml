@@ -16,6 +16,7 @@ yoink-identity.workspace = true
 yoink-access.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

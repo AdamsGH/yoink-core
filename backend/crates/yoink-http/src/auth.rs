@@ -70,6 +70,7 @@ pub(crate) fn router(state: AuthState, system: yoink_application::SystemService)
         router = router.route("/api/v1/auth/dev", post(dev_token));
     }
     router
+        .merge(crate::configuration::router())
         .merge(crate::admin::router())
         .merge(crate::groups::router())
         .merge(crate::nsfw::router())

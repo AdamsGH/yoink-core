@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use axum::{
     Json, Router,
     extract::{
@@ -490,44 +488,34 @@ async fn bot_settings(
 ) -> Result<impl IntoResponse, ApiError> {
     let service = state.service()?;
     let actor = authenticated_id(service, &headers)?;
-    Ok(no_store(
-        service.identities.admin_bot_settings(actor).await?,
-    ))
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BotSettingsPatch {
-    bot_access_mode: Option<String>,
-    browser_cookies_min_role: Option<String>,
-    inline_storage_chat_id: Option<i64>,
-    inline_storage_thread_id: Option<i64>,
+    let settings = service.identities.admin_bot_settings(actor).await?;
+    // Legacy DEFAULTS uses null for unset storage IDs, not empty strings.
+    let settings: std::collections::BTreeMap<_, _> = settings
+        .into_iter()
+        .map(|(key, value)| {
+            let unset = matches!(
+                key.as_str(),
+                "inline_storage_chat_id" | "inline_storage_thread_id"
+            ) && value.is_empty();
+            (key, if unset { None } else { Some(value) })
+        })
+        .collect();
+    Ok(no_store(settings))
 }
 
 async fn update_bot_settings(
     State(state): State<AuthState>,
     headers: HeaderMap,
-    body: Result<Json<BotSettingsPatch>, JsonRejection>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let service = state.service()?;
     let actor = authenticated_id(service, &headers)?;
     let Json(body) = body.map_err(|_| invalid_request())?;
-    let mut patch = BTreeMap::new();
-    if let Some(value) = body.bot_access_mode {
-        patch.insert("bot_access_mode".into(), value);
-    }
-    if let Some(value) = body.browser_cookies_min_role {
-        patch.insert("browser_cookies_min_role".into(), value);
-    }
-    if let Some(value) = body.inline_storage_chat_id {
-        patch.insert("inline_storage_chat_id".into(), value.to_string());
-    }
-    if let Some(value) = body.inline_storage_thread_id {
-        patch.insert("inline_storage_thread_id".into(), value.to_string());
-    }
+    let patch = yoink_identity::admin::configuration::BotSettingsPatch::parse(&body)
+        .map_err(|detail| ApiError(StatusCode::UNPROCESSABLE_ENTITY, detail))?;
     service
         .identities
-        .admin_update_bot_settings(actor, &patch)
+        .admin_patch_configuration(actor, &patch)
         .await?;
     Ok(no_store(serde_json::json!({"ok": true})))
 }

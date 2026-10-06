@@ -1,3 +1,5 @@
+pub mod configuration;
+
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -778,6 +780,48 @@ impl IdentityStore {
         finish_admin(tx, result).await
     }
 
+    /// Directory whose filesystem contains the configured native database.
+    /// For internal disk-health probing only; never serialize this path publicly.
+    pub fn configuration_health_directory(&self) -> Option<std::path::PathBuf> {
+        self.database
+            .path()
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+    }
+
+    /// Read-only process health probe; does not expose database error details.
+    pub async fn configuration_health(&self) -> Result<(), AdminError> {
+        query(include_str!("sql/configuration_health.sql"))
+            .fetch_one(&self.database)
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        Ok(())
+    }
+
+    /// Reauthorize core configuration/status requests against current rows.
+    pub async fn configuration_authorized(
+        &self,
+        actor_id: i64,
+        owner_only: bool,
+    ) -> Result<(), AdminError> {
+        if actor_id <= 0 {
+            return Err(AdminError::InvalidInput);
+        }
+        let mut connection = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Deferred)
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let result = admin_auth(&tx, actor_id, self.owner_id, true, owner_only)
+            .await
+            .map(|_| ());
+        finish_admin(tx, result).await
+    }
+
     pub async fn admin_bot_settings(
         &self,
         actor_id: i64,
@@ -825,6 +869,17 @@ impl IdentityStore {
         .await;
         finish_admin(tx, result).await
     }
+    /// Typed frontend configuration entrypoint; authorization is checked again
+    /// inside the immediate write transaction, never trusted from token claims.
+    pub async fn admin_patch_configuration(
+        &self,
+        actor_id: i64,
+        patch: &configuration::BotSettingsPatch,
+    ) -> Result<(), AdminError> {
+        self.admin_update_bot_settings(actor_id, patch.values())
+            .await
+    }
+
     pub async fn admin_update_bot_settings(
         &self,
         actor_id: i64,

@@ -2,7 +2,9 @@
 
 mod admin;
 mod auth;
+mod configuration;
 mod groups;
+mod health;
 mod m2m;
 mod nsfw;
 pub use auth::{AuthService, AuthState};
@@ -20,6 +22,10 @@ struct HealthStatus {
 
 /// Build the diagnostics HTTP router.
 pub fn router(system: SystemService) -> Router {
+    diagnostics(system.clone()).merge(health::router(system, None))
+}
+
+fn diagnostics(system: SystemService) -> Router {
     Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
@@ -28,7 +34,8 @@ pub fn router(system: SystemService) -> Router {
 }
 
 pub fn router_with_auth(system: SystemService, auth: Option<AuthState>) -> Router {
-    let diagnostics = router(system.clone());
+    let diagnostics =
+        diagnostics(system.clone()).merge(health::router(system.clone(), auth.clone()));
     match auth {
         Some(state) => diagnostics.merge(auth::router(state, system)),
         None => diagnostics,
@@ -40,7 +47,13 @@ pub fn router_with_identity(
     auth: Option<AuthState>,
     identities: AuthState,
 ) -> Router {
-    router_with_auth(system.clone(), auth).merge(m2m::router(identities, system))
+    let diagnostics =
+        diagnostics(system.clone()).merge(health::router(system.clone(), Some(identities.clone())));
+    let app = match auth {
+        Some(state) => diagnostics.merge(auth::router(state, system.clone())),
+        None => diagnostics,
+    };
+    app.merge(m2m::router(identities, system))
 }
 
 pub async fn serve_with_identity(
