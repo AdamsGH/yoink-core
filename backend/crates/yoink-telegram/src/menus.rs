@@ -75,7 +75,6 @@ const PRIVATE_CONTROLS: &[(&str, Key)] = &[
     ("proxy", Key::MenuProxy),
     ("uncache", Key::MenuUncache),
     ("cookie", Key::MenuCookie),
-    ("lang", Key::MenuLang),
 ];
 
 fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
@@ -87,6 +86,9 @@ fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
         entries.push(("status", Key::MenuStatus));
     }
     if access.downloads {
+        if !access.group {
+            entries.push(("lang", Key::MenuLang));
+        }
         entries.extend_from_slice(MEDIA);
         if access.owner || access.group {
             entries.extend_from_slice(EXTENDED);

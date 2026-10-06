@@ -91,11 +91,11 @@ The menu uses the saved interface language independently of the selected subtitl
 
 ## Interface language
 
-Owner-private `/lang` opens English and Russian choices. It changes the existing user's `language` and `updated_at` fields only, without creating a user or altering roles, grants, downloader preferences, cookies, jobs or cached media. Callbacks require an accessible message from this bot in the owner's private chat. Ban and configured-owner checks run again in the write transaction. Each accepted choice, including the current language, advances a monotonic revision. Older buttons cannot overwrite a later choice, including after restart or a switch back to the original language.
+Authorized private `/lang` opens English and Russian choices for ordinary users and the configured owner. It changes the existing user's `language` and `updated_at` fields only, without creating a user or altering roles, grants, downloader preferences, cookies, jobs or cached media. Callbacks require an accessible message from this bot in the sender's own private chat. Current role and ban checks run again in the write transaction. Pending and banned users cannot change the language. Callbacks can change only the sender's own private-chat preferences. Each accepted choice, including the current language, advances a monotonic revision. Older buttons cannot overwrite a later choice, including after restart or a switch back to the original language.
 
 New command replies and callback responses prefer a supported saved `users.language` over Telegram's `language_code`. Missing or unsupported saved values fall back to Telegram metadata, then English. A failed locale lookup also falls back without exposing database errors or changing access decisions. Successful selection updates the menu text in the new language and removes its keyboard. Already-created progress messages retain their stored language, while new admissions use the current choice. Groups cannot change the preference through `/lang`, and existing group authorization is unchanged.
 
-`just test-media language` runs the focused Bot API acceptance scenario. No schema migration or production configuration change is required.
+`just test-media language` runs the focused Bot API acceptance scenario, including ordinary-user selection, cross-user isolation, role/ban revocation and restart replay. No schema migration or production configuration change is required.
 
 ## Interactive clips
 

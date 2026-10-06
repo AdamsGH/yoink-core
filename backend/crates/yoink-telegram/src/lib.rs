@@ -632,7 +632,6 @@ fn owner_only_command(command: &Command, text: &str) -> bool {
             | Command::Uncache(_)
             | Command::Cookie(_)
             | Command::CookieUrl(_)
-            | Command::Lang(_)
     ) || matches!(
         command,
         Command::Media(media)
@@ -1037,7 +1036,7 @@ async fn handle_message(
         return Ok(());
     }
     if let Command::Lang(action) = command {
-        if target.chat_id() > 0 && actor_id == identity.owner_id && message.thread_id.is_none() {
+        if target.chat_id() > 0 && message.thread_id.is_none() {
             lang::handle_command(
                 &bot,
                 &message,
@@ -1556,7 +1555,6 @@ mod tests {
             ("/proxy", Command::Proxy(proxy::Action::Menu)),
             ("/uncache https://example.test", Command::Uncache(None)),
             ("/cookie", Command::Cookie(cookie::Action::List(None))),
-            ("/lang", Command::Lang(lang::Action::Menu)),
             (
                 "/list https://example.test",
                 Command::Media(
@@ -1570,6 +1568,10 @@ mod tests {
         for (text, command) in text_and_commands {
             assert!(owner_only_command(&command, text), "{text}");
         }
+        assert!(!owner_only_command(
+            &Command::Lang(lang::Action::Menu),
+            "/lang"
+        ));
         assert!(!owner_only_command(
             &Command::Media(
                 media_command::parse("video", &["https://example.test"])

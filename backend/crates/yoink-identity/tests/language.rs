@@ -160,14 +160,23 @@ async fn language_revision_authorization_and_preservation() {
     unchanged(&db, 45, &overflow_before).await;
 
     let non_owner_before = state(&db, 43).await;
+    let ordinary = identity
+        .change_language(43, "en", non_owner_before.7)
+        .await
+        .unwrap();
+    assert_eq!(ordinary.code, "en");
+    assert!(ordinary.revision > non_owner_before.7);
+    assert_non_language_fields_unchanged(&non_owner_before, &state(&db, 43).await);
     assert_eq!(
-        identity
-            .change_language(43, "en", non_owner_before.7)
-            .await
-            .unwrap_err(),
-        IdentityError::LanguageDenied
+        identity.change_language(43, "ru", non_owner_before.7).await,
+        Err(IdentityError::LanguageConflict)
     );
-    unchanged(&db, 43, &non_owner_before).await;
+    let pending_before = state(&db, 48).await;
+    assert_eq!(
+        identity.change_language(48, "ru", pending_before.7).await,
+        Err(IdentityError::LanguageDenied)
+    );
+    unchanged(&db, 48, &pending_before).await;
     assert_eq!(identity.language_preference(999).await.unwrap(), None);
     assert_eq!(
         identity.language_preference(0).await.unwrap_err(),

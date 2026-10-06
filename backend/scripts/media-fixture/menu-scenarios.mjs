@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHmac, randomInt } from 'node:crypto';
 
-const ordinary = ['audio', 'cancel', 'download', 'help', 'image', 'job', 'start', 'video'];
-const ownerOnly = ['cookie', 'cut', 'format', 'lang', 'list', 'playlist', 'proxy', 'quality', 'settings', 'status', 'subs', 'uncache'];
+const ordinary = ['audio', 'cancel', 'download', 'help', 'image', 'job', 'lang', 'start', 'video'];
+const ownerOnly = ['cookie', 'cut', 'format', 'list', 'playlist', 'proxy', 'quality', 'settings', 'status', 'subs', 'uncache'];
 const unavailable = ['about', 'ban_time', 'block', 'broadcast', 'group', 'runtime', 'stats', 'summary', 'thread', 'tldr', 'unblock'];
 const sortedNames = commands => commands.map(({ command }) => command).sort();
 

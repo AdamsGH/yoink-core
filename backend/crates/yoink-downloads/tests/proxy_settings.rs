@@ -166,7 +166,7 @@ async fn admission_no_row_defaults_and_enable_creates_settings_only_with_proxy()
 }
 
 #[tokio::test]
-async fn owner_language_settings_are_private_revisioned_and_freshly_authorized() {
+async fn language_settings_are_actor_private_revisioned_and_freshly_authorized() {
     let (_dir, store, service) = setup(None).await;
     let own = target(OWNER as i64, None, BOT);
     assert_eq!(
@@ -205,8 +205,25 @@ async fn owner_language_settings_are_private_revisioned_and_freshly_authorized()
             .await,
         Err(DownloadError::InvalidPreferences)
     );
+    let ordinary_target = target(43, None, BOT);
+    let ordinary = service
+        .language_settings(43, ordinary_target)
+        .await
+        .unwrap();
+    let changed = service
+        .change_language(43, ordinary_target, "ru", ordinary.revision)
+        .await
+        .unwrap();
+    assert_eq!(changed.code, "ru");
+    assert!(changed.revision > ordinary.revision);
+    assert_eq!(
+        service
+            .change_language(43, ordinary_target, "en", ordinary.revision)
+            .await,
+        Err(DownloadError::Conflict)
+    );
     for (actor, destination) in [
-        (43, target(43, None, BOT)),
+        (43, target(OWNER as i64, None, BOT)),
         (OWNER, target(43, None, BOT)),
         (OWNER, target(OWNER as i64, None, BOT + 1)),
         (OWNER, target(OWNER as i64, Some(7), BOT)),

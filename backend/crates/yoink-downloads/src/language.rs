@@ -63,7 +63,6 @@ impl DownloadService {
     ) -> Result<(), DownloadError> {
         if actor == 0
             || actor > i64::MAX as u64
-            || !self.identities.is_configured_owner(actor as i64)
             || target.bot_id() != self.delivery.bot_id()
             || target.chat_id() <= 0
             || target.chat_id() != actor as i64

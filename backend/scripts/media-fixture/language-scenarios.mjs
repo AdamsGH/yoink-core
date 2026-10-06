@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomInt } from 'node:crypto';
 import { commandHarness } from './command-harness.mjs';
 
 export async function runLanguageScenarios(context) {
@@ -184,6 +185,8 @@ export async function runLanguageScenarios(context) {
   assert.equal(await history(), before.history);
   assert.equal(await jobs(), before.jobs);
 
+  await runOrdinaryLanguageScenarios(context);
+
   // This is a separate real-worker admission phase. Its progress locale must be
   // frozen at admission even if the stored preference changes while fetch is gated.
   const admissionBaseline = { settings: await settings(), cookies: await cookies(), grants: await grants() };
@@ -214,5 +217,66 @@ export async function runLanguageScenarios(context) {
     if (admitted) await waitFor(async () => (await context.queryJob(admitted.operationId)).startsWith('succeeded|') || (await context.queryJob(admitted.operationId)).startsWith('failed|'), 'language admission worker cleanup');
     await fixtureSql(`UPDATE users SET language='${String(saved.language).replaceAll("'", "''")}',updated_at=${saved.updated_at} WHERE id=42`);
   }
-  return 'owner-private /lang menu, revision-fenced selection/replay/restart, locale precedence, API denial boundaries, language-only state invariants and gated worker admission-language snapshot';
+  return 'authorized private /lang menu, ordinary-user isolation/revocation, revision-fenced selection/replay/restart, locale precedence, language-only state invariants and gated worker admission-language snapshot';
+}
+
+async function runOrdinaryLanguageScenarios({ botApi, fixtureSql, waitFor, restartApp }) {
+  const actor = 6_100_000_000_000 + randomInt(1_000_000_000);
+  let messageId = 94_000;
+  const owner = await fixtureSql("SELECT language||'|'||updated_at FROM users WHERE id=42");
+  const operations = await fixtureSql('SELECT count(*) FROM runtime_operations');
+  const state = () => fixtureSql(`SELECT language||'|'||updated_at FROM users WHERE id=${actor}`);
+  const buttons = call => {
+    const markup = call.data.reply_markup;
+    return (typeof markup === 'string' ? JSON.parse(markup) : markup)?.inline_keyboard?.flat() ?? [];
+  };
+  async function menu() {
+    const start = botApi.calls.length;
+    botApi.enqueue(actor, actor, '/lang', messageId++, 'en');
+    return waitFor(() => botApi.calls.slice(start).find(call => call.method === 'sendmessage' && call.data.chat_id === actor && buttons(call).length === 2), 'ordinary private language menu');
+  }
+  async function click(message, data, from = actor) {
+    const start = botApi.calls.length;
+    const id = botApi.enqueueCallback(from, actor, message.messageId, data);
+    const ack = await waitFor(() => botApi.calls.slice(start).find(call => call.method === 'answercallbackquery' && call.data.callback_query_id === id), 'ordinary language callback acknowledgement');
+    return { ack, edit: botApi.calls.slice(start).find(call => call.method === 'editmessagetext' && call.data.message_id === message.messageId && call.data.chat_id === actor) };
+  }
+  await fixtureSql(`INSERT INTO users(id,role,language,created_at,updated_at) VALUES(${actor},'user','en',1,1)`);
+  try {
+    const initial = await menu();
+    const ru = buttons(initial).find(button => button.callback_data.startsWith('lang:ru:'));
+    assert(ru);
+    const before = await state();
+    const selected = await click(initial, ru.callback_data);
+    assert(selected.edit, 'ordinary user can change their own language');
+    assert.match(selected.edit.data.text, /рус|язык/i);
+    assert.match(await state(), /^ru\|/);
+    assert.notEqual(await state(), before);
+    const persisted = await state();
+    await restartApp();
+    const stale = await click(initial, ru.callback_data);
+    assert.equal(stale.edit, undefined);
+    assert.equal(await state(), persisted, 'restart retains language and fences old selection');
+    const current = await menu();
+    assert.match(current.data.text, /язык/i, 'saved locale overrides client locale for ordinary users');
+    const en = buttons(current).find(button => button.callback_data.startsWith('lang:en:'));
+    const foreign = await click(current, en.callback_data, 42);
+    assert.equal(foreign.edit, undefined);
+    assert.equal(foreign.ack.data.text, undefined);
+    assert.equal(await state(), persisted, 'owner cannot mutate another private chat by callback');
+    for (const mutation of ["ban_until=9223372036854775807", "role='restricted'", "role='banned'"]) {
+      await fixtureSql(`UPDATE users SET role='user',ban_until=NULL WHERE id=${actor}`);
+      const fresh = await menu();
+      const choice = buttons(fresh).find(button => button.callback_data.startsWith('lang:en:'));
+      await fixtureSql(`UPDATE users SET ${mutation} WHERE id=${actor}`);
+      const denied = await click(fresh, choice.callback_data);
+      assert.equal(denied.edit, undefined);
+      assert.equal(denied.ack.data.show_alert, true);
+      assert.equal(await state(), persisted, 'authorization is checked again at selection');
+    }
+    assert.equal(await fixtureSql("SELECT language||'|'||updated_at FROM users WHERE id=42"), owner);
+    assert.equal(await fixtureSql('SELECT count(*) FROM runtime_operations'), operations);
+  } finally {
+    await fixtureSql(`DELETE FROM users WHERE id=${actor}`);
+  }
 }

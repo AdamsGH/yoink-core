@@ -33,8 +33,8 @@ impl IdentityStore {
         .transpose()
     }
 
-    /// Changes the configured owner's language only if the callback revision is
-    /// current. updated_at itself is advanced, including when code is unchanged.
+    /// Changes an authorized user's own language only at the current revision.
+    /// updated_at advances even when the language is unchanged.
     pub async fn change_language(
         &self,
         user_id: i64,
@@ -50,10 +50,6 @@ impl IdentityStore {
         if expected_revision < 0 {
             return Err(IdentityError::LanguageConflict);
         }
-        if self.owner_id != Some(user_id) {
-            return Err(IdentityError::LanguageDenied);
-        }
-
         let mut connection = self.database.connection().await?;
         let transaction = Transaction::new(&mut connection, TransactionBehavior::Immediate)
             .await

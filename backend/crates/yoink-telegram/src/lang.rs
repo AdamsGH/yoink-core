@@ -105,7 +105,6 @@ fn callback(data: &str) -> Option<(&'static str, i64)> {
 
 fn authorized(query: &CallbackQuery, message: &Message, identity: TelegramIdentity) -> bool {
     !query.from.is_bot
-        && query.from.id.0 == identity.owner_id
         && message.chat.is_private()
         && message.chat.id.0 > 0
         && message.chat.id.0 as u64 == query.from.id.0
