@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { run, assertNoSecrets } from './process.mjs';
 import { compareAllContent } from './content.mjs';
@@ -7,6 +7,9 @@ import { nativeRequest } from './native.mjs';
 
 export async function operationsChecks({ backend, root, database, query, contract, native, secrets, image }) {
   const binary = path.join(backend, 'target/debug/yoink-ops');
+  const migrationFiles = await readdir(path.join(backend, 'crates/yoink-storage/migrations-turso'));
+  const expectedMigrations = migrationFiles.filter(name => /^\d{4}_.+\.sql$/.test(name)).length;
+  assert(expectedMigrations > 0, 'native migration inventory must not be empty');
   for (const container of image ? [false, true] : [false]) {
     const label = container ? 'container' : 'host';
     const backup = path.join(root, `${label} backup ' ; --.ybk`);
@@ -34,7 +37,7 @@ export async function operationsChecks({ backend, root, database, query, contrac
     assert.equal((await stat(restored)).mode & 0o777, 0o600);
     await compareAllContent(query, contract, native, restored);
     const ledger = await nativeRequest(native, restored, 'SELECT COUNT(*) FROM runtime_migrations');
-    assert.equal(Number(ledger.rows[0][0]), 13);
+    assert.equal(Number(ledger.rows[0][0]), expectedMigrations, 'restored ledger covers the checked-in native migrations');
     const sequence = await nativeRequest(native, restored, "INSERT INTO api_keys(name,key_hash,prefix,scopes,created_by,created_at) VALUES ('restore-sequence','restore-sequence-hash','p','[]',9007199254740993,0) RETURNING CAST(id AS TEXT)");
     assert.equal(sequence.rows[0][0], '2000000001', 'restore preserves native allocator high-water');
     const sentinel = await readFile(backup);
