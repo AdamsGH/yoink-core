@@ -1,7 +1,11 @@
 """Bounded media download and local processing for the v2 worker."""
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
+from contextlib import contextmanager
 import json
+import shutil
 import os
 import stat
 import subprocess
@@ -14,7 +18,7 @@ from typing import Any, Callable
 
 import tool_guard
 from content_metadata import MetadataCollector
-from failures import MediaFailure, classify_error
+from failures import MediaFailure, classify_error, exception_chain
 from format_engine import download_format_report
 from subtitle_engine import download_subtitles
 
@@ -222,7 +226,7 @@ def _bounded_transfer_write(handle: Any, data: bytes, file_size: int, total_size
 
 def _gallery_download(url: str, workspace: Path, progress: Callable[[float], None],
                       cookie_file: str | None, proxy: str, max_bytes: int,
-                      max_total: int, max_items: int, timeout: int, metadata=None) -> None:
+                      max_total: int, max_items: int, timeout: int, metadata=None) -> list[Path]:
     try:
         from gallery_dl import config, job
         import builtins
@@ -268,42 +272,54 @@ def _gallery_download(url: str, workspace: Path, progress: Callable[[float], Non
             def __exit__(self, *args):
                 return self.handle.__exit__(*args)
         def guarded_open(file, mode="r", *args, **kwargs):
-            handle = original_open(file, mode, *args, **kwargs)
             path = Path(file) if isinstance(file, (str, bytes, os.PathLike)) else None
-            if path is not None and ("w" in mode or "a" in mode or "+" in mode):
+            writing = "w" in mode or "a" in mode or "+" in mode
+            if path is not None and writing:
                 try:
                     path.resolve().relative_to(workspace)
-                    return BoundedWriter(handle, path)
-                except (ValueError, OSError):
-                    pass
-            return handle
+                except (ValueError, OSError) as exc:
+                    raise OSError("gallery write confinement: destination is not permitted") from exc
+            handle = original_open(file, mode, *args, **kwargs)
+            return BoundedWriter(handle, path) if path is not None and writing else handle
         builtins.open = guarded_open
+        completed = []
+        ordinal = 0
+        failures = []
         try:
             class StrictDownloadJob(job.DownloadJob):
                 failure = None
                 def handle_url(self, url, kwdict):
+                    nonlocal ordinal
+                    ordinal += 1
+                    kwdict = {**kwdict, "num": ordinal}
                     if metadata is not None:
                         metadata.add(kwdict)
-                    return super().handle_url(url, kwdict)
+                    result = super().handle_url(url, kwdict)
+                    path = Path(self.pathfmt.path)
+                    if path.is_file():
+                        completed.append(path)
+                    return result
                 def dispatch(self, extractor):
                     try:
                         return super().dispatch(extractor)
                     except MediaFailure as exc:
                         self.failure = exc
+                        failures.append(exc)
                         raise
             instance = StrictDownloadJob(url)
             result = instance.run()
-            if instance.failure is not None:
-                raise instance.failure
+            if failures:
+                raise failures[0]
             if result not in (None, 0) or not files:
                 raise MediaFailure("source_unavailable")
         finally:
             builtins.open = original_open
     except MediaFailure:
         raise
-    except BaseException as exc:
+    except Exception as exc:
         raise MediaFailure(classify_error(exc)) from exc
     progress(75.0)
+    return completed
 
 
 def download_media(request: dict[str, Any], settings: Any,
@@ -323,13 +339,18 @@ def download_media(request: dict[str, Any], settings: Any,
     if mode not in ("best", "video", "audio", "image", "subtitles", "formats"):
         raise MediaFailure("unsupported_source")
     engine = options.get("engine", "auto")
+    if engine in ("gallery", "auto_gallery_v1", "auto_fallback_v1") and mode in ("formats", "subtitles"):
+        raise MediaFailure("invalid_media")
+    if engine == "auto_fallback_v1":
+        return _provider_fallback(request, settings, emit_progress)
+    gallery = mode == "image" or engine in ("gallery", "auto_gallery_v1")
     if mode == "formats" and (
         options.get("max_height") is not None or options.get("playlist") is not None
         or options.get("clips") or options.get("gallery_zip", False)
         or options.get("video_codec", "h264") != "h264"
         or options.get("audio_codec", "best") != "best"
         or options.get("container", "mp4") != "mp4"
-        or options.get("engine", "auto") not in ("auto", "yt_dlp")
+        or options.get("engine", "auto") not in ("auto", "yt_dlp", "auto_yt_dlp_v1")
         or options.get("subtitles") is not None
     ):
         raise MediaFailure("invalid_media")
@@ -349,11 +370,7 @@ def download_media(request: dict[str, Any], settings: Any,
         raise MediaFailure("invalid_media")
     if mode != "image" and options.get("gallery_zip", False):
         raise MediaFailure("invalid_media")
-    if engine == "gallery" and mode != "image":
-        raise MediaFailure("unsupported_source")
     if mode == "image" and engine == "yt_dlp":
-        raise MediaFailure("unsupported_source")
-    if mode != "image" and engine == "gallery":
         raise MediaFailure("unsupported_source")
     try:
         indices = playlist_indices(options.get("playlist"))
@@ -376,8 +393,13 @@ def download_media(request: dict[str, Any], settings: Any,
         raise MediaFailure("source_unavailable") from exc
     except ValueError as exc:
         raise MediaFailure("unsupported_source") from exc
-    ffmpeg, ffprobe, wrapper_dir = _tools(workspace)
-    metadata = MetadataCollector()
+    try:
+        ffmpeg, ffprobe, wrapper_dir = _tools(workspace)
+        metadata = MetadataCollector()
+    except MediaFailure:
+        raise
+    except Exception as exc:
+        raise MediaFailure("processing_failed") from exc
     try:
         if cookie_text:
             if not cookie_text.startswith("# Netscape"):
@@ -385,10 +407,10 @@ def download_media(request: dict[str, Any], settings: Any,
             fd, cookie_file = tempfile.mkstemp(prefix=".cookies-", dir=workspace)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(cookie_text)
-        if mode == "image":
+        if gallery:
             if engine == "yt_dlp":
                 raise MediaFailure("unsupported_source")
-            _gallery_download(request["source_url"], workspace, emit_progress, cookie_file, proxy, max_bytes, max_total, max_items, socket_timeout, metadata)
+            gallery_sources = _gallery_download(request["source_url"], workspace, emit_progress, cookie_file, proxy, max_bytes, max_total, max_items, socket_timeout, metadata)
         else:
             try:
                 import yt_dlp
@@ -433,38 +455,44 @@ def download_media(request: dict[str, Any], settings: Any,
                 "logger": SilentLogger(), "quiet": True, "no_warnings": True,
                 "ignoreconfig": True, "plugin_dirs": [], "cookiefile": cookie_file,
                 "cookiesfrombrowser": None, "proxy": proxy, "external_downloader": None,
-                "impersonate": None, "progress_hooks": [hook], "overwrites": True,
+                "impersonate": None, "progress_hooks": [_local_callback(hook)], "overwrites": True,
                 "continuedl": False, "cachedir": False, "extract_flat": False,
                 "ffmpeg_location": str(wrapper_dir),
                 "merge_output_format": options.get("container", "mp4"),
-                "match_filter": match_filter,
+                "match_filter": _local_callback(match_filter),
                 "extractor_args": {},
                 "compat_opts": set(),
             }
             if options.get("max_height"):
                 opts["format_sort"] = [f"res:{options['max_height']}"]
-            try:
-                if mode == "subtitles":
-                    return download_subtitles(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
-                if mode == "formats":
-                    return download_format_report(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
-                with yt_dlp.YoutubeDL(opts) as downloader:
-                    return_code = downloader.download([request["source_url"]])
-                    if return_code:
-                        raise MediaFailure(classify_error(RuntimeError(f"yt-dlp returned {return_code}")))
-            except MediaFailure:
-                raise
-            except BaseException as exc:
-                raise MediaFailure(classify_error(exc)) from exc
+            if mode == "subtitles":
+                return download_subtitles(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
+            if mode == "formats":
+                return download_format_report(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
+            # Constructor/context configuration is local setup, never a provider phase.
+            with yt_dlp.YoutubeDL(opts) as downloader:
+                from network_guard import guard_failure_count
+                guard_baseline = guard_failure_count()
+                try:
+                    with _preserve_retry_cause():
+                        return_code = downloader.download([request["source_url"]])
+                except MediaFailure:
+                    # Metadata/quota/progress callbacks are local enforcement, not providers.
+                    raise
+                except Exception as exc:
+                    raise _classified_provider_failure(exc, guard_baseline) from exc
+                if return_code:
+                    # No structured provider error survived: do not infer provider authority.
+                    raise MediaFailure("source_unavailable")
         emit_progress(75.0)
         sources = sorted((p for p in workspace.iterdir() if p.is_file() and p.name.startswith("source-")), key=lambda p: p.name)
-        # Gallery files are all outputs except private helper files.
-        if mode == "image":
-            sources = sorted((p for p in workspace.iterdir() if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}), key=lambda p: p.name)
+        # Finalized provider outputs in extraction order, including video of any supported type.
+        if gallery:
+            sources = gallery_sources
         if not sources:
             raise MediaFailure("unsupported_source")
         produced: list[Path] = []
-        if mode == "image":
+        if gallery and mode == "image":
             sources.sort(key=lambda p: p.name)
             if options.get("gallery_zip") and len(sources) > 10:
                 if max_items < 10:
@@ -499,7 +527,7 @@ def download_media(request: dict[str, Any], settings: Any,
             for index, source in enumerate(sources, start=1):
                 if mode != "audio" and not clips:
                     info, format_name = _probe(source, ffprobe, timeout)
-                    if _already_compatible(info, format_name, options):
+                    if (gallery and _media_type(info, format_name).startswith("image/")) or _already_compatible(info, format_name, options):
                         produced.append(source)
                         continue
                 if mode == "audio":
@@ -537,7 +565,7 @@ def download_media(request: dict[str, Any], settings: Any,
         return result
     except MediaFailure:
         raise
-    except BaseException as exc:
+    except Exception as exc:
         raise MediaFailure("invalid_media") from exc
     finally:
         if cookie_file:
@@ -545,3 +573,113 @@ def download_media(request: dict[str, Any], settings: Any,
                 Path(cookie_file).unlink()
             except OSError:
                 pass
+
+
+def _provider_fallback(request, settings, emit_progress):
+    """Attempt-local files and metadata: publish only a wholly successful provider."""
+    parent = Path.cwd().resolve()
+    for engine in ("yt_dlp", "gallery"):
+        with tempfile.TemporaryDirectory(prefix=".provider-", dir=parent) as directory:
+            attempt = Path(directory)
+            local = {**request, "options": {**request.get("options", {}), "engine": engine}}
+            try:
+                os.chdir(attempt)
+                artifacts = download_media(local, settings, emit_progress)
+            except MediaFailure as exc:
+                if engine != "yt_dlp" or not provider_fallback_allowed(exc):
+                    raise
+                continue
+            finally:
+                os.chdir(parent)
+            for artifact in artifacts:
+                shutil.move(str(attempt / artifact["path"]), parent / artifact["path"])
+            return artifacts
+    raise MediaFailure("source_unavailable")
+
+
+@contextmanager
+def _preserve_retry_cause():
+    """Observe the pinned typed retry error before yt-dlp converts it to text.
+
+    Forward the original retry behavior unchanged; only retain a causal link on the
+    resulting DownloadError. This is scoped to one extractor call in one worker.
+    """
+    from yt_dlp.downloader.common import FileDownloader
+    from yt_dlp.utils import DownloadError
+    original = FileDownloader.report_retry
+    def report_retry(downloader, error, *args, **kwargs):
+        try:
+            return original(downloader, error, *args, **kwargs)
+        except DownloadError as exc:
+            exc.provider_cause = error
+            raise
+    FileDownloader.report_retry = report_retry
+    try:
+        yield
+    finally:
+        FileDownloader.report_retry = original
+
+
+def _local_callback(callback):
+    def guarded(*args, **kwargs):
+        try:
+            return callback(*args, **kwargs)
+        except MediaFailure:
+            raise
+        except Exception as exc:
+            raise MediaFailure(classify_error(exc)) from exc
+    return guarded
+
+
+def _classified_provider_failure(exc, guard_baseline):
+    """Explicit opt-in only for recognized provider errors from the extractor call."""
+    from network_guard import guard_failure_count
+    from yt_dlp.networking.exceptions import HTTPError, TransportError
+    from yt_dlp.utils import ContentTooShortError, DownloadError, ExtractorError, PostProcessingError
+    chain = exception_chain(exc)
+    failure_class = classify_error(exc)
+    if failure_class == "invalid_media" and any(isinstance(item, (ContentTooShortError, TransportError)) for item in chain):
+        failure_class = "source_unavailable"
+    failure = MediaFailure(failure_class)
+    if len(chain) >= 64 or guard_failure_count() != guard_baseline:
+        return failure
+    if not isinstance(exc, (ContentTooShortError, DownloadError, ExtractorError, HTTPError, TransportError)):
+        return failure
+    # yt-dlp marks malformed provider JSON as unexpected despite retaining its typed cause.
+    def provider_extractor_error(item):
+        return isinstance(item, ExtractorError) and (
+            item.expected or isinstance(item.cause, json.JSONDecodeError))
+
+    # Unexpected implementation and local postprocessing errors remain forbidden even
+    # when YoutubeDL wraps them in a DownloadError.
+    if any(isinstance(item, PostProcessingError) or
+           isinstance(item, ExtractorError) and not provider_extractor_error(item) for item in chain):
+        return failure
+    if not any(isinstance(item, (ContentTooShortError, HTTPError, TransportError)) or
+               provider_extractor_error(item) for item in chain):
+        return failure
+    failure.fallback_forbidden = False
+    if not provider_fallback_allowed(failure, original=exc):
+        failure.fallback_forbidden = True
+    return failure
+
+
+def provider_fallback_allowed(exc, *, original=None):
+    if getattr(exc, "fallback_forbidden", True) or exc.failure_class not in {
+            "unsupported_source", "source_unavailable", "rate_limited", "invalid_media"}:
+        return False
+    from urllib.error import HTTPError as UrllibHTTPError
+    for current in exception_chain(original or exc):
+        if getattr(current, "fallback_forbidden", False):
+            return False
+        if isinstance(current, (KeyboardInterrupt, SystemExit, PermissionError,
+                                asyncio.CancelledError, concurrent.futures.CancelledError)):
+            return False
+        if isinstance(current, (AssertionError, AttributeError, ImportError, MemoryError,
+                                NameError, RecursionError, RuntimeError, SystemError, TypeError)):
+            return False
+        # Local filesystem I/O is not a provider failure. Recognized transport wrappers
+        # can carry connection/timeout or urllib HTTP causes, never generic local OSError.
+        if isinstance(current, OSError) and not isinstance(current, (ConnectionError, TimeoutError, UrllibHTTPError)):
+            return False
+    return True

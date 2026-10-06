@@ -438,6 +438,7 @@ impl DownloadService {
             .map_err(map_profile)?;
         let prepared = request
             .clone()
+            .freeze_provider_routing()
             .with_network(selection)
             .map_err(|_| DownloadError::InvalidInput)?;
         self.store
@@ -1245,6 +1246,9 @@ fn worker_request(claim: &Claim, credentials: NetworkCredentials) -> Result<Work
         engine: match params.engine() {
             yoink_domain::Engine::Auto => yoink_worker_protocol::Engine::Auto,
             yoink_domain::Engine::YtDlp => yoink_worker_protocol::Engine::YtDlp,
+            yoink_domain::Engine::AutoYtDlpV1 => yoink_worker_protocol::Engine::AutoYtDlpV1,
+            yoink_domain::Engine::AutoGalleryV1 => yoink_worker_protocol::Engine::AutoGalleryV1,
+            yoink_domain::Engine::AutoFallbackV1 => yoink_worker_protocol::Engine::AutoFallbackV1,
             yoink_domain::Engine::Gallery => yoink_worker_protocol::Engine::Gallery,
         },
         playlist: params

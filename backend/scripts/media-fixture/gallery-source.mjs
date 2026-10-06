@@ -50,12 +50,12 @@ export function galleryResponse(requestPath) {
   return { status: 404, body: '' };
 }
 
-export async function startGallerySource({ tempRoot, capture, helperContainer, image }) {
+export async function startGallerySource({ tempRoot, capture, helperContainer, image, providerResponse }) {
   const directory = path.join(tempRoot, 'gallery-tls');
   await mkdir(directory, { mode: 0o700 });
   const cert = path.join(directory, 'server.crt'), key = path.join(directory, 'server.key');
   await capture('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=imgbox.com',
-    '-addext', 'subjectAltName=DNS:imgbox.com', '-addext', 'basicConstraints=critical,CA:TRUE', '-keyout', key, '-out', cert]);
+    '-addext', 'subjectAltName=DNS:imgbox.com,DNS:boards.4chan.org,DNS:a.4cdn.org,DNS:i.4cdn.org,DNS:instagram.com,DNS:www.instagram.com', '-addext', 'basicConstraints=critical,CA:TRUE', '-keyout', key, '-out', cert]);
   const certificate = await readFile(cert);
   const trust = path.join(directory, 'trust.pem');
   await writeFile(trust, certificate, { mode: 0o644 });
@@ -64,20 +64,30 @@ export async function startGallerySource({ tempRoot, capture, helperContainer, i
   assert.match(trustPath, /^\/usr\/local\/lib\/python3\.\d+\/site-packages\/certifi\/cacert\.pem$/);
   let requests = 0;
   const paths = new Set();
-  const server = https.createServer({ cert: certificate, key: await readFile(key) }, (req, res) => {
+  let error;
+  const server = https.createServer({ cert: certificate, key: await readFile(key) }, async (req, res) => {
+    try {
     requests++;
     paths.add(req.url);
-    const response = req.headers.host === 'imgbox.com' ? galleryResponse(req.url) : { status: 400, body: '' };
-    res.writeHead(response.status, { 'content-type': response.type ?? 'text/plain', 'content-length': Buffer.byteLength(response.body) });
-    res.end(response.body);
+    const response = providerResponse?.(req.headers.host, req.url, { headers: req.headers, method: req.method }) ?? (req.headers.host === 'imgbox.com' ? galleryResponse(req.url) : { status: 400, body: '' });
+    if (response.gate) await response.gate;
+    if (res.destroyed) return;
+    res.writeHead(response.status, { 'content-type': response.type ?? 'text/plain', 'content-length': response.declaredLength ?? Buffer.byteLength(response.body), ...response.headers });
+    if (response.truncateAt !== undefined) {
+      res.write(response.body.subarray(0, response.truncateAt));
+      // Let the installed downloader observe a successful partial write before EOF.
+      setTimeout(() => res.destroy(), 30).unref();
+    } else res.end(response.body);
+    } catch (cause) { error = cause; res.destroy(); }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   return {
+    get error() { return error; },
     get requests() { return requests; },
     paths,
-    untrustedDockerArgs: ['--add-host', 'imgbox.com:192.0.2.1'],
+    untrustedDockerArgs: ['--add-host', 'instagram.com:192.0.2.1', '--add-host', 'www.instagram.com:192.0.2.1', '--add-host', 'boards.4chan.org:192.0.2.1', '--add-host', 'a.4cdn.org:192.0.2.1', '--add-host', 'i.4cdn.org:192.0.2.1', '--add-host', 'imgbox.com:192.0.2.1'],
     port: server.address().port,
-    dockerArgs: ['--add-host', 'imgbox.com:192.0.2.1', '--mount', `type=bind,source=${trust},target=${trustPath},readonly`],
+    dockerArgs: ['--add-host', 'instagram.com:192.0.2.1', '--add-host', 'www.instagram.com:192.0.2.1', '--add-host', 'boards.4chan.org:192.0.2.1', '--add-host', 'a.4cdn.org:192.0.2.1', '--add-host', 'i.4cdn.org:192.0.2.1', '--add-host', 'imgbox.com:192.0.2.1', '--mount', `type=bind,source=${trust},target=${trustPath},readonly`],
     async close() { server.closeAllConnections(); await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); },
   };
 }

@@ -115,6 +115,9 @@ pub enum Engine {
     Auto,
     YtDlp,
     Gallery,
+    AutoYtDlpV1,
+    AutoGalleryV1,
+    AutoFallbackV1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,7 +337,10 @@ impl WorkerRequest {
                 || o.video_codec != VideoCodec::H264
                 || o.audio_codec != AudioCodec::Best
                 || o.container != Container::Mp4
-                || o.engine == Engine::Gallery
+                || matches!(
+                    o.engine,
+                    Engine::Gallery | Engine::AutoGalleryV1 | Engine::AutoFallbackV1
+                )
                 || o.playlist.is_some()
                 || !o.clips.is_empty()
                 || o.gallery_zip
@@ -350,7 +356,10 @@ impl WorkerRequest {
                 || o.video_codec != VideoCodec::H264
                 || o.audio_codec != AudioCodec::Best
                 || o.container != Container::Mp4
-                || o.engine == Engine::Gallery
+                || matches!(
+                    o.engine,
+                    Engine::Gallery | Engine::AutoGalleryV1 | Engine::AutoFallbackV1
+                )
                 || o.playlist.is_some()
                 || !o.clips.is_empty()
                 || o.gallery_zip

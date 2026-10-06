@@ -27,22 +27,22 @@ def _resolve_pinned(host: str, port: int, *, proxy: bool = False) -> tuple[str, 
     if network_guard._is_ip_address(host):
         addresses = [host]
     else:
-        answers = network_guard._ORIGINAL_GETADDRINFO(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        answers = network_guard.resolve_addresses(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         if not answers:
-            raise OSError("network destination is not permitted")
+            raise network_guard.NetworkPolicyError("network destination is not permitted")
         addresses = []
         for answer in answers:
             try:
                 address = answer[4][0].split("%", 1)[0]
                 public = network_guard._address_is_public(address)
             except (IndexError, TypeError, ValueError):
-                raise OSError("network destination is not permitted") from None
+                raise network_guard.NetworkPolicyError("network destination is not permitted") from None
             origin = (host.rstrip(".").lower(), port)
             permitted = origin in network_guard._ALLOWED_ORIGINS or (
                 proxy and origin == network_guard._CONFIGURED_PROXY and origin in network_guard._ALLOWED_PROXY_ORIGINS
             )
             if not public and not permitted:
-                raise OSError("network destination is not permitted")
+                raise network_guard.NetworkPolicyError("network destination is not permitted")
             addresses.append(address)
     origin = (host.rstrip(".").lower(), port)
     origin_allowed = origin in network_guard._ALLOWED_ORIGINS or (
@@ -50,7 +50,7 @@ def _resolve_pinned(host: str, port: int, *, proxy: bool = False) -> tuple[str, 
     )
     for address in addresses:
         if not network_guard._address_is_public(address) and not origin_allowed:
-            raise OSError("network destination is not permitted")
+            raise network_guard.NetworkPolicyError("network destination is not permitted")
     return addresses[0], port
 
 
@@ -182,6 +182,7 @@ class _RelayServer(socketserver.ThreadingTCPServer):
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
+            network_guard.record_guard_failure()
             request.close()
             return
         try:
@@ -243,6 +244,7 @@ class _RelayHandler(socketserver.BaseRequestHandler):
             status, _response_headers, upstream_remainder = _read_headers(upstream, self.server.timeout)
             status_parts = status.rstrip(b"\r\n").split()
             if len(status_parts) < 2 or status_parts[0] not in (b"HTTP/1.0", b"HTTP/1.1") or status_parts[1] != b"200":
+                network_guard.record_guard_failure()
                 client.sendall(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 return
             if request_data is None:
@@ -252,6 +254,7 @@ class _RelayHandler(socketserver.BaseRequestHandler):
                 upstream.sendall(request_data + client_remainder)
                 _relay_bytes(client, upstream, self.server.timeout, b"", upstream_remainder)
         except (OSError, ValueError, UnicodeError, ssl.SSLError):
+            network_guard.record_guard_failure()
             try:
                 client.sendall(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             except OSError:
@@ -335,7 +338,7 @@ def proxy_route(proxy_url: str | None, timeout_secs: float):
     parsed = network_guard._parse_http_url(proxy_url, "invalid proxy", allow_credentials=True)
     proxy_host, proxy_port = network_guard._host_port(parsed)
     if network_guard._CONFIGURED_PROXY != (proxy_host, proxy_port):
-        raise OSError("network destination is not permitted")
+        raise network_guard.NetworkPolicyError("network destination is not permitted")
     _resolve_pinned(proxy_host, proxy_port, proxy=True)
     server = _RelayServer(("127.0.0.1", 0), _RelayHandler, (parsed, proxy_host, proxy_port), timeout_secs)
     thread = threading.Thread(target=server.serve_forever, name="worker-proxy-relay", daemon=True)

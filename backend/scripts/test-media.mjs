@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { createProcessRunner, createContainerLifecycle } from './media-fixture/process-lifecycle.mjs';
 import { createNativeDbClient } from './media-fixture/native-db.mjs';
-import { boundReport, writeFailureReport } from './media-fixture/failure-report.mjs';
+import { boundReport, recentTelegramCalls, writeFailureReport } from './media-fixture/failure-report.mjs';
 import { isoBmffMdatPayloads } from './media-fixture/media-format.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { BotApiFixture } from './media-fixture/bot-api.mjs';
@@ -12,6 +12,8 @@ import { runBatchScenarios } from './media-fixture/batch-scenarios.mjs';
 import { runProgressScenarios } from './media-fixture/progress-scenarios.mjs';
 import { runGroupScenarios } from './media-fixture/group-scenarios.mjs';
 import { startGallerySource } from './media-fixture/gallery-source.mjs';
+import { runProviderRoutingScenarios } from './media-fixture/provider-routing-scenarios.mjs';
+import { ProviderRoutingSource } from './media-fixture/provider-routing-source.mjs';
 import { runGalleryScenarios } from './media-fixture/gallery-scenarios.mjs';
 import { runSubtitleScenarios } from './media-fixture/subtitle-scenarios.mjs';
 import { runSubtitleSettingsScenarios } from './media-fixture/subtitle-settings-scenarios.mjs';
@@ -47,7 +49,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'provider-routing', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|provider-routing|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = 'yoink/rust-backend:experimental';
 const fixtureImage = 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -82,17 +84,29 @@ let sourcePort;
 let proxyPort;
 let volumeCreated = false;
 let downloadMaxAttempts;
-let downloadTimeoutSeconds = 3;
-let workerSocketTimeoutSeconds = 1;
+let downloadTimeoutSeconds = scenario === 'provider-routing' ? 180 : 3;
+let workerSocketTimeoutSeconds = scenario === 'provider-routing' ? 120 : 1;
 let cacheTtlSeconds;
 let groupsEnabled = ['group-admin', 'membership'].includes(scenario);
 let gallerySource;
+let providerSource;
 let galleryEnabled = false;
 let galleryTrusted = true;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
 const { capture: spawnCapture, docker } = processRunner;
 const containerLifecycle = createContainerLifecycle({ docker, capture: spawnCapture, containers, assert, runId });
-const { startContainer, helperContainer } = containerLifecycle;
+const { startContainer } = containerLifecycle;
+// Explicit test-driver-only opt-in: existing images, current fixture executable and worker source.
+// This never changes production configuration or worker strategy selection.
+const localProviderSources = process.env.YOINK_MEDIA_PROVIDER_SOURCE_MOUNT === '1';
+assert(!localProviderSources || scenario === 'provider-routing', 'source mounts are restricted to the focused provider-routing fixture');
+const providerSourceArgs = localProviderSources ? [
+  '--mount', `type=bind,source=${path.join(workspace, 'target/debug/yoink-server')},target=/usr/local/bin/yoink-server,readonly`,
+  '--mount', `type=bind,source=${path.join(workspace, 'target/debug/yoink-fixture-server')},target=/usr/local/bin/yoink-fixture-server,readonly`,
+  '--mount', `type=bind,source=${path.join(workspace, 'worker')},target=/opt/yoink-worker,readonly`,
+] : [];
+const providerHelperLimits = scenario === 'provider-routing' ? ['--cpus','2','--memory','512m','--pids-limit','128'] : [];
+const helperContainer = (args, timeout, input) => containerLifecycle.helperContainer([...providerHelperLimits, ...providerSourceArgs, ...args], timeout, input);
 const nativeDb = createNativeDbClient({ getAppContainerId: () => appContainerId, getFixturePort: () => fixturePort, fixtureToken, volumeName, fixtureImage, helperContainer });
 const { query: nativeQuery, batch: nativeBatch } = nativeDb;
 async function cleanup() {
@@ -101,6 +115,7 @@ async function cleanup() {
   for (const id of containers) { try { await docker(['rm', '--force', '--volumes', id], { timeout: 15000 }); } catch (error) { failures.push(error); } }
   containers.clear();
   if (volumeCreated) { try { await docker(['volume', 'rm', volumeName], { timeout: 15000 }); } catch (error) { failures.push(error); } volumeCreated = false; }
+  providerSource?.releaseAll();
   for (const fixture of [botApi, sourceFixture, proxyFixture, gallerySource]) { if (!fixture) continue; try { await fixture.close(); } catch (error) { failures.push(error); } }
   try { await rm(tempRoot, { recursive: true, force: true }); } catch (error) { failures.push(error); }
   if (failures.length) throw new AggregateError(failures, 'one or more fixture cleanup actions failed');
@@ -109,7 +124,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { interru
 async function waitFor(predicate, label, milliseconds = 12000) {
   const deadline = Date.now() + milliseconds;
   while (Date.now() < deadline) {
-    const fixtureError = botApi?.error ?? sourceFixture?.error;
+    const fixtureError = botApi?.error ?? sourceFixture?.error ?? gallerySource?.error;
     if (fixtureError) throw new Error(`fixture HTTP server assertion failed: ${fixtureError.message}`, { cause: fixtureError });
     if (interrupted) throw new Error('test interrupted');
     const value = await predicate();
@@ -141,12 +156,12 @@ function assertNoSecret(output, where) {
   for (const secret of [secretMarker, token, fixtureToken, fixtureAuthSecret, cookieSecret, proxyPassword, proxyUser, proxyAuth]) assert(!output.includes(secret), `${where} leaked fixture credentials`);
   assert(!/fixture-(video|document|audio|photo)-\d+/.test(output), `${where} leaked a Telegram file ID`);
 }
-function safeTelegramSummary() { return botApi.calls.slice(-20).map(({method,data,status,uploadLength,cached}) => ({method,status,uploadLength,cached,chat_id:data?.chat_id,text:data?.text})); }
+function safeTelegramSummary() { return recentTelegramCalls(botApi.calls); }
 async function fixtureDiagnostics() {
   const status = await docker(['inspect','--format','{{.State.Status}} exit={{.State.ExitCode}}',appName]).catch(error => `unavailable: ${error.message}`);
   const logs = await docker(['logs','--tail','80',appName]).catch(error => `unavailable: ${error.message}`);
   const jobs = await nativeQuery('SELECT id,status,attempt,json_extract(request, \'$.target.bot_id\'),progress_stage,progress_percent FROM runtime_operations ORDER BY created_at DESC LIMIT 10').catch(error => `unavailable: ${error.message}`);
-  return `app=${status}\njobs (safe fields):\n${redact(jobs)}\nlogs (bounded, redacted):\n${redact(logs)}\ntelegram calls (last 20 of ${botApi.calls.length}):\n${safeTelegramSummary().map(call => JSON.stringify(call)).join('\n')}`;
+  return `app=${status}\njobs (safe fields):\n${redact(jobs)}\nlogs (bounded, redacted):\n${redact(logs)}\ntelegram calls (last 20 non-menu calls of ${botApi.calls.length}):\n${safeTelegramSummary().map(call => JSON.stringify(call)).join('\n')}`;
 }
 async function reportFailure(error, phase) {
   const details = error instanceof AggregateError
@@ -186,6 +201,7 @@ async function launchApp() {
     '--tmpfs','/tmp/yoink-work:rw,noexec,nosuid,size=256m,uid=10001,gid=10001,mode=0700',
     '--tmpfs','/tmp/yoink-db:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700',
     '--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','128','--memory','512m',
+    ...(scenario === 'provider-routing' ? ['--cpus','2'] : []),
     '--env','YOINK_RUST_TELEGRAM_PROGRESS_INTERVAL_SECS=1','--env','YOINK_RUST_TELEGRAM_PROGRESS_TIMEOUT_SECS=2',
     '--env','YOINK_RUST_TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS=2',
     '--env','YOINK_RUST_COOKIE_IMPORT_TIMEOUT_SECS=2',
@@ -200,16 +216,18 @@ async function launchApp() {
     '--env','YOINK_RUST_DATABASE_PATH=/state/private/state.db',
     '--env',`YOINK_FIXTURE_BIND=127.0.0.1:${fixturePort}`,'--env',`YOINK_FIXTURE_TOKEN=${fixtureToken}`,
     '--mount',`type=volume,source=${volumeName},target=/state`,
+    ...providerSourceArgs,
     '--env','YOINK_RUST_DOWNLOADS_ENABLED=true','--env',`YOINK_RUST_HTTP_BIND=127.0.0.1:${appHttpPort}`,
     ...(galleryEnabled ? (galleryTrusted ? gallerySource.dockerArgs : gallerySource.untrustedDockerArgs) : []),
-    '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=${JSON.stringify([`http://127.0.0.1:${sourcePort}`, ...(galleryEnabled ? ['https://imgbox.com'] : [])])}`,
+    '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=${JSON.stringify([`http://127.0.0.1:${sourcePort}`, ...(galleryEnabled ? ['https://imgbox.com', 'https://boards.4chan.org', 'https://a.4cdn.org', 'https://i.4cdn.org', 'https://instagram.com', 'https://www.instagram.com'] : [])])}`,
     '--env',`YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=["http://127.0.0.1:${proxyPort}"]`,
     '--env','YOINK_RUST_DOWNLOAD_LEASE_SECS=6','--env','YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1','--env','YOINK_RUST_DELIVERY_TIMEOUT_SECS=2',
     '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env',`YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=${workerSocketTimeoutSeconds}`,
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
-    ...(['all', 'nsfw'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
+    ...(['all', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
+    ...(scenario === 'provider-routing' ? ['--env','YOINK_RUST_DOWNLOAD_MAX_BYTES=65536','--env','YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES=196608','--env','YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=1'] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
     '--entrypoint','yoink-fixture-server',fixtureImage]);
@@ -264,6 +282,11 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   await seedDatabase();
   await runtimeMigrate();
   await seedFixtureRows();
+  if (scenario === 'provider-routing') {
+    const versions = JSON.parse(await helperContainer(['--network','none','--entrypoint','python',image,'-I','-c',
+      'import importlib.metadata,json; print(json.dumps({name:importlib.metadata.version(name) for name in ("yt-dlp","gallery-dl")}))'],15000));
+    assert.deepEqual(versions, { 'yt-dlp': '2026.8.19', 'gallery-dl': '1.32.13' }, 'provider response contracts require the pinned extractor versions');
+  }
   await helperContainer(['--network','none','--entrypoint','ffmpeg','--mount',`type=bind,source=${fixtureDir},target=/fixture`,image,
     '-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=blue:s=160x120:d=1','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=1',
     '-map','0:v:0','-map','1:a:0','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-movflags','+faststart','/fixture/sample.mp4'],20000);
@@ -690,9 +713,11 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
   if (scenario === 'all' || scenario === 'cookies') summaries.push(await runCookieScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'all' || scenario === 'cookie-uploads') summaries.push(await runCookieUploadScenarios({ ...commandContext, restartApp, cookieSecret, prepareLocalCookieFiles }));
   if (scenario === 'all' || scenario === 'cookie-urls') summaries.push(await runCookieUrlScenarios({ ...commandContext, restartApp, cookieSecret }));
-  if (scenario === 'all' || scenario === 'gallery') {
-  gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image });
-  const gallerySummary = await runGalleryScenarios({ ...commandContext, gallerySource,
+  if (scenario === 'all' || scenario === 'gallery' || scenario === 'provider-routing') {
+  providerSource = scenario === 'provider-routing' ? new ProviderRoutingSource({ mediaBytes, primaryBytes: playlistMedia[1], cookieSecret }) : undefined;
+  gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image, providerResponse: providerSource ? (...args) => providerSource.response(...args) : undefined });
+  const gallerySummary = await (scenario === 'provider-routing' ? runProviderRoutingScenarios : runGalleryScenarios)({ ...commandContext, gallerySource, mediaBytes, primaryBytes: playlistMedia[1], providerSource, cookieSecret,
+    restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); },
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}`,
     restartGallery: async (enabled, trusted = true) => { galleryEnabled = enabled; galleryTrusted = trusted; proxyFixture.galleryPort = enabled ? gallerySource.port : undefined; await restartApp(); },
     restartApp });

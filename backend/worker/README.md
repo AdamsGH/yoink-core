@@ -58,3 +58,98 @@ just test-worker test_format_engine.py
 just test-nsfw-worker
 just test-nsfw-worker 'test_*.py'
 ```
+
+## Versioned provider routing
+
+Rust, not Python or a Telegram URL parser, owns the automatic table. At admission it
+turns automatic intent into `auto_yt_dlp_v1`, `auto_gallery_v1`, or
+`auto_fallback_v1` in the immutable request. Explicit `yt_dlp` and `gallery` remain
+explicit intent. These typed engine variants enter persisted JSON and cache hashes.
+`auto` on an older stored job retains its previous worker behavior; no decoding-time
+rerouting is performed. Subtitles and format reports remain yt-dlp only.
+
+Gallery handles applicable ordinary video requests and mixed image/video batches.
+It returns finalized outputs in extractor order, with a shared batch ordinal across
+child extractors, rather than filtering a directory for image extensions. Explicit
+image requests also keep video returned by the gallery extractor. Probe/processing,
+artifact bounds, native delivery grouping, credentials and Rust NSFW policy are not
+bypassed.
+
+Instagram's automatic fallback runs each provider in a private attempt subdirectory.
+Only the fully successful attempt's artifacts and source prose are published. A
+metadata/extraction or download provider failure may try gallery; successful primary
+extraction/download suppresses fallback. Both-provider failure publishes nothing.
+Resource limits, confinement/network-policy denials, processing failures and
+cancellation cannot enable fallback. Processing an already downloaded primary is
+not a provider-failure escape hatch. These are approved repairs to legacy's broad
+exception fallback. Gallery writes are checked against the attempt directory before
+opening them. The outer launcher/executor deadline and confinement still apply.
+
+Fallback eligibility is default-deny, independent of diagnostic text. Only recognized
+extractor/HTTP/download failures inside the actual yt-dlp call can opt in. This includes
+extractor errors with a typed `json.JSONDecodeError` cause, which yt-dlp marks unexpected
+when the provider returns malformed JSON. Local wrappers still prohibit fallback.
+Source validation, tool/cookie/configuration setup, local metadata/progress callbacks,
+unexpected implementation errors and postprocessing remain forbidden. Network guards
+have structural error markers and a per-process monotonic failure counter, also used
+when the CONNECT relay converts a guard/local error to an HTTP response and loses
+its exception chain. yt-dlp's typed retry error is retained as a causal link while
+forwarding its retry behavior unchanged; an opaque DownloadError alone is insufficient.
+
+Focused verification without building shared images:
+
+```
+cd backend
+just test-provider-routing
+just test-provider-regression
+just test-provider-worker
+just test-provider-worker-regression
+just test-provider-fixtures
+just test-provider-native
+```
+
+The worker unit recipes use the existing `yoink/rust-backend:experimental` image
+with current source mounted read-only at
+`/worker`, no container network, and CPU/memory/PID limits. Loopback-only HTTP is
+available inside the container. Regressions cover real local downloads, malformed
+provider JSON, truncated-provider provenance and structural setup/callback/guard
+failures. These do not assert live provider
+compatibility.
+
+The native `provider-routing` scenario uses unmodified pinned yt-dlp 2026.8.19 and
+gallery-dl 1.32.13 Instagram and 4chan extractors. Disposable DNS pins source hosts
+to a documentation address, an authenticated proxy maps only that numeric authority
+to local TLS, and a disposable certificate supplies fixture trust. Instagram API
+responses distinguish the libraries' existing X-ASBD-ID headers and require the
+same selected session cookie; no worker strategy or native admission is mocked.
+
+Native acceptance covers the routing table and deceptive domains/VK queries; actual
+HTTP metadata failure, malformed JSON and truncated primary download fallback; primary success suppressing
+gallery; both-provider failure without cache/delivery; ordered mixed media and explicit
+image; primary byte limits, gallery item limits, forbidden redirects and cancellation;
+revoked frozen cookies despite an available pool alternative, running/queued role
+revocation; one immutable queued operation and one charge across restart/replay; and
+fresh/cached NSFW prose, private spoilers, group/topic delivery and late policy revocation.
+It compares uploaded bytes, retained cache metadata, native delivery journals, frozen
+requests and quota counters. Failed-primary metadata cannot spoil a safe fallback.
+
+`just test-provider-native` passes using source-mounted native binaries and the
+existing images, without rebuilding shared tags. It builds only the server's two
+entrypoints in this worktree's dev target. The test binaries link CRT statically:
+a dynamic host build required GLIBC 2.38/2.39/2.44 absent from the Debian image. Both
+migration and fixture binaries are mounted so fixture schema and source revisions
+match; the existing image's migrated schema was newer than this worktree. Current
+worker source is read-only at `/opt/yoink-worker` and still runs through the image's
+confined launcher. This opt-in exists only in the focused test driver, not production.
+Matching pinned release images and main's integration checks remain coordinator-owned;
+run `just test-media provider-routing` against those images after integration.
+
+### Persisted-contract rollback
+
+The `auto_*_v1` enum values change persisted request JSON and the worker's typed
+protocol contract without increasing the database schema or NDJSON envelope version.
+An older binary cannot safely decode/resume these operations **even if its database
+schema check succeeds**; an older worker cannot consume the new engine values either.
+Keep runtime and worker revisions paired. Use a compatible reader or a pre-routing
+backup for rollback, never rewrite frozen requests, delivery receipts or uncertain
+operations to force an older binary to resume them. No migration is added by routing.

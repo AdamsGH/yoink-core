@@ -140,7 +140,7 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     defaults.update(options)
     if defaults["max_height"] is not None and (type(defaults["max_height"]) is not int or defaults["max_height"] <= 0 or defaults["max_height"] > 100000):
         raise ValueError("invalid request")
-    if defaults["video_codec"] not in ("h264", "h265", "av1", "vp9", "any") or defaults["audio_codec"] not in ("best", "aac", "mp3", "opus") or defaults["container"] not in ("mp4", "mkv", "webm") or defaults["engine"] not in ("auto", "yt_dlp", "gallery") or type(defaults["gallery_zip"]) is not bool:
+    if defaults["video_codec"] not in ("h264", "h265", "av1", "vp9", "any") or defaults["audio_codec"] not in ("best", "aac", "mp3", "opus") or defaults["container"] not in ("mp4", "mkv", "webm") or defaults["engine"] not in ("auto", "yt_dlp", "gallery", "auto_yt_dlp_v1", "auto_gallery_v1", "auto_fallback_v1") or type(defaults["gallery_zip"]) is not bool:
         raise ValueError("invalid request")
     playlist = defaults["playlist"]
     if playlist is not None:
@@ -167,7 +167,7 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
         validate_subtitle_options(subtitles)
         if (defaults["max_height"] is not None or defaults["video_codec"] != "h264"
                 or defaults["audio_codec"] != "best" or defaults["container"] != "mp4"
-                or defaults["engine"] == "gallery" or playlist is not None or clips or defaults["gallery_zip"]):
+                or defaults["engine"] in ("gallery", "auto_gallery_v1", "auto_fallback_v1") or playlist is not None or clips or defaults["gallery_zip"]):
             raise ValueError("invalid request")
     if task.get("media_mode") == "formats":
         try:

@@ -35,3 +35,17 @@ When `/job <UUID>` reports `delivery_unknown`, check the chat before submitting 
 The persistent file preserves admitted operations across process restarts. Queued work and expired leases can be reconciled by later claims. Download execution retries only within configured limits; uncertain delivery is terminal. There is no automatic rollback or drop. Unix health checks detect database or lock-file replacement/removal and parent permission drift, causing the service to fail health rather than silently create a replacement.
 
 Never copy the database file and WAL files while the database is live and treat that as a backup. The separate [PostgreSQL importer](import.md) creates and verifies a new database using a read-only source snapshot. [Stats search](stats-search.md) derives a recoverable Tantivy index from native rows and a transactional dirty queue. Its matching contract deliberately differs from PostgreSQL tokenization. The [native backup/restore utility](backup-restore.md) validates and publishes a standalone snapshot to a new path. Historical restoration can resurrect already-delivered work, so external effects must be reconciled before activation. No production data import or cutover has occurred.
+
+### Provider-routing compatibility
+
+Automatic provider routing v1 adds versioned typed engine values to immutable
+request JSON, not a schema migration. Released migrations 1–16 are unchanged. A
+pre-routing binary cannot decode newly admitted `auto_yt_dlp_v1`,
+`auto_gallery_v1`, or `auto_fallback_v1` jobs, even when its database schema-version
+check succeeds. These enum values change persisted JSON and typed worker contracts,
+not the schema version. The v2 NDJSON envelope alone does not establish worker
+compatibility. Runtime and worker must be upgraded and rolled back together. Rollback to an older binary requires a pre-routing backup
+or a compatible reader; never rewrite frozen routing or delivery journals to force
+compatibility. Older `auto` jobs retain their old routing behavior. New automatic
+cache hashes include the resolved table version and do not reuse old automatic
+cache identities.

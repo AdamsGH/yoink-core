@@ -1,6 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+// Menu reconciliation can hide the actual rejection from a short diagnostic tail.
+export function recentTelegramCalls(calls) {
+  return calls.filter(call => !['setmycommands', 'deletemycommands'].includes(call.method))
+    .slice(-20)
+    .map(({ method, data, status, uploadLength, cached }) => ({
+      method, status, uploadLength, cached, chat_id: data?.chat_id,
+      thread_id: data?.message_thread_id, text: data?.text,
+    }));
+}
+
 // Bound an already-redacted report without losing the initiating assertion.
 export function boundReport(report, maxLength = 24576) {
   if (!Number.isSafeInteger(maxLength) || maxLength < 128) throw new Error('invalid report bound');

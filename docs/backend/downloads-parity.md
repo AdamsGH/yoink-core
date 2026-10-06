@@ -237,3 +237,80 @@ The immediate-command slice is verified by `just verify`, `just test-worker` and
 - Request invariants: `backend/crates/yoink-domain/src/lib.rs` and `backend/crates/yoink-worker-protocol/src/lib.rs`.
 - Profile and cache behavior: `backend/crates/yoink-downloads/src/profile/` and `cache.rs`. The settings use case and its bounded SQL live in `backend/crates/yoink-downloads/src/settings.rs`, `settings_read.sql` and `settings_write.sql`. The bot editor is `backend/crates/yoink-telegram/src/settings.rs`.
 - Worker validation, processing and networking: `backend/worker/main.py`, `media_engine.py`, `subtitle_engine.py`, `network_guard.py` and `proxy_tunnel.py`.
+
+## Versioned automatic provider routing
+
+New automatic requests freeze routing table v1 in Rust at admission, across native
+adapters. Exact canonical host labels/subdomains match YouTube-only first, then
+`2ch.su`, `4chan.org`, `e-hentai.org`, `e621.net`, `gelbooru.com`, `kemono.cr`,
+`kemono.party`, `coomer.party`, `nhentai.net`, `civitai.com`, `wallhaven.cc` as
+gallery-first; VK hosts with literal `/wall-` or `/album-` path prefixes next;
+Instagram hosts next as yt-dlp then gallery; otherwise yt-dlp. Query strings and
+embedded domain/path text cannot select another provider. Explicit engine intent is
+preserved, and explicit image uses gallery independently of the automatic domain
+table. Format reports and subtitles remain yt-dlp-only.
+
+The serialized typed engines `auto_yt_dlp_v1`, `auto_gallery_v1` and
+`auto_fallback_v1` distinguish resolved automatic intent from explicit providers and
+include the table version in cache identity. Replay compares original automatic
+intent, retains the first frozen snapshot and does not re-resolve credentials or
+preferences. Older stored `auto` requests keep their previous behavior. New-version
+automatic requests deliberately miss older cache identities. No SQL or schema
+migration is added, and released migrations 1–16 are unchanged.
+
+Gallery no longer refuses ordinary video requests or silently filters video out of
+mixed galleries. Finalized artifacts retain extractor order, share bounded batch
+ordinals across child extractors, and pass the existing native delivery and NSFW
+checks. Fallback uses isolated provider workspaces and separate metadata collectors;
+failed primary files/prose cannot become fallback outputs or cache entries. The
+legacy broad-exception fallback is intentionally narrowed: confinement/network
+policy, budget, cancellation and local processing failures never trigger another
+provider. Gallery writes are confined before opening a destination.
+
+Fallback authority is default-deny. Only recognized expected extractor/HTTP/download
+errors in the actual yt-dlp phase enable another provider. Source validation,
+configuration/tool/cookie setup, metadata/progress callbacks, unexpected local errors
+and postprocessing never acquire provider authority. Network-policy errors carry
+structural markers; a monotonic guard/relay fault counter preserves denial when a
+library or relay discards the original exception. The pinned downloader's typed
+retry cause is retained without changing its retries or extraction implementation.
+Diagnostic text cannot grant fallback eligibility.
+
+Verification: deterministic Rust routing/deceptive-host/VK-query and native storage
+replay/reopen/cache-partition tests; 207 changed-crate Rust regressions, 20 focused
+container worker tests, 98 worker regressions and six source/proxy fixture tests.
+The native [provider routing scenarios](../../backend/scripts/media-fixture/provider-routing-scenarios.mjs)
+pass through actual admission, executor, worker, cache, NSFW policy and Bot API delivery.
+The fixture follows the authenticated-proxy/disposable-DNS/trust-mount pattern of
+`gallery-scenarios.mjs` and asserts installed yt-dlp 2026.8.19/gallery-dl 1.32.13.
+Finite local Instagram API and 4chan JSON responses do not replace either extractor.
+
+Native cases include the default routing table and deceptive hosts/VK queries;
+metadata failure and truncated primary download fallback; primary success suppressing
+all gallery requests; both-provider failure without cache or delivery; ordered mixed
+image/video, explicit image, byte/item limits, forbidden redirects and cancellation;
+frozen cookie revocation without switching to an available pool record, running and
+queued role revocation; one queued operation/charge across restart and replay, then
+new-message whole-batch cache reuse; safe fallback metadata unaffected by a failed
+NSFW primary; and NSFW fresh/cache private spoilers, group-topic refusal/permission,
+restart and late group-policy revocation. Actual bytes, cache prose, immutable
+requests, receipts and quota counters are inspected. Existing NSFW policy is unchanged.
+
+`just test-provider-native` uses existing images with current worker source and
+focused worktree dev binaries mounted read-only. Static CRT linking avoids the host's
+newer glibc requirement; matching source migration/fixture binaries avoid an image
+schema/source mismatch. This is a test-driver-only opt-in, with resource guards and
+no shared image build. The confined worker launcher and source/proxy guards remain
+active. Coordinator release-image verification is still required through
+`just test-media provider-routing` after three-way integration. No live-source or
+production cutover claim is made.
+
+Rollback: these enum values are a **persisted JSON and typed worker-contract change**,
+not a schema migration. An older binary cannot safely decode or resume operations
+containing `auto_*_v1` snapshots **even if the database schema version is acceptable**.
+The NDJSON envelope remains v2, which also does not make an older worker compatible.
+Keep runtime and worker revisions paired. Preserve a pre-routing database backup for
+rollback to an older binary, or use a compatible reader. Do not rewrite admitted
+routing, clear operation history or resend uncertain delivery to force compatibility.
+Routing adds no migration; preserve the separate migration-17/manual-mark rollback
+requirements during integration.

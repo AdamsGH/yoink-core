@@ -982,8 +982,19 @@ fn same_request_intent(
     current: &DownloadRequest,
     requested: &DownloadRequest,
 ) -> Result<bool, StoreError> {
-    let current = without_network(current)?;
-    let requested = without_network(requested)?;
+    let normalize_route = |r: &DownloadRequest| -> Result<DownloadRequest, StoreError> {
+        let r = without_network(r)?;
+        let engine = match r.params().engine() {
+            yoink_domain::Engine::AutoYtDlpV1
+            | yoink_domain::Engine::AutoGalleryV1
+            | yoink_domain::Engine::AutoFallbackV1 => yoink_domain::Engine::Auto,
+            engine => engine,
+        };
+        let params = r.params().clone().with_engine(engine);
+        r.with_params(params).map_err(|_| StoreError::InvalidInput)
+    };
+    let current = normalize_route(current)?;
+    let requested = normalize_route(requested)?;
     if current.preference_overrides() != requested.preference_overrides() {
         return Ok(false);
     }

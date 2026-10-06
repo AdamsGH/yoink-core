@@ -339,7 +339,7 @@ async fn nsfw_blur_setting_is_current_versioned_and_preserves_cache_and_preferen
     }
     assert!(
         store
-            .lookup_media_cache(&request(44))
+            .lookup_media_cache(&request(44).freeze_provider_routing())
             .await
             .unwrap()
             .is_some()
@@ -436,7 +436,11 @@ async fn nsfw_mark_command_replay_denial_and_clean_cached_forced_delivery() {
             assert_eq!(delivery.calls.load(Ordering::SeqCst), 2);
         }
         assert!(store.get(44, first.operation_id).await.unwrap().is_some());
-        let cached = store.lookup_media_cache(&req).await.unwrap().unwrap();
+        let cached = store
+            .lookup_media_cache(&req.clone().freeze_provider_routing())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(cached.media.iter().all(|m| m.metadata().is_some()));
     }
 }

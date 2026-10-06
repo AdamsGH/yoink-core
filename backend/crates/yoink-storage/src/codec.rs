@@ -104,6 +104,9 @@ enum EngineData {
     Auto,
     YtDlp,
     Gallery,
+    AutoYtDlpV1,
+    AutoGalleryV1,
+    AutoFallbackV1,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -230,6 +233,9 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
             engine: match p.engine() {
                 Engine::Auto => EngineData::Auto,
                 Engine::YtDlp => EngineData::YtDlp,
+                Engine::AutoYtDlpV1 => EngineData::AutoYtDlpV1,
+                Engine::AutoGalleryV1 => EngineData::AutoGalleryV1,
+                Engine::AutoFallbackV1 => EngineData::AutoFallbackV1,
                 Engine::Gallery => EngineData::Gallery,
             },
             playlist: p.playlist().map(|r| PlaylistRangeData {
@@ -332,6 +338,9 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
         .with_engine(match p.engine {
             EngineData::Auto => Engine::Auto,
             EngineData::YtDlp => Engine::YtDlp,
+            EngineData::AutoYtDlpV1 => Engine::AutoYtDlpV1,
+            EngineData::AutoGalleryV1 => Engine::AutoGalleryV1,
+            EngineData::AutoFallbackV1 => Engine::AutoFallbackV1,
             EngineData::Gallery => Engine::Gallery,
         })
         .with_playlist(

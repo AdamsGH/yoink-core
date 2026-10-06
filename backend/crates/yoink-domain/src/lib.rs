@@ -87,6 +87,9 @@ pub enum Engine {
     Auto,
     YtDlp,
     Gallery,
+    AutoYtDlpV1,
+    AutoGalleryV1,
+    AutoFallbackV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -380,7 +383,10 @@ impl DownloadParams {
                 || self.audio_codec != AudioCodec::Best
                 || self.container != Container::Mp4
                 || !self.send_as_file
-                || self.engine == Engine::Gallery
+                || matches!(
+                    self.engine,
+                    Engine::Gallery | Engine::AutoGalleryV1 | Engine::AutoFallbackV1
+                )
                 || self.playlist.is_some()
                 || !self.clips.is_empty()
                 || self.gallery_zip
@@ -394,7 +400,10 @@ impl DownloadParams {
                 || self.video_codec != VideoCodec::H264
                 || self.audio_codec != AudioCodec::Best
                 || self.container != Container::Mp4
-                || self.engine == Engine::Gallery
+                || matches!(
+                    self.engine,
+                    Engine::Gallery | Engine::AutoGalleryV1 | Engine::AutoFallbackV1
+                )
                 || self.playlist.is_some()
                 || !self.clips.is_empty()
                 || self.gallery_zip
@@ -432,6 +441,14 @@ pub struct DownloadRequest {
 }
 
 impl DownloadRequest {
+    /// Freeze the automatic routing table at admission; explicit engine intent is unchanged.
+    pub fn freeze_provider_routing(mut self) -> Self {
+        if self.params.engine == Engine::Auto {
+            self.params.engine = automatic_provider_v1(&self.source_url, self.media_mode);
+        }
+        self
+    }
+
     pub fn new(
         actor_id: u64,
         source_url: &str,
@@ -1172,5 +1189,137 @@ mod tests {
         op.succeed().unwrap();
         assert_eq!(op.state(), OperationState::Succeeded);
         assert_eq!(op.acknowledge_cancel(), Err(TransitionError::Terminal));
+    }
+}
+
+/// Versioned legacy defaults. Host labels and literal path prefixes, never query substrings.
+pub fn automatic_provider_v1(url: &Url, mode: MediaMode) -> Engine {
+    if mode == MediaMode::Image {
+        return Engine::AutoGalleryV1;
+    }
+    if matches!(mode, MediaMode::Subtitles | MediaMode::Formats) {
+        return Engine::AutoYtDlpV1;
+    }
+    let host = url.host_str().unwrap_or("").trim_end_matches('.');
+    let matches = |domain: &str| {
+        host == domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    };
+    if ["youtube.com", "youtu.be"].iter().any(|d| matches(d)) {
+        return Engine::AutoYtDlpV1;
+    }
+    if [
+        "2ch.su",
+        "4chan.org",
+        "e-hentai.org",
+        "e621.net",
+        "gelbooru.com",
+        "kemono.cr",
+        "kemono.party",
+        "coomer.party",
+        "nhentai.net",
+        "civitai.com",
+        "wallhaven.cc",
+    ]
+    .iter()
+    .any(|d| matches(d))
+        || (matches("vk.com")
+            && ["/wall-", "/album-"]
+                .iter()
+                .any(|p| url.path().starts_with(p)))
+    {
+        return Engine::AutoGalleryV1;
+    }
+    if matches("instagram.com") {
+        Engine::AutoFallbackV1
+    } else {
+        Engine::AutoYtDlpV1
+    }
+}
+
+#[cfg(test)]
+mod provider_routing_tests {
+    use super::*;
+    #[test]
+    fn provider_routing_table_and_deceptive_urls() {
+        for host in [
+            "2ch.su",
+            "4chan.org",
+            "e-hentai.org",
+            "e621.net",
+            "gelbooru.com",
+            "kemono.cr",
+            "kemono.party",
+            "coomer.party",
+            "nhentai.net",
+            "civitai.com",
+            "wallhaven.cc",
+        ] {
+            for prefix in ["", "www.", "media."] {
+                let url = Url::parse(&format!("https://{prefix}{host}/post")).unwrap();
+                assert_eq!(
+                    automatic_provider_v1(&url, MediaMode::Video),
+                    Engine::AutoGalleryV1
+                );
+            }
+            let url =
+                Url::parse(&format!("https://{host}.evil.test/?url=https://{host}/")).unwrap();
+            assert_eq!(
+                automatic_provider_v1(&url, MediaMode::Video),
+                Engine::AutoYtDlpV1
+            );
+        }
+        for (url, expected) in [
+            (
+                "https://m.vk.com/wall-123_456?foo=bar",
+                Engine::AutoGalleryV1,
+            ),
+            ("https://VK.com/album-123_456", Engine::AutoGalleryV1),
+            ("https://vk.com/?url=vk.com/wall-123", Engine::AutoYtDlpV1),
+            ("https://evil.test/vk.com/wall-123", Engine::AutoYtDlpV1),
+            ("https://vk.com.evil.test/wall-123", Engine::AutoYtDlpV1),
+            ("https://vk.com/path/wall-123", Engine::AutoYtDlpV1),
+            ("https://instagram.com/p/id", Engine::AutoFallbackV1),
+            ("https://www.instagram.com/p/id", Engine::AutoFallbackV1),
+            ("https://notinstagram.com/p/id", Engine::AutoYtDlpV1),
+            (
+                "https://youtube.com/watch?url=vk.com/wall-123",
+                Engine::AutoYtDlpV1,
+            ),
+        ] {
+            assert_eq!(
+                automatic_provider_v1(&Url::parse(url).unwrap(), MediaMode::Video),
+                expected
+            );
+        }
+        assert_eq!(
+            automatic_provider_v1(
+                &Url::parse("https://youtube.com/watch?v=id").unwrap(),
+                MediaMode::Image
+            ),
+            Engine::AutoGalleryV1
+        );
+    }
+    #[test]
+    fn provider_routing_freezes_only_automatic_intent() {
+        let request = DownloadRequest::new(
+            42,
+            "https://instagram.com/p/id",
+            MediaMode::Video,
+            None,
+            DownloadParams::default(),
+        )
+        .unwrap();
+        assert_eq!(request.params().engine(), Engine::Auto);
+        let frozen = request.freeze_provider_routing();
+        assert_eq!(frozen.params().engine(), Engine::AutoFallbackV1);
+        assert_eq!(frozen.clone().freeze_provider_routing(), frozen);
+        let explicit = frozen
+            .with_params(DownloadParams::default().with_engine(Engine::YtDlp))
+            .unwrap()
+            .freeze_provider_routing();
+        assert_eq!(explicit.params().engine(), Engine::YtDlp);
     }
 }

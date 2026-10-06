@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import ipaddress
 import socket
+import threading
 import unicodedata
 from urllib.parse import urlsplit
 from urllib.request import OpenerDirector, ProxyHandler
@@ -20,26 +21,63 @@ _REQUESTS_SESSION = None
 _ORIGINAL_REQUESTS_SEND = None
 
 
+_GUARD_FAILURE_COUNT = 0
+_GUARD_FAILURE_LOCK = threading.Lock()
+
+
+def record_guard_failure() -> None:
+    """Retain policy/local-relay denials across a thread/HTTP boundary."""
+    global _GUARD_FAILURE_COUNT
+    with _GUARD_FAILURE_LOCK:
+        _GUARD_FAILURE_COUNT += 1
+
+
+def guard_failure_count() -> int:
+    with _GUARD_FAILURE_LOCK:
+        return _GUARD_FAILURE_COUNT
+
+
+class NetworkPolicyError(OSError):
+    fallback_forbidden = True
+    def __init__(self, message):
+        record_guard_failure()
+        super().__init__(message)
+
+
+class NetworkValidationError(ValueError):
+    fallback_forbidden = True
+    def __init__(self, message):
+        record_guard_failure()
+        super().__init__(message)
+
+
+def resolve_addresses(*args, **kwargs):
+    try:
+        return _ORIGINAL_GETADDRINFO(*args, **kwargs)
+    except OSError as exc:
+        raise NetworkPolicyError("network destination resolution failed") from exc
+
+
 def _origin_host_port(origin: str) -> tuple[str, int]:
     parsed = _parse_http_url(origin, "invalid allowed origin")
     if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
-        raise ValueError("invalid allowed origin")
+        raise NetworkValidationError("invalid allowed origin")
     return _host_port(parsed)
 
 
 def _parse_http_url(url: str, error: str, *, allow_credentials: bool = False):
     if not isinstance(url, str) or any(unicodedata.category(char) == "Cc" for char in url):
-        raise ValueError(error)
+        raise NetworkValidationError(error)
     try:
         parsed = urlsplit(url)
         if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
-            raise ValueError(error)
+            raise NetworkValidationError(error)
         if not allow_credentials and (parsed.username is not None or parsed.password is not None):
-            raise ValueError(error)
+            raise NetworkValidationError(error)
         parsed.port
         return parsed
     except (ValueError, UnicodeError) as exc:
-        raise ValueError(error) from exc
+        raise NetworkValidationError(error) from exc
 
 
 def _host_port(parsed) -> tuple[str, int]:
@@ -65,7 +103,9 @@ def _address_is_public(address: str) -> bool:
 
 
 def guarded_getaddrinfo(host, port, *args, **kwargs):
-    results = _ORIGINAL_GETADDRINFO(host, port, *args, **kwargs)
+    results = resolve_addresses(host, port, *args, **kwargs)
+    if not results:
+        raise NetworkPolicyError("network destination is not permitted")
     normalized_host = (
         host.decode("ascii", "ignore").rstrip(".").lower()
         if isinstance(host, bytes)
@@ -84,10 +124,10 @@ def guarded_getaddrinfo(host, port, *args, **kwargs):
     for result in results:
         try:
             public = _address_is_public(result[4][0])
-        except ValueError:
+        except (IndexError, TypeError, ValueError):
             public = False
         if not public and not source_allowlisted and not proxy_allowlisted and not relay_allowlisted:
-            raise OSError("network destination is not permitted")
+            raise NetworkPolicyError("network destination is not permitted")
     return results
 
 
@@ -131,7 +171,7 @@ def configure_proxy(proxy_url: str | None) -> None:
     parsed = _parse_http_url(proxy_url, "invalid proxy", allow_credentials=True)
     origin = _host_port(parsed)
     if _is_ip_address(origin[0]) and not _address_is_public(origin[0]) and origin not in _ALLOWED_PROXY_ORIGINS:
-        raise ValueError("invalid proxy")
+        raise NetworkValidationError("invalid proxy")
     _CONFIGURED_PROXY = origin
 
 
@@ -145,7 +185,7 @@ def _validate_proxy_request(url: str) -> None:
     if origin == _ACTIVE_RELAY_ORIGIN:
         return
     if _ACTIVE_RELAY_ORIGIN is not None or _CONFIGURED_PROXY is None or origin != _CONFIGURED_PROXY:
-        raise OSError("network destination is not permitted")
+        raise NetworkPolicyError("network destination is not permitted")
 
 
 def _guarded_opener_open(self, fullurl, data=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
@@ -179,11 +219,11 @@ def validate_source_url(source_url: str, allowed_origins: tuple[str, ...]) -> No
     permitted = frozenset(_origin_host_port(origin) for origin in allowed_origins)
     if _is_ip_address(host):
         if not _address_is_public(host) and (host, port) not in permitted:
-            raise OSError("network destination is not permitted")
+            raise NetworkPolicyError("network destination is not permitted")
     else:
-        results = _ORIGINAL_GETADDRINFO(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        results = resolve_addresses(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         if not results:
-            raise OSError("network destination is not permitted")
+            raise NetworkPolicyError("network destination is not permitted")
         source_allowed = (host, port) in permitted or (host, port) in _ALLOWED_ORIGINS
         for result in results:
             try:
@@ -191,7 +231,7 @@ def validate_source_url(source_url: str, allowed_origins: tuple[str, ...]) -> No
             except (IndexError, TypeError, ValueError):
                 public = False
             if not public and not source_allowed:
-                raise OSError("network destination is not permitted")
+                raise NetworkPolicyError("network destination is not permitted")
 
 
 def _is_ip_address(host: str) -> bool:
