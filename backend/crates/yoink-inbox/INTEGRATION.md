@@ -109,7 +109,7 @@ payloads or raw external error messages.
 |---|---|
 | `POST /folders` | Defaults `is_local:true`. Explicit `is_local:false` requires `Idempotency-Key` **before admission**, plus write access/credential. Success 201 returns folder DTO. |
 | `GET /gh_mutations` | 200 active `[{id,state,created_at}]`, user-scoped. |
-| `GET /gh_mutations/{id}` | 200 `{id,state,folder_id,error_code,created_at,updated_at,can_cancel,can_inspect_candidates}`. `folder_id` exposed only when applied. Unknown/other user's ID is 404. |
+| `GET /gh_mutations/{id}` | 200 `{id,state,folder_id,error_code,created_at,updated_at,can_cancel,can_inspect_candidates,operation_key_matches}`. `folder_id` exposed only when applied. Optional `Idempotency-Key` proves a match against this user's stored request key without returning it. Missing or different keys yield `operation_key_matches:false`. Unknown/other user's ID is 404. |
 | `POST /gh_mutations/{id}/reconcile` | Prepared may send **once**; confirmed atomically applies; sending/unknown performs reads only. Success 200 `{id,state,folder_id}`; unresolved is 409. Never replay an unknown create. |
 | `GET /gh_mutations/{id}/create-candidates` | 200 `[{id,name,slug,description}]`, including `[]`. Re-reads catalogue, excluding persisted pre-send baseline and requiring name/description match. Not evidence that this client caused any candidate. |
 | `POST /gh_mutations/{id}/adopt-create` | Body `{remote_id:string}`; explicit user selection is revalidated using fresh authority, token and catalogue. 200 applied intent/folder ID. An already read-synced candidate is reused, retaining its manual fields/pins/memberships. |
@@ -132,8 +132,11 @@ A key used with another payload is 422; an applied key returns its existing
 folder rather than contacting GitHub; pending keys remain pending. Do not rotate
 keys, regenerate payload defaults or offer “retry with a new key” to bypass an
 ambiguous result. Fetch active/status/candidates instead and require selection
-before adoption. GitHub itself does **not** accept this Inbox idempotency key or
-provide list-create idempotency/CAS.
+before adoption. A conflict ID can identify another request. Clear a saved
+rejected/cancelled create only after status proves its exact persisted key matches.
+An applied status alone does not clear the saved request. Retrieve its folder
+through an explicit POST with the same key and original body. GitHub itself does
+**not** accept this Inbox idempotency key or provide list-create idempotency/CAS.
 
 The mutation ledger has `prepared -> sending -> confirmed -> applied`, plus
 `unknown` and definite `rejected`. Send CAS and one active intent per user provide

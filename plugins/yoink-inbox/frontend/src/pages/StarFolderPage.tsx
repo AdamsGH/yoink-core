@@ -1,6 +1,7 @@
 import { ExternalLink, FolderMinus, GitFork, Search, Star } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import {
@@ -29,7 +30,7 @@ import {
   deleteFolder,
   listFolders,
   listFolderStars,
-  listGhStars,
+  listAllGhStars,
   removeStarFromFolder,
   updateFolder,
 } from '@inbox/api/items'
@@ -37,6 +38,7 @@ import type { InboxGhFolder, InboxGhFolderCreate, InboxGhStar } from '@inbox/typ
 
 export default function StarFolderPage() {
   const { id } = useParams<{ id: string }>()
+  const { t } = useTranslation()
   const folderId = Number(id)
   const navigate = useNavigate()
 
@@ -44,30 +46,41 @@ export default function StarFolderPage() {
   const [stars, setStars] = useState<InboxGhStar[]>([])
   const [allStars, setAllStars] = useState<InboxGhStar[]>([])
   const [addSearch, setAddSearch] = useState('')
+  const [loadFailed, setLoadFailed] = useState(false)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<InboxGhFolderCreate>({ name: '' })
 
   useEffect(() => {
     if (!folderId) return
+    let active = true
+    setLoading(true)
+    setLoadFailed(false)
+    setFolder(null)
+    setStars([])
+    setAllStars([])
     Promise.all([
       listFolders(),
       listFolderStars(folderId),
-      listGhStars({ limit: 200 }),
+      listAllGhStars(),
     ])
       .then(([folders, folderStars, allStarsRes]) => {
+        if (!active) return
         const f = folders.find((x) => x.id === folderId) ?? null
         setFolder(f)
         if (f) setForm({ name: f.name, description: f.description ?? '', icon: f.icon ?? '' })
         setStars(folderStars)
-        setAllStars(allStarsRes.items)
+        setAllStars(allStarsRes)
       })
       .catch((err) => {
+        if (!active) return
         if (import.meta.env.DEV) console.error(err)
-        toast.error('Failed to load folder')
+        setLoadFailed(true)
+        toast.error(t('inboxRecovery.folderLoadFailed'))
       })
-      .finally(() => setLoading(false))
-  }, [folderId])
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [folderId, t])
 
   const starIdsInFolder = new Set(stars.map((s) => s.id))
   const addCandidates = allStars.filter(
@@ -128,7 +141,7 @@ export default function StarFolderPage() {
     return (
       <PageContainer>
         <div className="container mx-auto max-w-5xl py-8">
-          <EmptyState message="Folder not found." />
+          <EmptyState message={loadFailed ? t('inboxRecovery.folderLoadFailed') : 'Folder not found.'} />
         </div>
       </PageContainer>
     )
@@ -246,7 +259,7 @@ export default function StarFolderPage() {
           <p className="text-sm text-muted-foreground">All stars are already in this folder.</p>
         ) : (
           <div className="max-h-64 space-y-1 overflow-y-auto">
-            {addCandidates.slice(0, 30).map((s) => (
+            {addCandidates.map((s) => (
               <div key={s.id} className="flex items-center justify-between rounded px-2 py-1.5 hover:bg-muted">
                 <div className="min-w-0 flex-1">
                   <span className="truncate text-sm font-medium">{s.full_name}</span>

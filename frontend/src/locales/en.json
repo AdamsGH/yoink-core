@@ -789,5 +789,31 @@
     "web": "Web",
     "tldr_by_alias": "By alias",
     "no_tldr": "No TL;DR usage yet"
+  },
+  "inboxRecovery": {
+    "discardRejected": "Discard saved request after confirmed rejection/cancellation",
+    "folderLoadFailed": "Could not load the complete folder catalogue. No partial result is shown.",
+    "title": "GitHub operation recovery",
+    "unknown": "The outcome is not confirmed. Do not repeat the operation as a new request. Refresh status or explicitly reconcile; unknown creates require your selection, never automatic adoption.",
+    "unavailable": "Recovery status is unavailable. No remote success has been confirmed. Your saved request is retained.",
+    "resolveFirst": "Resolve the saved create before starting another remote create.",
+    "applied": "GitHub operation confirmed and applied",
+    "refresh": "Refresh status",
+    "retry": "Retry saved request (same operation key)",
+    "reconcile": "Check remote outcome",
+    "cancel": "Cancel before send",
+    "inspect": "Inspect create candidates",
+    "noCandidates": "No candidates found. The outcome remains unknown; this does not authorize a new create.",
+    "adopt": "Adopt selected remote list",
+    "adoptTitle": "Adopt this remote list?",
+    "adoptDescription": "Confirm that remote list {{id}} is the result of your create. Matching names alone do not prove ownership.",
+    "states": {
+      "prepared": "Prepared, not yet sent",
+      "sending": "Sending; outcome not confirmed",
+      "unknown": "Outcome unknown",
+      "confirmed": "Remote confirmed; local application pending",
+      "applied": "Confirmed and applied",
+      "rejected": "Rejected or cancelled"
+    }
   }
 }

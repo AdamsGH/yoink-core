@@ -1,3 +1,5 @@
+import { collectStars } from './star-pagination'
+
 import { apiClient } from '@core/lib/api-client'
 
 import type {
@@ -116,8 +118,11 @@ export async function listFolders(): Promise<InboxGhFolder[]> {
   return data
 }
 
-export async function createFolder(body: InboxGhFolderCreate): Promise<InboxGhFolder> {
-  const { data } = await apiClient.post<InboxGhFolder>('/inbox/folders', body)
+export async function createFolder(body: InboxGhFolderCreate, operationKey?: string): Promise<InboxGhFolder> {
+  if (body.is_local === false && !operationKey) throw new Error('Remote create requires a durable operation key')
+  const { data } = await apiClient.post<InboxGhFolder>('/inbox/folders', body, {
+    headers: operationKey ? { 'Idempotency-Key': operationKey } : undefined,
+  })
   return data
 }
 
@@ -144,11 +149,7 @@ export async function removeStarFromFolder(folderId: number, starId: number): Pr
 }
 
 export async function listFolderStars(folderId: number): Promise<InboxGhStar[]> {
-  // stars in a folder come via the regular gh_stars endpoint filtered by folder_id
-  const { data } = await apiClient.get<InboxGhStarListResponse>('/inbox/gh_stars', {
-    params: { folder_id: folderId, limit: 200 },
-  })
-  return data.items
+  return listAllGhStars({ folder_id: folderId })
 }
 
 // ---------------------------------------------------------------------------
@@ -203,4 +204,8 @@ export async function unstarRepo(starId: number): Promise<void> {
 export async function listStarLanguages(): Promise<string[]> {
   const { data } = await apiClient.get<string[]>('/inbox/gh_stars/languages')
   return data
+}
+
+export function listAllGhStars(filters: GhStarFilters = {}): Promise<InboxGhStar[]> {
+  return collectStars(listGhStars, filters)
 }

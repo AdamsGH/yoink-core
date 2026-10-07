@@ -159,9 +159,13 @@ verify-py *args="src/tests":
 verify-i18n:
     cd frontend && npm run test:i18n && npm run check:i18n
 
-# Frontend verify: translations + tsc across core and plugin frontends.
+test-inbox-frontend:
+    node --test plugins/yoink-inbox/frontend/tests/frontend.test.mjs
+
+# Frontend verify: translations + Inbox regressions + tsc across core and plugins.
 verify-fe *args="":
     just verify-i18n
+    just test-inbox-frontend
     just tsc {{args}}
 
 # Full verify: python (lint + tests) + frontend (tsc). Mirrors CI.

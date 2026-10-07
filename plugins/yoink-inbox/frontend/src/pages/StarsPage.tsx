@@ -76,6 +76,7 @@ import { EmptyState } from '@app'
 import type { InboxGhFolder, InboxGhStar } from '@inbox/types'
 
 import type { GhStarSort } from '@inbox/api/items'
+import { MutationRecovery } from './MutationRecovery'
 import { type FolderSelection, useStarsPage } from './useStarsPage'
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,7 @@ export default function StarsPage() {
       onDragEnd={(e) => void handleDragEnd(e)}
     >
       <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto p-4 sm:p-6">
+        <MutationRecovery recovery={page.recovery} />
         {/* header */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between gap-2">
@@ -227,7 +229,7 @@ export default function StarsPage() {
                   moving={page.movingId === star.id}
                   isDragging={activeStar?.id === star.id}
                   onMoveTo={(fid) => void page.onMoveStar(star.id, fid)}
-                  onUnstar={() => void page.onUnstar(star.id, star.gh_repo_id)}
+                  onUnstar={() => void page.onUnstar(star.id)}
                 />
               ))}
             </div>

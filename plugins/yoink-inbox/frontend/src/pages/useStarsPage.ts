@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { toast } from 'sonner'
 
 import {
@@ -16,6 +16,9 @@ import {
 } from '@inbox/api/items'
 import type { GhStarSort } from '@inbox/api/items'
 import type { InboxGhFolder, InboxGhFolderCreate, InboxGhStar } from '@inbox/types'
+
+import { useMutationRecovery } from './useMutationRecovery'
+import { continuation } from '../api/star-pagination'
 
 export type FolderSelection = 'all' | 'unorganised' | number
 
@@ -36,6 +39,7 @@ export function useStarsPage() {
   const [selectedFolder, setSelectedFolder] = useState<FolderSelection>('all')
   const [movingId, setMovingId] = useState<number | null>(null)
   const [languages, setLanguages] = useState<string[]>([])
+  const recovery = useMutationRecovery(setFolders)
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -56,56 +60,62 @@ export function useStarsPage() {
     } catch { /* non-critical */ }
   }, [])
 
+  const filters = useMemo(() => ({
+    limit: PAGE_SIZE,
+    language: language || undefined,
+    search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
+    folder_id: typeof selectedFolder === 'number' ? selectedFolder : selectedFolder === 'unorganised' ? 0 : undefined,
+    sort,
+  }), [language, debouncedSearch, selectedFolder, sort])
+  const currentFilters = useRef(filters)
+  currentFilters.current = filters
+  const loadedFilters = useRef<typeof filters | null>(null)
+  const generation = useRef(0)
+  const moreInFlight = useRef(false)
   const loadStars = useCallback(async () => {
+    const version = ++generation.current
     setLoading(true)
+    setMoreCursor(null)
+    setLoadingMore(false)
+    moreInFlight.current = false
     try {
-      const res = await listGhStars({
-        limit: PAGE_SIZE,
-        language: language || undefined,
-        search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
-        folder_id:
-          typeof selectedFolder === 'number' ? selectedFolder :
-          selectedFolder === 'unorganised' ? 0 :
-          undefined,
-        sort,
-      })
+      const res = await listGhStars(filters)
+      if (version !== generation.current || currentFilters.current !== filters) return
+      loadedFilters.current = filters
       setStars(res.items)
       setMoreCursor(res.next_cursor ?? null)
       setSyncStatus(res.sync_status ?? null)
       setLastSync(res.last_synced_at ?? null)
     } catch (err) {
       if (import.meta.env.DEV) console.error(err)
-      toast.error('Failed to load stars')
+      if (version === generation.current && currentFilters.current === filters) toast.error('Failed to load stars')
     } finally {
-      setLoading(false)
+      if (version === generation.current && currentFilters.current === filters) setLoading(false)
     }
-  }, [language, debouncedSearch, selectedFolder, sort])
+  }, [filters])
 
   useEffect(() => { void loadFolders() }, [loadFolders])
   useEffect(() => { void loadLanguages() }, [loadLanguages])
-  useEffect(() => { void loadStars() }, [loadStars])
+  useEffect(() => { void loadStars(); return () => { ++generation.current } }, [loadStars])
 
   async function loadMore() {
-    if (!moreCursor || loadingMore) return
+    if (!moreCursor || loading || loadedFilters.current !== filters || moreInFlight.current) return
+    const version = generation.current
+    moreInFlight.current = true
     setLoadingMore(true)
     try {
-      const isOffset = sort !== 'starred_at'
-      const res = await listGhStars({
-        limit: PAGE_SIZE,
-        ...(isOffset
-          ? { offset: Number(moreCursor) }
-          : { cursor: moreCursor }),
-        language: language || undefined,
-        search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
-        sort,
-      })
+      const res = await listGhStars(continuation(filters, moreCursor))
+      if (version !== generation.current || currentFilters.current !== filters) return
       setStars((p) => [...p, ...res.items])
       setMoreCursor(res.next_cursor ?? null)
     } catch (err) {
       if (import.meta.env.DEV) console.error(err)
-      toast.error('Failed to load more')
+      if (version === generation.current && currentFilters.current === filters) toast.error('Failed to load more')
     } finally {
-      setLoadingMore(false)
+      if (version === generation.current && currentFilters.current === filters) {
+        moreInFlight.current = false
+        setLoadingMore(false)
+      }
     }
   }
 
@@ -119,10 +129,11 @@ export function useStarsPage() {
   }
 
   async function onCreateFolder(body: InboxGhFolderCreate) {
+    if (body.is_local === false) return recovery.create(body)
     try {
       const f = await createFolder(body)
       setFolders((p) => [...p, f])
-      toast.success(body.is_local === false ? 'Folder created and synced to GitHub Lists' : 'Folder created')
+      toast.success('Folder created')
       return f
     } catch {
       toast.error('Failed to create folder')
@@ -166,6 +177,7 @@ export function useStarsPage() {
       setFolders((p) => p.map((x) => (x.id === id ? f : x)))
     } catch {
       toast.error('Failed to rename')
+      void recovery.refresh()
     }
   }
 
@@ -177,6 +189,7 @@ export function useStarsPage() {
       toast.success('Folder deleted')
     } catch {
       toast.error('Failed to delete')
+      void recovery.refresh()
     }
   }
 
@@ -216,23 +229,25 @@ export function useStarsPage() {
       }
     } catch {
       toast.error('Failed to move')
+      void recovery.refresh()
     } finally {
       setMovingId(null)
     }
   }
 
-  async function onUnstar(starId: number, repoId: number) {
+  async function onUnstar(starId: number) {
     try {
-      await unstarRepo(repoId)
+      await unstarRepo(starId)
       setStars((p) => p.filter((s) => s.id !== starId))
       toast.success('Unstarred')
     } catch {
       toast.error('Failed to unstar')
+      void recovery.refresh()
     }
   }
 
   return {
-    stars, folders, loading, loadingMore, moreCursor,
+    recovery, stars, folders, loading, loadingMore, moreCursor,
     syncStatus, lastSync,
     search, setSearch,
     language, setLanguage,
