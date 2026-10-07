@@ -3,12 +3,14 @@ import { commandHarness } from './command-harness.mjs';
 
 // Opt-in only: uses the isolated native acceptance DB and fixture transports.
 export async function runPersonalControlsScenarios(context) {
-  const { botApi, fixtureSql, waitFor, sourceFixture, sourcePort, cookieSecret, proxyFixture, proxyUrl } = context;
+  const { botApi, fixtureSql, waitFor, sourceFixture, sourcePort, cookieSecret, proxyFixture, proxyUrl, appHttpPort, cookieWebOrigin, registerCookieSyncToken } = context;
   const actor = 43;
   const h = commandHarness(context, 2_500_000);
   const quote = v => v === null ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replaceAll("'", "''")}'`;
   const saved = [];
-  for (const [table, where] of [['users', 'id=43'], ['cookies', 'user_id=43 AND is_pool=0'], ['dl_user_settings', 'user_id=43'], ['runtime_personal_cookie_mutation_watermarks', 'actor_id=43']]) {
+  const tables = [['users', 'id=43'], ['cookies', 'user_id=43 AND is_pool=0'], ['dl_user_settings', 'user_id=43'], ['runtime_personal_cookie_mutation_watermarks', 'actor_id=43']];
+  if (cookieWebOrigin) tables.push(['cookie_web_tokens', 'user_id=43']);
+  for (const [table, where] of tables) {
     const columns = (await fixtureSql(`SELECT name FROM pragma_table_info('${table}') ORDER BY cid`)).trim().split('\n');
     const rows = JSON.parse(await fixtureSql(`SELECT json_group_array(json_object(${columns.flatMap(c => [quote(c), c]).join(',')})) FROM ${table} WHERE ${where}`));
     saved.push({ table, where, columns, rows });
@@ -53,6 +55,33 @@ export async function runPersonalControlsScenarios(context) {
     const importPath = '/cookie-import/ordinary-personal';
     sourceFixture.setCookieImportResponse(importPath, { body: jar, headers: { 'content-type': 'text/plain' } });
     assert.match((await send(`/cookie http://127.0.0.1:${sourcePort}${importPath} 127.0.0.1`)).data.text, /Personal cookies were saved/);
+    if (cookieWebOrigin) {
+      const reply = await send('/cookie token');
+      const syncToken = reply.data.text.split('\n')[2];
+      assert.equal(typeof syncToken, 'string', 'native token reply must include a token');
+      registerCookieSyncToken(syncToken);
+      assert.match(syncToken, /^[A-Za-z0-9_-]{32,128}$/);
+      assert.deepEqual(reply.data.reply_markup.inline_keyboard, [[{
+        text: 'Manage cookies', web_app: { url: new URL('cookies', cookieWebOrigin).href },
+      }]]);
+      const body = JSON.stringify({ token: syncToken, cookies: { '127.0.0.1': [{
+        domain: '127.0.0.1', path: '/', name: 'fixture_auth', value: cookieSecret,
+        expirationDate: 4102444800,
+      }, {
+        // The recognized auth hint makes this jar usable, but its path must exclude the media request.
+        domain: '127.0.0.1', path: '/unrelated', name: 'sid', value: cookieSecret,
+        expirationDate: 4102444800,
+      }] } });
+      const submit = () => fetch(`http://127.0.0.1:${appHttpPort}/api/v1/dl/cookies/submit`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body,
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal((await submit()).status, 204, 'native extension submission without JWT');
+      assert.equal(await fixtureSql("SELECT is_valid FROM cookies WHERE user_id=43 AND is_pool=0 AND domain='127.0.0.1'"), '1', 'browser jar must be eligible for extraction');
+      const synced = await state();
+      assert.equal((await submit()).status, 401, 'sync token must be single-use');
+      assert.equal(await state(), synced, 'replayed submission must not replace cookies');
+    }
     const menu = await send('/cookie');
     for (const options of [{ from: 42 }, { isBot: true }, { messagePatch: { from: { id: 999, is_bot: true, first_name: 'Wrong' } } }, { messagePatch: { chat: { id: 42, type: 'private', first_name: 'Wrong' } } }, { messagePatch: { sender_chat: { id: -99, type: 'channel', title: 'Wrong' } } }, { messagePatch: { message_thread_id: 9 } }]) {
       await click(menu, 'cookie:page:0', options);
@@ -89,7 +118,7 @@ export async function runPersonalControlsScenarios(context) {
     assert.equal(await fixtureSql('SELECT count(*) FROM cookies WHERE user_id=43 AND is_pool=0'), '0');
     assert((await fixtureSql('SELECT * FROM cookies WHERE user_id<>43 OR is_pool=1 ORDER BY id')) === ownerCookies, 'foreign and pool cookies unchanged');
     assert((await fixtureSql('SELECT * FROM dl_user_settings WHERE user_id<>43 ORDER BY user_id')) === ownerSettings, 'foreign settings unchanged');
-    return 'ordinary personal controls: file/URL/owned extraction/proxy routing/replay/revocation/fences';
+    return `ordinary personal controls: file/URL/owned extraction/proxy routing/replay/revocation/fences${cookieWebOrigin ? '/native token keyboard/one-use extension API' : ''}`;
   } finally {
     for (const { table, where, columns, rows } of saved.reverse()) {
       if (table === 'users') {

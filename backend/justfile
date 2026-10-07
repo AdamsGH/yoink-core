@@ -257,6 +257,12 @@ test-provider-native: check-build-space
     cargo rustc --locked --message-format short -p yoink-server --features test-fixtures --bin yoink-fixture-server -- -C target-feature=+crt-static
     YOINK_MEDIA_PROVIDER_SOURCE_MOUNT=1 node scripts/test-media.mjs provider-routing
 
+test-personal-controls-native: check-build-space
+    cargo rustc --locked --message-format short -p yoink-server --bin yoink-server -- -C target-feature=+crt-static
+    cargo rustc --locked --message-format short -p yoink-server --features test-fixtures --bin yoink-fixture-server -- -C target-feature=+crt-static
+    YOINK_MEDIA_PROVIDER_SOURCE_MOUNT=1 node scripts/test-media.mjs personal-controls
+    node scripts/build-resources.mjs check
+
 test-youtube-auth-wire: check-build-space
     cargo test --locked --message-format short -p yoink-downloads --lib worker_request_preserves_oauth_only_credentials
 
