@@ -97,7 +97,7 @@ smoke: build
 build-worker:
     docker build --quiet --target worker-runtime -t yoink/rust-worker:experimental .
 
-build-content-worker:
+build-content-worker: check-build-space
     docker build --quiet --target content-worker -t yoink/rust-content-worker:experimental .
 
 # Python executes only in an isolated container. Its HTTP fixture uses loopback.
