@@ -1,6 +1,7 @@
 mod auth_config;
 mod config;
 mod fixture_control;
+mod fixture_cookie_providers;
 mod media_config;
 mod runtime;
 mod user_session_config;
@@ -102,6 +103,20 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "fixture controller bind failed")?;
     let signal = termination_signal().map_err(|_| "signal initialization failed")?;
     let (config, store) = open_store().await?;
+    // This opt-in belongs exclusively to the fixture entry point. Production
+    // startup neither reads the switch nor imports the offline providers.
+    let cookie_providers = if std::env::var("YOINK_FIXTURE_COOKIE_PROVIDERS").as_deref() == Ok("1")
+    {
+        match fixture_cookie_providers::install(store.clone()).await {
+            Ok(providers) => Some(providers),
+            Err(_) => {
+                let _ = store.close().await;
+                return Err("fixture cookie provider initialization failed".into());
+            }
+        }
+    } else {
+        None
+    };
     let address = listener
         .local_addr()
         .map_err(|_| "fixture controller address failed")?;
@@ -136,7 +151,22 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             _ = controller_stopped.cancelled() => Ok(()),
         }
     };
-    let runtime_result = runtime::run_with_store(config, runtime_signal, store.clone()).await;
+    let runtime_result = match cookie_providers {
+        Some((oauth, account, refresh)) => {
+            runtime::run_with_store_and_cookie_providers(
+                config,
+                runtime_signal,
+                store.clone(),
+                Some(runtime::CookieProviderOverrides {
+                    oauth,
+                    refresh,
+                    account,
+                }),
+            )
+            .await
+        }
+        None => runtime::run_with_store(config, runtime_signal, store.clone()).await,
+    };
     control_shutdown.cancel();
     let controller_result =
         match tokio::time::timeout(Duration::from_secs(7), &mut controller).await {

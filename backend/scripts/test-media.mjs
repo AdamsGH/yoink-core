@@ -49,6 +49,8 @@ import { runCookieUploadScenarios } from './media-fixture/cookie-upload-scenario
 import { runCookieUrlScenarios } from './media-fixture/cookie-url-scenarios.mjs';
 import { startSyntheticYoutubeAuth } from './media-fixture/youtube-auth-topology.mjs';
 import { runYoutubeAuthScenarios } from './media-fixture/youtube-auth-scenarios.mjs';
+import { startBrowserTopology } from './media-fixture/browser-topology.mjs';
+import { createCookieBrowserProviderControl } from './media-fixture/cookie-browser-provider-control.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -57,7 +59,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|personal-controls|private-user|inline|youtube-auth|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend:experimental';
 const fixtureImage = scenario === 'youtube-auth' ? image : 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -100,6 +102,7 @@ let gallerySource;
 let providerSource;
 let inlineSource;
 let youtubeAuthTopology;
+let browserTopology;
 let galleryEnabled = false;
 let galleryTrusted = true;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
@@ -109,7 +112,7 @@ const { startContainer } = containerLifecycle;
 // Explicit test-driver-only opt-in: existing images, current fixture executable and worker source.
 // This never changes production configuration or worker strategy selection.
 const localProviderSources = process.env.YOINK_MEDIA_PROVIDER_SOURCE_MOUNT === '1';
-const cookieWebOrigin = localProviderSources && scenario === 'personal-controls' ? 'https://cookies.example/' : undefined;
+let cookieWebOrigin = localProviderSources && scenario === 'personal-controls' ? 'https://cookies.example/' : undefined;
 const cookieSyncTokens = new Set();
 const providerSourceArgs = localProviderSources ? [
   '--mount', `type=bind,source=${path.join(workspace, 'target/debug/yoink-server')},target=/usr/local/bin/yoink-server,readonly`,
@@ -229,7 +232,8 @@ async function launchApp() {
     '--env','YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT=/cookie-files/allowed',
     '--mount',`type=bind,source=${cookieFileDir},target=/cookie-files,readonly`,
     '--env','YOINK_RUST_TELEGRAM_ENABLED=true','--env',`YOINK_RUST_TELEGRAM_TOKEN=${token}`,'--env','YOINK_RUST_OWNER_ID=42',
-    ...(['admin', 'menus', 'group-admin', 'membership', 'nsfw'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
+    ...(scenario === 'cookie-browser' ? ['--env', 'YOINK_FIXTURE_COOKIE_PROVIDERS=1'] : []),
+    ...(['admin', 'menus', 'group-admin', 'membership', 'nsfw', 'cookie-browser'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
     '--env',`YOINK_RUST_TELEGRAM_GROUPS_ENABLED=${groupsEnabled}`,
     '--env',`YOINK_RUST_BOT_API_URL=http://127.0.0.1:${apiPort}`,'--env','TURSO_TMPDIR=/tmp/yoink-db','--env','TMPDIR=/tmp/yoink-db',
     '--env','YOINK_RUST_DATABASE_PATH=/state/private/state.db',
@@ -338,6 +342,11 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'formats') sourceFixture.formatSource = new FormatSource(cookieSecret);
   proxyFixture=new AuthenticatedProxyFixture({originPort:sourcePort,authorization:proxyAuth}); proxyPort=await proxyFixture.start();
   appHttpPort=await freeLoopbackPort(); fixturePort=await freeLoopbackPort();
+  if (scenario === 'cookie-browser') {
+    assert(localProviderSources, 'browser acceptance requires freshly built native fixture binaries');
+    browserTopology = await startBrowserTopology({ workspace, tempRoot, runId, backendPort: appHttpPort, freeLoopbackPort, capture: spawnCapture, startContainer });
+    cookieWebOrigin = `${browserTopology.origin}/`;
+  }
   if (scenario === 'youtube-auth') {
     assert(localProviderSources, 'YouTube acceptance requires freshly built native fixture binaries');
     youtubeAuthTopology = await startSyntheticYoutubeAuth({ capture: spawnCapture, runId });
@@ -753,6 +762,10 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
   if (scenario === 'all' || scenario === 'cookie-uploads') summaries.push(await runCookieUploadScenarios({ ...commandContext, restartApp, cookieSecret, prepareLocalCookieFiles }));
   if (scenario === 'all' || scenario === 'cookie-urls') summaries.push(await runCookieUrlScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'youtube-auth') summaries.push(await runYoutubeAuthScenarios({ ...commandContext, restartApp, fixtureDir }));
+  if (scenario === 'cookie-browser') {
+    const { runCookieBrowserScenarios } = await import('./media-fixture/cookie-browser-scenarios.mjs');
+    summaries.push(JSON.stringify(await runCookieBrowserScenarios({ ...commandContext, restartApp, fixtureDir, cookieBrowserProviders: createCookieBrowserProviderControl(fixtureSql), telegramToken: token, origin: browserTopology.origin, certificateSpki: browserTopology.spki, registerCookieSyncToken: value => cookieSyncTokens.add(value) })));
+  }
   if (scenario === 'inline') {
     inlineSource = new InlineSource({ mediaBytes, mediaUrl: `http://127.0.0.1:${sourcePort}/media?case=inline-youtube` });
     gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image, extraHosts: ['www.youtube.com','youtube.com'], providerResponse: (...args) => inlineSource.response(...args) });

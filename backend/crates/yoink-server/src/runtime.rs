@@ -42,12 +42,18 @@ pub enum ServerError {
     Media,
 }
 
+pub struct CookieProviderOverrides {
+    pub oauth: Arc<dyn yoink_downloads::cookie_oauth::OAuthProvider>,
+    pub refresh: Arc<dyn yoink_downloads::profile::oauth_refresh::OAuthRefreshProvider>,
+    pub account: Arc<dyn yoink_downloads::cookie_web_live::AccountProvider>,
+}
+
 #[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 pub async fn run(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
 ) -> Result<(), ServerError> {
-    run_impl(config, shutdown_signal, None).await
+    run_impl(config, shutdown_signal, None, None).await
 }
 
 #[cfg(feature = "test-fixtures")]
@@ -59,6 +65,20 @@ pub async fn run_with_store(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
     store: Arc<yoink_storage::Store>,
+) -> Result<(), ServerError> {
+    run_with_store_and_cookie_providers(config, shutdown_signal, store, None).await
+}
+
+#[cfg(feature = "test-fixtures")]
+#[allow(
+    dead_code,
+    reason = "Only the isolated fixture binary calls this entry point"
+)]
+pub async fn run_with_store_and_cookie_providers(
+    config: Config,
+    shutdown_signal: impl Future<Output = io::Result<()>>,
+    store: Arc<yoink_storage::Store>,
+    providers: Option<CookieProviderOverrides>,
 ) -> Result<(), ServerError> {
     let database = config
         .database
@@ -72,13 +92,14 @@ pub async fn run_with_store(
     if configured.as_deref() != Some(store.database().path()) {
         return Err(ServerError::DatabaseStartup);
     }
-    run_impl(config, shutdown_signal, Some(store)).await
+    run_impl(config, shutdown_signal, Some(store), providers).await
 }
 
 async fn run_impl(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
     provided_store: Option<Arc<yoink_storage::Store>>,
+    cookie_providers: Option<CookieProviderOverrides>,
 ) -> Result<(), ServerError> {
     let system = SystemService::new(env!("CARGO_PKG_VERSION"));
     let cancel = CancellationToken::new();
@@ -242,29 +263,46 @@ async fn run_impl(
             } else {
                 service
             };
-            let oauth_config = yoink_downloads::cookie_oauth::OAuthProviderConfig::new(
-                media.cookie_web.oauth_timeout,
-            )
-            .map_err(|_| ServerError::MediaStartup)?;
-            let oauth_provider = Arc::new(
-                yoink_downloads::cookie_oauth::YouTubeOAuthProvider::with_config(oauth_config)
-                    .map_err(|_| ServerError::MediaStartup)?,
-            );
+            let providers = match cookie_providers {
+                Some(providers) => providers,
+                None => {
+                    let oauth_config = yoink_downloads::cookie_oauth::OAuthProviderConfig::new(
+                        media.cookie_web.oauth_timeout,
+                    )
+                    .map_err(|_| ServerError::MediaStartup)?;
+                    let oauth = Arc::new(
+                        yoink_downloads::cookie_oauth::YouTubeOAuthProvider::with_config(
+                            oauth_config,
+                        )
+                        .map_err(|_| ServerError::MediaStartup)?,
+                    );
+                    let account_config =
+                        yoink_downloads::cookie_web_live::AccountProviderConfig::new(
+                            media.cookie_web.account_timeout,
+                        )
+                        .map_err(|_| ServerError::MediaStartup)?;
+                    let account = Arc::new(
+                        yoink_downloads::cookie_web_live::LiveAccountProvider::with_config(
+                            account_config,
+                        )
+                        .map_err(|_| ServerError::MediaStartup)?,
+                    );
+                    CookieProviderOverrides {
+                        refresh: oauth.clone(),
+                        oauth,
+                        account,
+                    }
+                }
+            };
             let service = service
-                .with_oauth_refresh(oauth_provider.clone())
+                .with_oauth_refresh(providers.refresh)
                 .with_oauth_refresh_timeout(media.cookie_web.oauth_timeout)
                 .map_err(|_| ServerError::MediaStartup)?
-                .with_cookie_oauth_provider(oauth_provider)
+                .with_cookie_oauth_provider(providers.oauth)
                 .with_cookie_oauth_poll_config(media.cookie_web.oauth_poll)
-                .map_err(|_| ServerError::MediaStartup)?;
-            let account_config = yoink_downloads::cookie_web_live::AccountProviderConfig::new(
-                media.cookie_web.account_timeout,
-            )
-            .map_err(|_| ServerError::MediaStartup)?;
-            let service = service.with_cookie_account_provider(Arc::new(
-                yoink_downloads::cookie_web_live::LiveAccountProvider::with_config(account_config)
-                    .map_err(|_| ServerError::MediaStartup)?,
-            ));
+                .map_err(|_| ServerError::MediaStartup)?
+                .with_cookie_account_provider(providers.account);
+
             cookie_oauth_lifecycle =
                 Some((service.clone(), media.cookie_web.oauth_cleanup_interval));
             auth_state

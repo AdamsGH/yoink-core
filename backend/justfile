@@ -74,6 +74,14 @@ test-crate crate: check-build-space
     cargo test --locked --message-format short -p {{quote(crate)}}
     node scripts/build-resources.mjs check
 
+check-fixture-server: check-build-space
+    cargo check --locked -p yoink-server --all-targets --features test-fixtures
+    node scripts/build-resources.mjs check
+
+test-fixture-server: check-build-space
+    cargo test --locked -p yoink-server --all-features
+    node scripts/build-resources.mjs check
+
 test-fixture-control: check-build-space
     cargo test --workspace --all-features --locked fixture_control::tests -- --nocapture
     node scripts/build-resources.mjs check
@@ -266,6 +274,12 @@ test-media-native scenario: check-build-space
 test-media-all-native: (test-media-native "all")
 
 test-personal-controls-native: (test-media-native "personal-controls")
+
+build-cookie-browser-frontend: check-build-space
+    docker build --file ../docker/Dockerfile.frontend --tag yoink-fixture-frontend:browser ..
+    node scripts/build-resources.mjs check
+
+test-cookie-browser-native: build-cookie-browser-frontend (test-media-native "cookie-browser")
 
 test-youtube-auth-wire: check-build-space
     cargo test --locked --message-format short -p yoink-downloads --lib worker_request_preserves_oauth_only_credentials
