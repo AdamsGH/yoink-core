@@ -7,6 +7,8 @@ mod cookie_web;
 mod downloader_settings;
 mod groups;
 mod health;
+mod inbox;
+pub use inbox::InboxAuthorization;
 mod m2m;
 mod nsfw;
 mod user_session;
@@ -73,6 +75,26 @@ pub fn router_with_identity_and_user_session(
         None => diagnostics,
     };
     app.merge(m2m::router(identities, system))
+}
+
+/// Compose native Inbox dependencies supplied by the application root.
+/// Existing constructors remain unchanged; this does not install an Inbox runtime.
+/// Inbox routes are absent when bearer authentication is disabled. Store, Insight
+/// and GitHub are retained; HTTP authority is replaced with the shared AuthService
+/// identity store so a supplied authorization implementation cannot bypass it.
+pub fn router_with_identity_user_session_and_inbox(
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    inbox: yoink_inbox::http::HttpState,
+) -> Router {
+    let app =
+        router_with_identity_and_user_session(system.clone(), auth.clone(), identities, client);
+    match auth {
+        Some(auth) => app.merge(inbox::router(system, auth, inbox)),
+        None => app,
+    }
 }
 
 fn authenticated_routes(

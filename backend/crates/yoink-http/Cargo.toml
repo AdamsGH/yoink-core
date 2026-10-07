@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+yoink-inbox = { path = "../yoink-inbox" }
 yoink-user-session = { path = "../yoink-user-session" }
 axum.workspace = true
 serde.workspace = true

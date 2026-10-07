@@ -364,6 +364,10 @@ check-inbox-schema: check-build-space
     cargo clippy --locked --message-format short -p yoink-storage -p yoink-import --all-targets -- -D warnings
     node scripts/build-resources.mjs check
 
+check-inbox-http: check-build-space
+    cargo clippy --locked --message-format short -p yoink-http --all-targets -- -D warnings
+    node scripts/build-resources.mjs check
+
 check-inbox: check-build-space
     cargo clippy --locked --message-format short -p yoink-inbox --all-targets -- -D warnings
     node scripts/build-resources.mjs check

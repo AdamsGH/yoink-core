@@ -4901,6 +4901,7 @@ dependencies = [
  "yoink-downloads",
  "yoink-executor",
  "yoink-identity",
+ "yoink-inbox",
  "yoink-storage",
  "yoink-user-session",
 ]
