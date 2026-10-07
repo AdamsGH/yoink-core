@@ -90,7 +90,11 @@ build: check-build-space
     cargo build --workspace --locked
     node scripts/build-resources.mjs check
 
-smoke: build
+build-server: check-build-space
+    cargo build --locked -p yoink-server
+    node scripts/build-resources.mjs check
+
+smoke: build-server
     node --test scripts/smoke.mjs
 
 # Independent worker target avoids requiring an integrated Rust build for Python checks.
