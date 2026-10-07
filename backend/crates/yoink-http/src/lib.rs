@@ -338,3 +338,46 @@ mod tests {
         assert!(task.await.unwrap().is_ok());
     }
 }
+
+/// Late installation preserves diagnostics while dependencies are prepared.
+#[derive(Clone, Default)]
+pub struct LateInbox(std::sync::Arc<std::sync::OnceLock<axum::Router>>);
+impl LateInbox {
+    pub fn install(
+        &self,
+        system: SystemService,
+        auth: AuthState,
+        state: yoink_inbox::http::HttpState,
+    ) -> Result<(), &'static str> {
+        self.0
+            .set(inbox::router(system, auth, state))
+            .map_err(|_| "Inbox already installed")
+    }
+}
+pub async fn serve_with_late_inbox(
+    listener: TcpListener,
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    inbox: LateInbox,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    use tower::ServiceExt;
+    let app = router_with_identity_and_user_session(system, auth, identities, client).fallback(
+        move |request: axum::extract::Request| {
+            let inbox = inbox.clone();
+            async move {
+                match inbox.0.get() {
+                    Some(router) => router.clone().oneshot(request).await.unwrap(),
+                    None => axum::response::IntoResponse::into_response(
+                        axum::http::StatusCode::NOT_FOUND,
+                    ),
+                }
+            }
+        },
+    );
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
+}

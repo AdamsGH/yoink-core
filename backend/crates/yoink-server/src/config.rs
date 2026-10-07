@@ -56,6 +56,7 @@ pub struct TelegramConfig {
 
 #[derive(Debug)]
 pub struct Config {
+    pub inbox: Option<crate::inbox_config::InboxConfig>,
     pub user_session: Option<yoink_user_session::Config>,
     pub auth: Option<crate::auth_config::AuthHttpConfig>,
     pub http_bind: SocketAddr,
@@ -350,7 +351,25 @@ impl Config {
         } else {
             None
         };
+        let inbox = crate::inbox_config::InboxConfig::from_lookup(
+            &mut read,
+            shutdown_timeout,
+            database.is_some(),
+        )?;
+        if let (Some(inbox), Some(database)) = (&inbox, &database) {
+            let recovery = database.acquire_timeout * 4;
+            if inbox.job + inbox.drain + recovery >= inbox.lease
+                || inbox.job + inbox.drain + recovery >= shutdown_timeout
+                || inbox.text_timeout + recovery >= shutdown_timeout
+            {
+                return Err(invalid(
+                    "INBOX_LEASE_SECS",
+                    "job, cancellation drain and four DB acquisition budgets must fit strictly below lease and shutdown",
+                ));
+            }
+        }
         Ok(Self {
+            inbox,
             user_session,
             auth,
             http_bind,

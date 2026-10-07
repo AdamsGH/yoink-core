@@ -9,6 +9,7 @@ publish.workspace = true
 yoink-inbox = { path = "../yoink-inbox" }
 yoink-user-session = { path = "../yoink-user-session" }
 axum.workspace = true
+tower.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -24,7 +25,6 @@ rustix.workspace = true
 [dev-dependencies]
 yoink-executor.workspace = true
 yoink-domain.workspace = true
-tower.workspace = true
 yoink-storage.workspace = true
 yoink-db.workspace = true
 tempfile = "3"

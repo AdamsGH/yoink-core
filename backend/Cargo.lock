@@ -5043,6 +5043,8 @@ dependencies = [
  "yoink-executor",
  "yoink-http",
  "yoink-identity",
+ "yoink-inbox",
+ "yoink-insight",
  "yoink-storage",
  "yoink-telegram",
  "yoink-user-session",

@@ -40,6 +40,10 @@ pub enum ServerError {
     MediaStartup,
     #[error("media execution service failed")]
     Media,
+    #[error("Inbox initialization failed")]
+    InboxStartup,
+    #[error("Inbox owned runtime failed")]
+    Inbox,
 }
 
 pub struct CookieProviderOverrides {
@@ -110,6 +114,10 @@ async fn run_impl(
     tokio::pin!(shutdown_signal);
     let mut tasks = JoinSet::new();
     let mut cookie_oauth_lifecycle = None;
+    let late_inbox = yoink_http::LateInbox::default();
+    let http_inbox = late_inbox.clone();
+    let mut inbox_runtime = None;
+    let mut inbox_telegram = None;
     let auth_state =
         yoink_http::AuthState::new(config.auth.as_ref().is_some_and(|auth| auth.dev_enabled));
     let http_auth = config.auth.as_ref().map(|_| auth_state.clone());
@@ -124,12 +132,13 @@ async fn run_impl(
         .map_err(|_| ServerError::Http)?
         .map(Arc::new);
     tasks.spawn(async move {
-        yoink_http::serve_with_user_session(
+        yoink_http::serve_with_late_inbox(
             listener,
             http_system,
             http_auth,
             http_identities,
             user_session,
+            http_inbox,
             http_cancel,
         )
         .await
@@ -148,6 +157,10 @@ async fn run_impl(
     let mut database: Option<Arc<yoink_storage::Store>> = None;
     let mut identities: Option<Arc<yoink_identity::IdentityStore>> = None;
     let mut downloads = None;
+    let auth_enabled = config.auth.is_some();
+    let inbox_owner = owner_id
+        .map(|id| id as i64)
+        .or_else(|| config.auth.as_ref().map(|auth| auth.owner_id));
     let prepare = async {
         if let Some(database_config) = &config.database {
             let store = match provided_store.clone() {
@@ -311,6 +324,55 @@ async fn run_impl(
             telegram = Some(adapter.with_downloads(service.clone()));
             downloads = Some(service);
         }
+        if let Some(inbox) = config.inbox {
+            let store = database.as_ref().ok_or(ServerError::InboxStartup)?;
+            let identity = identities.clone().ok_or(ServerError::InboxStartup)?;
+            let status = Command::new("/usr/local/bin/yoink-worker-launcher")
+                .arg("--check")
+                .current_dir(&inbox.executor.workspace_root)
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .status()
+                .await
+                .map_err(|_| ServerError::InboxStartup)?;
+            if !status.success() {
+                return Err(ServerError::InboxStartup);
+            }
+            let runtime = crate::inbox_runtime::InboxRuntime::new(
+                inbox,
+                store,
+                identity.clone(),
+                inbox_owner,
+            )?;
+            if let Some(adapter) = telegram.take() {
+                let text = adapter
+                    .text_delivery(store.clone(), runtime.config.text_timeout)
+                    .map_err(|_| ServerError::InboxStartup)?;
+                let notification = yoink_telegram::InboxRuntime::new(
+                    runtime.store.clone(),
+                    identity,
+                    text,
+                    groups_enabled,
+                )
+                .with_config(runtime.config.notifications)
+                .map_err(|_| ServerError::InboxStartup)?;
+                telegram = Some(adapter.with_inbox(notification.clone()));
+                inbox_telegram = Some((notification, runtime.config.interval));
+            }
+            if auth_enabled {
+                late_inbox
+                    .install(
+                        system.clone(),
+                        auth_state.clone(),
+                        runtime.http(cancel.child_token()),
+                    )
+                    .map_err(|_| ServerError::InboxStartup)?;
+            }
+            inbox_runtime = Some(runtime);
+        }
         if let Some(adapter) = &mut telegram {
             adapter.initialize_menus().await;
         }
@@ -368,6 +430,18 @@ async fn run_impl(
             return finish_database(result, database, config.shutdown_timeout).await;
         }
     };
+    if let Some(runtime) = inbox_runtime {
+        tasks.spawn(runtime.run(cancel.child_token()));
+    }
+    if let Some((runtime, interval)) = inbox_telegram {
+        let token = cancel.child_token();
+        tasks.spawn(async move {
+            runtime
+                .run(token, interval)
+                .await
+                .map_err(|_| ServerError::Inbox)
+        });
+    }
     let telegram_enabled = telegram.is_some();
     let bot_username = telegram
         .as_ref()

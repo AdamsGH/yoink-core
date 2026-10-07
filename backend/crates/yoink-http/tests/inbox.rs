@@ -412,3 +412,48 @@ async fn actual_http_transport_installs_inbox_observes_bans_and_drains() {
             .unwrap();
     }
 }
+
+#[tokio::test]
+async fn late_install_preserves_diagnostics_and_current_authority() {
+    let f = Fixture::new().await;
+    f.sql("UPDATE users SET role='user' WHERE id=2").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let inbox = yoink_http::LateInbox::default();
+    let server = tokio::spawn(yoink_http::serve_with_late_inbox(
+        listener,
+        f.system.clone(),
+        Some(f.auth.clone()),
+        f.auth.clone(),
+        None,
+        inbox.clone(),
+        shutdown.clone(),
+    ));
+    assert_eq!(
+        transport_status(address, Some(&f.tokens[1])).await,
+        StatusCode::NOT_FOUND
+    );
+    inbox
+        .install(f.system.clone(), f.auth.clone(), f.inbox.clone())
+        .unwrap();
+    assert_eq!(
+        transport_status(address, None).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        transport_status(address, Some(&f.tokens[1])).await,
+        StatusCode::OK
+    );
+    f.sql("UPDATE users SET role='banned' WHERE id=2").await;
+    assert_eq!(
+        transport_status(address, Some(&f.tokens[1])).await,
+        StatusCode::FORBIDDEN
+    );
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}

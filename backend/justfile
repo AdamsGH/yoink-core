@@ -144,7 +144,7 @@ test-import image='': build-import build-ops
     node scripts/import-fixture/test-import.mjs {{quote(image)}}
 
 # Build and check the operator CLI against the pinned deployment compiler.
-build-import-image:
+build-import-image: check-build-space
     docker build --target importer -t yoink/rust-importer:experimental .
     docker run --rm --pull never --network none --read-only yoink/rust-importer:experimental --help
 
@@ -160,7 +160,7 @@ backup source destination: build-ops
 restore source destination: build-ops
     target/debug/yoink-ops restore --source {{quote(source)}} --destination {{quote(destination)}}
 
-build-ops-image:
+build-ops-image: check-build-space
     docker build --target operations -t yoink/rust-operations:experimental .
     docker run --rm --pull never --network none --read-only yoink/rust-operations:experimental --help
 
@@ -172,11 +172,11 @@ test-ops image='': build-import build-ops
 verify-ops: verify build-ops-image (test-ops "yoink/rust-operations:experimental")
 
 # Opt-in image only, never changes the existing Compose deployment.
-build-media:
+build-media: check-build-space
     docker build --target runtime -t yoink/rust-backend:experimental .
 
 # Isolated fixture controller is absent from the default production image.
-build-media-fixture:
+build-media-fixture: check-build-space
     docker build --target media-fixture -t yoink/rust-backend-fixture:experimental .
 
 # Exact default launcher in the deployment's hardened, network-isolated profile.
