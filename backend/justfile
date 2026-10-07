@@ -354,6 +354,13 @@ format-downloader-settings:
 check-downloader-settings-runtime: check-build-space
     cargo check --locked --message-format short -p yoink-server
 
+format-inbox:
+    cargo fmt -p yoink-inbox
+
+check-inbox: check-build-space
+    cargo clippy --locked --message-format short -p yoink-inbox --all-targets -- -D warnings
+    node scripts/build-resources.mjs check
+
 format-user-session:
     cargo fmt -p yoink-user-session -p yoink-http -p yoink-identity -p yoink-server
 

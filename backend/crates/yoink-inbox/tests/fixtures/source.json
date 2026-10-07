@@ -1,0 +1,862 @@
+{
+  "chrome": {
+    "input": "---\nurl: private\n---\n# Heading\n\n![hero](https://example.com/h)\n\n[![Ada](https://example.com/a)](/author/ada/)\nBy [Ada](/author/ada/)\nPublished yesterday\nOriginally from elsewhere\nBio sentence\n\nArticle content.\n\n---\nPowered by [curl.md](https://curl.md)\n",
+    "expected": "# Heading\n\nArticle content.\n"
+  },
+  "github_responses": {
+    "repos/a/b": {
+      "full_name": "a/b",
+      "description": "Répo",
+      "stargazers_count": 7,
+      "forks_count": 2,
+      "open_issues_count": 3,
+      "language": null,
+      "license": null,
+      "default_branch": "main",
+      "html_url": "https://github.com/a/b"
+    },
+    "repos/a/b/readme": {
+      "content": "UmVhZG1l"
+    },
+    "repos/a/b/git/trees/HEAD?recursive=1": {
+      "tree": [
+        {
+          "type": "tree",
+          "path": "src"
+        },
+        {
+          "type": "blob",
+          "path": "src/a.rs"
+        },
+        {
+          "type": "blob",
+          "path": "docs/a.md"
+        }
+      ]
+    },
+    "repos/a/b/git/trees/main?recursive=1": {
+      "tree": [
+        {
+          "type": "tree",
+          "path": "src"
+        },
+        {
+          "type": "blob",
+          "path": "src/a.rs"
+        },
+        {
+          "type": "blob",
+          "path": "docs/a.md"
+        }
+      ]
+    },
+    "repos/a/b/contents/src/a.rs?ref=main": {
+      "encoding": "base64",
+      "content": "Y29udGVudHM="
+    },
+    "repos/a/b/contents/src/a.rs?ref=feature%2Fx": {
+      "encoding": "base64",
+      "content": "Y29udGVudHM="
+    },
+    "repos/a/b/issues/1": {
+      "number": 1,
+      "title": "Title",
+      "state": "open",
+      "user": {
+        "login": "Ada"
+      },
+      "body": null,
+      "base": {
+        "ref": "main"
+      },
+      "head": {
+        "ref": "feature"
+      }
+    },
+    "repos/a/b/pulls/1": {
+      "number": 1,
+      "title": "Title",
+      "state": "open",
+      "user": {
+        "login": "Ada"
+      },
+      "body": null,
+      "base": {
+        "ref": "main"
+      },
+      "head": {
+        "ref": "feature"
+      }
+    },
+    "repos/a/b/issues/1/comments?per_page=20": [
+      {
+        "user": {
+          "login": "Bob"
+        },
+        "body": "Comment"
+      }
+    ],
+    "repos/a/b/pulls/1/comments?per_page=20": [
+      {
+        "user": {
+          "login": "Bob"
+        },
+        "body": "Review",
+        "path": "src/a.rs"
+      }
+    ],
+    "repos/a/b/issues?state=open&per_page=30": [
+      {
+        "number": 1,
+        "title": "Title",
+        "state": "open",
+        "user": {
+          "login": "Ada"
+        },
+        "body": null,
+        "base": {
+          "ref": "main"
+        },
+        "head": {
+          "ref": "feature"
+        }
+      },
+      {
+        "number": 1,
+        "title": "Title",
+        "state": "open",
+        "user": {
+          "login": "Ada"
+        },
+        "body": null,
+        "base": {
+          "ref": "main"
+        },
+        "head": {
+          "ref": "feature"
+        },
+        "pull_request": {}
+      }
+    ],
+    "repos/a/b/pulls?state=open&per_page=30": [
+      {
+        "number": 1,
+        "title": "Title",
+        "state": "open",
+        "user": {
+          "login": "Ada"
+        },
+        "body": null,
+        "base": {
+          "ref": "main"
+        },
+        "head": {
+          "ref": "feature"
+        }
+      }
+    ],
+    "repos/a/b/commits?per_page=30": [
+      {
+        "sha": "1234567890abcdef",
+        "commit": {
+          "message": "Title\nBody",
+          "author": {
+            "name": "Ada"
+          }
+        }
+      }
+    ],
+    "repos/a/b/commits?per_page=30&sha=feature": [
+      {
+        "sha": "1234567890abcdef",
+        "commit": {
+          "message": "Title\nBody",
+          "author": {
+            "name": "Ada"
+          }
+        }
+      }
+    ],
+    "repos/a/b/releases?per_page=10": [
+      {
+        "tag_name": "v1",
+        "name": "Release",
+        "published_at": "2026-01-01T10:00:00Z",
+        "body": "Notes"
+      }
+    ],
+    "users/a/repos?per_page=2": [
+      {
+        "id": 7,
+        "name": "b",
+        "description": "Répo"
+      }
+    ]
+  },
+  "raw_responses": {
+    "a/b/main/raw.txt": "raw body"
+  },
+  "github": [
+    {
+      "url": "https://github.com/a/b",
+      "route": {
+        "op": "repo_info",
+        "owner": "a",
+        "repo": "b"
+      },
+      "toon": "# a/b\nRépo\n\nStars: 7  Forks: 2  Open issues: 3\nLanguage: None  License: ?\nDefault branch: main\nURL: https://github.com/a/b\n\n## README\nReadme",
+      "fallback": "# a/b\nRépo\n\nStars: 7  Forks: 2  Open issues: 3\nLanguage: None  License: ?\nDefault branch: main\nURL: https://github.com/a/b\n\n## README\nReadme"
+    },
+    {
+      "url": "https://github.com/a/b/compare/main...x",
+      "route": {
+        "op": "repo_info",
+        "owner": "a",
+        "repo": "b"
+      },
+      "toon": "# a/b\nRépo\n\nStars: 7  Forks: 2  Open issues: 3\nLanguage: None  License: ?\nDefault branch: main\nURL: https://github.com/a/b\n\n## README\nReadme",
+      "fallback": "# a/b\nRépo\n\nStars: 7  Forks: 2  Open issues: 3\nLanguage: None  License: ?\nDefault branch: main\nURL: https://github.com/a/b\n\n## README\nReadme"
+    },
+    {
+      "url": "https://github.com/a/b/releases/download/v1/file.zip",
+      "route": {
+        "op": "releases",
+        "owner": "a",
+        "repo": "b"
+      },
+      "toon": "## Releases\n[1]{tag,name,published,body}:\n  v1,Release,2026-01-01,Notes",
+      "fallback": "## Releases\n[\n  {\n    \"tag\": \"v1\",\n    \"name\": \"Release\",\n    \"published\": \"2026-01-01\",\n    \"body\": \"Notes\"\n  }\n]"
+    },
+    {
+      "url": "https://github.com/a/b/commit/abcdef",
+      "route": {
+        "op": "repo_info",
+        "owner": "a",
+        "repo": "b"
+      },
+      "toon": "# a/b\nRépo\n\nStars: 7  Forks: 2  Open issues: 3\nLanguage: None  License: ?\nDefault branch: main\nURL: https://github.com/a/b\n\n## README\nReadme",
+      "fallback": "# a/b\nRépo\n\nStars: 7  Forks: 2  Open issues: 3\nLanguage: None  License: ?\nDefault branch: main\nURL: https://github.com/a/b\n\n## README\nReadme"
+    },
+    {
+      "url": "https://github.com/a/b/blob/feature%2Fx/src/a.rs",
+      "route": {
+        "op": "file",
+        "owner": "a",
+        "repo": "b",
+        "ref": "feature%2Fx",
+        "path": "src/a.rs"
+      },
+      "toon": "contents",
+      "fallback": "contents"
+    },
+    {
+      "url": "https://github.com/a/b/issues/+1",
+      "route": {
+        "op": "issues",
+        "owner": "a",
+        "repo": "b",
+        "state": "open"
+      },
+      "toon": "## Issues (open)\n[1]{number,state,title,author}:\n  1,open,Title,Ada",
+      "fallback": "## Issues (open)\n[\n  {\n    \"number\": 1,\n    \"state\": \"open\",\n    \"title\": \"Title\",\n    \"author\": \"Ada\"\n  }\n]"
+    },
+    {
+      "url": "https://github.com/a/b/blob/main/raw.txt",
+      "route": {
+        "op": "file",
+        "owner": "a",
+        "repo": "b",
+        "ref": "main",
+        "path": "raw.txt"
+      },
+      "toon": "raw body",
+      "fallback": "raw body"
+    },
+    {
+      "url": "https://github.com/a/b/blob/main/src/a.rs",
+      "route": {
+        "op": "file",
+        "owner": "a",
+        "repo": "b",
+        "ref": "main",
+        "path": "src/a.rs"
+      },
+      "toon": "contents",
+      "fallback": "contents"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/a/b/main/raw.txt",
+      "route": {
+        "op": "raw_file",
+        "owner": "a",
+        "repo": "b",
+        "ref": "main",
+        "path": "raw.txt"
+      },
+      "toon": "raw body",
+      "fallback": "raw body"
+    },
+    {
+      "url": "https://github.com/a/b/tree",
+      "route": {
+        "op": "tree",
+        "owner": "a",
+        "repo": "b",
+        "ref": "HEAD",
+        "path": ""
+      },
+      "toon": "tree  src\nblob  src/a.rs\nblob  docs/a.md",
+      "fallback": "tree  src\nblob  src/a.rs\nblob  docs/a.md"
+    },
+    {
+      "url": "https://github.com/a/b/tree/main/src",
+      "route": {
+        "op": "tree",
+        "owner": "a",
+        "repo": "b",
+        "ref": "main",
+        "path": "src"
+      },
+      "toon": "tree  src\nblob  src/a.rs",
+      "fallback": "tree  src\nblob  src/a.rs"
+    },
+    {
+      "url": "https://github.com/a/b/issues/1",
+      "route": {
+        "op": "issue",
+        "owner": "a",
+        "repo": "b",
+        "number": 1
+      },
+      "toon": "# Issue #1: Title\nState: open  Author: Ada\n\n(no body)\n\n--- @Bob ---\nComment",
+      "fallback": "# Issue #1: Title\nState: open  Author: Ada\n\n(no body)\n\n--- @Bob ---\nComment"
+    },
+    {
+      "url": "https://github.com/a/b/pull/1",
+      "route": {
+        "op": "pr",
+        "owner": "a",
+        "repo": "b",
+        "number": 1
+      },
+      "toon": "# PR #1: Title\nState: open  Author: Ada\nBase: main <- Head: feature\n\n(no body)\n\n--- @Bob on `src/a.rs` ---\nReview",
+      "fallback": "# PR #1: Title\nState: open  Author: Ada\nBase: main <- Head: feature\n\n(no body)\n\n--- @Bob on `src/a.rs` ---\nReview"
+    },
+    {
+      "url": "https://github.com/a/b/issues",
+      "route": {
+        "op": "issues",
+        "owner": "a",
+        "repo": "b",
+        "state": "open"
+      },
+      "toon": "## Issues (open)\n[1]{number,state,title,author}:\n  1,open,Title,Ada",
+      "fallback": "## Issues (open)\n[\n  {\n    \"number\": 1,\n    \"state\": \"open\",\n    \"title\": \"Title\",\n    \"author\": \"Ada\"\n  }\n]"
+    },
+    {
+      "url": "https://github.com/a/b/pulls",
+      "route": {
+        "op": "prs",
+        "owner": "a",
+        "repo": "b",
+        "state": "open"
+      },
+      "toon": "## Pull requests (open)\n[1]{number,state,title,author}:\n  1,open,Title,Ada",
+      "fallback": "## Pull requests (open)\n[\n  {\n    \"number\": 1,\n    \"state\": \"open\",\n    \"title\": \"Title\",\n    \"author\": \"Ada\"\n  }\n]"
+    },
+    {
+      "url": "https://github.com/a/b/commits",
+      "route": {
+        "op": "commits",
+        "owner": "a",
+        "repo": "b",
+        "branch": null
+      },
+      "toon": "## Commits\n[1]{sha,message,author}:\n  \"12345678\",Title,Ada",
+      "fallback": "## Commits\n[\n  {\n    \"sha\": \"12345678\",\n    \"message\": \"Title\",\n    \"author\": \"Ada\"\n  }\n]"
+    },
+    {
+      "url": "https://github.com/a/b/commits/feature",
+      "route": {
+        "op": "commits",
+        "owner": "a",
+        "repo": "b",
+        "branch": "feature"
+      },
+      "toon": "## Commits\n[1]{sha,message,author}:\n  \"12345678\",Title,Ada",
+      "fallback": "## Commits\n[\n  {\n    \"sha\": \"12345678\",\n    \"message\": \"Title\",\n    \"author\": \"Ada\"\n  }\n]"
+    },
+    {
+      "url": "https://github.com/a/b/releases",
+      "route": {
+        "op": "releases",
+        "owner": "a",
+        "repo": "b"
+      },
+      "toon": "## Releases\n[1]{tag,name,published,body}:\n  v1,Release,2026-01-01,Notes",
+      "fallback": "## Releases\n[\n  {\n    \"tag\": \"v1\",\n    \"name\": \"Release\",\n    \"published\": \"2026-01-01\",\n    \"body\": \"Notes\"\n  }\n]"
+    },
+    {
+      "url": "https://api.github.com/users/a/repos?per_page=2",
+      "route": {
+        "op": "api_passthrough",
+        "path": "users/a/repos?per_page=2"
+      },
+      "toon": "[1]{id,name,description}:\n  7,b,Répo",
+      "fallback": "[\n  {\n    \"id\": 7,\n    \"name\": \"b\",\n    \"description\": \"Répo\"\n  }\n]"
+    },
+    {
+      "url": "https://github.com/a",
+      "route": null
+    },
+    {
+      "url": "https://github.com/orgs/a",
+      "route": {
+        "op": "repo_info",
+        "owner": "orgs",
+        "repo": "a"
+      },
+      "error": true
+    },
+    {
+      "url": "https://www.github.com/a/b",
+      "route": null
+    },
+    {
+      "url": "https://raw.githubusercontent.com/a/b",
+      "route": null
+    }
+  ],
+  "validation": [
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Café 日本語"
+      },
+      "expected": {
+        "name": "Café 日本語",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": null,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "A",
+        "slug": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "expected": {
+        "name": "A",
+        "slug": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": null,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "A",
+        "slug": null
+      },
+      "expected": {
+        "name": "A",
+        "slug": "a",
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": null,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "A",
+        "slug": ""
+      },
+      "expected": {
+        "name": "A",
+        "slug": "a",
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": null,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "A",
+        "parent_id": "2.0",
+        "extra": "ignored"
+      },
+      "expected": {
+        "name": "A",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 2,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": ""
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": 7
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "A",
+        "description": 5
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxGhFolderCreate",
+      "body": {
+        "name": "A"
+      },
+      "expected": {
+        "name": "A",
+        "slug": null,
+        "description": null,
+        "icon": null,
+        "parent_id": null,
+        "is_local": true
+      }
+    },
+    {
+      "schema": "InboxGhFolderCreate",
+      "body": {
+        "name": "A",
+        "is_local": "false",
+        "is_pinned": true,
+        "sort_order": 9
+      },
+      "expected": {
+        "name": "A",
+        "slug": null,
+        "description": null,
+        "icon": null,
+        "parent_id": null,
+        "is_local": false
+      }
+    },
+    {
+      "schema": "InboxGhFolderCreate",
+      "body": {
+        "name": "A",
+        "is_local": 0.0
+      },
+      "expected": {
+        "name": "A",
+        "slug": null,
+        "description": null,
+        "icon": null,
+        "parent_id": null,
+        "is_local": false
+      }
+    },
+    {
+      "schema": "InboxGhFolderCreate",
+      "body": {
+        "name": "A",
+        "is_local": null
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxGhFolderPatch",
+      "body": {
+        "name": null,
+        "description": null,
+        "is_pinned": null,
+        "sort_order": null,
+        "slug": "ignored"
+      },
+      "expected": {}
+    },
+    {
+      "schema": "InboxGhFolderPatch",
+      "body": {
+        "name": "A",
+        "sort_order": "7.0",
+        "is_pinned": "yes",
+        "icon": "ignored"
+      },
+      "expected": {
+        "name": "A",
+        "is_pinned": true,
+        "sort_order": 7
+      }
+    },
+    {
+      "schema": "InboxRuleCreate",
+      "body": {
+        "name": "R",
+        "trigger": "star_synced",
+        "priority": "9999",
+        "enabled": "off",
+        "conditions": [
+          {}
+        ]
+      },
+      "expected": {
+        "name": "R",
+        "enabled": false,
+        "priority": 9999,
+        "trigger": "star_synced",
+        "conditions": [
+          {}
+        ],
+        "actions": null
+      }
+    },
+    {
+      "schema": "InboxRuleCreate",
+      "body": {
+        "name": "R",
+        "trigger": "wrong"
+      },
+      "expected": {
+        "name": "R",
+        "enabled": true,
+        "priority": 100,
+        "trigger": "wrong",
+        "conditions": null,
+        "actions": null
+      }
+    },
+    {
+      "schema": "InboxRuleCreate",
+      "body": {
+        "name": "R",
+        "trigger": "star_synced",
+        "priority": 10000
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxRuleUpdate",
+      "body": {
+        "enabled": null
+      },
+      "expected": {
+        "enabled": null
+      }
+    },
+    {
+      "schema": "InboxRuleUpdate",
+      "body": {
+        "priority": true,
+        "conditions": []
+      },
+      "expected": {
+        "priority": 1,
+        "conditions": []
+      }
+    },
+    {
+      "schema": "InboxRuleCreate",
+      "body": {
+        "name": "R",
+        "trigger": "star_synced",
+        "actions": [
+          1
+        ]
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxTeamCreate",
+      "body": {
+        "name": "Team",
+        "slug": null
+      },
+      "expected": {
+        "name": "Team",
+        "slug": "team",
+        "description": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "1_000"
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 1000,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "1e3"
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": " 2 "
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 2,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "+2"
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 2,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "00"
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 0,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "-0.0"
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 0,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "1."
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "1.000"
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 1,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "nan"
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": "1.1"
+      },
+      "error": true
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": 1.0
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 1,
+        "shared_with_team_id": null
+      }
+    },
+    {
+      "schema": "InboxCategoryCreate",
+      "body": {
+        "name": "Integer oracle",
+        "parent_id": true
+      },
+      "expected": {
+        "name": "Integer oracle",
+        "slug": null,
+        "icon": null,
+        "color": null,
+        "description": null,
+        "parent_id": 1,
+        "shared_with_team_id": null
+      }
+    }
+  ]
+}

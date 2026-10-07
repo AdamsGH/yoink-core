@@ -4958,6 +4958,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "yoink-inbox"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "url",
+ "uuid",
+ "yoink-db",
+]
+
+[[package]]
 name = "yoink-ops"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,15 @@
+# Module-local, isolated source oracles. Never build/pull images or run host Python.
+set shell := ["bash", "-euo", "pipefail", "-c"]
+root := "../../.."
+
+source-oracle-record:
+    cd ../.. && just check-build-space
+    docker run --rm --pull never --network none --read-only --memory 256m --pids-limit 64 --entrypoint python -v "$(realpath {{root}}):/source:ro" yoink/yoink:latest -B /source/backend/crates/yoink-inbox/tests/source_oracle.py > tests/fixtures/source.json
+
+source-oracle:
+    cd ../.. && just check-build-space
+    docker run --rm --pull never --network none --read-only --memory 256m --pids-limit 64 --entrypoint python -v "$(realpath {{root}}):/source:ro" yoink/yoink:latest -B /source/backend/crates/yoink-inbox/tests/source_oracle.py | diff - tests/fixtures/source.json
+
+postgres-oracle:
+    cd ../.. && just check-build-space
+    node tests/postgres_oracle.mjs

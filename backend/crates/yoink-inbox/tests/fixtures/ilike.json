@@ -1,0 +1,18 @@
+[
+  ["прИв", "ПРИВЕТ", true],
+  ["é_c", "Éxc", true],
+  ["é_c", "Éxxc", false],
+  ["a\\%b", "a%b", true],
+  ["a%b", "a---b", true],
+  ["a\\_b", "a_b", true],
+  ["ss", "ß", false],
+  ["σ", "Σ", true],
+  ["οσ", "ΟΣ", true],
+  ["_x", "İx", true],
+  ["i_", "İx", true],
+  ["ıx", "Ix", false],
+  ["Ång", "ångström", true],
+  ["ffi", "ﬃ", false],
+  ["__", "🙂a", true],
+  ["a%b", "a\nb", true]
+]
