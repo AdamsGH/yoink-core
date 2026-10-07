@@ -88,6 +88,7 @@ async fn run_impl(
     let address = listener.local_addr().map_err(|_| ServerError::Bind)?;
     tokio::pin!(shutdown_signal);
     let mut tasks = JoinSet::new();
+    let mut cookie_oauth_lifecycle = None;
     let auth_state =
         yoink_http::AuthState::new(config.auth.as_ref().is_some_and(|auth| auth.dev_enabled));
     let http_auth = config.auth.as_ref().map(|_| auth_state.clone());
@@ -199,6 +200,11 @@ async fn run_impl(
             let worker_workspace = media.executor.workspace_root.clone();
             let executor = yoink_executor::Executor::new(media.executor)
                 .map_err(|_| ServerError::MediaStartup)?;
+            let executor = if media.youtube_auth_adapter {
+                executor.with_youtube_auth_adapter()
+            } else {
+                executor
+            };
             // The enclosing startup deadline also bounds this check. The configured
             // workspace must already exist, as required by Executor::new.
             let status = Command::new("/usr/local/bin/yoink-worker-launcher")
@@ -229,6 +235,41 @@ async fn run_impl(
                 .check_profile_schema()
                 .await
                 .map_err(|_| ServerError::MediaStartup)?;
+            let service = if let Some(origin) = media.cookie_web.origin {
+                service
+                    .with_cookie_web_origin(origin.as_str())
+                    .map_err(|_| ServerError::MediaStartup)?
+            } else {
+                service
+            };
+            let oauth_config = yoink_downloads::cookie_oauth::OAuthProviderConfig::new(
+                media.cookie_web.oauth_timeout,
+            )
+            .map_err(|_| ServerError::MediaStartup)?;
+            let oauth_provider = Arc::new(
+                yoink_downloads::cookie_oauth::YouTubeOAuthProvider::with_config(oauth_config)
+                    .map_err(|_| ServerError::MediaStartup)?,
+            );
+            let service = service
+                .with_oauth_refresh(oauth_provider.clone())
+                .with_oauth_refresh_timeout(media.cookie_web.oauth_timeout)
+                .map_err(|_| ServerError::MediaStartup)?
+                .with_cookie_oauth_provider(oauth_provider)
+                .with_cookie_oauth_poll_config(media.cookie_web.oauth_poll)
+                .map_err(|_| ServerError::MediaStartup)?;
+            let account_config = yoink_downloads::cookie_web_live::AccountProviderConfig::new(
+                media.cookie_web.account_timeout,
+            )
+            .map_err(|_| ServerError::MediaStartup)?;
+            let service = service.with_cookie_account_provider(Arc::new(
+                yoink_downloads::cookie_web_live::LiveAccountProvider::with_config(account_config)
+                    .map_err(|_| ServerError::MediaStartup)?,
+            ));
+            cookie_oauth_lifecycle =
+                Some((service.clone(), media.cookie_web.oauth_cleanup_interval));
+            auth_state
+                .install_cookies(service.clone())
+                .map_err(|_| ServerError::MediaStartup)?;
             telegram = Some(adapter.with_downloads(service.clone()));
             downloads = Some(service);
         }
@@ -246,6 +287,13 @@ async fn run_impl(
         signal = &mut shutdown_signal => Startup::Stopped(signal.map_err(|_| ServerError::Signal)),
         completed = tasks.join_next() => Startup::Stopped(Err(adapter_exit(completed))),
     };
+    if let Some((service, interval)) = cookie_oauth_lifecycle {
+        tasks.spawn(run_cookie_oauth_lifecycle(
+            service,
+            cancel.clone(),
+            interval,
+        ));
+    }
     if let Some(database) = database.clone() {
         let database_cancel = cancel.clone();
         let (health_interval, health_timeout) =
@@ -318,6 +366,38 @@ async fn run_impl(
     )
     .await;
     finish_database(result, database, config.shutdown_timeout).await
+}
+
+async fn run_cookie_oauth_lifecycle(
+    service: yoink_downloads::DownloadService,
+    cancel: CancellationToken,
+    interval: Duration,
+) -> Result<(), ServerError> {
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            _ = tokio::time::sleep(interval) => {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => break,
+                    result = service.cleanup_cookie_oauth(epoch_seconds()) => {
+                        if result.is_err() {
+                            tracing::warn!("cookie OAuth expiry cleanup failed");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    service.drain_cookie_oauth().await;
+    Ok(())
+}
+
+fn epoch_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs().min(i64::MAX as u64) as i64)
 }
 
 async fn supervise(
@@ -488,3 +568,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_cookie_tests.rs"]
+mod cookie_oauth_tests;

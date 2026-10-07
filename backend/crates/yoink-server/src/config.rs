@@ -121,7 +121,7 @@ impl Config {
         let shutdown_timeout = timeout(
             read("SHUTDOWN_TIMEOUT_SECS")?,
             "SHUTDOWN_TIMEOUT_SECS",
-            if media_enabled { 60 } else { 10 },
+            if media_enabled { 135 } else { 10 },
         )?;
         let enabled = match read("TELEGRAM_ENABLED")?.as_deref().unwrap_or("false") {
             "true" => true,

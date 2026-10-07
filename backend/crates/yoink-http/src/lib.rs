@@ -3,6 +3,7 @@
 mod admin;
 mod auth;
 mod configuration;
+mod cookie_web;
 mod downloader_settings;
 mod groups;
 mod health;
@@ -40,7 +41,9 @@ pub fn router_with_auth(system: SystemService, auth: Option<AuthState>) -> Route
     let diagnostics =
         diagnostics(system.clone()).merge(health::router(system.clone(), auth.clone()));
     match auth {
-        Some(state) => diagnostics.merge(authenticated_routes(state, system, None)),
+        Some(state) => diagnostics
+            .merge(cookie_web::public_router(state.clone(), system.clone()))
+            .merge(authenticated_routes(state, system, None)),
         None => diagnostics,
     }
 }
@@ -61,6 +64,10 @@ pub fn router_with_identity_and_user_session(
 ) -> Router {
     let diagnostics =
         diagnostics(system.clone()).merge(health::router(system.clone(), Some(identities.clone())));
+    let diagnostics = diagnostics.merge(cookie_web::public_router(
+        identities.clone(),
+        system.clone(),
+    ));
     let app = match auth {
         Some(state) => diagnostics.merge(authenticated_routes(state, system.clone(), client)),
         None => diagnostics,

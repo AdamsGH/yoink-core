@@ -21,6 +21,8 @@ serde_json.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+yoink-executor.workspace = true
+yoink-domain.workspace = true
 tower.workspace = true
 yoink-storage.workspace = true
 yoink-db.workspace = true

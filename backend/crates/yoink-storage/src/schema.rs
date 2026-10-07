@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 18] = [
+const MIGRATIONS: [Migration; 19] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -100,6 +100,11 @@ const MIGRATIONS: [Migration; 18] = [
         version: 18,
         sql: include_str!("../migrations-turso/0018_deferred_media.sql"),
         expected_tables: 61,
+    },
+    Migration {
+        version: 19,
+        sql: include_str!("../migrations-turso/0019_cookie_web.sql"),
+        expected_tables: 63,
     },
 ];
 
@@ -710,22 +715,10 @@ mod tests {
             .fetch_all(store.database())
             .await
             .unwrap();
-        assert_eq!(versions.len(), 18);
-        assert_eq!(versions[0].try_get::<i64, _>("version").unwrap(), 1);
-        assert_eq!(versions[1].try_get::<i64, _>("version").unwrap(), 2);
-        assert_eq!(versions[2].try_get::<i64, _>("version").unwrap(), 3);
-        assert_eq!(versions[3].try_get::<i64, _>("version").unwrap(), 4);
-        assert_eq!(versions[4].try_get::<i64, _>("version").unwrap(), 5);
-        assert_eq!(versions[5].try_get::<i64, _>("version").unwrap(), 6);
-        assert_eq!(versions[6].try_get::<i64, _>("version").unwrap(), 7);
-        assert_eq!(versions[7].try_get::<i64, _>("version").unwrap(), 8);
-        assert_eq!(versions[8].try_get::<i64, _>("version").unwrap(), 9);
-        assert_eq!(versions[9].try_get::<i64, _>("version").unwrap(), 10);
-        assert_eq!(versions[10].try_get::<i64, _>("version").unwrap(), 11);
-        assert_eq!(versions[11].try_get::<i64, _>("version").unwrap(), 12);
-        assert_eq!(versions[12].try_get::<i64, _>("version").unwrap(), 13);
-        assert_eq!(versions[13].try_get::<i64, _>("version").unwrap(), 14);
-        assert_eq!(versions[14].try_get::<i64, _>("version").unwrap(), 15);
+        assert_eq!(versions.len(), MIGRATIONS.len());
+        for (row, migration) in versions.iter().zip(&MIGRATIONS) {
+            assert_eq!(row.try_get::<i64, _>("version").unwrap(), migration.version);
+        }
     }
 
     #[tokio::test]

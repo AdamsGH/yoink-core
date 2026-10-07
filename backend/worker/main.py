@@ -188,9 +188,15 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     request["options"] = defaults
     network = request.get("network")
     if network is not None:
-        if not isinstance(network, dict) or set(network) - {"proxy_url", "cookie_jar"}:
+        if not isinstance(network, dict) or set(network) - {"proxy_url", "cookie_jar", "youtube_oauth"}:
             raise ValueError("invalid request")
         proxy, cookies = network.get("proxy_url"), network.get("cookie_jar")
+        oauth = network.get("youtube_oauth")
+        if oauth is not None:
+            from youtube_auth import validate_tokens
+            validate_tokens(oauth)
+            if cookies is not None:
+                raise ValueError("invalid request")
         if proxy is not None:
             if not isinstance(proxy, str) or not proxy or len(proxy.encode()) > 4096 or any(ord(c) < 32 for c in proxy):
                 raise ValueError("invalid request")
@@ -206,7 +212,7 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
                 fields = row.split("\t")
                 if len(fields) != 7 or not fields[0] or not fields[2] or fields[1] not in ("TRUE", "FALSE") or fields[3] not in ("TRUE", "FALSE") or not fields[4].isascii() or not fields[4].isdigit() or int(fields[4]) > 0xFFFFFFFFFFFFFFFF or not fields[5]:
                     raise ValueError("invalid request")
-        request["network"] = {"proxy_url": proxy, "cookie_jar": cookies}
+        request["network"] = {"proxy_url": proxy, "cookie_jar": cookies, "youtube_oauth": oauth}
     return request
 
 

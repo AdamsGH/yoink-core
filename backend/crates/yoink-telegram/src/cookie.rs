@@ -14,6 +14,7 @@ const PAGE_SIZE: usize = 10;
 #[derive(Clone, PartialEq)]
 pub(super) enum Action {
     List(Option<i64>),
+    Token,
     Status(CookieDomain),
     Delete(Option<CookieDomain>),
     Invalid,
@@ -23,6 +24,7 @@ impl std::fmt::Debug for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::List(_) => "List",
+            Self::Token => "Token",
             Self::Status(_) => "Status",
             Self::Delete(_) => "Delete",
             Self::Invalid => "Invalid",
@@ -33,6 +35,7 @@ impl std::fmt::Debug for Action {
 pub(super) fn command(args: &[&str]) -> Action {
     match args {
         [] => Action::List(None),
+        [name] if name.eq_ignore_ascii_case("token") => Action::Token,
         [name] if name.eq_ignore_ascii_case("clear") => Action::Delete(None),
         [name, domain] if name.eq_ignore_ascii_case("del") => {
             CookieDomain::parse(domain).map_or(Action::Invalid, |d| Action::Delete(Some(d)))
@@ -122,13 +125,44 @@ async fn apply(
     language: Language,
 ) -> Result<(String, InlineKeyboardMarkup), String> {
     match action {
+        Action::Token => {
+            let token = service
+                .issue_telegram_cookie_token(actor, target)
+                .await
+                .map_err(|e| download_error_response(e, language))?;
+            let text = format!(
+                "Cookie sync token\n\n{}\n\nPaste into the browser extension and click Send Cookies. Valid for 10 minutes, single-use.",
+                token.token
+            );
+            let mut rows = Vec::new();
+            if let Some(url) = service.cookie_web_link("cookies") {
+                rows.push(vec![InlineKeyboardButton::web_app(
+                    "Manage cookies",
+                    teloxide::types::WebAppInfo { url },
+                )]);
+            }
+            if let Some(mut url) = service.cookie_web_link("cookie-sync") {
+                url.query_pairs_mut().append_pair("token", &token.token);
+                rows.push(vec![InlineKeyboardButton::url("Upload page (mobile)", url)]);
+            }
+            Ok((text, InlineKeyboardMarkup::new(rows)))
+        }
         Action::Invalid => Err(translate(language, Key::CookieUsage, &[])),
         Action::List(after) => {
             let page = service
                 .personal_cookies(actor, target, after)
                 .await
                 .map_err(|e| download_error_response(e, language))?;
-            Ok(render(&page, language))
+            let (text, mut keyboard) = render(&page, language);
+            if let Some(url) = service.cookie_web_link("cookies") {
+                keyboard
+                    .inline_keyboard
+                    .push(vec![InlineKeyboardButton::web_app(
+                        "Manage cookies",
+                        teloxide::types::WebAppInfo { url },
+                    )]);
+            }
+            Ok((text, keyboard))
         }
         Action::Status(domain) => {
             let status = service
@@ -176,6 +210,13 @@ pub(super) async fn handle_command(
         Ok((text, keyboard)) => {
             let _ = bot
                 .send_message(message.chat.id, text)
+                .link_preview_options(teloxide::types::LinkPreviewOptions {
+                    is_disabled: true,
+                    url: None,
+                    prefer_small_media: false,
+                    prefer_large_media: false,
+                    show_above_text: false,
+                })
                 .reply_markup(keyboard)
                 .await;
         }
@@ -293,14 +334,14 @@ mod tests {
         ));
         assert!(matches!(command(&["clear", "secret"]), Action::Invalid));
         for input in [
-            vec!["token"],
-            vec!["TOKEN"],
             vec!["del"],
             vec!["del", "example.com", "secret"],
             vec!["upload"],
         ] {
             assert!(matches!(command(&input), Action::Invalid));
         }
+        assert!(matches!(command(&["token"]), Action::Token));
+        assert!(matches!(command(&["TOKEN"]), Action::Token));
         assert!(matches!(command(&["CLEAR"]), Action::Delete(None)));
         assert!(matches!(
             command(&["DEL", "example.com"]),

@@ -10,6 +10,17 @@ pub struct MediaConfig {
     pub executor: ExecutorConfig,
     pub downloads: DownloadConfig,
     pub network: DownloadNetworkConfig,
+    pub cookie_web: CookieWebConfig,
+    pub youtube_auth_adapter: bool,
+}
+
+#[derive(Debug)]
+pub struct CookieWebConfig {
+    pub origin: Option<url::Url>,
+    pub oauth_timeout: Duration,
+    pub account_timeout: Duration,
+    pub oauth_poll: yoink_downloads::cookie_oauth::OAuthPollConfig,
+    pub oauth_cleanup_interval: Duration,
 }
 
 impl fmt::Debug for MediaConfig {
@@ -18,6 +29,8 @@ impl fmt::Debug for MediaConfig {
             .field("downloads", &self.downloads)
             .field("executor", &"confined worker launcher")
             .field("network", &self.network)
+            .field("cookie_web", &self.cookie_web)
+            .field("youtube_auth_adapter", &self.youtube_auth_adapter)
             .finish()
     }
 }
@@ -140,8 +153,91 @@ impl MediaConfig {
                     "invalid personal cookie storage limits",
                 )
             })?;
+        let origin = read("COOKIE_WEB_ORIGIN")?
+            .map(|value| {
+                let origin = url::Url::parse(&value)
+                    .map_err(|_| invalid("COOKIE_WEB_ORIGIN", "expected an HTTPS origin"))?;
+                if origin.scheme() != "https"
+                    || origin.host_str().is_none()
+                    || !origin.username().is_empty()
+                    || origin.password().is_some()
+                    || origin.path() != "/"
+                    || origin.query().is_some()
+                    || origin.fragment().is_some()
+                {
+                    return Err(invalid(
+                        "COOKIE_WEB_ORIGIN",
+                        "expected an HTTPS origin without credentials, path, query or fragment",
+                    ));
+                }
+                Ok(origin)
+            })
+            .transpose()?;
+        let oauth_poll = yoink_downloads::cookie_oauth::OAuthPollConfig {
+            budget: Duration::from_secs(number(
+                read,
+                "COOKIE_OAUTH_POLL_BUDGET_SECS",
+                120,
+                61,
+                294,
+            )?),
+            result_retention: Duration::from_secs(number(
+                read,
+                "COOKIE_OAUTH_RESULT_RETENTION_SECS",
+                1800,
+                60,
+                86400,
+            )?),
+            max_inflight: number(read, "COOKIE_OAUTH_MAX_INFLIGHT", 128, 1, 10000)? as usize,
+        };
+        if shutdown <= oauth_poll.budget + Duration::from_secs(5) {
+            return Err(invalid(
+                "SHUTDOWN_TIMEOUT_SECS",
+                "must exceed COOKIE_OAUTH_POLL_BUDGET_SECS by more than five seconds",
+            ));
+        }
+        let cookie_web = CookieWebConfig {
+            oauth_poll,
+            oauth_cleanup_interval: Duration::from_secs(number(
+                read,
+                "COOKIE_OAUTH_CLEANUP_INTERVAL_SECS",
+                60,
+                1,
+                3600,
+            )?),
+            origin,
+            oauth_timeout: Duration::from_secs(number(
+                read,
+                "COOKIE_OAUTH_TIMEOUT_SECS",
+                15,
+                1,
+                60,
+            )?),
+            account_timeout: Duration::from_secs(number(
+                read,
+                "COOKIE_ACCOUNT_TIMEOUT_SECS",
+                10,
+                1,
+                60,
+            )?),
+        };
+        let youtube_auth_adapter = match read("YOUTUBE_AUTH_ADAPTER_ENABLED")?
+            .as_deref()
+            .unwrap_or("false")
+        {
+            "true" => true,
+            "false" => false,
+            _ => {
+                return Err(invalid(
+                    "YOUTUBE_AUTH_ADAPTER_ENABLED",
+                    "expected true or false",
+                ));
+            }
+        };
         Ok(Self {
             network,
+            cookie_web,
+            youtube_auth_adapter,
             executor: ExecutorConfig {
                 program: "/usr/local/bin/yoink-worker-launcher".into(),
                 args: vec![],
@@ -290,8 +386,101 @@ mod tests {
                     .find(|(k, _)| *k == key)
                     .map(|(_, v)| v.to_string()))
             },
-            Duration::from_secs(60),
+            Duration::from_secs(135),
         )
+    }
+
+    #[test]
+    fn cookie_controls_have_bounded_defaults_and_explicit_origin() {
+        let default = parse(&[]).unwrap();
+        assert!(default.cookie_web.origin.is_none());
+        assert!(!default.youtube_auth_adapter);
+        assert_eq!(default.cookie_web.oauth_timeout, Duration::from_secs(15));
+        assert_eq!(default.cookie_web.account_timeout, Duration::from_secs(10));
+        let configured = parse(&[
+            ("COOKIE_WEB_ORIGIN", "https://yoink.example"),
+            ("COOKIE_OAUTH_TIMEOUT_SECS", "60"),
+            ("COOKIE_ACCOUNT_TIMEOUT_SECS", "1"),
+            ("YOUTUBE_AUTH_ADAPTER_ENABLED", "true"),
+            ("COOKIE_OAUTH_POLL_BUDGET_SECS", "61"),
+            ("COOKIE_OAUTH_RESULT_RETENTION_SECS", "60"),
+            ("COOKIE_OAUTH_MAX_INFLIGHT", "1"),
+            ("COOKIE_OAUTH_CLEANUP_INTERVAL_SECS", "1"),
+        ])
+        .unwrap();
+        assert!(configured.youtube_auth_adapter);
+        assert_eq!(configured.cookie_web.oauth_poll.budget.as_secs(), 61);
+        assert_eq!(
+            configured.cookie_web.oauth_poll.result_retention.as_secs(),
+            60
+        );
+        assert_eq!(configured.cookie_web.oauth_poll.max_inflight, 1);
+        assert_eq!(configured.cookie_web.oauth_cleanup_interval.as_secs(), 1);
+        assert_eq!(
+            configured.cookie_web.origin.unwrap().as_str(),
+            "https://yoink.example/"
+        );
+        assert_eq!(configured.cookie_web.oauth_timeout, Duration::from_secs(60));
+        assert_eq!(
+            configured.cookie_web.account_timeout,
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn cookie_controls_reject_unsafe_origins_and_unbounded_deadlines() {
+        for origin in [
+            "http://yoink.example",
+            "https://user@yoink.example",
+            "https://yoink.example/path",
+            "https://yoink.example/?query=x",
+            "https://yoink.example/#fragment",
+            "",
+        ] {
+            let error = parse(&[("COOKIE_WEB_ORIGIN", origin)])
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("YOINK_RUST_COOKIE_WEB_ORIGIN"));
+        }
+        for name in ["COOKIE_OAUTH_TIMEOUT_SECS", "COOKIE_ACCOUNT_TIMEOUT_SECS"] {
+            for value in ["0", "61", "-1", "garbage"] {
+                let error = parse(&[(name, value)]).unwrap_err().to_string();
+                assert!(error.contains(name));
+            }
+        }
+    }
+
+    #[test]
+    fn cookie_poll_lifecycle_rejects_invalid_limits_and_short_shutdown() {
+        for (name, value) in [
+            ("COOKIE_OAUTH_POLL_BUDGET_SECS", "60"),
+            ("COOKIE_OAUTH_POLL_BUDGET_SECS", "295"),
+            ("COOKIE_OAUTH_RESULT_RETENTION_SECS", "59"),
+            ("COOKIE_OAUTH_RESULT_RETENTION_SECS", "86401"),
+            ("COOKIE_OAUTH_MAX_INFLIGHT", "0"),
+            ("COOKIE_OAUTH_MAX_INFLIGHT", "10001"),
+            ("COOKIE_OAUTH_CLEANUP_INTERVAL_SECS", "0"),
+            ("COOKIE_OAUTH_CLEANUP_INTERVAL_SECS", "3601"),
+        ] {
+            assert!(
+                parse(&[(name, value)])
+                    .unwrap_err()
+                    .to_string()
+                    .contains(name)
+            );
+        }
+        assert!(
+            MediaConfig::from_lookup(
+                &mut |key| Ok((key == "COOKIE_OAUTH_POLL_BUDGET_SECS").then(|| "294".to_owned())),
+                Duration::from_secs(300),
+            )
+            .is_ok()
+        );
+        let error = MediaConfig::from_lookup(&mut |_| Ok(None), Duration::from_secs(125))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("SHUTDOWN_TIMEOUT_SECS"));
+        assert!(error.contains("COOKIE_OAUTH_POLL_BUDGET_SECS"));
     }
 
     #[test]
@@ -339,6 +528,7 @@ mod tests {
     fn rejects_unsafe_or_unbounded_configuration_without_echoing_values() {
         for entries in [
             vec![("DOWNLOAD_CONCURRENCY", "0")],
+            vec![("YOUTUBE_AUTH_ADAPTER_ENABLED", "yes")],
             vec![("DOWNLOAD_QUOTA_MINUTE", "0")],
             vec![("DOWNLOAD_QUOTA_HOUR", "-1")],
             vec![("DOWNLOAD_QUOTA_DAY", "1000001")],

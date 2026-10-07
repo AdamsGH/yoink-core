@@ -14,7 +14,8 @@ use landlock::{
 
 const ERROR: &str = "worker launcher failed";
 
-const WORKER_ENV: [&str; 7] = [
+const WORKER_ENV: [&str; 8] = [
+    "YOINK_YOUTUBE_AUTH_SOCKET",
     "YOINK_WORKER_MAX_BYTES",
     "YOINK_WORKER_SOCKET_TIMEOUT_SECS",
     "YOINK_WORKER_PROCESSING_TIMEOUT_SECS",
@@ -60,6 +61,11 @@ fn run() -> Result<(), ()> {
         .filter_map(|key| env::var_os(key).map(|value| ((*key).to_owned(), value)))
         .collect();
 
+    if let Some(socket) = env::var_os("YOINK_YOUTUBE_AUTH_SOCKET")
+        && socket != "/run/yoink-youtube-auth/adapter.sock"
+    {
+        return Err(());
+    }
     apply_confinement(&cwd)?;
 
     if check_only {
@@ -170,7 +176,7 @@ mod tests {
     #[test]
     fn worker_environment_allowlist_contains_typed_processing_limit() {
         assert!(WORKER_ENV.contains(&"YOINK_WORKER_PROCESSING_TIMEOUT_SECS"));
-        assert_eq!(WORKER_ENV.len(), 7);
+        assert_eq!(WORKER_ENV.len(), 8);
         assert!(!WORKER_ENV.contains(&"DATABASE_URL"));
         assert!(!WORKER_ENV.contains(&"TELEGRAM_BOT_TOKEN"));
     }

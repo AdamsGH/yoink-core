@@ -403,18 +403,25 @@ def download_media(request: dict[str, Any], settings: Any,
         raise MediaFailure("processing_failed") from exc
     try:
         if cookie_text:
+            if cookie_text.lstrip().startswith(("__oauth2__", "{")):
+                raise MediaFailure("invalid_media")
             if not cookie_text.startswith("# Netscape"):
                 cookie_text = "# Netscape HTTP Cookie File\n" + cookie_text
             fd, cookie_file = tempfile.mkstemp(prefix=".cookies-", dir=workspace)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(cookie_text)
-        if gallery:
+        if network.get("youtube_oauth") is not None:
+            from youtube_auth import download as oauth_download
+            oauth_download(request, settings, workspace, metadata)
+        elif gallery:
             if engine == "yt_dlp":
                 raise MediaFailure("unsupported_source")
             gallery_sources = _gallery_download(request["source_url"], workspace, emit_progress, cookie_file, proxy, max_bytes, max_total, max_items, socket_timeout, metadata)
         else:
             try:
                 import yt_dlp
+                from youtube_auth_pot import install
+                install()
             except ImportError as exc:
                 raise MediaFailure("unsupported_source") from exc
             class SilentLogger:

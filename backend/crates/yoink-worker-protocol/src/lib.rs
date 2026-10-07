@@ -9,6 +9,7 @@
 //! symlink safety, including for paths created by an untrusted executor.
 
 mod media_info;
+pub mod youtube_auth;
 pub use media_info::*;
 mod links;
 pub use links::*;
@@ -244,10 +245,13 @@ impl DownloadOptions {
 pub struct NetworkCredentials {
     pub proxy_url: Option<String>,
     pub cookie_jar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub youtube_oauth: Option<youtube_auth::YoutubeOAuth>,
 }
 impl fmt::Debug for NetworkCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NetworkCredentials")
+            .field("youtube_oauth", &self.youtube_oauth)
             .field("proxy_url", &self.proxy_url.as_ref().map(|_| "[REDACTED]"))
             .field(
                 "cookie_jar",
@@ -259,6 +263,12 @@ impl fmt::Debug for NetworkCredentials {
 impl NetworkCredentials {
     /// Validate transient stdin credentials without exposing their values in diagnostics.
     pub fn validate(&self) -> Result<(), ProtocolError> {
+        if let Some(oauth) = &self.youtube_oauth {
+            oauth.validate()?;
+            if self.cookie_jar.is_some() {
+                return Err(ProtocolError::InvalidRequest);
+            }
+        }
         if let Some(proxy) = &self.proxy_url {
             if proxy.is_empty()
                 || proxy.len() > MAX_PROXY_URL_BYTES
@@ -830,6 +840,7 @@ mod tests {
             subtitles: None,
         };
         req.network = Some(NetworkCredentials {
+            youtube_oauth: None,
             proxy_url: Some("https://proxy.example:8443".into()),
             cookie_jar: Some(
                 "# Netscape\n.example.test\tTRUE\t/\tFALSE\t2000000000\tname\tsecret-cookie".into(),
@@ -852,6 +863,7 @@ mod tests {
         ] {
             let mut bad = request();
             bad.network = Some(NetworkCredentials {
+                youtube_oauth: None,
                 proxy_url: Some(proxy.into()),
                 cookie_jar: None,
             });
@@ -859,6 +871,7 @@ mod tests {
         }
         let mut too_long_proxy = request();
         too_long_proxy.network = Some(NetworkCredentials {
+            youtube_oauth: None,
             proxy_url: Some(format!("http://x/{}", "a".repeat(MAX_PROXY_URL_BYTES))),
             cookie_jar: None,
         });
@@ -868,6 +881,7 @@ mod tests {
         );
         let mut malformed_cookie = request();
         malformed_cookie.network = Some(NetworkCredentials {
+            youtube_oauth: None,
             proxy_url: None,
             cookie_jar: Some("not-a-netscape-row".into()),
         });
@@ -877,6 +891,7 @@ mod tests {
         );
         let mut control_cookie = request();
         control_cookie.network = Some(NetworkCredentials {
+            youtube_oauth: None,
             proxy_url: None,
             cookie_jar: Some("name\u{0001}".into()),
         });
@@ -886,6 +901,7 @@ mod tests {
         );
         let mut huge_cookie = request();
         huge_cookie.network = Some(NetworkCredentials {
+            youtube_oauth: None,
             proxy_url: None,
             cookie_jar: Some("x".repeat(MAX_COOKIE_JAR_BYTES + 1)),
         });

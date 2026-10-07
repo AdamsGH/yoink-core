@@ -19,6 +19,7 @@ pub struct AuthState {
     service: Arc<OnceLock<AuthService>>,
     identities: Arc<OnceLock<Arc<IdentityStore>>>,
     downloader_settings: Arc<OnceLock<yoink_downloads::UserSettingsService>>,
+    pub(crate) cookies: Arc<OnceLock<yoink_downloads::DownloadService>>,
     dev_enabled: bool,
 }
 
@@ -33,8 +34,16 @@ impl AuthState {
             service: Arc::new(OnceLock::new()),
             identities: Arc::new(OnceLock::new()),
             downloader_settings: Arc::new(OnceLock::new()),
+            cookies: Arc::new(OnceLock::new()),
             dev_enabled,
         }
+    }
+
+    pub fn install_cookies(
+        &self,
+        service: yoink_downloads::DownloadService,
+    ) -> Result<(), Box<yoink_downloads::DownloadService>> {
+        self.cookies.set(service).map_err(Box::new)
     }
 
     pub fn install_downloader_settings(
@@ -92,6 +101,7 @@ pub(crate) fn router(state: AuthState, system: yoink_application::SystemService)
         .merge(crate::groups::router())
         .merge(crate::nsfw::router())
         .merge(crate::downloader_settings::router())
+        .merge(crate::cookie_web::router())
         .route_layer(middleware::from_fn(move |request: Request, next: Next| {
             let ready = system.snapshot().ready;
             async move {

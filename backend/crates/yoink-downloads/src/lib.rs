@@ -5,6 +5,12 @@ mod cut;
 mod language;
 pub use cut::{CutSession, CutStage, CutSubmission};
 pub use yoink_identity::LanguagePreference;
+pub mod cookie_oauth;
+mod cookie_oauth_refresh;
+pub mod cookie_web;
+mod cookie_web_account;
+pub mod cookie_web_live;
+mod cookie_web_network;
 mod deferred_media;
 mod personal_cookies;
 pub mod profile;
@@ -168,6 +174,10 @@ pub struct DownloadService {
     profile: ProfileStore,
     network_config: DownloadNetworkConfig,
     groups_enabled: bool,
+    cookie_web_origin: Option<url::Url>,
+    cookie_oauth_provider: Option<Arc<dyn cookie_oauth::OAuthProvider>>,
+    cookie_oauth_work: Arc<cookie_oauth::OAuthWork>,
+    cookie_account_provider: Option<Arc<dyn cookie_web_live::AccountProvider>>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -244,6 +254,7 @@ impl DownloadNetworkConfig {
         normalized.dedup();
         if let Some(proxy) = &system_proxy {
             NetworkCredentials {
+                youtube_oauth: None,
                 proxy_url: Some(proxy.clone()),
                 cookie_jar: None,
             }
@@ -340,6 +351,10 @@ impl DownloadService {
             profile,
             network_config,
             groups_enabled: false,
+            cookie_web_origin: None,
+            cookie_oauth_provider: None,
+            cookie_oauth_work: Arc::new(cookie_oauth::OAuthWork::default()),
+            cookie_account_provider: None,
         })
     }
 
@@ -365,6 +380,25 @@ impl DownloadService {
         self.executor
             .execute_search(&request, cancel, timeout)
             .await
+    }
+
+    pub fn with_oauth_refresh(
+        mut self,
+        provider: std::sync::Arc<dyn profile::oauth_refresh::OAuthRefreshProvider>,
+    ) -> Self {
+        self.profile = self.profile.with_oauth_refresh(provider);
+        self
+    }
+
+    pub fn with_oauth_refresh_timeout(
+        mut self,
+        timeout: std::time::Duration,
+    ) -> Result<Self, DownloadError> {
+        self.profile = self
+            .profile
+            .with_oauth_refresh_timeout(timeout)
+            .map_err(map_profile)?;
+        Ok(self)
     }
 
     pub fn with_network_config(mut self, config: DownloadNetworkConfig) -> Self {

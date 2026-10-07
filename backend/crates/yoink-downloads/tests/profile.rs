@@ -531,24 +531,26 @@ async fn native_profile_contracts_serial() {
 
     // OAuth cases must not be masked by the preceding missing-proxy fixture.
     set_setting(&pool, USER, "proxy_enabled", "false").await;
-    // OAuth and unknown modes are rejected by the public database-backed boundary.
+    // Missing OAuth credentials preserve cookie-mode fallback; unknown modes remain rejected.
     set_setting(&pool, USER, "youtube_auth_mode", "oauth2").await;
-    assert!(matches!(
+    assert!(
         store
             .prepare_network(context(USER as u64, "youtube.com", &base, &none, None), 0)
-            .await,
-        Err(ProfileError::UnsupportedAuthentication)
-    ));
+            .await
+            .is_ok()
+    );
     let youtube_bypass = vec!["youtube.com".to_owned()];
-    assert!(matches!(
+    assert!(
         store
             .prepare_network(
                 context(USER as u64, "youtube.com", &base, &youtube_bypass, None),
                 0
             )
-            .await,
-        Err(ProfileError::UnsupportedAuthentication)
-    ));
+            .await
+            .unwrap()
+            .cookie()
+            .is_none()
+    );
     set_setting(&pool, USER, "youtube_auth_mode", "not-a-mode").await;
     assert!(matches!(
         store

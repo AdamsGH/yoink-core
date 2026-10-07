@@ -33,6 +33,7 @@ const MAX_SNIFF_BYTES: usize = 64;
 #[derive(Clone)]
 pub struct Executor {
     config: ExecutorConfig,
+    youtube_auth_adapter: bool,
 }
 
 #[cfg(test)]
@@ -229,7 +230,16 @@ impl Executor {
         {
             return Err(ExecutorError::InvalidConfig);
         }
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            youtube_auth_adapter: false,
+        })
+    }
+
+    /// Operator-only Unix adapter; never configured from a media request.
+    pub fn with_youtube_auth_adapter(mut self) -> Self {
+        self.youtube_auth_adapter = true;
+        self
     }
 
     pub async fn execute(
@@ -349,6 +359,12 @@ impl Executor {
             .kill_on_drop(true)
             .process_group(0);
 
+        if self.youtube_auth_adapter {
+            command.env(
+                "YOINK_YOUTUBE_AUTH_SOCKET",
+                "/run/yoink-youtube-auth/adapter.sock",
+            );
+        }
         let mut child = command.spawn().map_err(|_| ExecutorError::Spawn)?;
         let pid = child.id().ok_or(ExecutorError::Spawn)?;
         let group_pid = i32::try_from(pid)

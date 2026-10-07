@@ -49,6 +49,7 @@ impl SearchRequest {
         }
         if let Some(network) = &self.network {
             NetworkCredentials {
+                youtube_oauth: None,
                 proxy_url: network.proxy_url.clone(),
                 cookie_jar: None,
             }

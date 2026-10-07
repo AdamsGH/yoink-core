@@ -33,5 +33,10 @@ yoink-downloads.workspace = true
 yoink-executor.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+yoink-db.workspace = true
+yoink-domain.workspace = true
+
 [lints]
 workspace = true

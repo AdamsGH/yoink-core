@@ -1,4 +1,6 @@
-//! Read-only legacy download preferences and versioned credential resolution.
+//! Legacy preferences, versioned credentials and pre-admission OAuth refresh.
+pub mod oauth;
+pub mod oauth_refresh;
 use std::fmt;
 
 use chrono::{DateTime, Utc};
@@ -36,6 +38,8 @@ pub struct NetworkContext<'a> {
 #[derive(Clone)]
 pub struct ProfileStore {
     database: Database,
+    oauth_refresh: Option<std::sync::Arc<dyn oauth_refresh::OAuthRefreshProvider>>,
+    oauth_refresh_timeout: std::time::Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -145,7 +149,11 @@ struct Candidate {
 
 impl ProfileStore {
     pub fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            oauth_refresh: None,
+            oauth_refresh_timeout: std::time::Duration::from_secs(15),
+        }
     }
 
     /// Checks required native tables and columns with zero-row reads.
@@ -281,6 +289,7 @@ impl ProfileStore {
         context: NetworkContext<'_>,
         selection_seed: u64,
     ) -> Result<NetworkSelection, ProfileError> {
+        self.refresh_before_admission(&context).await?;
         let NetworkContext {
             actor_id,
             domain: requested_domain,
@@ -323,16 +332,35 @@ impl ProfileStore {
         };
 
         let bypass = matches_no_cookie_domain(&target, no_cookie_domains)?;
-        if target == "youtube.com" && is_oauth_mode(&youtube_auth_mode) {
-            return Err(ProfileError::UnsupportedAuthentication);
-        }
+        let want_oauth = target == "youtube.com" && is_oauth_mode(&youtube_auth_mode);
         let cookie_ref = if bypass {
             None
         } else {
             let shared_allowed = pool_allowed(identity, use_pool);
-            let candidates = self
+            let mut candidates = self
                 .cookie_candidates(&tx, actor, &target, shared_allowed)
                 .await?;
+            // OAuth is personal-only. Missing OAuth preserves real cookie fallback.
+            if want_oauth {
+                let mut oauth_candidates = Vec::new();
+                for candidate in candidates.iter().filter(|c| !c.is_pool) {
+                    let row = query(include_str!("cookie_by_id.sql"))
+                        .bind(candidate.id)
+                        .bind(MAX_COOKIE_JAR_BYTES as i64)
+                        .fetch_optional(&*tx)
+                        .await?;
+                    if let Some(row) = row {
+                        let content: Option<String> =
+                            row.try_get("content").map_err(|_| ProfileError::Database)?;
+                        if content.as_deref().is_some_and(is_oauth) {
+                            oauth_candidates.push(candidate.clone());
+                        }
+                    }
+                }
+                if !oauth_candidates.is_empty() {
+                    candidates = oauth_candidates;
+                }
+            }
             let selected = select_candidate(&candidates, selection_seed);
             if let Some(c) = selected {
                 let row = query(include_str!("cookie_by_id.sql"))
@@ -366,9 +394,11 @@ impl ProfileStore {
                             return Err(ProfileError::StaleReference);
                         }
                         if is_oauth(&content) {
-                            return Err(ProfileError::UnsupportedAuthentication);
-                        }
-                        if !valid_cookie(&content) {
+                            if !want_oauth || actual_pool {
+                                return Err(ProfileError::UnsupportedAuthentication);
+                            }
+                            oauth::require_fresh(&oauth::decode(&content)?, identity.now)?;
+                        } else if !valid_cookie(&content) {
                             return Err(ProfileError::InvalidCookie);
                         }
                         let ver = cookie_version(
@@ -447,13 +477,12 @@ impl ProfileStore {
             .map_err(|_| ProfileError::Database)?
             .unwrap_or_else(|| "cookies".to_owned());
         validate_auth_mode(&auth_mode)?;
-        if target == "youtube.com" && is_oauth_mode(&auth_mode) {
-            return Err(ProfileError::UnsupportedAuthentication);
-        }
+        let want_oauth = target == "youtube.com" && is_oauth_mode(&auth_mode);
         if bypass && selection.cookie().is_some() {
             return Err(ProfileError::StaleReference);
         }
         let mut cookie_jar = None;
+        let mut youtube_oauth = None;
         if let Some(reference) = selection.cookie() {
             let use_pool = settings
                 .as_ref()
@@ -495,12 +524,18 @@ impl ProfileStore {
                 return Err(ProfileError::StaleReference);
             }
             if is_oauth(&content) {
-                return Err(ProfileError::UnsupportedAuthentication);
+                if !want_oauth || pool {
+                    return Err(ProfileError::StaleReference);
+                }
+                let tokens = oauth::decode(&content)?;
+                oauth::require_fresh(&tokens, identity.now)?;
+                youtube_oauth = Some(tokens);
+            } else {
+                if !valid_cookie(&content) {
+                    return Err(ProfileError::InvalidCookie);
+                }
+                cookie_jar = Some(content);
             }
-            if !valid_cookie(&content) {
-                return Err(ProfileError::InvalidCookie);
-            }
-            cookie_jar = Some(content);
         }
         let proxy_url = if let Some(reference) = selection.proxy() {
             let (candidate, expected_source) = match reference.source() {
@@ -559,6 +594,7 @@ impl ProfileStore {
         };
         tx.commit().await?;
         Ok(NetworkCredentials {
+            youtube_oauth,
             proxy_url,
             cookie_jar,
         })
@@ -876,7 +912,7 @@ fn valid_actor(actor: u64) -> Result<i64, ProfileError> {
 fn version(bytes: &[u8]) -> CredentialVersion {
     CredentialVersion::new(format!("{:x}", Sha256::digest(bytes))).expect("SHA-256 length")
 }
-fn cookie_version(
+pub(crate) fn cookie_version(
     content: &str,
     id: i32,
     owner: i64,

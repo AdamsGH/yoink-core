@@ -125,12 +125,14 @@ async fn disk_profile_preferences_and_frozen_cookie_credentials() {
         .execute(&db)
         .await
         .unwrap();
-    assert!(matches!(
+    assert!(
         store
             .prepare_network(context(42, "youtube.com", &actor), 0)
-            .await,
-        Err(ProfileError::UnsupportedAuthentication)
-    ));
+            .await
+            .unwrap()
+            .cookie()
+            .is_none()
+    );
     query("UPDATE dl_user_settings SET youtube_auth_mode = 'cookies' WHERE user_id = ?1")
         .bind(42_i64)
         .execute(&db)

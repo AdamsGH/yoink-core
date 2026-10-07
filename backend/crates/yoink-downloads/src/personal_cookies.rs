@@ -70,7 +70,7 @@ pub enum PersonalCookieStatus {
 }
 
 impl DownloadService {
-    async fn authorize_cookie_control(
+    pub(super) async fn authorize_cookie_control(
         &self,
         actor: u64,
         target: DeliveryTarget,
