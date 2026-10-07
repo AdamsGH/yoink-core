@@ -59,7 +59,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['all', 'admission', 'delivery', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|admission|delivery|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const image = scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend:experimental';
 const fixtureImage = scenario === 'youtube-auth' ? image : 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
@@ -251,7 +251,7 @@ async function launchApp() {
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
-    ...(['all', 'private-user', 'inline', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
+    ...(['all', 'admission', 'delivery', 'private-user', 'inline', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
     ...(scenario === 'provider-routing' ? ['--env','YOINK_RUST_DOWNLOAD_MAX_BYTES=65536','--env','YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES=196608','--env','YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=1'] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
@@ -352,7 +352,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     youtubeAuthTopology = await startSyntheticYoutubeAuth({ capture: spawnCapture, runId });
   }
   await launchApp();
-  if (scenario === 'all') {
+  if (scenario === 'all' || scenario === 'admission') {
     const sourceUrl = `http://127.0.0.1:${sourcePort}/media?key=${secretMarker}`;
     const replayMessageId = 500;
     botApi.enqueue(42, 42, `/download ${sourceUrl}`, replayMessageId);
@@ -722,17 +722,17 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   const commandContext = {
     botApi, sourcePort, sourceFixture, fixtureSql, queryJob, waitFor, helperContainer, image, assertWorkspaceClean,
   };
-  if (scenario === 'all') {
+  if (scenario === 'all' || scenario === 'admission') {
     summaries.push(await runCommandMediaScenarios(commandContext));
     summaries.push(await runPreferenceScenarios(commandContext));
   }
   downloadTimeoutSeconds = 30;
   cacheTtlSeconds = scenario === 'youtube-auth' ? 0 : 3600;
   await restartApp();
-  if (scenario === 'all') summaries.push(await runBatchScenarios({ ...commandContext, playlistMedia, imageBytes, restartApp }));
+  if (scenario === 'all' || scenario === 'delivery') summaries.push(await runBatchScenarios({ ...commandContext, playlistMedia, imageBytes, restartApp }));
   workerSocketTimeoutSeconds = 20;
   await restartApp();
-  if (scenario === 'all') summaries.push(await runProgressScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'delivery') summaries.push(await runProgressScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'subtitles') summaries.push(await runSubtitleScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'subtitle-settings') summaries.push(await runSubtitleSettingsScenarios({ ...commandContext, restartApp,
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
@@ -788,7 +788,7 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
     restartApp });
   summaries.push(gallerySummary);
   }
-  if (scenario === 'all' || scenario === 'urls') summaries.push(await runGroupScenarios({ ...commandContext, playlistMedia, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
+  if (scenario === 'all' || scenario === 'delivery' || scenario === 'urls') summaries.push(await runGroupScenarios({ ...commandContext, playlistMedia, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
   console.log(`Media acceptance (${scenario}) passed. ${summaries.join('. ')}.`);

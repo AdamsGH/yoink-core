@@ -5,7 +5,10 @@ import test from 'node:test';
 
 const driver = fileURLToPath(new URL('../test-media.mjs', import.meta.url));
 
-for (const args of [['unsupported-native-fixture'], ['all', 'unexpected-extra-argument']]) {
+for (const args of [
+  ['unsupported-native-fixture'],
+  ...['all', 'admission', 'delivery'].map(scenario => [scenario, 'unexpected-extra-argument']),
+]) {
   test(`native fixture rejects invalid arguments: ${args.join(' ')}`, () => {
     const result = spawnSync(process.execPath, [driver, ...args], {
       env: { ...process.env, YOINK_MEDIA_PROVIDER_SOURCE_MOUNT: '1' },
