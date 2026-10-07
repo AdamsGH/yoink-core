@@ -357,6 +357,13 @@ check-downloader-settings-runtime: check-build-space
 format-inbox:
     cargo fmt -p yoink-inbox
 
+format-inbox-schema:
+    cargo fmt -p yoink-storage -p yoink-import
+
+check-inbox-schema: check-build-space
+    cargo clippy --locked --message-format short -p yoink-storage -p yoink-import --all-targets -- -D warnings
+    node scripts/build-resources.mjs check
+
 check-inbox: check-build-space
     cargo clippy --locked --message-format short -p yoink-inbox --all-targets -- -D warnings
     node scripts/build-resources.mjs check

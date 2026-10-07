@@ -69,6 +69,14 @@ await withLegacyFixture(async fixture => {
     const countsBefore = await sourceCounts(query, expectedTables);
     const digestsBefore = await sourceDigests(query, expectedTables);
     const synthetic = await seedSynthetic(query, contract);
+    await query(`INSERT INTO inbox_items(id,user_id,url,normalized_url,status,created_at,modified_at,archived_at)
+      SELECT 10400 + fixture.n,9007199254740993,
+        'https://fixture.invalid/inbox-import-' || fixture.n,
+        'https://fixture.invalid/inbox-import-' || fixture.n,fixture.status,
+        '2024-02-03 04:05:06.123456+00'::timestamptz,
+        '2024-02-03 04:05:07.654321+00'::timestamptz,
+        CASE WHEN fixture.n=3 THEN '2024-02-03 04:05:08+00'::timestamptz ELSE NULL END
+      FROM (VALUES (1,'pending'),(2,'enriched'),(3,'pending'),(4,'classified'),(5,'failed')) AS fixture(n,status)`);
     const seededCounts = await sourceCounts(query, expectedTables);
     assert(expectedTables.every(name => seededCounts[name] >= 1), 'synthetic source contains a record for every application table');
     const beforeDigest = await sourceDigests(query, expectedTables);
@@ -87,6 +95,15 @@ await withLegacyFixture(async fixture => {
       assert.equal(Number(row.rows[0][0]), seededCounts[table], `imported row count for ${table}`);
     }
     await compareAllContent(query, contract, native, successfulPrerequisite.db);
+    const expectedInboxJobs = await nativeRequest(native, successfulPrerequisite.db,
+      `SELECT CAST(user_id AS TEXT),CAST(id AS TEXT),
+        CASE status WHEN 'pending' THEN 'enrich' ELSE 'classify' END,'ready',
+        CAST(modified_at AS TEXT),CAST(modified_at AS TEXT)
+        FROM inbox_items WHERE status IN ('pending','enriched') AND archived_at IS NULL ORDER BY id`);
+    assert.equal(expectedInboxJobs.rows.length, 2, 'fixture includes both active Inbox phases and excludes archived/completed/failed work');
+    const inboxJobs = await nativeRequest(native, successfulPrerequisite.db,
+      'SELECT CAST(user_id AS TEXT),CAST(item_id AS TEXT),kind,state,CAST(available_at AS TEXT),CAST(created_at AS TEXT) FROM inbox_jobs ORDER BY item_id');
+    assert.deepEqual(inboxJobs.rows, expectedInboxJobs.rows, 'real importer admits only active Inbox work after copying rows, preserving exact owners and timestamps');
     await operationsChecks({ backend, root: successfulPrerequisite.root, database: successfulPrerequisite.db, query, contract, native, secrets, image: process.env.YOINK_OPS_TEST_IMAGE });
     const nulls = await nativeRequest(native, successfulPrerequisite.db,
       "SELECT payload FROM events WHERE plugin='fixture-edge' ORDER BY id");

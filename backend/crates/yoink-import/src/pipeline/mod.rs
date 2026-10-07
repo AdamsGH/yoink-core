@@ -13,6 +13,7 @@ use turso::{
     Connection, Value,
     transaction::{Transaction, TransactionBehavior},
 };
+use yoink_db::raw_sql;
 use yoink_storage::Store;
 
 use crate::{
@@ -87,6 +88,10 @@ async fn execute_connected(
                 .map_err(|error| error.at_table(&table.name, "content verification"))?;
         }
         verify_foreign_keys(&transaction, &tables).await?;
+        raw_sql(include_str!("../../../yoink-inbox/sql/backfill_jobs.sql"))
+            .execute(&*transaction)
+            .await
+            .map_err(|_| ImportError::Storage.at_table("inbox_jobs", "work admission"))?;
         transaction
             .commit()
             .await

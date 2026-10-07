@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 19] = [
+const MIGRATIONS: [Migration; 22] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -105,6 +105,25 @@ const MIGRATIONS: [Migration; 19] = [
         version: 19,
         sql: include_str!("../migrations-turso/0019_cookie_web.sql"),
         expected_tables: 63,
+    },
+    Migration {
+        version: 20,
+        sql: concat!(
+            include_str!("../../yoink-inbox/sql/durable_jobs.sql"),
+            "\n",
+            include_str!("../../yoink-inbox/sql/backfill_jobs.sql"),
+        ),
+        expected_tables: 64,
+    },
+    Migration {
+        version: 21,
+        sql: include_str!("../../yoink-inbox/sql/github_mutations.sql"),
+        expected_tables: 65,
+    },
+    Migration {
+        version: 22,
+        sql: include_str!("../../yoink-inbox/sql/notification_outbox.sql"),
+        expected_tables: 66,
     },
 ];
 
@@ -306,6 +325,10 @@ async fn schema_hash(
 #[cfg(test)]
 #[path = "schema_search_tests.rs"]
 mod search_tests;
+
+#[cfg(test)]
+#[path = "schema_inbox_tests.rs"]
+mod inbox_tests;
 
 #[cfg(test)]
 mod tests {
