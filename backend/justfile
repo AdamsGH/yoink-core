@@ -66,8 +66,17 @@ test: check-build-space
     node scripts/build-resources.mjs check
 
 # Focused contracts or adapter verification while other crates are being integrated.
+check-crate crate: check-build-space
+    cargo check --locked --message-format short -p {{quote(crate)}} --all-targets
+    node scripts/build-resources.mjs check
+
 test-crate crate: check-build-space
     cargo test --locked --message-format short -p {{quote(crate)}}
+    node scripts/build-resources.mjs check
+
+test-fixture-control: check-build-space
+    cargo test --workspace --all-features --locked fixture_control::tests -- --nocapture
+    node scripts/build-resources.mjs check
 
 build: check-build-space
     cargo build --workspace --locked

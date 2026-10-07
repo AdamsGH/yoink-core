@@ -116,6 +116,23 @@ fn status_text(domain: &CookieDomain, status: PersonalCookieStatus, language: La
     }
 }
 
+fn token_reply(
+    token: &str,
+    web_app: Option<teloxide::types::WebAppInfo>,
+) -> (String, InlineKeyboardMarkup) {
+    let text = format!(
+        "Cookie sync token\n\n{token}\n\nPaste into the browser extension and click Send Cookies. Valid for 10 minutes, single-use."
+    );
+    let mut rows = Vec::new();
+    if let Some(web_app) = web_app {
+        rows.push(vec![InlineKeyboardButton::web_app(
+            "Manage cookies",
+            web_app,
+        )]);
+    }
+    (text, InlineKeyboardMarkup::new(rows))
+}
+
 async fn apply(
     service: &DownloadService,
     actor: u64,
@@ -130,22 +147,12 @@ async fn apply(
                 .issue_telegram_cookie_token(actor, target)
                 .await
                 .map_err(|e| download_error_response(e, language))?;
-            let text = format!(
-                "Cookie sync token\n\n{}\n\nPaste into the browser extension and click Send Cookies. Valid for 10 minutes, single-use.",
-                token.token
-            );
-            let mut rows = Vec::new();
-            if let Some(url) = service.cookie_web_link("cookies") {
-                rows.push(vec![InlineKeyboardButton::web_app(
-                    "Manage cookies",
-                    teloxide::types::WebAppInfo { url },
-                )]);
-            }
-            if let Some(mut url) = service.cookie_web_link("cookie-sync") {
-                url.query_pairs_mut().append_pair("token", &token.token);
-                rows.push(vec![InlineKeyboardButton::url("Upload page (mobile)", url)]);
-            }
-            Ok((text, InlineKeyboardMarkup::new(rows)))
+            Ok(token_reply(
+                &token.token,
+                service
+                    .cookie_web_link("cookies")
+                    .map(|url| teloxide::types::WebAppInfo { url }),
+            ))
         }
         Action::Invalid => Err(translate(language, Key::CookieUsage, &[])),
         Action::List(after) => {
@@ -314,6 +321,32 @@ pub(super) async fn handle_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sync_token_reply_has_only_the_supported_webapp_link() {
+        let token = "synthetic-sync-token";
+        let (text, empty) = token_reply(token, None);
+        assert!(text.contains(token));
+        assert!(empty.inline_keyboard.is_empty());
+
+        let (text, keyboard) = token_reply(
+            token,
+            Some(teloxide::types::WebAppInfo {
+                url: "https://cookies.example/cookies".parse().unwrap(),
+            }),
+        );
+        assert!(text.contains(token));
+        let encoded = serde_json::to_value(keyboard).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({"inline_keyboard": [[{
+                "text": "Manage cookies",
+                "web_app": {"url": "https://cookies.example/cookies"}
+            }]]})
+        );
+        assert!(!encoded.to_string().contains(token));
+        assert!(!encoded.to_string().contains("cookie-sync"));
+    }
+
     #[test]
     fn strict_command_suffix_cursor_and_redaction() {
         let cmd = command(&["https://example.com/?token=secret"]);

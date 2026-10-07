@@ -45,8 +45,12 @@ Domain capacity conservatively counts physical rows (including malformed imports
 Lowering limits never removes imported data or blocks reads/deletes/clear or
 non-growing replacements. Rejected growth consumes its message watermark so a
 replay cannot install credentials after capacity is freed. No schema change is needed.
-Legacy `/cookie` token/browser-extension synchronization and WebApp links remain
-absent separate workflows; this is not complete cookie/downloader parity.
+`/cookie token` issues a single-use browser-extension sync token. Configuring
+`YOINK_RUST_COOKIE_WEB_ORIGIN` adds a WebApp link to the existing `/cookies` page.
+No mobile `/cookie-sync` link is emitted because that page is not implemented.
+The operator must serve the frontend and API at the configured HTTPS origin.
+See [the cookie web contract](docs/cookie-web.md) for the API and verification
+boundaries; this is not complete cookie/downloader parity.
 
 Coordinator-only opt-in native acceptance: `node scripts/test-media.mjs personal-controls`
 against already built fixture/backend images. This scenario is deliberately not part

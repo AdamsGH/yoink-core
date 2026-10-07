@@ -22,7 +22,8 @@ versioning invalidates admitted references when content changes.
 
 Telegram /cookie token uses the same durable issuer. Configured links are enabled
 by `DownloadService::with_cookie_web_origin("https://host/")`: Manage cookies is
-an actual WebApp `/cookies`; mobile link is `/cookie-sync?token=...`. The origin
+a WebApp link to the existing frontend's `/cookies` route. Telegram does not
+emit a mobile `/cookie-sync` link because that page has no implementation. The origin
 setter rejects credentials, query, fragment, non-HTTPS and non-root paths.
 The native runtime reads `YOINK_RUST_COOKIE_WEB_ORIGIN`; leaving it unset hides
 WebApp links. Invalid origins fail configuration validation without echoing values.
@@ -113,10 +114,12 @@ There is no executable content/export HTTP route or separate PUT/PATCH cookie
 route in the reviewed actual router/client. CookieResponse deliberately excludes
 content. No speculative secret-returning endpoints were invented. Existing
 content replacement is POST upsert; OAuth secret access is a typed Rust-only
-owner-authorized interface. Likewise the source links to `/cookie-sync`, but the
-tracked unchanged frontend has no `/cookie-sync` page: mobile-page implementation
-is not claimed here. The actual `/cookies` WebApp route and browser extension
-submission are supported.
+owner-authorized interface. The legacy Python handler links to `/cookie-sync`, but the
+tracked unchanged frontend has no `/cookie-sync` page. Token responses therefore
+contain no mobile upload URL. The `/cookies` WebApp link and browser extension
+submission remain available. The operator must serve the frontend and API at the
+configured HTTPS origin. The native JSON router does not serve the SPA.
+REST checks do not verify the browser or reverse-proxy configuration.
 
 Durable control-state bounds: 128 active browser tokens per actor / 100,000 total;
 8 active device sessions per actor / 10,000 total. Rejection preserves existing
