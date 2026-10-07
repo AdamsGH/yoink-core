@@ -352,3 +352,31 @@ test-cookie-web-http case="": check-build-space
 
 test-cookie-oauth-lifecycle: check-build-space
     cargo test --locked --offline --message-format short -p yoink-server cookie_oauth_lifecycle -- --nocapture
+
+# Source-only packaging checks; never builds or contacts media providers.
+test-youtube-auth-package:
+    cd ../docker/youtubei-service && npm ci --ignore-scripts --no-audit --no-fund && npm test
+    node --test worker/test_youtube_auth_adapter.mjs
+    docker compose -f docker-compose.youtube-auth.yaml -f docker-compose.youtube-auth-fixture.yaml config --quiet
+    node scripts/test-youtube-auth-topology.mjs --static
+
+# Coordinator only: prebuilt native runtime + reviewed gateway/youtubei images.
+test-youtube-auth-gateway:
+    node --test ../docker/youtubei-service/test/gateway.test.mjs
+
+test-youtube-auth-topology:
+    node scripts/test-youtube-auth-topology.mjs
+
+build-youtube-auth-review: check-build-space
+    cd .. && docker build -f docker/Dockerfile.youtubei -t yoink-youtubei:review .
+    cd .. && docker build -f backend/Dockerfile.youtube-auth-gateway -t yoink-youtube-auth-gateway:review .
+    docker build -f Dockerfile --target runtime-base -t yoink-native:youtube-auth-review .
+
+test-youtube-auth-gateway-node22:
+    docker run --rm --pull never --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges --memory 256m --cpus 1 --pids-limit 64 --tmpfs /tmp:size=16m,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev --mount type=bind,source={{justfile_directory()}}/scripts,target=/source/backend/scripts,readonly --mount type=bind,source={{justfile_directory()}}/worker,target=/source/backend/worker,readonly --mount type=bind,source={{justfile_directory()}}/../docker/youtubei-service/test,target=/source/docker/youtubei-service/test,readonly --entrypoint node yoink-youtube-auth-gateway:review --test /source/docker/youtubei-service/test/gateway.test.mjs
+
+pull-youtube-auth-bgutil:
+    docker pull brainicism/bgutil-ytdlp-pot-provider:2.0.0@sha256:ed86b6fdd5e430ddd7c8ce1adb55e1ab54db7c7dbc1bcbf3a82454a85b971164
+
+test-youtube-auth-bgutil:
+    node scripts/test-youtube-auth-bgutil.mjs

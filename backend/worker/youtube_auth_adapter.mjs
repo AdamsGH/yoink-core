@@ -34,12 +34,14 @@ const server = http.createServer(async (req, res) => {
     }
     const payload = JSON.parse(body);
     if (route[0] === 'pot' && (payload.proxy || payload.source_address || payload.disable_tls_verification)) throw new Error('policy violation');
+    // The admission preload retains only dispatched work with uncertain completion.
+    if (req.url === '/pot') res[Symbol.for('yoink.youtube_auth.pot_dispatched')] = true;
     const upstream = await fetch(new URL(route[1], targets.get(route[0])), {
       method: route[2], headers: { 'Content-Type': 'application/json' },
       body: route[2] === 'POST' ? JSON.stringify(payload) : undefined,
       redirect: 'error', signal: controller.signal,
     });
-    // Worker-owned refresh: sidecar credential rotation invalidates this execution.
+    // Credentials are immutable after admission. Reject sidecar token rotation.
     if (upstream.status !== 200 || upstream.headers.has('x-updated-tokens')) throw new Error('upstream rejected');
     res.writeHead(200, { 'Content-Type': route[1] === '/download' ? 'application/octet-stream' : 'application/json' });
     await pipeline(upstream.body, res);

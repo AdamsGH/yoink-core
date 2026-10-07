@@ -1,0 +1,18 @@
+# Deterministic override: removes ALL provider egress and replaces BOTH upstreams.
+services:
+  youtubei:
+    command: [node, test/synthetic-server.mjs]
+    networks: !override [services]
+  bgutil:
+    image: yoink-youtube-auth-gateway:review
+    user: "10001:10001"
+    entrypoint: [node, -e]
+    command:
+      - "require('http').createServer((q,s)=>{q.resume();s.setHeader('Content-Type','application/json');s.end(JSON.stringify(q.url==='/ping'?{version:'2.0.0'}:{poToken:'synthetic-pot'}))}).listen(4416)"
+    networks: !override [services]
+    tmpfs: !override ['/tmp:size=16m,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev']
+  worker:
+    # Resolve the public source name deterministically without DNS/provider contact.
+    # The worker has network_mode:none; actual traffic is ONLY the fixed Unix socket.
+    # This is not a private-origin exception and changes no guard implementation.
+    extra_hosts: ["youtu.be:93.184.216.34"]

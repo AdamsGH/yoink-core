@@ -1,9 +1,16 @@
-FROM node:22-alpine
-RUN apk add --no-cache ffmpeg
+FROM node:22.16.0-bookworm-slim@sha256:048ed02c5fd52e86fda6fbd2f6a76cf0d4492fd6c6fee9e2c463ed5108da0e34
+# Immutable Debian snapshot fixes the ffmpeg/transitive apt artifact set.
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250611T000000Z bookworm main\ndeb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250611T000000Z bookworm-security main\n' > /etc/apt/sources.list \
+    && apt-get update && apt-get install --no-install-recommends -y ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 10001 yoink && useradd -u 10001 -g yoink --no-create-home yoink
 WORKDIR /app
-COPY docker/youtubei-service/package.json ./
-RUN npm install --omit=dev
-COPY docker/youtubei-service/index.js ./
-ENV PORT=9173
+COPY docker/youtubei-service/package.json docker/youtubei-service/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY docker/youtubei-service/index.js docker/youtubei-service/lifecycle.mjs ./
+COPY docker/youtubei-service/test/ ./test/
+USER 10001:10001
+ENV PORT=9173 DOWNLOAD_DIR=/tmp/youtubei MAX_CONCURRENCY=2 MAX_QUEUE=0
 EXPOSE 9173
 CMD ["node", "index.js"]

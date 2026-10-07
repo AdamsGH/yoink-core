@@ -1,0 +1,102 @@
+# Experimental standalone operator topology. Not an override of production compose.
+# Run from repo root with -f backend/docker-compose.youtube-auth.yaml.
+name: yoink-youtube-auth
+x-bounded: &bounded
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: "no"
+  # Preserve coordinator's 135s media-runtime drain budget (120s polls + >5s).
+  # This standalone worker is a launcher harness, not a cookie-poll owner.
+  stop_grace_period: 150s
+services:
+  socket-init:
+    <<: *bounded
+    image: yoink-youtube-auth-gateway:review
+    user: "0:0"
+    cap_add: [CHOWN, FOWNER]
+    network_mode: none
+    command: [sh, -ec, 'chown 10001:10001 /socket; chmod 0700 /socket']
+    volumes: [auth-socket:/socket]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 16
+  gateway:
+    <<: *bounded
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile.youtube-auth-gateway
+    image: yoink-youtube-auth-gateway:review
+    user: "10001:10001"
+    depends_on:
+      socket-init: {condition: service_completed_successfully}
+      youtubei: {condition: service_started}
+      bgutil: {condition: service_started}
+    environment:
+      YOINK_YOUTUBE_AUTH_SOCKET: /run/yoink-youtube-auth/adapter.sock
+      YOINK_TRUSTED_YOUTUBEI_URL: http://youtubei:9173
+      YOINK_TRUSTED_BGUTIL_URL: http://bgutil:4416
+    volumes: [auth-socket:/run/yoink-youtube-auth]
+    networks: [services]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 32
+  youtubei:
+    <<: *bounded
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.youtubei
+    image: yoink-youtubei:review
+    user: "10001:10001"
+    environment:
+      DOWNLOAD_DIR: /tmp/youtubei
+      MAX_CONCURRENCY: "2"
+      MAX_QUEUE: "0"
+      JOB_DEADLINE_MS: "240000"
+      FFMPEG_KILL_GRACE_MS: "1000"
+      MAX_FILE_BYTES: "67108864"
+      MAX_SCRATCH_BYTES: "201326592"
+    tmpfs: ['/tmp:size=448m,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev']
+    networks: [services, provider-egress]
+    mem_limit: 768m
+    cpus: 2.0
+    pids_limit: 96
+  bgutil:
+    <<: *bounded
+    # v2 matches worker /get_pot context/content-binding contract. Never use latest.
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0@sha256:ed86b6fdd5e430ddd7c8ce1adb55e1ab54db7c7dbc1bcbf3a82454a85b971164
+    user: "1000:1000"
+    tmpfs: ['/tmp:size=64m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev']
+    networks: [services, provider-egress]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 64
+  worker:
+    <<: *bounded
+    # Coordinator builds the existing native runtime; this file never builds it.
+    image: ${YOINK_NATIVE_WORKER_IMAGE:-yoink-native:youtube-auth-review}
+    user: "10001:10001"
+    network_mode: none
+    depends_on: {gateway: {condition: service_started}}
+    entrypoint: [/usr/local/bin/yoink-worker-launcher]
+    working_dir: /tmp/yoink-work
+    environment:
+      YOINK_YOUTUBE_AUTH_SOCKET: /run/yoink-youtube-auth/adapter.sock
+      YOINK_WORKER_MAX_BYTES: "67108864"
+      YOINK_WORKER_TOTAL_MAX_BYTES: "67108864"
+      YOINK_WORKER_MAX_ITEMS: "1"
+      YOINK_WORKER_SOCKET_TIMEOUT_SECS: "10"
+      YOINK_WORKER_PROCESSING_TIMEOUT_SECS: "30"
+      YOINK_WORKER_ALLOWED_PRIVATE_ORIGINS: '[]'
+      YOINK_WORKER_ALLOWED_PROXY_ORIGINS: '[]'
+    volumes: [auth-socket:/run/yoink-youtube-auth:ro]
+    tmpfs: ['/tmp/yoink-work:size=192m,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev']
+    mem_limit: 512m
+    cpus: 2.0
+    pids_limit: 96
+volumes:
+  auth-socket:
+networks:
+  services: {internal: true}
+  provider-egress: {}
