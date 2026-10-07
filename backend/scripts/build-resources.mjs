@@ -49,10 +49,21 @@ export async function cleanArtifacts(target) {
   console.log(`Removed build artifacts from ${target}; media-reports preserved.`);
 }
 
+export async function cleanWorkspace(workspace, scope = '') {
+  if (scope && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(scope) || scope === 'media-reports' || artifactNames.has(scope))) {
+    throw new Error('Cleanup target must be one named Cargo target directory under target/, not a path or report directory.');
+  }
+  const target = path.join(workspace, 'target');
+  if (!await targetExists(target)) return;
+  await cleanArtifacts(scope ? path.join(target, scope) : target);
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const workspace = fileURLToPath(new URL('../', import.meta.url));
   const action = process.argv[2];
-  if (process.argv.length !== 3 || !['check', 'clean'].includes(action)) throw new Error('Usage: build-resources.mjs check|clean');
+  if (!['check', 'clean'].includes(action) || process.argv.length < 3 || process.argv.length > (action === 'clean' ? 4 : 3)) {
+    throw new Error('Usage: build-resources.mjs check | clean [TARGET_NAME]');
+  }
   if (action === 'check') await checkSpace(workspace);
-  else await cleanArtifacts(path.join(workspace, 'target'));
+  else await cleanWorkspace(workspace, process.argv[3] ?? '');
 }

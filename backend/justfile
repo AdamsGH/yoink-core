@@ -8,8 +8,8 @@ check-build-space:
     node scripts/build-resources.mjs check
 
 # Stop all builds in this worktree first. Reports and source changes are retained.
-clean-builds:
-    node scripts/build-resources.mjs clean
+clean-builds target='':
+    node scripts/build-resources.mjs clean {{quote(target)}}
 
 test-build-resources:
     node --test scripts/build-resources.test.mjs
