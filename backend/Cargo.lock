@@ -5106,6 +5106,7 @@ dependencies = [
  "yoink-executor",
  "yoink-i18n",
  "yoink-identity",
+ "yoink-inbox",
  "yoink-storage",
  "yoink-worker-protocol",
 ]

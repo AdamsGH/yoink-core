@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 22] = [
+const MIGRATIONS: [Migration; 23] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -124,6 +124,11 @@ const MIGRATIONS: [Migration; 22] = [
         version: 22,
         sql: include_str!("../../yoink-inbox/sql/notification_outbox.sql"),
         expected_tables: 66,
+    },
+    Migration {
+        version: 23,
+        sql: include_str!("../migrations-turso/0023_text_effects.sql"),
+        expected_tables: 67,
     },
 ];
 

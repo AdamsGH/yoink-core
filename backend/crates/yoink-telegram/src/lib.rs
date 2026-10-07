@@ -45,11 +45,15 @@ mod membership_update;
 mod menus;
 mod raw_polling;
 pub use menus::MenuConfig;
+pub mod inbox_runtime;
 mod plain_url;
 mod progress;
 mod proxy;
 mod quality;
 mod sender;
+pub mod text;
+pub use inbox_runtime::{InboxRuntime, InboxRuntimeConfig};
+pub use text::TextDelivery;
 mod settings;
 mod subs;
 mod uncache;
@@ -115,6 +119,7 @@ pub struct TelegramAdapter {
     http_client: reqwest::Client,
     menu_config: MenuConfig,
     menus: Option<menus::Menus>,
+    inbox: Option<InboxRuntime>,
 }
 
 impl TelegramAdapter {
@@ -184,7 +189,23 @@ impl TelegramAdapter {
             http_client,
             menu_config: MenuConfig::default(),
             menus: None,
+            inbox: None,
         })
+    }
+
+    /// Shared text transport uses the bot identity verified by prepare/getMe.
+    pub fn text_delivery(
+        &self,
+        ledger: Arc<yoink_storage::Store>,
+        timeout: Duration,
+    ) -> Result<TextDelivery, yoink_storage::StoreError> {
+        TextDelivery::new(self.bot.clone(), self.bot_id as i64, ledger, timeout)
+    }
+
+    /// Installs Inbox commands only. The coordinator separately owns run().
+    pub fn with_inbox(mut self, runtime: InboxRuntime) -> Self {
+        self.inbox = Some(runtime);
+        self
     }
 
     /// Enables the progressive video-download slice.
@@ -259,7 +280,8 @@ impl TelegramAdapter {
             self.downloads.is_some(),
             self.groups_enabled,
             self.menu_config,
-        );
+        )
+        .with_inbox(self.inbox.is_some());
         menus.initialize().await;
         self.menus = Some(menus);
     }
@@ -329,6 +351,7 @@ impl TelegramAdapter {
                     },
                     cookie_url: CookieUrlDependency(self.cookie_url),
                     identities: self.identities,
+                    inbox: self.inbox,
                 }
             ])
             .default_handler(|_| async {})
@@ -393,6 +416,7 @@ struct MessageDependencies {
     upload: CookieUploadDependency,
     cookie_url: CookieUrlDependency,
     identities: Option<Arc<IdentityStore>>,
+    inbox: Option<InboxRuntime>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -888,6 +912,11 @@ async fn handle_message(
         return Ok(());
     };
     if !system.snapshot().ready {
+        return Ok(());
+    }
+    if let Some(inbox) = &dependencies.inbox
+        && inbox.handle(&message, &bot_username).await
+    {
         return Ok(());
     }
     let private = message.chat.is_private();

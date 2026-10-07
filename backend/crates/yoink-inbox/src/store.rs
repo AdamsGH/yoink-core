@@ -36,23 +36,9 @@ impl Store {
         source: &str,
         now: i64,
     ) -> Result<IngestResult> {
-        if !["bot", "web", "api", "extension"].contains(&source) {
-            return Err(Error::Invalid);
-        }
-        let normalized = normalize_url(url)?;
-        let kind = detect_kind(&normalized);
         let c = self.db.connection().await?;
         c.batch("BEGIN IMMEDIATE").await?;
-        let r = async {
- let existing=query("SELECT id FROM inbox_items WHERE user_id=? AND normalized_url=?").bind(user).bind(&normalized).fetch_optional(&*c).await?;
- if let Some(row)=existing {return Ok(IngestResult{item_id:row.try_get("id")?,normalized_url:normalized.clone(),created:false})}
- let row=query("INSERT INTO inbox_items(user_id,url,normalized_url,kind,source,status,created_at,modified_at) VALUES(?,?,?,?,?,'pending',?,?) RETURNING id").bind(user).bind(url.trim()).bind(&normalized).bind(kind).bind(source).bind(now).bind(now).fetch_one(&*c).await?;
- let id=row.try_get("id")?;
- enqueue(&*c,user,Some(id),"enrich",now).await?;
- run_rules(&*c,user,id,"item_ingested",now).await?;
- crate::bridge::link_all(&*c,user,now).await?;
- Ok(IngestResult{item_id:id,normalized_url:normalized.clone(),created:true})
- }.await;
+        let r = Self::ingest_on(&*c, user, url, source, now).await;
         match r {
             Ok(v) => {
                 c.batch("COMMIT").await?;
@@ -63,6 +49,44 @@ impl Store {
                 Err(e)
             }
         }
+    }
+    /// Ingest on a caller-owned transaction. The caller must hold BEGIN IMMEDIATE
+    /// and commit item, jobs, rules, bridges and its immutable command result
+    /// together; this hook never acquires another connection or commits.
+    pub async fn ingest_on<E: Executor>(
+        c: &E,
+        user: i64,
+        url: &str,
+        source: &str,
+        now: i64,
+    ) -> Result<IngestResult> {
+        if !["bot", "web", "api", "extension"].contains(&source) {
+            return Err(Error::Invalid);
+        }
+        let normalized = normalize_url(url)?;
+        let kind = detect_kind(&normalized);
+        let existing = query("SELECT id FROM inbox_items WHERE user_id=? AND normalized_url=?")
+            .bind(user)
+            .bind(&normalized)
+            .fetch_optional(c)
+            .await?;
+        if let Some(row) = existing {
+            return Ok(IngestResult {
+                item_id: row.try_get("id")?,
+                normalized_url: normalized.clone(),
+                created: false,
+            });
+        }
+        let row=query("INSERT INTO inbox_items(user_id,url,normalized_url,kind,source,status,created_at,modified_at) VALUES(?,?,?,?,?,'pending',?,?) RETURNING id").bind(user).bind(url.trim()).bind(&normalized).bind(kind).bind(source).bind(now).bind(now).fetch_one(c).await?;
+        let id = row.try_get("id")?;
+        enqueue(c, user, Some(id), "enrich", now).await?;
+        run_rules(c, user, id, "item_ingested", now).await?;
+        crate::bridge::link_all(c, user, now).await?;
+        Ok(IngestResult {
+            item_id: id,
+            normalized_url: normalized.clone(),
+            created: true,
+        })
     }
     pub async fn enqueue(&self, user: i64, item: Option<i64>, kind: &str, now: i64) -> Result<()> {
         if !["enrich", "classify", "stars_sync"].contains(&kind) {

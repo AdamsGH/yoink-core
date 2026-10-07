@@ -47,6 +47,8 @@ impl MenuConfig {
 
 #[derive(Clone, Copy)]
 struct Eligibility {
+    ingest: bool,
+    stars: bool,
     approved: bool,
     owner: bool,
     downloads: bool,
@@ -79,14 +81,23 @@ const PRIVATE_CONTROLS: &[(&str, Key)] = &[
 const OWNER_CONTROLS: &[(&str, Key)] = &[("uncache", Key::MenuUncache)];
 
 fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
-    if !access.approved {
+    if !access.approved && !access.ingest && !access.stars {
         return vec![];
     }
     let mut entries = BASIC.to_vec();
+    if access.ingest {
+        entries.extend_from_slice(&[("save", Key::MenuSave), ("inbox", Key::MenuInbox)]);
+    }
+    if access.stars {
+        entries.extend_from_slice(&[
+            ("stars", Key::MenuStars),
+            ("stars_sync", Key::MenuStarsSync),
+        ]);
+    }
     if access.owner && !access.group {
         entries.push(("status", Key::MenuStatus));
     }
-    if access.downloads {
+    if access.approved && access.downloads {
         if !access.group {
             entries.push(("lang", Key::MenuLang));
         }
@@ -121,6 +132,8 @@ fn eligibility(
         check_thread_policy: false,
     };
     Eligibility {
+        ingest: false,
+        stars: false,
         approved: snapshot.authorize(&policy, None).decision.allowed
             && (!group || (groups && downloads)),
         owner: snapshot.principal.user_id == owner,
@@ -231,6 +244,7 @@ pub(crate) struct Menus<A = BotApi> {
     // Scope identifiers only, never role/locale snapshots. Keep deleted groups
     // until revocation succeeds so removal cannot orphan personalized menus.
     known_groups: std::collections::BTreeSet<i64>,
+    inbox: bool,
 }
 impl Menus {
     pub(crate) fn new(
@@ -253,10 +267,35 @@ impl Menus {
             downloads,
             groups,
             known_groups: Default::default(),
+            inbox: false,
         }
     }
 }
 impl<A: MenuApi> Menus<A> {
+    pub(crate) fn with_inbox(mut self, enabled: bool) -> Self {
+        self.inbox = enabled;
+        self
+    }
+    fn inbox_eligibility(&self, snapshot: &IdentitySnapshot) -> Eligibility {
+        let mut access = eligibility(snapshot, self.owner, self.downloads, self.groups);
+        let policy = AccessPolicy {
+            min_role: Role::Restricted,
+            scopes: vec![AccessScope::Private, AccessScope::Group],
+            check_group_enabled: true,
+            check_thread_policy: false,
+        };
+        if self.inbox && (!access.group || self.groups) {
+            access.ingest = snapshot
+                .authorize(&policy, Some(("inbox", "ingest")))
+                .decision
+                .allowed;
+            access.stars = snapshot
+                .authorize(&policy, Some(("inbox", "gh_sync")))
+                .decision
+                .allowed;
+        }
+        access
+    }
     async fn defaults(&self) -> Result<(), Failure> {
         for locale in ["", "en", "ru"] {
             for scope in [
@@ -268,6 +307,8 @@ impl<A: MenuApi> Menus<A> {
             let language = yoink_i18n::language_for(Some(locale));
             let commands = catalog(
                 Eligibility {
+                    ingest: false,
+                    stars: false,
                     approved: self.identities.is_some(),
                     owner: false,
                     downloads: false,
@@ -309,11 +350,13 @@ impl<A: MenuApi> Menus<A> {
         let (access, language) = match &self.identities {
             Some(store) => match store.snapshot(user, group.then_some((chat, None))).await {
                 Ok(Some(snapshot)) => (
-                    eligibility(&snapshot, self.owner, self.downloads, self.groups),
+                    self.inbox_eligibility(&snapshot),
                     crate::lang::resolve_language(Some(&snapshot.language), None),
                 ),
                 Ok(None) => (
                     Eligibility {
+                        ingest: false,
+                        stars: false,
                         approved: user == self.owner && !group,
                         owner: user == self.owner,
                         downloads: false,
@@ -331,6 +374,8 @@ impl<A: MenuApi> Menus<A> {
             },
             None => (
                 Eligibility {
+                    ingest: false,
+                    stars: false,
                     approved: user == self.owner && !group,
                     owner: user == self.owner,
                     downloads: false,

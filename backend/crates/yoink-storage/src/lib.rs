@@ -23,3 +23,6 @@ pub use model::{
 pub use progress::{ProgressMessage, ProgressNotice};
 pub use quality::{QualityChoice, QualitySession, QualityStage};
 pub use store::{StopDeliveryReason, Store};
+
+mod text;
+pub use text::{TextEffect, TextIdentity, TextOutcome};

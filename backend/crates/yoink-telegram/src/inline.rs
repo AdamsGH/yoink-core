@@ -387,6 +387,7 @@ mod tests {
             assert!(searches.begin(43).unwrap().1);
             let query: InlineQuery = serde_json::from_value(serde_json::json!({"id":"held-throttle", "from":{"id":43,"is_bot":false,"first_name":"Fixture"}, "query":"cats", "offset":""})).unwrap();
             let dependencies = MessageDependencies {
+                inbox: None,
                 downloads: None,
                 identities: Some(identities.clone()),
                 upload: crate::CookieUploadDependency {
@@ -517,6 +518,7 @@ mod tests {
         );
         let query: InlineQuery = serde_json::from_value(serde_json::json!({"id":"cumulative-answer", "from":{"id":43,"is_bot":false,"first_name":"Fixture"}, "query":"https://example.com/video", "offset":""})).unwrap();
         let dependencies = MessageDependencies {
+            inbox: None,
             downloads: None,
             identities: Some(identities),
             upload: crate::CookieUploadDependency {
@@ -657,6 +659,7 @@ mod tests {
                 panic!("raw help not decoded");
             };
             let dependencies = crate::MessageDependencies {
+                inbox: None,
                 downloads: None,
                 identities: Some(identities.clone()),
                 upload: crate::CookieUploadDependency {

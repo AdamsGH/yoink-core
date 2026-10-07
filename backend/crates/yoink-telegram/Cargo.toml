@@ -26,11 +26,12 @@ yoink-storage.workspace = true
 yoink-identity.workspace = true
 yoink-access.workspace = true
 yoink-worker-protocol.workspace = true
+yoink-inbox = { path = "../yoink-inbox" }
+yoink-db.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-yoink-db.workspace = true
 tempfile = "3"
 
 [lints]

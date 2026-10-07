@@ -44,6 +44,18 @@ macro_rules! define_keys {
 }
 
 define_keys! {
+    InboxDuplicate => "telegram.inbox_duplicate";
+    InboxSaveUsage => "telegram.inbox_save_usage";
+    InboxSaveFailed => "telegram.inbox_save_failed";
+    InboxStarsEmpty => "telegram.inbox_stars_empty";
+    InboxSaved => "telegram.inbox_saved";
+    InboxCompleted => "telegram.inbox_completed";
+    InboxSyncQueued => "telegram.inbox_sync_queued";
+    InboxEmpty => "telegram.inbox_empty";
+    MenuSave => "telegram.menu_save";
+    MenuInbox => "telegram.menu_inbox";
+    MenuStars => "telegram.menu_stars";
+    MenuStarsSync => "telegram.menu_stars_sync";
     InlineHelp => "telegram.inline_help";
     InlineShort => "telegram.inline_short";
     InlineInvalid => "telegram.inline_invalid";

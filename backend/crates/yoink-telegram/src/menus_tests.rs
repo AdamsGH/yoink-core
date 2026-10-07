@@ -69,6 +69,8 @@ fn names(commands: &[BotCommand]) -> Vec<&str> {
 #[test]
 fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
     let ordinary = Eligibility {
+        ingest: false,
+        stars: false,
         approved: true,
         owner: false,
         downloads: true,
@@ -82,6 +84,8 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
         assert_eq!(names(&catalog(ordinary, language)), expected);
         let owner = catalog(
             Eligibility {
+                ingest: false,
+                stars: false,
                 owner: true,
                 ..ordinary
             },
@@ -121,6 +125,8 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
 #[test]
 fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     let basic = Eligibility {
+        ingest: false,
+        stars: false,
         approved: true,
         owner: false,
         downloads: false,
@@ -130,6 +136,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     assert_eq!(
         names(&catalog(
             Eligibility {
+                ingest: false,
+                stars: false,
                 owner: true,
                 ..basic
             },
@@ -140,6 +148,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     assert!(
         catalog(
             Eligibility {
+                ingest: false,
+                stars: false,
                 approved: false,
                 owner: true,
                 downloads: true,
@@ -151,6 +161,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     );
     let group = catalog(
         Eligibility {
+            ingest: false,
+            stars: false,
             group: true,
             downloads: true,
             owner: true,
@@ -219,6 +231,8 @@ async fn personalized_language_removes_both_higher_precedence_overrides() {
     }
     let ru = catalog(
         Eligibility {
+            ingest: false,
+            stars: false,
             approved: true,
             owner: false,
             downloads: true,
@@ -278,6 +292,7 @@ fn worker(api: Fake, identities: Arc<IdentityStore>) -> Menus<Fake> {
         downloads: true,
         groups: false,
         known_groups: Default::default(),
+        inbox: false,
     }
 }
 async fn until(api: &Fake, predicate: impl Fn(&Saved) -> bool) {
@@ -515,4 +530,43 @@ async fn group_deletion_revokes_member_scopes_using_only_retained_scope_ids() {
         menus.known_groups.contains(&-100),
         "durable deletion targets retain cleanup scope across restarts"
     );
+}
+
+#[tokio::test]
+async fn inbox_menus_are_feature_aware_localized_and_absent_without_transport() {
+    let (_dir, identities) = setup().await;
+    identities
+        .admin_grant_permission(42, 43, "inbox", "gh_sync", None)
+        .await
+        .unwrap();
+    let snapshot = identities.snapshot(43, None).await.unwrap().unwrap();
+    let menus = worker(Fake::default(), identities.clone()).with_inbox(true);
+    let mut snapshot = snapshot;
+    // A restricted principal's explicit grants do not turn on unrelated media.
+    snapshot.principal.role = Role::Restricted;
+    let entries = catalog(menus.inbox_eligibility(&snapshot), Language::Russian);
+    assert!(names(&entries).contains(&"stars"));
+    assert!(names(&entries).contains(&"stars_sync"));
+    assert!(!names(&entries).contains(&"save"));
+    assert!(!names(&entries).contains(&"download"));
+    assert!(
+        entries
+            .iter()
+            .find(|c| c.command == "stars")
+            .unwrap()
+            .description
+            .contains("GitHub")
+    );
+    let unavailable = worker(Fake::default(), identities.clone());
+    assert!(catalog(unavailable.inbox_eligibility(&snapshot), Language::English).is_empty());
+    snapshot.principal.role = Role::User;
+    assert!(
+        names(&catalog(
+            menus.inbox_eligibility(&snapshot),
+            Language::English
+        ))
+        .contains(&"save")
+    );
+    snapshot.principal.role = Role::Banned;
+    assert!(catalog(menus.inbox_eligibility(&snapshot), Language::English).is_empty());
 }

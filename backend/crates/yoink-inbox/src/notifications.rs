@@ -153,6 +153,13 @@ impl Store {
             Err(Error::Uncertain)
         }
     }
+    /// Current authority/provenance denial is terminal only before the shared
+    /// send boundary. A stale claim cannot cancel sending/unknown work or a
+    /// competing dispatcher's newer claim. No additional migration is needed.
+    pub async fn cancel_notification_claim(&self, n: &Notification, now: i64) -> Result<bool> {
+        Ok(query("UPDATE inbox_notifications SET state='cancelled',error_code='inactive',lease_token=NULL,lease_until=NULL,updated_at=? WHERE id=? AND user_id=? AND state='claimed' AND lease_token=? AND lease_until>?")
+            .bind(now).bind(&n.id).bind(n.user_id).bind(&n.lease_token).bind(now).execute(&self.db).await?.rows_affected()==1)
+    }
     /// Pre-send retry is fenced by the live claim. It cannot retry sending work.
     pub async fn retry_notification(
         &self,
