@@ -12,6 +12,8 @@ use yoink_inbox::{
     store::Store,
 };
 struct RawStages {
+    denied_at: Option<String>,
+    cancelled_at: Option<&'static str>,
     base: url::Url,
     client: reqwest::Client,
     readability: Option<Extraction>,
@@ -21,6 +23,8 @@ struct RawStages {
 impl RawStages {
     fn new(f: &Fixture) -> Self {
         Self {
+            denied_at: None,
+            cancelled_at: None,
             base: f.endpoint(),
             client: reqwest::Client::new(),
             readability: None,
@@ -38,6 +42,12 @@ impl Stages for RawStages {
     ) -> Call<'a, String> {
         Box::pin(async move {
             assert!(!headers.contains_key("Authorization"));
+            if self.cancelled_at == Some(url) {
+                return Err(Error::Cancelled);
+            }
+            if self.denied_at.as_deref() == Some(url) {
+                return Err(Error::Forbidden);
+            }
             let mut endpoint = self.base.join("content").unwrap();
             endpoint.query_pairs_mut().append_pair("target", url);
             let mut request = self.client.get(endpoint);
@@ -54,12 +64,18 @@ impl Stages for RawStages {
     fn readability<'a>(&'a self, _html: &'a str, _url: &'a str) -> Call<'a, Extraction> {
         Box::pin(async {
             self.steps.lock().unwrap().push("readability");
+            if self.cancelled_at == Some("readability") {
+                return Err(Error::Cancelled);
+            }
             self.readability.clone().ok_or(Error::External)
         })
     }
     fn trafilatura<'a>(&'a self, _html: &'a str) -> Call<'a, String> {
         Box::pin(async {
             self.steps.lock().unwrap().push("trafilatura");
+            if self.cancelled_at == Some("trafilatura") {
+                return Err(Error::Cancelled);
+            }
             self.trafilatura.clone().ok_or(Error::External)
         })
     }
@@ -445,4 +461,56 @@ async fn confirmed_reply_hook_is_replay_safe_owned_and_ban_checked() {
     assert!(s.item(1, item).await.unwrap().get("tg_chat_id").is_none());
     s.archive(1, item, false, 2).await.unwrap();
     assert!(reply_target(&s, &Auth, 1, item).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn policy_denials_at_each_fetch_do_not_become_fallback_misses() {
+    let f = Fixture::new().await;
+    for denied in [
+        "https://example.com/llms.txt",
+        "https://example.com/a",
+        "https://r.jina.ai/https://example.com/a",
+        "https://curl.md/https://example.com/a",
+    ] {
+        let mut stages = RawStages::new(&f);
+        stages.denied_at = Some(denied.into());
+        assert!(
+            matches!(
+                engine(&stages, &f)
+                    .extract_content(1, "https://example.com/a")
+                    .await,
+                Err(Error::Forbidden)
+            ),
+            "{denied}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancellation_at_each_fetch_and_extractor_stops_fallback() {
+    let f = Fixture::new().await;
+    f.state.lock().await.pages.insert(
+        "https://example.com/a".into(),
+        "<article>Fixture content</article>".into(),
+    );
+    for cancelled in [
+        "https://example.com/llms.txt",
+        "https://example.com/a",
+        "https://r.jina.ai/https://example.com/a",
+        "https://curl.md/https://example.com/a",
+        "readability",
+        "trafilatura",
+    ] {
+        let mut stages = RawStages::new(&f);
+        stages.cancelled_at = Some(cancelled);
+        assert!(
+            matches!(
+                engine(&stages, &f)
+                    .extract_content(1, "https://example.com/a")
+                    .await,
+                Err(Error::Cancelled)
+            ),
+            "{cancelled}"
+        );
+    }
 }

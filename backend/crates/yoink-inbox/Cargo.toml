@@ -6,6 +6,9 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+yoink-executor = { path = "../yoink-executor" }
+yoink-worker-protocol = { path = "../yoink-worker-protocol" }
+tokio-util.workspace = true
 yoink-db = { path = "../yoink-db" }
 chrono.workspace = true
 serde.workspace = true

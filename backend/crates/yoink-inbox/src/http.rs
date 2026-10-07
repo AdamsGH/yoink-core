@@ -46,6 +46,8 @@ impl IntoResponse for Error {
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::Forbidden => StatusCode::FORBIDDEN,
             Error::Uncertain | Error::MutationPending(_) => StatusCode::CONFLICT,
+            Error::Cancelled => StatusCode::SERVICE_UNAVAILABLE,
+            Error::Completion(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Error::External => StatusCode::BAD_GATEWAY,
             Error::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Error::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,

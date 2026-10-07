@@ -1,0 +1,28 @@
+[package]
+name = "yoink-insight"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+[dependencies]
+axum.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+url.workspace = true
+yoink-db.workspace = true
+turso = "=0.7.2"
+yoink-access.workspace = true
+yoink-identity.workspace = true
+sha2 = "0.10"
+[dev-dependencies]
+yoink-inbox = { path = "../yoink-inbox" }
+tempfile = "3"
+tower.workspace = true
+yoink-storage.workspace = true
+[lints]
+workspace = true

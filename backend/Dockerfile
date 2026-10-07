@@ -1,9 +1,18 @@
 # Experimental images only. They do not replace the Python deployment.
-FROM rust:1.88-bookworm AS rust-build
+FROM rust:1.88-bookworm AS rust-source
 WORKDIR /build
 ENV CARGO_BUILD_JOBS=4
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
+
+FROM rust-source AS launcher-build
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    CARGO_BUILD_JOBS=1 cargo build --locked --release -p yoink-worker-launcher \
+    && cp target/release/yoink-worker-launcher /
+
+FROM rust-source AS rust-build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
@@ -49,7 +58,7 @@ FROM python:3.12-slim-bookworm AS worker-runtime
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir yt-dlp==2026.8.19 gallery-dl==1.32.13 \
+    && pip install --no-cache-dir yt-dlp==2026.8.19 gallery-dl==1.32.13 readability-lxml==0.8.4.1 trafilatura==2.0.0 \
     && groupadd --gid 10001 yoink \
     && useradd --uid 10001 --gid yoink --no-create-home yoink \
     && mkdir -p /tmp/yoink-work \
@@ -59,6 +68,10 @@ COPY worker/ /opt/yoink-worker/
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 10001:10001
 WORKDIR /tmp/yoink-work
+
+FROM worker-runtime AS content-worker
+COPY --from=launcher-build /yoink-worker-launcher /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/yoink-worker-launcher"]
 
 FROM worker-runtime AS runtime-base
 COPY --from=rust-build /yoink-server /yoink-worker-launcher /usr/local/bin/

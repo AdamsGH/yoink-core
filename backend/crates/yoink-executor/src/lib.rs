@@ -152,6 +152,8 @@ impl fmt::Debug for ValidatedArtifact {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ExecutorError {
+    #[error("content network destination denied")]
+    ContentDenied,
     #[error("invalid executor configuration")]
     InvalidConfig,
     #[error("worker could not be started")]
@@ -177,22 +179,26 @@ pub enum ExecutorError {
 enum ExecutionRequest<'a> {
     Media(&'a WorkerRequest),
     Search(&'a SearchRequest),
+    Content(&'a yoink_worker_protocol::ContentRequest),
 }
 enum ExecutionOutput {
     Media(Vec<ValidatedArtifact>),
     Search(Vec<SearchEntry>),
+    Content(yoink_worker_protocol::ContentResult),
 }
 impl ExecutionRequest<'_> {
     fn identity(&self) -> (u16, uuid::Uuid, u32) {
         match self {
             Self::Media(r) => (r.version, r.operation_id, r.attempt),
             Self::Search(r) => (r.version, r.operation_id, r.attempt),
+            Self::Content(r) => (r.version, r.operation_id, r.attempt),
         }
     }
     fn frame(&self) -> Result<Vec<u8>, ExecutorError> {
         match self {
             Self::Media(r) => encode_request(r),
             Self::Search(r) => encode_search_request(r),
+            Self::Content(r) => yoink_worker_protocol::encode_content_request(r),
         }
         .map_err(|_| ExecutorError::Protocol)
     }
@@ -264,7 +270,7 @@ impl Executor {
             .await?
         {
             ExecutionOutput::Media(artifacts) => Ok(artifacts),
-            ExecutionOutput::Search(_) => Err(ExecutorError::Protocol),
+            _ => Err(ExecutorError::Protocol),
         }
     }
 
@@ -286,7 +292,22 @@ impl Executor {
             .await?
         {
             ExecutionOutput::Search(entries) => Ok(entries),
-            ExecutionOutput::Media(_) => Err(ExecutorError::Protocol),
+            _ => Err(ExecutorError::Protocol),
+        }
+    }
+
+    /// Shares bounded IO, process-group cleanup and deadlines with media.
+    pub async fn execute_content(
+        &self,
+        request: &yoink_worker_protocol::ContentRequest,
+        cancel: CancellationToken,
+    ) -> Result<yoink_worker_protocol::ContentResult, ExecutorError> {
+        match self
+            .execute_inner(ExecutionRequest::Content(request), cancel, None)
+            .await?
+        {
+            ExecutionOutput::Content(result) => Ok(result),
+            _ => Err(ExecutorError::Protocol),
         }
     }
 
@@ -501,6 +522,15 @@ impl Executor {
             }
         }
         let event = terminal.ok_or(ExecutorError::Protocol)?;
+        if matches!(request, ExecutionRequest::Content(_)) {
+            if std::fs::read_dir(&workspace).map_err(|_| ExecutorError::Io)?.next().is_some() { return Err(ExecutorError::UnsafeArtifact); }
+            return match event {
+                WorkerEventKind::ContentCompleted { result } => Ok(ExecutionOutput::Content(result)),
+                WorkerEventKind::ContentDenied => Err(ExecutorError::ContentDenied),
+                WorkerEventKind::Failure { class } => Err(ExecutorError::Worker(class)),
+                _ => Err(ExecutorError::Protocol),
+            };
+        }
         if matches!(request, ExecutionRequest::Search(_)) {
             return match event {
                 WorkerEventKind::SearchCompleted { entries } => {
@@ -1338,6 +1368,53 @@ mod tests {
             options: yoink_worker_protocol::DownloadOptions::default(),
             network: None,
         }
+    }
+
+    #[tokio::test]
+    async fn content_typed_results_denial_bounds_cancellation_and_reap() {
+        let request = yoink_worker_protocol::ContentRequest {
+            version: yoink_worker_protocol::PROTOCOL_VERSION,
+            operation_id: uuid::Uuid::new_v4(),
+            attempt: 1,
+            proxy_url: None,
+            task: yoink_worker_protocol::ContentStage::ContentTrafilatura {
+                html: "body".into(),
+            },
+        };
+        for (mode, expected) in [
+            ("content-denied", ExecutorError::ContentDenied),
+            ("content-bound", ExecutorError::Protocol),
+            ("content-artifact", ExecutorError::UnsafeArtifact),
+            ("hang", ExecutorError::Timeout),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            assert_eq!(
+                process_executor_args(mode, temp.path(), Duration::from_secs(1), vec![])
+                    .execute_content(&request, CancellationToken::new())
+                    .await
+                    .unwrap_err(),
+                expected
+            );
+            assert!(temp.path().read_dir().unwrap().next().is_none());
+        }
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            process_executor("content-ok", temp.path())
+                .execute_content(&request, CancellationToken::new())
+                .await
+                .unwrap()
+                .text,
+            "body"
+        );
+        let cancel = CancellationToken::new();
+        let executor = process_executor("hang", temp.path());
+        let child_cancel = cancel.clone();
+        let task =
+            tokio::spawn(async move { executor.execute_content(&request, child_cancel).await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+        assert_eq!(task.await.unwrap().unwrap_err(), ExecutorError::Cancelled);
+        assert!(temp.path().read_dir().unwrap().next().is_none());
     }
 
     fn search_request() -> yoink_worker_protocol::SearchRequest {

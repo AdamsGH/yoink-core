@@ -1530,6 +1530,7 @@ fn retryable_executor_error(error: ExecutorError) -> bool {
         ExecutorError::InvalidConfig
         | ExecutorError::Protocol
         | ExecutorError::Cancelled
+        | ExecutorError::ContentDenied
         | ExecutorError::ResourceLimit
         | ExecutorError::UnsafeArtifact => false,
     }

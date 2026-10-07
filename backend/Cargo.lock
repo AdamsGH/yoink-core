@@ -4972,10 +4972,37 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tower",
  "url",
  "uuid",
  "yoink-db",
+ "yoink-executor",
+ "yoink-worker-protocol",
+]
+
+[[package]]
+name = "yoink-insight"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "turso",
+ "url",
+ "yoink-access",
+ "yoink-db",
+ "yoink-identity",
+ "yoink-inbox",
+ "yoink-storage",
 ]
 
 [[package]]

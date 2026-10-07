@@ -8,6 +8,8 @@
 //! before opening or consuming it. Lexical validation does not guarantee
 //! symlink safety, including for paths created by an untrusted executor.
 
+mod content;
+pub use content::*;
 mod media_info;
 pub mod youtube_auth;
 pub use media_info::*;
@@ -525,6 +527,8 @@ pub enum WorkerEventKind {
     Progress { percent: f32, stage: ProgressStage },
     Completed { artifacts: Vec<ArtifactDescriptor> },
     SearchCompleted { entries: Vec<SearchEntry> },
+    ContentCompleted { result: ContentResult },
+    ContentDenied,
     Failure { class: FailureClass },
     CancellationAcknowledged,
 }
@@ -568,6 +572,9 @@ impl WorkerEvent {
             WorkerEventKind::Progress { percent, .. }
                 if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
             {
+                Err(ProtocolError::InvalidEvent)
+            }
+            WorkerEventKind::ContentCompleted { result } if !result.valid() => {
                 Err(ProtocolError::InvalidEvent)
             }
             WorkerEventKind::SearchCompleted { entries } => validate_entries(entries),

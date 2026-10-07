@@ -146,8 +146,21 @@ fn cap(text: &str, max: usize) -> String {
 // Explicit nested branches keep ordered, non-fatal fallback stages readable.
 #[allow(clippy::collapsible_if)]
 impl FallbackContent<'_> {
-    async fn fetch(&self, user: i64, url: &str) -> Result<String> {
-        self.stages.fetch(user, url, &BTreeMap::new()).await
+    async fn optional_fetch(
+        &self,
+        user: i64,
+        url: &str,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<Option<String>> {
+        match self.stages.fetch(user, url, headers).await {
+            Ok(s) => Ok(Some(s)),
+            Err(Error::Forbidden) => Err(Error::Forbidden),
+            Err(Error::Cancelled) => Err(Error::Cancelled),
+            Err(_) => Ok(None),
+        }
+    }
+    async fn fetch(&self, user: i64, url: &str) -> Result<Option<String>> {
+        self.optional_fetch(user, url, &BTreeMap::new()).await
     }
     async fn github_body(&self, url: &str, token: Option<&str>) -> Result<Extraction> {
         let route = crate::github_content::parse(url).ok_or(Error::Invalid)?;
@@ -184,12 +197,12 @@ impl FallbackContent<'_> {
         let mut fetch_url = url.to_owned();
         if extraction.is_none() {
             if !gh {
-                if let Ok(llms) = self
+                if let Some(llms) = self
                     .fetch(
                         user,
                         u.join("/llms.txt").map_err(|_| Error::Invalid)?.as_str(),
                     )
-                    .await
+                    .await?
                 {
                     if llms.chars().count() >= 50 {
                         let requested = u.path().trim_end_matches('/');
@@ -209,22 +222,26 @@ impl FallbackContent<'_> {
                     }
                 }
             }
-            html = self.fetch(user, &fetch_url).await.ok();
+            html = self.fetch(user, &fetch_url).await?;
             if !gh {
                 if let Some(ref h) = html {
-                    if let Ok(r) = self.stages.readability(h, &fetch_url).await {
-                        if r.text.chars().count() > 200 {
-                            extraction = Some(r)
-                        }
+                    match self.stages.readability(h, &fetch_url).await {
+                        Ok(r) if r.text.chars().count() > 200 => extraction = Some(r),
+                        Err(Error::Forbidden) => return Err(Error::Forbidden),
+                        Err(Error::Cancelled) => return Err(Error::Cancelled),
+                        _ => (),
                     }
                     if extraction.is_none() {
-                        if let Ok(t) = self.stages.trafilatura(h).await {
-                            if t.chars().count() > 200 {
+                        match self.stages.trafilatura(h).await {
+                            Ok(t) if t.chars().count() > 200 => {
                                 extraction = Some(Extraction {
                                     text: t,
                                     title: None,
                                 })
                             }
+                            Err(Error::Forbidden) => return Err(Error::Forbidden),
+                            Err(Error::Cancelled) => return Err(Error::Cancelled),
+                            _ => (),
                         }
                     }
                 }
@@ -239,7 +256,7 @@ impl FallbackContent<'_> {
                         headers.insert("X-No-Cache".into(), "true".into());
                         headers.insert("X-Return-Format".into(), "markdown".into());
                     }
-                    if let Ok(raw) = self.stages.fetch(user, &provider, &headers).await {
+                    if let Some(raw) = self.optional_fetch(user, &provider, &headers).await? {
                         let stripped = strip_provider_chrome(&raw);
                         if raw.chars().count() > 100
                             && stripped
@@ -274,7 +291,7 @@ impl FallbackContent<'_> {
                 original_html = html;
             }
             if original_html.is_none() {
-                original_html = self.fetch(user, url).await.ok();
+                original_html = self.fetch(user, url).await?;
             }
             opengraph(
                 url,

@@ -1,0 +1,18 @@
+Summarise the material into a tight, specific bullet list of at most 12
+items. Preserve the difference between what the source claims, what it
+demonstrates, and what remains unsupported.
+
+Rules:
+- Each bullet must carry a concrete fact, claim, code reference, or
+  recommendation. Skip filler such as "the post discusses X".
+- Attribute disputed, evaluative, or weakly supported statements to the
+  source. Do not turn an author's assertion into an established fact.
+- Preserve names, versions, model identifiers, paths, error tokens, and
+  numbers verbatim.
+- Lead with the most important point, then descend by relevance.
+- Do not recap the source structure. State the actual point.
+- Call out contradictions, missing evidence, incomparable benchmarks,
+  conflicts of interest, and marketing claims when the supplied material
+  supports that judgment. Never invent an affiliation or motive.
+- No preamble, closing summary, or sign-off. Output only the bullets.
+- Reply in {lang}.

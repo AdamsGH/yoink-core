@@ -408,13 +408,39 @@ impl Store {
         status: &str,
         retry_at: Option<i64>,
     ) -> Result<bool> {
-        if !["no_token", "auth_failed", "rate_limited", "error", "failed"].contains(&status) {
+        if ![
+            "no_token",
+            "auth_failed",
+            "rate_limited",
+            "error",
+            "failed",
+            "cancelled",
+            "quota_exceeded",
+            "insufficient_credits",
+            "model_not_found",
+            "invalid_config",
+            "completion_failed",
+        ]
+        .contains(&status)
+        {
+            return Err(Error::Invalid);
+        }
+        // Cancellation must release/requeue the admission, never terminate it.
+        // Require a future, caller-bounded retry time before touching the lease.
+        if status == "cancelled" && retry_at.is_none_or(|at| at <= now) {
             return Err(Error::Invalid);
         }
         let c = self.db.connection().await?;
         c.batch("BEGIN IMMEDIATE").await?;
         let result=async {
  if !live(&*c,job,now).await?{return Ok(false)}
+ if status=="cancelled" {
+ // Restore only this live claim's consumed attempt. Stale/duplicate outcomes
+ // cannot decrement attempts or overwrite the current holder's state.
+ query("UPDATE inbox_jobs SET state='ready',attempts=attempts-1,available_at=?,lease_until=NULL,lease_token=NULL WHERE id=? AND state='running' AND lease_token=? AND lease_until>?").bind(retry_at).bind(job.id).bind(&job.lease_token).bind(now).execute(&*c).await?;
+ // Preserve last_error, item/LLM status and stars-sync metadata: no failure occurred.
+ return Ok(true)
+ }
  if job.kind=="stars_sync" {
  query("INSERT INTO inbox_gh_sync_state(user_id,last_status,last_error,created_at,updated_at) VALUES(?,?,'external operation failed',?,?) ON CONFLICT(user_id) DO UPDATE SET last_status=excluded.last_status,last_error=excluded.last_error,updated_at=excluded.updated_at").bind(job.user_id).bind(status).bind(now).bind(now).execute(&*c).await?;
  }else if let Some(id)=job.item_id {

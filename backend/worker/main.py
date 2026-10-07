@@ -110,6 +110,9 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     def reject_constant(_value: str) -> Any:
         raise ValueError("invalid request")
     request = json.loads(raw, parse_constant=reject_constant, object_pairs_hook=_unique_object)
+    if isinstance(request, dict) and isinstance(request.get("task"), dict) and request["task"].get("kind") in ("content_get", "content_readability", "content_trafilatura"):
+        from content_stage import validate
+        return validate(request)
     if isinstance(request, dict) and isinstance(request.get("task"), dict) and request["task"].get("kind") == "youtube_search":
         return _validate_search_request(request, len(raw))
     required = {"version", "operation_id", "attempt", "source_url", "task"}
@@ -292,7 +295,10 @@ def main() -> int:
     except BaseException:
         sys.stderr.write("invalid worker request or settings: use version 2 download/content with source_url, or youtube_search with a bounded query and no source_url/options/cookies\n")
         return 2
-    if request["task"]["kind"] == "youtube_search":
+    if request["task"]["kind"] in ("content_get", "content_readability", "content_trafilatura"):
+        from content_stage import execute
+        execute(request, settings, _emit, _event_prefix(request))
+    elif request["task"]["kind"] == "youtube_search":
         _search(request, settings)
     else:
         _download(request, settings)

@@ -38,17 +38,24 @@ impl Worker<'_> {
         )
         .await;
         if let Err(err) = result {
-            let retry = job.attempts < self.max_attempts
-                && matches!(
-                    err,
-                    Error::External | Error::RateLimited | Error::Database(_)
-                );
+            // Shutdown interrupts an admission, not a failed attempt. The store
+            // restores the claim's attempt under the live lease transaction.
+            let retry = matches!(err, Error::Cancelled)
+                || (job.attempts < self.max_attempts
+                    && matches!(
+                        err,
+                        Error::External | Error::RateLimited | Error::Database(_)
+                    ));
             let now = clock();
             self.store
                 .fail_job(
                     &job,
                     now,
-                    if matches!(err, Error::Forbidden) {
+                    if let Error::Completion(code) = err {
+                        code
+                    } else if matches!(err, Error::Cancelled) {
+                        "cancelled"
+                    } else if matches!(err, Error::Forbidden) {
                         "auth_failed"
                     } else if matches!(err, Error::RateLimited) {
                         "rate_limited"

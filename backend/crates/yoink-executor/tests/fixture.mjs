@@ -49,7 +49,11 @@ const spawnMarkerWriter = (marker) => spawn(process.execPath, ["-e", `
   setInterval(() => fs.appendFileSync(marker, "x"), 10);
 `, marker], { detached: false, stdio: "ignore" });
 
-if (mode.startsWith("search-")) {
+if (mode.startsWith("content-")) {
+  if (mode === 'content-denied') emit({type:'content_denied'});
+  else if (mode === 'content-artifact') { await writeArtifact('unexpected.mp4'); emit({type:'content_completed',result:{text:'body',title:null}}); }
+  else emit({type:'content_completed',result:{text: mode === 'content-bound' ? 'x'.repeat(131073) : 'body',title:'Title'}});
+} else if (mode.startsWith("search-")) {
   if (request.task.kind !== 'youtube_search' || Object.hasOwn(request,'source_url') || Object.hasOwn(request,'options') || request.network?.cookie_jar) throw new Error('invalid search envelope');
   const entry = {url:'https://www.youtube.com/watch?v=fixture0000',title:'Fixture',channel:'Channel',duration_seconds:1,view_count:1};
   if (mode === 'search-artifact') await writeArtifact('unexpected.mp4');

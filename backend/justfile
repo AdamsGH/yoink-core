@@ -97,6 +97,9 @@ smoke: build
 build-worker:
     docker build --quiet --target worker-runtime -t yoink/rust-worker:experimental .
 
+build-content-worker:
+    docker build --quiet --target content-worker -t yoink/rust-content-worker:experimental .
+
 # Python executes only in an isolated container. Its HTTP fixture uses loopback.
 test-worker pattern='test_*.py': build-worker
     docker run --rm --pull never --network none --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-worker:experimental -B -m unittest discover -s /worker -p {{quote(pattern)}}
@@ -368,6 +371,10 @@ check-inbox-http: check-build-space
     cargo clippy --locked --message-format short -p yoink-http --all-targets -- -D warnings
     node scripts/build-resources.mjs check
 
+check-inbox-insight: check-build-space
+    cargo clippy --locked --message-format short -p yoink-insight -p yoink-inbox --all-targets -- -D warnings
+    node scripts/build-resources.mjs check
+
 check-inbox: check-build-space
     cargo clippy --locked --message-format short -p yoink-inbox --all-targets -- -D warnings
     node scripts/build-resources.mjs check
@@ -440,3 +447,28 @@ pull-youtube-auth-bgutil:
 
 test-youtube-auth-bgutil:
     node scripts/test-youtube-auth-bgutil.mjs
+
+check-inbox-content: check-build-space
+    cargo clippy --locked --message-format short -p yoink-worker-protocol -p yoink-executor -p yoink-inbox --all-targets -- -D warnings
+    node scripts/build-resources.mjs check
+
+test-inbox-content: check-build-space
+    cargo test --locked --message-format short -p yoink-worker-protocol -p yoink-executor -p yoink-inbox
+    node scripts/build-resources.mjs check
+
+test-content-worker image pattern='test_*.py':
+    docker run --rm --pull never --network none --memory 512m --cpus 1 --pids-limit 128 --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly {{quote(image)}} -B -m unittest discover -s /worker -p {{quote(pattern)}}
+
+test-content-primitives image:
+    docker run --rm --pull never --network none --memory 512m --cpus 1 --pids-limit 128 --workdir /worker --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly {{quote(image)}} -B -m unittest test_content_stage.StageTests
+
+check-inbox-transport: check-build-space
+    cargo clippy --locked --message-format short -p yoink-storage -p yoink-telegram -p yoink-i18n --all-targets -- -D warnings
+    node scripts/build-resources.mjs check
+
+test-inbox-transport: check-build-space
+    cargo test --locked --message-format short -p yoink-storage -p yoink-telegram -p yoink-i18n
+    node scripts/build-resources.mjs check
+
+test-content-launcher image:
+    node scripts/test-content-launcher.mjs {{quote(image)}}
