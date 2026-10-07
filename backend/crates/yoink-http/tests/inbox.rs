@@ -270,3 +270,73 @@ async fn legacy_admin_is_current_moderator_or_higher_and_bans_win() {
     f.sql("UPDATE users SET role='banned' WHERE id=1").await;
     assert_eq!(f.get(path, 1).await, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn mutation_status_proves_only_the_owned_matching_operation_key() {
+    let f = Fixture::new().await;
+    let store = yoink_inbox::store::Store::new(f.storage.database().clone());
+    let intent = store
+        .prepare_mutation_keyed(
+            1,
+            &yoink_inbox::mutations::Mutation::CreateList {
+                body: json!({"name":"Proof fixture","is_local":false}),
+            },
+            Some("fixture-create-key"),
+            1,
+        )
+        .await
+        .unwrap();
+    store
+        .cancel_prepared_mutation(1, &intent.id, 2)
+        .await
+        .unwrap();
+    let oversized = "x".repeat(129);
+    for (key, expected, status) in [
+        (None, false, StatusCode::OK),
+        (Some("unrelated-conflict-key"), false, StatusCode::OK),
+        (Some("fixture-create-key"), true, StatusCode::OK),
+        (Some(""), false, StatusCode::UNPROCESSABLE_ENTITY),
+        (
+            Some(oversized.as_str()),
+            false,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .uri(format!("/api/v1/inbox/gh_mutations/{}", intent.id))
+            .header(header::AUTHORIZATION, format!("Bearer {}", f.tokens[0]));
+        if let Some(key) = key {
+            request = request.header("Idempotency-Key", key);
+        }
+        let response = f
+            .app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        if status == StatusCode::OK {
+            assert_eq!(body["operation_key_matches"], expected);
+            assert_eq!(body["state"], "rejected");
+            assert!(body.get("request_key").is_none());
+            assert!(
+                !String::from_utf8(bytes.to_vec())
+                    .unwrap()
+                    .contains("fixture-create-key")
+            );
+        }
+    }
+    f.sql("UPDATE users SET role='user' WHERE id=2; INSERT INTO user_permissions(user_id,plugin,feature,granted_by) VALUES(2,'inbox','gh_write',1)").await;
+    let foreign = Request::builder()
+        .uri(format!("/api/v1/inbox/gh_mutations/{}", intent.id))
+        .header(header::AUTHORIZATION, format!("Bearer {}", f.tokens[1]))
+        .header("Idempotency-Key", "fixture-create-key")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        f.app.oneshot(foreign).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}

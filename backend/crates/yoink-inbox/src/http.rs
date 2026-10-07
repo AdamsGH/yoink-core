@@ -785,12 +785,22 @@ async fn mutation_status(
     State(s): State<HttpState>,
     Extension(a): Extension<Actor>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Value>> {
     require(&s, a, "inbox:gh_write").await?;
     let i = s.store.mutation(a.0, &id).await?;
+    let key = headers
+        .get("Idempotency-Key")
+        .map(|v| v.to_str().map_err(|_| Error::Invalid))
+        .transpose()?;
+    if key.is_some_and(|k| k.is_empty() || k.len() > 128) {
+        return Err(Error::Invalid);
+    }
+    // A conflict ID can belong to another request. Prove key ownership without returning the key.
+    let operation_key_matches = key.is_some_and(|k| i.request_key.as_deref() == Some(k));
     let create = matches!(i.request, crate::mutations::Mutation::CreateList { .. });
     Ok(Json(
-        json!({"id":i.id,"state":i.state,"folder_id":if i.state=="applied"{i.local_folder_id}else{None},"error_code":i.error_code,"created_at":i.created_at,"updated_at":i.updated_at,"can_cancel":i.state=="prepared","can_inspect_candidates":create && ["sending","unknown"].contains(&i.state.as_str())}),
+        json!({"id":i.id,"state":i.state,"folder_id":if i.state=="applied"{i.local_folder_id}else{None},"error_code":i.error_code,"created_at":i.created_at,"updated_at":i.updated_at,"can_cancel":i.state=="prepared","can_inspect_candidates":create && ["sending","unknown"].contains(&i.state.as_str()),"operation_key_matches":operation_key_matches}),
     ))
 }
 
