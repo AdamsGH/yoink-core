@@ -15,6 +15,7 @@ path = "src/fixture_main.rs"
 required-features = ["test-fixtures"]
 
 [dependencies]
+yoink-user-session = { path = "../yoink-user-session" }
 turso = { version = "=0.7.2", optional = true }
 thiserror.workspace = true
 tokio.workspace = true

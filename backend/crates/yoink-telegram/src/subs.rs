@@ -19,6 +19,8 @@ const LANGUAGES: &[&str] = &[
 enum Action {
     Language(&'static str, i64),
     Automatic(bool, i64),
+    Enabled(bool, i64),
+    AlwaysAsk(bool, i64),
 }
 
 fn parse_callback(data: &str) -> Option<Action> {
@@ -39,6 +41,18 @@ fn parse_callback(data: &str) -> Option<Action> {
             LANGUAGES.iter().find(|&&code| code == fields[2])?,
             revision,
         )),
+        "enabled" | "ask" => {
+            let enabled = match fields[2] {
+                "true" => true,
+                "false" => false,
+                _ => return None,
+            };
+            Some(if fields[1] == "enabled" {
+                Action::Enabled(enabled, revision)
+            } else {
+                Action::AlwaysAsk(enabled, revision)
+            })
+        }
         "auto" => Some(Action::Automatic(
             match fields[2] {
                 "true" => true,
@@ -100,6 +114,41 @@ fn render(settings: &EditableSettings, language: Language) -> (String, InlineKey
         .chunks(3)
         .map(|row| row.to_vec())
         .collect::<Vec<_>>();
+    for (field, action, english, russian) in [
+        (
+            SettingField::SubtitleEnabled,
+            "enabled",
+            "Stored subtitle preference",
+            "Сохранённая настройка субтитров",
+        ),
+        (
+            SettingField::SubtitleAlwaysAsk,
+            "ask",
+            "Stored always-ask preference",
+            "Сохранённая настройка запроса субтитров",
+        ),
+    ] {
+        let enabled = value(field) == "true";
+        rows.push(vec![InlineKeyboardButton::callback(
+            format!(
+                "{}: {}",
+                match language {
+                    Language::English => english,
+                    Language::Russian => russian,
+                },
+                translate(
+                    language,
+                    if enabled {
+                        Key::SettingsOn
+                    } else {
+                        Key::SettingsOff
+                    },
+                    &[]
+                )
+            ),
+            format!("subs:{action}:{}:{}", !enabled, settings.revision),
+        )]);
+    }
     let automatic_value = (!automatic).to_string();
     rows.push(vec![InlineKeyboardButton::callback(
         translate(
@@ -126,6 +175,16 @@ async fn show(
     if let Some(action) = action {
         let (field, value, revision) = match action {
             Action::Language(code, revision) => (SettingField::SubtitleLanguage, code, revision),
+            Action::Enabled(enabled, revision) => (
+                SettingField::SubtitleEnabled,
+                if enabled { "true" } else { "false" },
+                revision,
+            ),
+            Action::AlwaysAsk(enabled, revision) => (
+                SettingField::SubtitleAlwaysAsk,
+                if enabled { "true" } else { "false" },
+                revision,
+            ),
             Action::Automatic(enabled, revision) => (
                 SettingField::SubtitleAutomatic,
                 if enabled { "true" } else { "false" },

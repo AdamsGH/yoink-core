@@ -15,7 +15,12 @@ use yoink_domain::{
     SubtitleOptions, VideoCodec,
 };
 use yoink_identity::IdentitySnapshot;
-use yoink_worker_protocol::{MAX_COOKIE_JAR_BYTES, MAX_PROXY_URL_BYTES, NetworkCredentials};
+use yoink_worker_protocol::{MAX_COOKIE_JAR_BYTES, NetworkCredentials};
+
+/// Settings bound shared by validation and persisted preference reads.
+/// The existing application schema caps proxy_url at 512 characters; a byte
+/// bound also keeps non-ASCII input within that cap without a schema migration.
+pub const MAX_PROXY_URL_BYTES: usize = 512;
 
 const MAX_CANDIDATES: i64 = 128;
 const MAX_ARGS_JSON_BYTES: usize = 64 * 1024;
@@ -592,7 +597,7 @@ impl ProfileStore {
     }
 }
 
-fn pool_allowed(identity: &IdentitySnapshot, use_pool: bool) -> bool {
+pub(crate) fn pool_allowed(identity: &IdentitySnapshot, use_pool: bool) -> bool {
     let feature = FeatureSpec {
         plugin: "dl".into(),
         feature: "shared_cookies".into(),
@@ -686,7 +691,7 @@ pub(crate) fn resolve_format_values(
                 || o.audio_codec.is_some()
                 || o.container.is_some()
         }
-        MediaMode::Formats => true,
+        MediaMode::Formats | MediaMode::Links | MediaMode::AudioLinks => true,
     };
     if irrelevant
         || o.max_height
@@ -821,7 +826,9 @@ pub(crate) fn resolve_format_values(
                         .unwrap_or(p.map(|p| p.send_as_file).unwrap_or(false)),
                 );
         }
-        MediaMode::Formats => return Err(ProfileError::InvalidPreferences),
+        MediaMode::Formats | MediaMode::Links | MediaMode::AudioLinks => {
+            return Err(ProfileError::InvalidPreferences);
+        }
     }
     Ok(params)
 }
@@ -853,7 +860,7 @@ fn validate_preferences(p: &DownloadPreferences) -> Result<(), ProfileError> {
         || serde_json::to_vec(&p.args_json).map_or(true, |v| v.len() > MAX_ARGS_JSON_BYTES)
         || p.proxy_url
             .as_ref()
-            .is_some_and(|url| url.len() > 512 || url.chars().any(char::is_control))
+            .is_some_and(|url| url.len() > MAX_PROXY_URL_BYTES || url.chars().any(char::is_control))
     {
         return Err(ProfileError::InvalidPreferences);
     }

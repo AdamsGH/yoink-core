@@ -144,7 +144,10 @@ class MediaEngineTests(unittest.TestCase):
                     ffmpeg, Path("generated.mp4"), clip, options, "video",
                     {"start_seconds": 0.1, "end_seconds": 0.7},
                 ), 20)
-                media_engine._probe(clip, ffprobe, 10)
+                probed, _ = media_engine._probe(clip, ffprobe, 10)
+                report = media_engine.local_media_info(probed, clip.stat().st_size)
+                self.assertEqual(report["size_bytes"], clip.stat().st_size)
+                self.assertTrue(any(s["codec"] == "h264" and s["width"] == 64 for s in report["streams"]))
                 for codec, extension, mime in (
                     ("best", "m4a", "audio/mp4"), ("aac", "m4a", "audio/mp4"),
                     ("mp3", "mp3", "audio/mpeg"), ("opus", "opus", "audio/ogg"),

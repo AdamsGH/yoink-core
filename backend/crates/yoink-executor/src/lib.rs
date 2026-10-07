@@ -73,6 +73,7 @@ mod formats_report_tests {
         let bytes = format!("{HEADER}137\tmp4\t1920\t1080\t29.970\th264\taac\thttps\n");
         std::fs::write(temp.path().join("formats.txt"), bytes.as_bytes()).unwrap();
         let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+            media_info: None,
             metadata: None,
             path: yoink_worker_protocol::ArtifactPath::parse("formats.txt").unwrap(),
             size_bytes: bytes.len() as u64,
@@ -120,6 +121,7 @@ pub struct ValidatedArtifact {
     pub media_type: String,
     pub size_bytes: u64,
     pub metadata: Option<yoink_domain::ContentMetadata>,
+    pub media_info: Option<yoink_worker_protocol::MediaInfoReport>,
 }
 
 impl ValidatedArtifact {
@@ -525,14 +527,23 @@ impl Executor {
                 media_mode: yoink_worker_protocol::MediaMode::Formats
             }, .. })
         );
+        let links_report = matches!(&request,
+            ExecutionRequest::Media(WorkerRequest { task: yoink_worker_protocol::TaskKind::Download {
+                media_mode: yoink_worker_protocol::MediaMode::Links | yoink_worker_protocol::MediaMode::AudioLinks
+            }, .. }));
+        let allow_media_info = matches!(&request,
+            ExecutionRequest::Media(WorkerRequest { task: yoink_worker_protocol::TaskKind::Download {
+                media_mode: yoink_worker_protocol::MediaMode::Video | yoink_worker_protocol::MediaMode::Audio | yoink_worker_protocol::MediaMode::Image | yoink_worker_protocol::MediaMode::Best
+            }, options: yoink_worker_protocol::DownloadOptions { media_info: true, .. }, .. }));
         let artifact_task = tokio::task::spawn_blocking(move || {
             let mut validated = Vec::with_capacity(artifacts.len());
             let mut total = 0u64;
             for descriptor in &artifacts {
-                if formats_report && artifacts.len() != 1 {
+                if (formats_report || links_report) && artifacts.len() != 1 {
                     return Err(ExecutorError::UnsafeArtifact);
                 }
-                let artifact = load_artifact(&workspace, descriptor, limit, formats_report)?;
+                let mut artifact = load_artifact_kind(&workspace, descriptor, limit, formats_report, links_report)?;
+                if !allow_media_info || artifacts.len() != 1 { artifact.media_info = None; }
                 total = total.checked_add(artifact.size_bytes).ok_or(ExecutorError::ResourceLimit)?;
                 if total > workspace_limit {
                     return Err(ExecutorError::ResourceLimit);
@@ -715,11 +726,22 @@ fn workspace_usage(root: &Path, limit: u64) -> Result<(), WorkspaceError> {
     Ok(())
 }
 
+#[cfg(test)]
 fn load_artifact(
     root: &Path,
     descriptor: &yoink_worker_protocol::ArtifactDescriptor,
     limit: u64,
     formats_report: bool,
+) -> Result<ValidatedArtifact, ExecutorError> {
+    load_artifact_kind(root, descriptor, limit, formats_report, false)
+}
+
+fn load_artifact_kind(
+    root: &Path,
+    descriptor: &yoink_worker_protocol::ArtifactDescriptor,
+    limit: u64,
+    formats_report: bool,
+    links_report: bool,
 ) -> Result<ValidatedArtifact, ExecutorError> {
     let path = Path::new(descriptor.path.as_str());
     let components: Vec<_> = path.components().collect();
@@ -765,6 +787,34 @@ fn load_artifact(
         return Err(ExecutorError::UnsafeArtifact);
     }
     let mut file = File::from(fd);
+    if links_report {
+        if descriptor.path.as_str() != "links.json"
+            || descriptor.media_type != "application/json"
+            || descriptor.size_bytes > yoink_worker_protocol::MAX_LINK_REPORT_BYTES as u64
+        {
+            return Err(ExecutorError::UnsafeArtifact);
+        }
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(yoink_worker_protocol::MAX_LINK_REPORT_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ExecutorError::Io)?;
+        if bytes.len() as u64 != descriptor.size_bytes
+            || yoink_worker_protocol::StreamLinks::decode(&bytes).is_err()
+        {
+            return Err(ExecutorError::UnsafeArtifact);
+        }
+        file.seek(std::io::SeekFrom::Start(0))
+            .map_err(|_| ExecutorError::Io)?;
+        return Ok(ValidatedArtifact {
+            file,
+            filename: "links.json".into(),
+            media_type: "application/json".into(),
+            size_bytes: descriptor.size_bytes,
+            metadata: None,
+            media_info: None,
+        });
+    }
     if formats_report {
         if descriptor.path.as_str() != "formats.txt"
             || descriptor.media_type != "text/plain"
@@ -789,6 +839,7 @@ fn load_artifact(
             media_type: "text/plain".into(),
             size_bytes: descriptor.size_bytes,
             metadata: descriptor.metadata.clone(),
+            media_info: None,
         });
     }
     let mut header = [0u8; MAX_SNIFF_BYTES];
@@ -896,6 +947,7 @@ fn load_artifact(
         media_type: media_type.into(),
         size_bytes: descriptor.size_bytes,
         metadata: descriptor.metadata.clone(),
+        media_info: descriptor.media_info.clone(),
     })
 }
 
@@ -1119,6 +1171,7 @@ mod tests {
             );
             std::fs::write(temp.path().join(&name), bytes.as_bytes()).unwrap();
             let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+                media_info: None,
                 metadata: None,
                 path: yoink_worker_protocol::ArtifactPath::parse(&name).unwrap(),
                 size_bytes: bytes.len() as u64,
@@ -1166,6 +1219,7 @@ mod tests {
         ] {
             std::fs::write(temp.path().join(name), bytes).unwrap();
             let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+                media_info: None,
                 metadata: None,
                 path: yoink_worker_protocol::ArtifactPath::parse(name).unwrap(),
                 size_bytes: bytes.len() as u64,
@@ -1184,6 +1238,7 @@ mod tests {
     #[test]
     fn artifact_debug_does_not_include_payload() {
         let artifact = ValidatedArtifact {
+            media_info: None,
             metadata: None,
             file: File::open("/dev/null").unwrap(),
             filename: "media.mp4".into(),
@@ -1389,6 +1444,7 @@ mod tests {
         source.set_len(1024 * 1024 * 1024).unwrap();
         drop(source);
         let descriptor = yoink_worker_protocol::ArtifactDescriptor {
+            media_info: None,
             metadata: None,
             path: yoink_worker_protocol::ArtifactPath::parse("large.mp4").unwrap(),
             size_bytes: 1024 * 1024 * 1024,
@@ -1607,5 +1663,36 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let second = std::fs::read(marker).unwrap();
         assert_eq!(first, second, "descendant kept writing after cleanup");
+    }
+}
+
+#[cfg(test)]
+mod direct_links_artifact_tests {
+    use super::*;
+    #[test]
+    fn direct_links_are_distinct_bounded_confined_and_cannot_be_format_reports() {
+        let temp = tempfile::tempdir().unwrap();
+        let bytes =
+            br#"{"video_url":"https://cdn.example/video?signature=fixture","audio_url":null}"#;
+        std::fs::write(temp.path().join("links.json"), bytes).unwrap();
+        let mut descriptor = yoink_worker_protocol::ArtifactDescriptor {
+            path: yoink_worker_protocol::ArtifactPath::parse("links.json").unwrap(),
+            size_bytes: bytes.len() as u64,
+            media_type: "application/json".into(),
+            metadata: None,
+            media_info: None,
+        };
+        let a = load_artifact_kind(temp.path(), &descriptor, 4096, false, true).unwrap();
+        assert_eq!(a.filename, "links.json");
+        assert!(!format!("{a:?}").contains("signature"));
+        assert!(load_artifact_kind(temp.path(), &descriptor, 4096, true, false).is_err());
+        assert!(load_artifact_kind(temp.path(), &descriptor, 4096, false, false).is_err());
+        descriptor.media_type = "text/plain".into();
+        assert!(load_artifact_kind(temp.path(), &descriptor, 4096, false, true).is_err());
+        descriptor.media_type = "application/json".into();
+        std::fs::remove_file(temp.path().join("links.json")).unwrap();
+        std::fs::write(temp.path().join("outside"), bytes).unwrap();
+        std::os::unix::fs::symlink("outside", temp.path().join("links.json")).unwrap();
+        assert!(load_artifact_kind(temp.path(), &descriptor, 4096, false, true).is_err());
     }
 }

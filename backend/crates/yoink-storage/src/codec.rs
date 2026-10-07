@@ -72,6 +72,9 @@ enum MediaModeData {
     Image,
     Subtitles,
     Formats,
+    Links,
+    #[serde(rename = "audio_links")]
+    AudioLinks,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -130,6 +133,8 @@ struct DownloadParamsData {
     send_as_file: bool,
     #[serde(default)]
     gallery_zip: bool,
+    #[serde(default)]
+    media_info: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subtitles: Option<SubtitleOptionsData>,
 }
@@ -164,6 +169,7 @@ impl Default for DownloadParamsData {
             clips: Vec::new(),
             send_as_file: false,
             gallery_zip: false,
+            media_info: false,
             subtitles: None,
         }
     }
@@ -205,6 +211,8 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
             MediaMode::Image => MediaModeData::Image,
             MediaMode::Subtitles => MediaModeData::Subtitles,
             MediaMode::Formats => MediaModeData::Formats,
+            MediaMode::Links => MediaModeData::Links,
+            MediaMode::AudioLinks => MediaModeData::AudioLinks,
         },
         clip_range: request.clip_range().map(|r| ClipRangeData {
             start_seconds: r.start_seconds(),
@@ -252,6 +260,7 @@ pub(crate) fn encode(request: &DownloadRequest) -> Result<serde_json::Value, Sto
                 .collect(),
             send_as_file: p.send_as_file(),
             gallery_zip: p.gallery_zip(),
+            media_info: p.media_info(),
             subtitles: p.subtitles().map(|s| SubtitleOptionsData {
                 language: s.language().into(),
                 automatic: s.automatic(),
@@ -305,6 +314,8 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
         MediaModeData::Image => MediaMode::Image,
         MediaModeData::Subtitles => MediaMode::Subtitles,
         MediaModeData::Formats => MediaMode::Formats,
+        MediaModeData::Links => MediaMode::Links,
+        MediaModeData::AudioLinks => MediaMode::AudioLinks,
     };
     let range = data
         .clip_range
@@ -363,6 +374,7 @@ pub(crate) fn decode(value: serde_json::Value) -> Result<DownloadRequest, StoreE
         .map_err(|_| StoreError::InvalidStoredData)?
         .with_send_as_file(p.send_as_file)
         .with_gallery_zip(p.gallery_zip)
+        .with_media_info(p.media_info)
         .with_subtitles(
             p.subtitles
                 .map(|s| SubtitleOptions::new(&s.language, s.automatic))

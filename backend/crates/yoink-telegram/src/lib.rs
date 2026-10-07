@@ -489,11 +489,37 @@ fn parse_command(text: &str, own_username: &str) -> Option<Command> {
     if name == "nsfw" {
         return Some(Command::Nsfw(settings::nsfw_command(&args)));
     }
+    if name == "clean" {
+        return Some(Command::Settings(settings::clean_command(&args)));
+    }
     if name == "settings" || name == "format" {
         return Some(settings::command(&args).map_or(
             Command::Settings(settings::Action::Invalid),
             Command::Settings,
         ));
+    }
+    if let Some(field) = match name.as_str() {
+        "split" => Some(yoink_downloads::SettingField::SplitSize),
+        "keyboard" => Some(yoink_downloads::SettingField::Keyboard),
+        "mediainfo" => Some(yoink_downloads::SettingField::MediaInfo),
+        _ => None,
+    } {
+        let action = match args.as_slice() {
+            [] => settings::Action::Field(field),
+            [value] => {
+                let value = match *value {
+                    "on" => "true",
+                    "off" => "false",
+                    other => other,
+                };
+                yoink_downloads::SettingChange::new(field, value)
+                    .map_or(settings::Action::Invalid, |change| {
+                        settings::Action::Change(change, None)
+                    })
+            }
+            _ => settings::Action::Invalid,
+        };
+        return Some(Command::Settings(action));
     }
     if name == "quality" {
         return Some(Command::Quality(args.is_empty()));
@@ -1278,8 +1304,16 @@ async fn handle_message(
                 return Ok(());
             };
             let mut params = DownloadParams::default().with_playlist(media.playlist);
-            if media.mode == DomainMediaMode::Formats {
+            if matches!(
+                media.mode,
+                DomainMediaMode::Formats | DomainMediaMode::Links | DomainMediaMode::AudioLinks
+            ) {
                 params = params.with_send_as_file(true);
+            }
+            if media.link_height.is_some() {
+                params = params
+                    .with_max_height(media.link_height)
+                    .expect("closed link quality parser");
             }
             if let Some(engine) = media.engine {
                 params = params.with_engine(engine);

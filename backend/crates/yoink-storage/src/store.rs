@@ -1116,7 +1116,11 @@ fn same_request_intent(
             | yoink_domain::Engine::AutoFallbackV1 => yoink_domain::Engine::Auto,
             engine => engine,
         };
-        let params = r.params().clone().with_engine(engine);
+        let params = r
+            .params()
+            .clone()
+            .with_engine(engine)
+            .with_media_info(false);
         r.with_params(params).map_err(|_| StoreError::InvalidInput)
     };
     let current = normalize_route(current)?;

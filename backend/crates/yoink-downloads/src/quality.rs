@@ -96,7 +96,10 @@ impl DownloadService {
         {
             return Err(DownloadError::InvalidInput);
         }
-        if request.media_mode() != MediaMode::Formats {
+        if !matches!(
+            request.media_mode(),
+            MediaMode::Formats | MediaMode::Links | MediaMode::AudioLinks
+        ) {
             crate::profile::resolve_format_values(request.media_mode(), None, overrides)
                 .map_err(map_profile)?;
         }
@@ -120,7 +123,10 @@ impl DownloadService {
         let intent = request.clone().with_preference_overrides(overrides.clone());
         let private_actor =
             target.chat_id() == request.actor_id() as i64 && target.thread_id().is_none();
-        if request.media_mode() == MediaMode::Formats {
+        if matches!(
+            request.media_mode(),
+            MediaMode::Formats | MediaMode::Links | MediaMode::AudioLinks
+        ) {
             if !private_actor || overrides != DownloadPreferenceOverrides::default() {
                 return Err(DownloadError::Denied);
             }

@@ -71,6 +71,7 @@ pub(super) fn parse(message: &Message, bot_id: u64) -> Option<Result<Action, ()>
         let start_hint = query_start(source)?;
         let times = text[end_byte..].split_whitespace().collect::<Vec<_>>();
         let mut media = ParsedMedia {
+            link_height: None,
             url: source.to_owned(),
             mode: MediaMode::Video,
             playlist: None,

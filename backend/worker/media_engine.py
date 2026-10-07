@@ -20,6 +20,7 @@ import tool_guard
 from content_metadata import MetadataCollector
 from failures import MediaFailure, classify_error, exception_chain
 from format_engine import download_format_report
+from link_engine import download_links
 from subtitle_engine import download_subtitles
 
 
@@ -336,10 +337,10 @@ def download_media(request: dict[str, Any], settings: Any,
     if task.get("kind") != "download":
         raise MediaFailure("unsupported_source")
     mode = task.get("media_mode")
-    if mode not in ("best", "video", "audio", "image", "subtitles", "formats"):
+    if mode not in ("best", "video", "audio", "image", "subtitles", "formats", "links", "audio_links"):
         raise MediaFailure("unsupported_source")
     engine = options.get("engine", "auto")
-    if engine in ("gallery", "auto_gallery_v1", "auto_fallback_v1") and mode in ("formats", "subtitles"):
+    if engine in ("gallery", "auto_gallery_v1", "auto_fallback_v1") and mode in ("formats", "subtitles", "links", "audio_links"):
         raise MediaFailure("invalid_media")
     if engine == "auto_fallback_v1":
         return _provider_fallback(request, settings, emit_progress)
@@ -467,6 +468,8 @@ def download_media(request: dict[str, Any], settings: Any,
                 opts["format_sort"] = [f"res:{options['max_height']}"]
             if mode == "subtitles":
                 return download_subtitles(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
+            if mode in ("links", "audio_links"):
+                return download_links(request, opts, workspace, max_bytes, max_total, settings)
             if mode == "formats":
                 return download_format_report(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
             # Constructor/context configuration is local setup, never a provider phase.
@@ -558,7 +561,10 @@ def download_media(request: dict[str, Any], settings: Any,
             else:
                 probed, format_name = _probe(path, ffprobe, timeout)
                 media_type = _media_type(probed, format_name)
-            result.append({"path": path.name, "size_bytes": size, "media_type": media_type, "metadata": metadata.finish()})
+            artifact = {"path": path.name, "size_bytes": size, "media_type": media_type, "metadata": metadata.finish()}
+            if options.get("media_info", False) and len(produced) == 1 and path.suffix.lower() != ".zip":
+                artifact["media_info"] = local_media_info(probed, size)
+            result.append(artifact)
         if not result:
             raise MediaFailure("invalid_media")
         emit_progress(100.0)
@@ -683,3 +689,17 @@ def provider_fallback_allowed(exc, *, original=None):
         if isinstance(current, OSError) and not isinstance(current, (ConnectionError, TimeoutError, UrllibHTTPError)):
             return False
     return True
+
+
+def local_media_info(probed, size):
+    """Only closed technical fields from the already confined local ffprobe."""
+    codecs = {"h264", "hevc", "av1", "vp9", "vp8", "aac", "mp3", "opus", "vorbis", "flac"}
+    streams = []
+    for track in probed.get("streams", [])[:16]:
+        kind = track.get("codec_type")
+        codec = track.get("codec_name")
+        dimension = lambda key: track[key] if type(track.get(key)) is int and 0 <= track[key] <= 16384 else None
+        streams.append({"kind": kind if kind in ("video", "audio", "subtitle") else "other",
+                        "codec": codec if codec in codecs else "unknown",
+                        "width": dimension("width"), "height": dimension("height")})
+    return {"size_bytes": size, "streams": streams}

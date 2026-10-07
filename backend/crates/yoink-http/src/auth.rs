@@ -18,6 +18,7 @@ use yoink_identity::{IdentityError, IdentityStore, TrustedProfile, UserProfile, 
 pub struct AuthState {
     service: Arc<OnceLock<AuthService>>,
     identities: Arc<OnceLock<Arc<IdentityStore>>>,
+    downloader_settings: Arc<OnceLock<yoink_downloads::UserSettingsService>>,
     dev_enabled: bool,
 }
 
@@ -31,8 +32,24 @@ impl AuthState {
         Self {
             service: Arc::new(OnceLock::new()),
             identities: Arc::new(OnceLock::new()),
+            downloader_settings: Arc::new(OnceLock::new()),
             dev_enabled,
         }
+    }
+
+    pub fn install_downloader_settings(
+        &self,
+        service: yoink_downloads::UserSettingsService,
+    ) -> Result<(), yoink_downloads::UserSettingsService> {
+        self.downloader_settings.set(service)
+    }
+    pub(crate) fn downloader_settings(
+        &self,
+    ) -> Result<&yoink_downloads::UserSettingsService, ApiError> {
+        self.downloader_settings.get().ok_or(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Downloader settings unavailable",
+        ))
     }
 
     pub fn install(&self, service: AuthService) -> Result<(), AuthService> {
@@ -74,6 +91,7 @@ pub(crate) fn router(state: AuthState, system: yoink_application::SystemService)
         .merge(crate::admin::router())
         .merge(crate::groups::router())
         .merge(crate::nsfw::router())
+        .merge(crate::downloader_settings::router())
         .route_layer(middleware::from_fn(move |request: Request, next: Next| {
             let ready = system.snapshot().ready;
             async move {

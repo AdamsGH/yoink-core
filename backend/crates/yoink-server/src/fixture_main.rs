@@ -3,6 +3,7 @@ mod config;
 mod fixture_control;
 mod media_config;
 mod runtime;
+mod user_session_config;
 
 use std::{
     collections::BTreeSet,

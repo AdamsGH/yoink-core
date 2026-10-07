@@ -15,7 +15,9 @@ pub use personal_cookies::{
 };
 pub use quality::{QualityChoice, QualitySession, QualityStage, TelegramSubmission};
 mod settings;
-pub use settings::{EditableSettings, ProxySettings, SettingChange, SettingField};
+mod user_settings;
+pub use settings::{EditableSettings, ProxySettings, ResetSettings, SettingChange, SettingField};
+pub use user_settings::{UserSettings, UserSettingsPatch, UserSettingsService};
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
@@ -25,6 +27,7 @@ use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use uuid::Uuid;
+use yoink_db::query;
 use yoink_domain::CachedMedia;
 use yoink_domain::{
     DeliveryTarget, DownloadParams, DownloadPreferenceOverrides, DownloadRequest,
@@ -60,7 +63,18 @@ impl std::fmt::Debug for DeliveredMedia {
     }
 }
 
+pub type DiagnosticFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
 pub trait Delivery: Send + Sync {
+    /// Optional diagnostics run only after confirmed receipts have been persisted.
+    /// The service owns timeout/shutdown cancellation; adapters must not detach work.
+    fn deliver_diagnostic(
+        &self,
+        _target: DeliveryTarget,
+        _report: yoink_worker_protocol::MediaInfoReport,
+    ) -> DiagnosticFuture<'_> {
+        Box::pin(async {})
+    }
     /// Adapters must explicitly support spoilers; never silently downgrade policy.
     fn deliver_with_policy(
         &self,
@@ -406,8 +420,10 @@ impl DownloadService {
         telegram: Option<&yoink_storage::TelegramMediaAdmission>,
     ) -> Result<Admission, DownloadError> {
         if !request_format_defaults(request)
-            || (request.media_mode() == DomainMediaMode::Formats
-                && overrides != DownloadPreferenceOverrides::default())
+            || (matches!(
+                request.media_mode(),
+                DomainMediaMode::Formats | DomainMediaMode::Links | DomainMediaMode::AudioLinks
+            ) && overrides != DownloadPreferenceOverrides::default())
             || request.preference_overrides().is_some()
             || request.source_url().as_str().len() > 4096
             || request
@@ -429,7 +445,10 @@ impl DownloadService {
             return Ok(admission);
         }
         let base = request.params();
-        let params = if request.media_mode() == DomainMediaMode::Formats {
+        let params = if matches!(
+            request.media_mode(),
+            DomainMediaMode::Formats | DomainMediaMode::Links | DomainMediaMode::AudioLinks
+        ) {
             base.clone().with_send_as_file(true)
         } else {
             let preferences = self
@@ -519,8 +538,29 @@ impl DownloadService {
             )
             .await
             .map_err(map_profile)?;
+        let media_info = if request
+            .target()
+            .is_some_and(|t| t.chat_id() == request.actor_id() as i64 && t.thread_id().is_none())
+            && matches!(
+                request.media_mode(),
+                DomainMediaMode::Video | DomainMediaMode::Audio | DomainMediaMode::Image
+            ) {
+            query(include_str!("media_info_preference.sql"))
+                .bind(request.actor_id() as i64)
+                .fetch_optional(self.store.database())
+                .await
+                .map_err(|_| DownloadError::Database)?
+                .map(|r| r.try_get::<bool, _>(0))
+                .transpose()
+                .map_err(|_| DownloadError::Database)?
+                .unwrap_or(false)
+        } else {
+            false
+        };
         let prepared = request
             .clone()
+            .with_params(request.params().clone().with_media_info(media_info))
+            .map_err(|_| DownloadError::InvalidInput)?
             .freeze_provider_routing()
             .with_network(selection)
             .map_err(|_| DownloadError::InvalidInput)?;
@@ -569,13 +609,14 @@ impl DownloadService {
         &self,
         request: &DownloadRequest,
     ) -> Result<yoink_identity::IdentitySnapshot, DownloadError> {
-        if request.media_mode() == DomainMediaMode::Formats
-            && request.target().is_none_or(|target| {
-                target.bot_id() != self.delivery.bot_id()
-                    || target.chat_id() != request.actor_id() as i64
-                    || target.thread_id().is_some()
-            })
-        {
+        if matches!(
+            request.media_mode(),
+            DomainMediaMode::Formats | DomainMediaMode::Links | DomainMediaMode::AudioLinks
+        ) && request.target().is_none_or(|target| {
+            target.bot_id() != self.delivery.bot_id()
+                || target.chat_id() != request.actor_id() as i64
+                || target.thread_id().is_some()
+        }) {
             return Err(DownloadError::Denied);
         }
         self.authorize_target(request.actor_id(), request.target().copied())
@@ -680,7 +721,10 @@ impl DownloadService {
             }
         };
         let send_as_file = claim.request.params().send_as_file();
-        let is_formats = claim.request.media_mode() == DomainMediaMode::Formats;
+        let is_formats = matches!(
+            claim.request.media_mode(),
+            DomainMediaMode::Formats | DomainMediaMode::Links | DomainMediaMode::AudioLinks
+        );
         let mut cached_revision = None;
         let cache_hit = if !is_formats
             && cache::cache_read_enabled(self.config.cache_ttl, claim.cache_bypassed)
@@ -802,6 +846,19 @@ impl DownloadService {
             }
             return Err(error);
         }
+        let diagnostic = if artifacts.len() == 1
+            && claim.request.params().media_info()
+            && claim.request.target().is_some_and(|t| {
+                t.chat_id() == claim.request.actor_id() as i64 && t.thread_id().is_none()
+            }) {
+            match &artifacts[0] {
+                DeliveryArtifact::Upload(a) => a.media_info.clone().filter(|r| r.valid()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let mut diagnostic_confirmed = false;
         let source_metadata = artifacts
             .iter()
             .map(|artifact| cache_metadata(artifact, send_as_file))
@@ -1086,6 +1143,7 @@ impl DownloadService {
                 Ok((false, _, _)) => break,
                 Ok((true, true, _)) => break,
                 Ok((true, false, Some(receipts))) => {
+                    diagnostic_confirmed = diagnostic.is_some();
                     confirmed_file_ids.extend(receipts.into_iter().map(|receipt| receipt.file_id));
                 }
                 Ok((true, false, None)) => break,
@@ -1135,6 +1193,28 @@ impl DownloadService {
             );
         }
         drop(heartbeat);
+        // Diagnostics cannot turn an already persisted upload into Unknown/Partial.
+        // Stay in the supervised worker lifecycle, using the configured timeout.
+        if diagnostic_confirmed
+            && !shutdown.is_cancelled()
+            && !cancellation_seen
+            && let Some(report) = diagnostic
+        {
+            let diagnostic = async {
+                if self
+                    .authorize_target(claim.request.actor_id(), Some(target))
+                    .await
+                    .is_ok()
+                {
+                    self.delivery.deliver_diagnostic(target, report).await;
+                }
+            };
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {},
+                _ = time::timeout(self.config.delivery_timeout, diagnostic) => {},
+            }
+        }
         Ok(())
     }
 
@@ -1366,6 +1446,7 @@ fn worker_request(claim: &Claim, credentials: NetworkCredentials) -> Result<Work
             )
             .collect(),
         gallery_zip: params.gallery_zip(),
+        media_info: params.media_info(),
         subtitles: params
             .subtitles()
             .map(|s| yoink_worker_protocol::SubtitleOptions {
@@ -1379,6 +1460,8 @@ fn worker_request(claim: &Claim, credentials: NetworkCredentials) -> Result<Work
         DomainMediaMode::Image => MediaMode::Image,
         DomainMediaMode::Subtitles => MediaMode::Subtitles,
         DomainMediaMode::Formats => MediaMode::Formats,
+        DomainMediaMode::Links => MediaMode::Links,
+        DomainMediaMode::AudioLinks => MediaMode::AudioLinks,
     };
     Ok(WorkerRequest {
         version: PROTOCOL_VERSION,
@@ -1417,6 +1500,13 @@ fn retryable_executor_error(error: ExecutorError) -> bool {
 
 fn request_format_defaults(request: &DownloadRequest) -> bool {
     let p = request.params();
+    if matches!(
+        request.media_mode(),
+        DomainMediaMode::Links | DomainMediaMode::AudioLinks
+    ) {
+        // Request construction enforces the closed link quality/options contract.
+        return true;
+    }
     if request.media_mode() == DomainMediaMode::Formats {
         return p.max_height().is_none()
             && p.video_codec() == yoink_domain::VideoCodec::H264

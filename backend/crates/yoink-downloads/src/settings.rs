@@ -16,10 +16,16 @@ pub enum SettingField {
     SubtitleLanguage,
     SubtitleAutomatic,
     NsfwBlur,
+    SubtitleEnabled,
+    SubtitleAlwaysAsk,
+    SplitSize,
+    Keyboard,
+    MediaInfo,
+    PoolCookies,
 }
 
 impl SettingField {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 15] = [
         Self::Quality,
         Self::Codec,
         Self::Container,
@@ -29,6 +35,12 @@ impl SettingField {
         Self::SubtitleLanguage,
         Self::SubtitleAutomatic,
         Self::NsfwBlur,
+        Self::SubtitleEnabled,
+        Self::SubtitleAlwaysAsk,
+        Self::SplitSize,
+        Self::Keyboard,
+        Self::MediaInfo,
+        Self::PoolCookies,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -41,6 +53,12 @@ impl SettingField {
             Self::SubtitleLanguage => "subs_lang",
             Self::SubtitleAutomatic => "subs_auto",
             Self::NsfwBlur => "nsfw_blur",
+            Self::SubtitleEnabled => "subs_enabled",
+            Self::SubtitleAlwaysAsk => "subs_always_ask",
+            Self::SplitSize => "split_size",
+            Self::Keyboard => "keyboard",
+            Self::MediaInfo => "mediainfo",
+            Self::PoolCookies => "use_pool_cookies",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -54,9 +72,16 @@ impl SettingField {
             Self::Codec => &["avc1", "av01", "vp09"],
             Self::Container => &["mp4", "mkv"],
             Self::AudioCodec => &["best", "mp4a", "opus", "mp3"],
-            Self::SendAsFile | Self::GalleryZip | Self::SubtitleAutomatic | Self::NsfwBlur => {
-                &["false", "true"]
-            }
+            Self::SplitSize => &["524288000", "1073741824", "1610612736", "2043000000"],
+            Self::Keyboard => &["OFF", "1x3", "2x3", "FULL"],
+            Self::SendAsFile
+            | Self::GalleryZip
+            | Self::SubtitleAutomatic
+            | Self::NsfwBlur
+            | Self::SubtitleEnabled
+            | Self::SubtitleAlwaysAsk
+            | Self::MediaInfo
+            | Self::PoolCookies => &["false", "true"],
             Self::SubtitleLanguage => &["en", "ru", "de", "fr", "es", "zh-Hans"],
         }
     }
@@ -91,7 +116,103 @@ pub struct EditableSettings {
     pub revision: i64,
 }
 
+/// Closed selective resets. `All` intentionally does not remove credentials,
+/// cookies, quota/cache state, forwarding preferences or imported extension fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResetSettings {
+    Format,
+    Language,
+    Proxy,
+    Split,
+    Subtitles,
+    Nsfw,
+    MediaInfo,
+    Keyboard,
+    Arguments,
+    All,
+}
+impl ResetSettings {
+    pub const ALL: [Self; 10] = [
+        Self::Format,
+        Self::Language,
+        Self::Proxy,
+        Self::Split,
+        Self::Subtitles,
+        Self::Nsfw,
+        Self::MediaInfo,
+        Self::Keyboard,
+        Self::Arguments,
+        Self::All,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Format => "format",
+            Self::Language => "lang",
+            Self::Proxy => "proxy",
+            Self::Split => "split",
+            Self::Subtitles => "subs",
+            Self::Nsfw => "nsfw",
+            Self::MediaInfo => "mediainfo",
+            Self::Keyboard => "keyboard",
+            Self::Arguments => "args",
+            Self::All => "all",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|group| group.name() == value)
+    }
+}
+
 impl DownloadService {
+    /// Atomic compare-and-swap reset with authorization rechecked at the write boundary.
+    pub async fn reset_settings(
+        &self,
+        actor: u64,
+        target: DeliveryTarget,
+        group: ResetSettings,
+        expected_revision: i64,
+    ) -> Result<(), DownloadError> {
+        self.authorize_settings(actor, target).await?;
+        if expected_revision < 0 {
+            return Err(DownloadError::Conflict);
+        }
+        let mut connection = self
+            .store
+            .database()
+            .connection()
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| DownloadError::Database)?;
+        let updated = query(include_str!("settings_reset.sql"))
+            .bind(actor as i64)
+            .bind(group.name())
+            .bind(expected_revision)
+            .bind(chrono::Utc::now())
+            .bind(self.identities.is_configured_owner(actor as i64))
+            .fetch_optional(&*tx)
+            .await
+            .map_err(crate::profile::ProfileError::from)
+            .map_err(map_profile)?;
+        if updated.is_none() {
+            return Err(DownloadError::Conflict);
+        }
+        if matches!(group, ResetSettings::Language | ResetSettings::All) {
+            let row = query(include_str!("settings_reset_language.sql"))
+                .bind(actor as i64)
+                .bind(chrono::Utc::now())
+                .fetch_optional(&*tx)
+                .await
+                .map_err(|_| DownloadError::Database)?;
+            if row.is_none() {
+                return Err(DownloadError::Conflict);
+            }
+        }
+        tx.commit().await.map_err(|_| DownloadError::Database)?;
+        Ok(())
+    }
+
     pub async fn mark_next_nsfw(
         &self,
         actor: u64,
@@ -169,7 +290,12 @@ impl DownloadService {
         actor: u64,
         target: DeliveryTarget,
     ) -> Result<(), DownloadError> {
-        if target.chat_id() <= 0 || target.chat_id() as u64 != actor || target.thread_id().is_some()
+        if actor == 0
+            || actor > i64::MAX as u64
+            || target.bot_id() != self.delivery.bot_id()
+            || target.chat_id() <= 0
+            || target.chat_id() as u64 != actor
+            || target.thread_id().is_some()
         {
             return Err(DownloadError::Denied);
         }
@@ -388,7 +514,7 @@ mod tests {
             }
             assert!(SettingChange::new(field, "secret\n'invalid").is_err());
         }
-        for name in ["proxy_url", "args_json", "user_id", "subs_enabled", "role"] {
+        for name in ["proxy_url", "args_json", "user_id", "role"] {
             assert!(SettingField::parse(name).is_none());
         }
         assert!(SettingChange::new(SettingField::Quality, "ask").is_ok());

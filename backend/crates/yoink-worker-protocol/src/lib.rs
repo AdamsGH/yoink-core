@@ -8,6 +8,10 @@
 //! before opening or consuming it. Lexical validation does not guarantee
 //! symlink safety, including for paths created by an untrusted executor.
 
+mod media_info;
+pub use media_info::*;
+mod links;
+pub use links::*;
 mod search;
 pub use search::*;
 
@@ -79,6 +83,8 @@ pub enum MediaMode {
     Image,
     Subtitles,
     Formats,
+    Links,
+    AudioLinks,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +203,8 @@ pub struct DownloadOptions {
     pub playlist: Option<PlaylistRange>,
     pub clips: Vec<ClipRange>,
     pub gallery_zip: bool,
+    #[serde(default)]
+    pub media_info: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtitles: Option<SubtitleOptions>,
 }
@@ -211,6 +219,7 @@ impl Default for DownloadOptions {
             playlist: None,
             clips: Vec::new(),
             gallery_zip: false,
+            media_info: false,
             subtitles: None,
         }
     }
@@ -331,6 +340,32 @@ impl WorkerRequest {
         if matches!(
             self.task,
             TaskKind::Download {
+                media_mode: MediaMode::Links | MediaMode::AudioLinks
+            }
+        ) {
+            let o = &self.options;
+            if !matches!(o.max_height, None | Some(720 | 1080 | 480 | 360))
+                || o.video_codec != VideoCodec::H264
+                || o.audio_codec != AudioCodec::Best
+                || o.container != Container::Mp4
+                || !matches!(o.engine, Engine::Auto | Engine::YtDlp | Engine::AutoYtDlpV1)
+                || o.playlist.is_some()
+                || !o.clips.is_empty()
+                || o.gallery_zip
+                || o.subtitles.is_some()
+                || (matches!(
+                    self.task,
+                    TaskKind::Download {
+                        media_mode: MediaMode::AudioLinks
+                    }
+                ) && o.max_height.is_some())
+            {
+                return Err(ProtocolError::InvalidRequest);
+            }
+        }
+        if matches!(
+            self.task,
+            TaskKind::Download {
                 media_mode: MediaMode::Formats
             }
         ) {
@@ -426,12 +461,21 @@ pub struct ArtifactDescriptor {
     /// Bounded prose only; Rust owns classification and authorization.
     #[serde(default)]
     pub metadata: Option<yoink_domain::ContentMetadata>,
+    #[serde(default)]
+    pub media_info: Option<MediaInfoReport>,
     /// MIME media type, e.g. "video/mp4".
     pub media_type: String,
 }
 
 impl ArtifactDescriptor {
     fn validate(&self) -> Result<(), ProtocolError> {
+        if self
+            .media_info
+            .as_ref()
+            .is_some_and(|r| !r.valid() || r.size_bytes != self.size_bytes)
+        {
+            return Err(ProtocolError::InvalidEvent);
+        }
         if self.metadata.as_ref().is_some_and(|m| !m.valid()) {
             return Err(ProtocolError::InvalidEvent);
         }
@@ -593,6 +637,7 @@ mod tests {
     #[test]
     fn nsfw_source_metadata_bounds_and_no_worker_classification_field() {
         let mut descriptor = ArtifactDescriptor {
+            media_info: None,
             path: ArtifactPath::parse("media.mp4").unwrap(),
             size_bytes: 1,
             media_type: "video/mp4".into(),
@@ -637,6 +682,7 @@ mod tests {
 
         let source = event(WorkerEventKind::Completed {
             artifacts: vec![ArtifactDescriptor {
+                media_info: None,
                 metadata: None,
                 path: ArtifactPath::parse("media/audio.m4a").unwrap(),
                 size_bytes: 42,
@@ -780,6 +826,7 @@ mod tests {
                 end_seconds: 2.0,
             }],
             gallery_zip: true,
+            media_info: false,
             subtitles: None,
         };
         req.network = Some(NetworkCredentials {
@@ -926,6 +973,7 @@ mod tests {
         };
         let complete = WorkerEventKind::Completed {
             artifacts: vec![ArtifactDescriptor {
+                media_info: None,
                 metadata: None,
                 path: ArtifactPath::parse("result.bin").unwrap(),
                 size_bytes: 1,

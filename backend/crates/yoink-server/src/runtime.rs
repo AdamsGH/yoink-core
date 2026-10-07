@@ -94,12 +94,20 @@ async fn run_impl(
     let http_identities = auth_state.clone();
     let http_system = system.clone();
     let http_cancel = cancel.clone();
+    let user_session = config
+        .user_session
+        .clone()
+        .map(yoink_user_session::Client::new)
+        .transpose()
+        .map_err(|_| ServerError::Http)?
+        .map(Arc::new);
     tasks.spawn(async move {
-        yoink_http::serve_with_identity(
+        yoink_http::serve_with_user_session(
             listener,
             http_system,
             http_auth,
             http_identities,
+            user_session,
             http_cancel,
         )
         .await
@@ -143,6 +151,12 @@ async fn run_impl(
             ));
             auth_state
                 .install_identities(identity.clone())
+                .map_err(|_| ServerError::DatabaseStartup)?;
+            auth_state
+                .install_downloader_settings(yoink_downloads::UserSettingsService::new(
+                    store.database().clone(),
+                    identity.clone(),
+                ))
                 .map_err(|_| ServerError::DatabaseStartup)?;
             identities = Some(identity);
         }

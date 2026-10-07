@@ -130,19 +130,21 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     if not isinstance(task, dict) or task.get("kind") not in ("download", "extract_content"):
         raise ValueError("invalid request")
     if task["kind"] == "download":
-        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio", "image", "subtitles", "formats"):
+        if set(task) != {"kind", "media_mode"} or task["media_mode"] not in ("video", "best", "audio", "image", "subtitles", "formats", "links", "audio_links"):
             raise ValueError("invalid request")
     elif set(task) != {"kind"}:
         raise ValueError("invalid request")
     options = request.get("options", {})
-    option_keys = {"max_height", "video_codec", "audio_codec", "container", "engine", "playlist", "clips", "gallery_zip", "subtitles"}
+    option_keys = {"max_height", "video_codec", "audio_codec", "container", "engine", "playlist", "clips", "gallery_zip", "subtitles", "media_info"}
     if not isinstance(options, dict) or set(options) - option_keys:
         raise ValueError("invalid request")
-    defaults = {"max_height": None, "video_codec": "h264", "audio_codec": "best", "container": "mp4", "engine": "auto", "playlist": None, "clips": [], "gallery_zip": False}
+    defaults = {"max_height": None, "video_codec": "h264", "audio_codec": "best", "container": "mp4", "engine": "auto", "playlist": None, "clips": [], "gallery_zip": False, "media_info": False}
     defaults.update(options)
     if defaults["max_height"] is not None and (type(defaults["max_height"]) is not int or defaults["max_height"] <= 0 or defaults["max_height"] > 100000):
         raise ValueError("invalid request")
     if defaults["video_codec"] not in ("h264", "h265", "av1", "vp9", "any") or defaults["audio_codec"] not in ("best", "aac", "mp3", "opus") or defaults["container"] not in ("mp4", "mkv", "webm") or defaults["engine"] not in ("auto", "yt_dlp", "gallery", "auto_yt_dlp_v1", "auto_gallery_v1", "auto_fallback_v1") or type(defaults["gallery_zip"]) is not bool:
+        raise ValueError("invalid request")
+    if type(defaults["media_info"]) is not bool:
         raise ValueError("invalid request")
     playlist = defaults["playlist"]
     if playlist is not None:
@@ -170,6 +172,13 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
         if (defaults["max_height"] is not None or defaults["video_codec"] != "h264"
                 or defaults["audio_codec"] != "best" or defaults["container"] != "mp4"
                 or defaults["engine"] in ("gallery", "auto_gallery_v1", "auto_fallback_v1") or playlist is not None or clips or defaults["gallery_zip"]):
+            raise ValueError("invalid request")
+    if task.get("media_mode") in ("links", "audio_links"):
+        if (defaults["max_height"] not in (None, 720, 1080, 480, 360)
+                or defaults["video_codec"] != "h264" or defaults["audio_codec"] != "best"
+                or defaults["container"] != "mp4" or defaults["engine"] not in ("auto", "yt_dlp", "auto_yt_dlp_v1")
+                or playlist is not None or clips or defaults["gallery_zip"] or subtitles is not None
+                or task["media_mode"] == "audio_links" and defaults["max_height"] is not None):
             raise ValueError("invalid request")
     if task.get("media_mode") == "formats":
         try:

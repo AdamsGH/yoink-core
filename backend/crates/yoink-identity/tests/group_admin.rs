@@ -234,3 +234,71 @@ async fn admin_authorization_is_fresh_and_global_bans_are_not_overridden() {
         AdminError::Forbidden
     );
 }
+
+#[tokio::test]
+async fn user_session_scan_is_atomic_preserves_policy_and_rechecks_owner() {
+    let (_d, database, db) = setup().await;
+    let owner = 8000000000011;
+    let gid = -8000000000099;
+    db.group_create(
+        owner,
+        &GroupCreate {
+            id: gid,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    db.thread_upsert(
+        owner,
+        gid,
+        &ThreadPatch {
+            thread_id: Some(7),
+            name: Some("manual".into()),
+            enabled: false,
+        },
+    )
+    .await
+    .unwrap();
+    db.thread_upsert(
+        owner,
+        gid,
+        &ThreadPatch {
+            thread_id: None,
+            name: Some("default".into()),
+            enabled: false,
+        },
+    )
+    .await
+    .unwrap();
+    db.scan_thread_names(owner, gid, &[(7, "new".into()), (8, "topic".into())])
+        .await
+        .unwrap();
+    let rows = db.threads_list(owner, gid).await.unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r.thread_id == Some(7) && !r.enabled && r.name.as_deref() == Some("new"))
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.thread_id.is_none() && !r.enabled && r.name.as_deref() == Some("default"))
+    );
+    assert!(rows.iter().any(|r| r.thread_id == Some(8) && r.enabled));
+    assert_eq!(
+        db.scan_thread_names(owner, gid, &[(9, "valid".into()), (0, "invalid".into())])
+            .await
+            .unwrap_err(),
+        AdminError::InvalidInput
+    );
+    assert_eq!(db.threads_list(owner, gid).await.unwrap(), rows);
+    yoink_db::raw_sql(include_str!("sql/user_session_ban_owner.sql"))
+        .execute(&database)
+        .await
+        .unwrap();
+    assert_eq!(
+        db.scan_thread_names(owner, gid, &[(9, "blocked".into())])
+            .await
+            .unwrap_err(),
+        AdminError::Forbidden
+    );
+}

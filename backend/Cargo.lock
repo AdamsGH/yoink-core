@@ -4884,8 +4884,10 @@ dependencies = [
  "yoink-application",
  "yoink-auth",
  "yoink-db",
+ "yoink-downloads",
  "yoink-identity",
  "yoink-storage",
+ "yoink-user-session",
 ]
 
 [[package]]
@@ -4977,6 +4979,7 @@ dependencies = [
  "yoink-identity",
  "yoink-storage",
  "yoink-telegram",
+ "yoink-user-session",
 ]
 
 [[package]]
@@ -5039,6 +5042,21 @@ dependencies = [
  "yoink-identity",
  "yoink-storage",
  "yoink-worker-protocol",
+]
+
+[[package]]
+name = "yoink-user-session"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "url",
 ]
 
 [[package]]

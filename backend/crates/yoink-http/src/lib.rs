@@ -3,11 +3,14 @@
 mod admin;
 mod auth;
 mod configuration;
+mod downloader_settings;
 mod groups;
 mod health;
 mod m2m;
 mod nsfw;
+mod user_session;
 pub use auth::{AuthService, AuthState};
+pub use user_session::router as user_session_router;
 
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use serde::Serialize;
@@ -37,7 +40,7 @@ pub fn router_with_auth(system: SystemService, auth: Option<AuthState>) -> Route
     let diagnostics =
         diagnostics(system.clone()).merge(health::router(system.clone(), auth.clone()));
     match auth {
-        Some(state) => diagnostics.merge(auth::router(state, system)),
+        Some(state) => diagnostics.merge(authenticated_routes(state, system, None)),
         None => diagnostics,
     }
 }
@@ -47,13 +50,45 @@ pub fn router_with_identity(
     auth: Option<AuthState>,
     identities: AuthState,
 ) -> Router {
+    router_with_identity_and_user_session(system, auth, identities, None)
+}
+
+pub fn router_with_identity_and_user_session(
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+) -> Router {
     let diagnostics =
         diagnostics(system.clone()).merge(health::router(system.clone(), Some(identities.clone())));
     let app = match auth {
-        Some(state) => diagnostics.merge(auth::router(state, system.clone())),
+        Some(state) => diagnostics.merge(authenticated_routes(state, system.clone(), client)),
         None => diagnostics,
     };
     app.merge(m2m::router(identities, system))
+}
+
+fn authenticated_routes(
+    state: AuthState,
+    system: SystemService,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+) -> Router {
+    let app = auth::router(state.clone(), system.clone());
+    let session = user_session_router(state, client).route_layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let ready = system.snapshot().ready;
+            async move {
+                use axum::response::IntoResponse;
+                if ready {
+                    next.run(request).await
+                } else {
+                    auth::ApiError(StatusCode::SERVICE_UNAVAILABLE, "Service unavailable")
+                        .into_response()
+                }
+            }
+        },
+    ));
+    app.merge(session)
 }
 
 pub async fn serve_with_identity(
@@ -109,6 +144,23 @@ pub async fn serve(
     axum::serve(listener, router(system))
         .with_graceful_shutdown(shutdown.cancelled_owned())
         .await
+}
+
+/// Serve the authenticated router with its configured user-mode client.
+pub async fn serve_with_user_session(
+    listener: TcpListener,
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    axum::serve(
+        listener,
+        router_with_identity_and_user_session(system, auth, identities, client),
+    )
+    .with_graceful_shutdown(shutdown.cancelled_owned())
+    .await
 }
 
 #[cfg(test)]

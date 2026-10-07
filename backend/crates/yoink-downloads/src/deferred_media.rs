@@ -58,7 +58,10 @@ impl DownloadService {
         }
         self.validate_telegram_request(request, message_id, &overrides)?;
         self.authorize_request(request).await?;
-        let original = if request.media_mode() == MediaMode::Formats {
+        let original = if matches!(
+            request.media_mode(),
+            MediaMode::Formats | MediaMode::Links | MediaMode::AudioLinks
+        ) {
             request.clone()
         } else {
             request.clone().with_preference_overrides(overrides.clone())

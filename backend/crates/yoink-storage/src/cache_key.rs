@@ -30,6 +30,14 @@ pub fn media_cache_key(request: &DownloadRequest) -> Result<MediaCacheKey, Store
         .ok_or(StoreError::InvalidStoredData)?;
     object.remove("preference_overrides");
     object.remove("force_nsfw");
+    // A local diagnostic preference does not change media bytes or invalidate
+    // pre-existing v1 cache identities. Cached file IDs have no local probe report.
+    if let Some(params) = object
+        .get_mut("params")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        params.remove("media_info");
+    }
     object.insert(
         "target".to_owned(),
         serde_json::json!({ "bot_id": target.bot_id() }),
@@ -60,6 +68,19 @@ mod tests {
         .unwrap()
         .with_target(DeliveryTarget::new(bot, actor as i64, None, None).unwrap())
         .unwrap()
+    }
+
+    #[test]
+    fn local_media_info_does_not_change_existing_media_cache_identity() {
+        let base = request(42, 700, MediaMode::Video, DownloadParams::default());
+        let report = base
+            .clone()
+            .with_params(base.params().clone().with_media_info(true))
+            .unwrap();
+        assert_eq!(
+            media_cache_key(&base).unwrap(),
+            media_cache_key(&report).unwrap()
+        );
     }
 
     #[test]

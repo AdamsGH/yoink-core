@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use teloxide::{
     ApiError, Bot, RequestError,
     payloads::{
-        SendAudioSetters, SendDocumentSetters, SendMediaGroupSetters, SendPhotoSetters,
-        SendVideoSetters,
+        SendAudioSetters, SendDocumentSetters, SendMediaGroupSetters, SendMessageSetters,
+        SendPhotoSetters, SendVideoSetters,
     },
     prelude::{ChatId, Requester},
     types::{
@@ -165,6 +165,20 @@ fn media_file_id(message: &Message, kind: MediaKind) -> Option<String> {
     }
 }
 
+fn validate_destination(
+    message: &Message,
+    expected_chat: i64,
+    expected_thread: Option<ThreadId>,
+) -> Result<(), DeliveryError> {
+    if message.id.0 <= 0
+        || message.chat.id.0 != expected_chat
+        || message.thread_id != expected_thread
+    {
+        return Err(DeliveryError::Unknown);
+    }
+    Ok(())
+}
+
 fn validate_messages(
     messages: Vec<Message>,
     kinds: &[MediaKind],
@@ -178,12 +192,8 @@ fn validate_messages(
     let mut receipts = Vec::with_capacity(messages.len());
     for (message, kind) in messages.into_iter().zip(kinds.iter().copied()) {
         let message_id = i64::from(message.id.0);
-        let actual_thread = message.thread_id;
-        if message_id <= 0
-            || !ids.insert(message_id)
-            || message.chat.id.0 != expected_chat
-            || actual_thread != expected_thread
-        {
+        validate_destination(&message, expected_chat, expected_thread)?;
+        if !ids.insert(message_id) {
             return Err(DeliveryError::Unknown);
         }
         let file_id = media_file_id(&message, kind).ok_or(DeliveryError::Unknown)?;
@@ -259,6 +269,20 @@ async fn send_group(
 }
 
 impl yoink_downloads::Delivery for TelegramDelivery {
+    fn deliver_diagnostic(
+        &self,
+        target: DeliveryTarget,
+        report: yoink_worker_protocol::MediaInfoReport,
+    ) -> yoink_downloads::DiagnosticFuture<'_> {
+        let bot = self.bot.clone();
+        Box::pin(async move {
+            if target.chat_id() > 0 && target.thread_id().is_none() && report.valid() {
+                let _ = bot
+                    .send_message(ChatId(target.chat_id()), report.render())
+                    .await;
+            }
+        })
+    }
     fn bot_id(&self) -> i64 {
         self.bot_id
     }
@@ -283,6 +307,55 @@ impl yoink_downloads::Delivery for TelegramDelivery {
             // Validate the complete unit before moving any file handle or making an API call.
             if artifacts.is_empty() || artifacts.len() > 10 {
                 return Err(DeliveryError::Rejected);
+            }
+            if artifacts.len() == 1
+                && matches!(&artifacts[0], DeliveryArtifact::Upload(a) if a.filename == "links.json" && a.media_type == "application/json")
+            {
+                if target.chat_id() <= 0 || target.thread_id().is_some() || spoiler {
+                    return Err(DeliveryError::Rejected);
+                }
+                let DeliveryArtifact::Upload(upload) = artifacts.into_iter().next().unwrap() else {
+                    unreachable!()
+                };
+                let mut file = tokio::fs::File::from_std(upload.into_file());
+                let mut bytes = Vec::new();
+                tokio::io::AsyncReadExt::read_to_end(
+                    &mut tokio::io::AsyncReadExt::take(
+                        &mut file,
+                        yoink_worker_protocol::MAX_LINK_REPORT_BYTES as u64 + 1,
+                    ),
+                    &mut bytes,
+                )
+                .await
+                .map_err(|_| DeliveryError::Rejected)?;
+                let links = yoink_worker_protocol::StreamLinks::decode(&bytes)
+                    .map_err(|_| DeliveryError::Rejected)?;
+                let mut lines = Vec::new();
+                if let Some(url) = links.video_url {
+                    lines.push(format!("Video stream\n{url}"));
+                }
+                if let Some(url) = links.audio_url {
+                    lines.push(format!("Audio stream\n{url}"));
+                }
+                let message = bot
+                    .send_message(ChatId(target.chat_id()), lines.join("\n\n"))
+                    .link_preview_options(teloxide::types::LinkPreviewOptions {
+                        is_disabled: true,
+                        url: None,
+                        prefer_small_media: false,
+                        prefer_large_media: false,
+                        show_above_text: false,
+                    })
+                    .await
+                    .map_err(|error| classify_delivery_error_for_origin(&error, false))?;
+                if !message.chat.is_private() {
+                    return Err(DeliveryError::Unknown);
+                }
+                validate_destination(&message, target.chat_id(), None)?;
+                return Ok(vec![DeliveredMedia {
+                    message_id: i64::from(message.id.0),
+                    file_id: None,
+                }]);
             }
             let is_cached = matches!(artifacts.first(), Some(DeliveryArtifact::Cached(_)));
             if artifacts
@@ -321,7 +394,8 @@ impl yoink_downloads::Delivery for TelegramDelivery {
                 )
                 .await
                 .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
-                validate_messages(vec![message], &kinds, target.chat_id(), thread)
+                let receipts = validate_messages(vec![message], &kinds, target.chat_id(), thread)?;
+                Ok(receipts)
             } else {
                 let messages = send_group(&bot, target, &kinds, artifacts, thread, spoiler)
                     .await
@@ -580,5 +654,153 @@ mod tests {
                 DeliveryError::Unknown
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod direct_links_wire_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use yoink_downloads::Delivery;
+    #[tokio::test]
+    async fn links_are_private_plain_messages_not_uploads_or_format_documents() {
+        link_response(serde_json::json!({"message_id":77,"date":0,"chat":{"id":43,"type":"private"},"text":"Streams"}), true).await;
+    }
+    #[tokio::test]
+    async fn links_wrong_chat_thread_or_nonpositive_id_are_unknown() {
+        for result in [
+            serde_json::json!({"message_id":77,"date":0,"chat":{"id":44,"type":"private"},"text":"Streams"}),
+            serde_json::json!({"message_id":77,"date":0,"chat":{"id":43,"type":"private"},"message_thread_id":8,"text":"Streams"}),
+            serde_json::json!({"message_id":0,"date":0,"chat":{"id":43,"type":"private"},"text":"Streams"}),
+            serde_json::json!({"message_id":77,"date":0,"chat":{"id":43,"type":"group","title":"Wrong kind"},"text":"Streams"}),
+        ] {
+            link_response(result, false).await;
+        }
+    }
+    #[tokio::test]
+    async fn accepted_links_without_a_valid_receipt_are_unknown() {
+        link_wire(None, false).await;
+        link_response(serde_json::json!({"message_id":77,"date":0}), false).await;
+    }
+    async fn link_response(result: serde_json::Value, success: bool) {
+        link_wire(Some(result), success).await;
+    }
+    async fn link_wire(result: Option<serde_json::Value>, success: bool) {
+        let temp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let root = temp.path().join("worker");
+        std::fs::create_dir(&root).unwrap();
+        let executor = yoink_executor::Executor::new(yoink_executor::ExecutorConfig {
+            program: "/usr/bin/node".into(),
+            args: vec![
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../yoink-downloads/tests/remaining_worker.mjs"
+                )
+                .into(),
+            ],
+            workspace_root: root,
+            timeout: std::time::Duration::from_secs(15),
+            processing_timeout: std::time::Duration::from_secs(10),
+            socket_timeout: std::time::Duration::from_secs(3),
+            max_artifact_bytes: 4096,
+            max_workspace_bytes: 8192,
+            max_output_bytes: 8192,
+            max_artifacts: 1,
+            allowed_proxy_origins: vec![],
+            allowed_private_origins: vec![],
+        })
+        .unwrap();
+        let request = yoink_worker_protocol::WorkerRequest {
+            version: yoink_worker_protocol::PROTOCOL_VERSION,
+            operation_id: uuid::Uuid::new_v4(),
+            attempt: 1,
+            source_url: yoink_worker_protocol::HttpSourceUrl::parse("https://example.com/source")
+                .unwrap(),
+            task: yoink_worker_protocol::TaskKind::Download {
+                media_mode: yoink_worker_protocol::MediaMode::Links,
+            },
+            options: Default::default(),
+            network: None,
+        };
+        let artifacts = executor
+            .execute(&request, tokio_util::sync::CancellationToken::new())
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_end = loop {
+                let n = stream.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break end + 4;
+                }
+                assert!(bytes.len() < 8192);
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            assert!(headers.to_ascii_lowercase().contains("/sendmessage "));
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            while bytes.len() < header_end + length {
+                let n = stream.read(&mut chunk).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+            }
+            let body: serde_json::Value =
+                serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
+            if let Some(result) = result {
+                let response = serde_json::json!({"ok":true,"result":result}).to_string();
+                let payload = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                );
+                stream.write_all(payload.as_bytes()).await.unwrap();
+            }
+            body
+        });
+        let bot = Bot::with_client(
+            "123:fixture",
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+        )
+        .set_api_url(url::Url::parse(&format!("http://{address}/")).unwrap());
+        let delivery = TelegramDelivery { bot, bot_id: 123 };
+        let receipts = delivery
+            .deliver(
+                DeliveryTarget::new(123, 43, None, None).unwrap(),
+                true,
+                artifacts
+                    .into_iter()
+                    .map(DeliveryArtifact::Upload)
+                    .collect(),
+            )
+            .await;
+        if success {
+            let receipts = receipts.unwrap();
+            assert_eq!(receipts[0].message_id, 77);
+            assert!(receipts[0].file_id.is_none());
+        } else {
+            assert!(matches!(receipts, Err(DeliveryError::Unknown)));
+        }
+        let body = server.await.unwrap();
+        assert_eq!(body["chat_id"], 43);
+        assert!(body["text"].as_str().unwrap().contains("signature=fixture"));
+        assert_eq!(body["link_preview_options"]["is_disabled"], true);
+        assert!(body.get("parse_mode").is_none());
     }
 }

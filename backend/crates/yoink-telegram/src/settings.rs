@@ -4,7 +4,9 @@ use teloxide::{
     types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message},
 };
 use yoink_domain::DeliveryTarget;
-use yoink_downloads::{DownloadService, EditableSettings, SettingChange, SettingField};
+use yoink_downloads::{
+    DownloadService, EditableSettings, ResetSettings, SettingChange, SettingField,
+};
 use yoink_i18n::{Key, Language};
 
 use crate::{DownloadsDependency, TelegramIdentity, download_error_response, translate};
@@ -13,6 +15,8 @@ use crate::{DownloadsDependency, TelegramIdentity, download_error_response, tran
 pub(super) enum Action {
     Invalid,
     Menu,
+    CleanMenu,
+    Reset(ResetSettings, i64),
     NsfwInvalid,
     NsfwMenu,
     NsfwMark,
@@ -30,6 +34,14 @@ pub(super) fn command(args: &[&str]) -> Option<Action> {
             None,
         )),
         _ => None,
+    }
+}
+
+pub(super) fn clean_command(args: &[&str]) -> Action {
+    if args.is_empty() {
+        Action::CleanMenu
+    } else {
+        Action::Invalid
     }
 }
 
@@ -66,6 +78,20 @@ fn callback(data: &str) -> Option<Action> {
     if data.len() > 64 {
         return None;
     }
+    if data == "prefs:clean" {
+        return Some(Action::CleanMenu);
+    }
+    if let Some(rest) = data.strip_prefix("prefs:reset:") {
+        let (group, revision) = rest.split_once(':')?;
+        if revision.is_empty() || !revision.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let number = revision.parse::<i64>().ok()?;
+        if number.to_string() != revision {
+            return None;
+        }
+        return Some(Action::Reset(ResetSettings::parse(group)?, number));
+    }
     if data == "prefs:menu" {
         return Some(Action::Menu);
     }
@@ -92,8 +118,8 @@ fn callback(data: &str) -> Option<Action> {
     }
 }
 
-fn label(field: SettingField) -> Key {
-    match field {
+fn label(field: SettingField, language: Language) -> String {
+    let key = match field {
         SettingField::Quality => Key::SettingsQuality,
         SettingField::Codec => Key::SettingsCodec,
         SettingField::Container => Key::SettingsContainer,
@@ -103,7 +129,9 @@ fn label(field: SettingField) -> Key {
         SettingField::SubtitleLanguage => Key::SettingsSubtitleLanguage,
         SettingField::SubtitleAutomatic => Key::SettingsSubtitleAutomatic,
         SettingField::NsfwBlur => Key::SettingsNsfwBlur,
-    }
+        _ => return field.name().to_owned(),
+    };
+    translate(language, key, &[])
 }
 
 fn value_label(value: &str, language: Language) -> String {
@@ -127,7 +155,7 @@ fn render(
         .map(|(field, value)| {
             format!(
                 "{}: {}",
-                translate(language, label(*field), &[]),
+                label(*field, language),
                 value_label(value, language)
             )
         })
@@ -165,7 +193,7 @@ fn render(
             .into_iter()
             .map(|field| {
                 vec![InlineKeyboardButton::callback(
-                    translate(language, label(field), &[]),
+                    label(field, language),
                     format!("prefs:{}:_menu", field.name()),
                 )]
             })
@@ -183,7 +211,16 @@ async fn apply(
     message_id: i32,
 ) -> Result<(String, InlineKeyboardMarkup), String> {
     let nsfw = matches!(action, Action::NsfwMenu | Action::NsfwChange(..));
+    let clean = matches!(action, Action::CleanMenu | Action::Reset(..));
     let page = match action {
+        Action::CleanMenu => None,
+        Action::Reset(group, revision) => {
+            service
+                .reset_settings(actor, target, group, revision)
+                .await
+                .map_err(|e| download_error_response(e, language))?;
+            None
+        }
         Action::NsfwMark => {
             service
                 .mark_next_nsfw(actor, target, message_id)
@@ -246,6 +283,29 @@ async fn apply(
         .settings(actor, target)
         .await
         .map_err(|e| download_error_response(e, language))?;
+    if clean {
+        let rows = ResetSettings::ALL
+            .into_iter()
+            .map(|group| {
+                vec![InlineKeyboardButton::callback(
+                    format!("Reset {}", group.name()),
+                    format!("prefs:reset:{}:{}", group.name(), settings.revision),
+                )]
+            })
+            .collect::<Vec<_>>();
+        return Ok((
+            match language {
+                Language::Russian => {
+                    "Сброс настроек загрузчика. Cookies и учётные данные сохраняются."
+                }
+                Language::English => {
+                    "Reset downloader preferences. Cookies and credentials are preserved."
+                }
+            }
+            .to_owned(),
+            InlineKeyboardMarkup::new(rows),
+        ));
+    }
     if nsfw {
         let blur = settings
             .values

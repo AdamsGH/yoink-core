@@ -9,6 +9,7 @@ use yoink_domain::{
 #[derive(Clone, PartialEq)]
 pub(super) struct ParsedMedia {
     pub(super) url: String,
+    pub(super) link_height: Option<u32>,
     pub(super) mode: MediaMode,
     pub(super) playlist: Option<PlaylistRange>,
     pub(super) clip: Option<ClipRange>,
@@ -31,6 +32,9 @@ impl fmt::Debug for ParsedMedia {
 }
 
 pub(super) fn parse(name: &str, args: &[&str]) -> Option<Result<ParsedMedia, ()>> {
+    if name == "link" {
+        return Some(parse_link(args));
+    }
     if name == "list" {
         return Some(parse_list(args));
     }
@@ -43,6 +47,29 @@ pub(super) fn parse(name: &str, args: &[&str]) -> Option<Result<ParsedMedia, ()>
         _ => return None,
     };
     Some(parse_inner(name, args, mode))
+}
+
+fn parse_link(args: &[&str]) -> Result<ParsedMedia, ()> {
+    let (quality, url) = match args {
+        [url] => ("best", *url),
+        [quality, url] => (*quality, *url),
+        _ => return Err(()),
+    };
+    let mut parsed = parse_list(&[url])?;
+    parsed.mode = if quality == "audio" {
+        MediaMode::AudioLinks
+    } else {
+        MediaMode::Links
+    };
+    parsed.link_height = match quality {
+        "best" | "audio" => None,
+        "720" => Some(720),
+        "1080" => Some(1080),
+        "480" => Some(480),
+        "360" => Some(360),
+        _ => return Err(()),
+    };
+    Ok(parsed)
 }
 
 fn parse_list(args: &[&str]) -> Result<ParsedMedia, ()> {
@@ -59,6 +86,7 @@ fn parse_list(args: &[&str]) -> Result<ParsedMedia, ()> {
     }
     Ok(ParsedMedia {
         url: args[0].to_owned(),
+        link_height: None,
         mode: MediaMode::Formats,
         playlist: None,
         clip: None,
@@ -140,6 +168,7 @@ fn parse_inner(name: &str, args: &[&str], mode: MediaMode) -> Result<ParsedMedia
         }
     };
     Ok(ParsedMedia {
+        link_height: None,
         url: url.to_owned(),
         mode,
         playlist,
@@ -840,5 +869,36 @@ mod tests {
         assert!(parse("image", &[URL]).unwrap().is_ok());
         assert_eq!(parsed("image", &[URL]).engine, Some(Engine::Gallery));
         assert!(parse("video", &[URL, "extra", "extra"]).unwrap().is_err());
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+    #[test]
+    fn direct_link_quality_contract_is_separate_from_format_report() {
+        for (quality, height, mode) in [
+            ("best", None, MediaMode::Links),
+            ("720", Some(720), MediaMode::Links),
+            ("1080", Some(1080), MediaMode::Links),
+            ("480", Some(480), MediaMode::Links),
+            ("360", Some(360), MediaMode::Links),
+            ("audio", None, MediaMode::AudioLinks),
+        ] {
+            let parsed = parse("link", &[quality, "https://example.com/video"])
+                .unwrap()
+                .unwrap();
+            assert_eq!(parsed.link_height, height);
+            assert_eq!(parsed.mode, mode);
+            assert!(!format!("{parsed:?}").contains("example.com"));
+        }
+        for args in [
+            vec!["2160", "https://example.com"],
+            vec!["https://user:secret@example.com"],
+            vec!["--args", "https://example.com"],
+            vec!["best", "https://example.com", "extra"],
+        ] {
+            assert!(parse("link", &args).unwrap().is_err());
+        }
     }
 }

@@ -571,3 +571,107 @@ async fn ordinary_user_own_proxy_enable_disable_cas_preserves_credentials_and_is
         "foreign actor state unchanged"
     );
 }
+
+#[tokio::test]
+async fn remaining_settings_patch_reset_and_pool_permission_contract() {
+    use yoink_downloads::{ResetSettings, UserSettingsPatch};
+    let (_dir, store, service) = setup(None).await;
+    let before = service.user_settings(43).await.unwrap();
+    assert!(before.use_pool_cookies);
+    assert!(!before.has_pool_access);
+    let patch: UserSettingsPatch = serde_json::from_value(serde_json::json!({
+        "quality":"720", "codec":"av01", "container":"mkv", "proxy_url":"http://fixture:secret@proxy.example:3128",
+        "proxy_enabled":true, "split_size":524288000, "keyboard":"FULL", "mediainfo":true,
+        "subs_enabled":true, "subs_always_ask":true, "subs_auto":true, "subs_lang":"ru",
+        "nsfw_blur":false, "send_as_file":true, "gallery_zip":true, "use_pool_cookies":false
+    })).unwrap();
+    let after = service
+        .patch_user_settings(43, patch, Some(before.revision))
+        .await
+        .unwrap();
+    assert!(after.revision > before.revision);
+    assert_eq!(
+        after.proxy_url.as_deref(),
+        Some("http://fixture:secret@proxy.example:3128")
+    );
+    assert_eq!(after.split_size, 524288000);
+    assert!(after.mediainfo && after.subs_enabled && after.subs_always_ask && after.send_as_file);
+    assert!(!after.has_pool_access);
+    // Multi-field stale mutation changes nothing.
+    assert!(matches!(
+        service
+            .patch_user_settings(
+                43,
+                serde_json::from_value(serde_json::json!({"quality":"best","proxy_enabled":false}))
+                    .unwrap(),
+                Some(before.revision)
+            )
+            .await,
+        Err(DownloadError::Conflict)
+    ));
+    let null_proxy = service
+        .patch_user_settings(
+            43,
+            serde_json::from_value(serde_json::json!({"proxy_url":null,"use_pool_cookies":true}))
+                .unwrap(),
+            Some(after.revision),
+        )
+        .await
+        .unwrap();
+    assert_eq!(null_proxy.proxy_url, after.proxy_url);
+    assert!(null_proxy.use_pool_cookies && !null_proxy.has_pool_access);
+    let own = target(43, None, BOT);
+    let language = service.language_settings(43, own).await.unwrap();
+    service
+        .change_language(43, own, "ru", language.revision)
+        .await
+        .unwrap();
+    yoink_db::query("UPDATE dl_user_settings SET args_json = '{\"imported\":true}', audio_codec = 'opus', youtube_auth_mode = 'oauth', dm_topic_thread_id = 73 WHERE user_id = 43").execute(store.database()).await.unwrap();
+    service
+        .reset_settings(43, own, ResetSettings::All, null_proxy.revision)
+        .await
+        .unwrap();
+    let reset = service.user_settings(43).await.unwrap();
+    assert_eq!(
+        (
+            reset.quality.as_str(),
+            reset.codec.as_str(),
+            reset.container.as_str()
+        ),
+        ("best", "avc1", "mp4")
+    );
+    assert_eq!(reset.split_size, 2043000000);
+    assert_eq!(reset.keyboard, "2x3");
+    assert!(
+        !reset.proxy_enabled
+            && !reset.mediainfo
+            && !reset.subs_enabled
+            && !reset.subs_auto
+            && !reset.subs_always_ask
+    );
+    assert!(reset.nsfw_blur && reset.send_as_file && reset.gallery_zip && reset.use_pool_cookies);
+    assert_eq!(reset.proxy_url, after.proxy_url);
+    assert_eq!(reset.audio_codec, "opus");
+    assert_eq!(reset.youtube_auth_mode, "oauth");
+    assert_eq!(
+        service.preferred_language(43).await.unwrap().as_deref(),
+        Some("en")
+    );
+    let row = yoink_db::query(
+        "SELECT args_json, dm_topic_thread_id FROM dl_user_settings WHERE user_id = 43",
+    )
+    .fetch_one(store.database())
+    .await
+    .unwrap();
+    assert_eq!(row.try_get::<String, _>(0).unwrap(), "{}");
+    assert_eq!(row.try_get::<i64, _>(1).unwrap(), 73);
+    assert!(matches!(
+        service
+            .reset_settings(43, own, ResetSettings::All, null_proxy.revision)
+            .await,
+        Err(DownloadError::Conflict)
+    ));
+    for actor in [0, 44, 45, 46, u64::MAX] {
+        assert!(service.user_settings(actor).await.is_err());
+    }
+}

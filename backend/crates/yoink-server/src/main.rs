@@ -2,6 +2,7 @@ mod auth_config;
 mod config;
 mod media_config;
 mod runtime;
+mod user_session_config;
 
 use std::{future::Future, io, process::ExitCode};
 

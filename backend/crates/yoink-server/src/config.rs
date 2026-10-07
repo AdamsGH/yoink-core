@@ -56,6 +56,7 @@ pub struct TelegramConfig {
 
 #[derive(Debug)]
 pub struct Config {
+    pub user_session: Option<yoink_user_session::Config>,
     pub auth: Option<crate::auth_config::AuthHttpConfig>,
     pub http_bind: SocketAddr,
     pub telegram: Option<TelegramConfig>,
@@ -333,6 +334,7 @@ impl Config {
         } else {
             None
         };
+        let user_session = crate::user_session_config::from_lookup(&mut read)?;
         let auth = crate::auth_config::AuthHttpConfig::from_lookup(&mut read, database.is_some())?;
         let media = if media_enabled {
             if telegram.is_none() || database.is_none() {
@@ -349,6 +351,7 @@ impl Config {
             None
         };
         Ok(Self {
+            user_session,
             auth,
             http_bind,
             telegram,

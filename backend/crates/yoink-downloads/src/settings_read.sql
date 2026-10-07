@@ -8,6 +8,12 @@ SELECT
  CASE WHEN length(CAST(COALESCE(s.subs_lang, 'en') AS BLOB)) <= 8 THEN COALESCE(s.subs_lang, 'en') END,
  CASE WHEN COALESCE(s.subs_auto, 0) = 0 THEN 'false' ELSE 'true' END,
  CASE WHEN COALESCE(s.nsfw_blur, 1) = 0 THEN 'false' ELSE 'true' END,
+ CASE WHEN COALESCE(s.subs_enabled, 0) = 0 THEN 'false' ELSE 'true' END,
+ CASE WHEN COALESCE(s.subs_always_ask, 0) = 0 THEN 'false' ELSE 'true' END,
+ CAST(COALESCE(s.split_size, 2043000000) AS TEXT),
+ CASE WHEN length(CAST(COALESCE(s.keyboard, '2x3') AS BLOB)) <= 8 THEN COALESCE(s.keyboard, '2x3') END,
+ CASE WHEN COALESCE(s.mediainfo, 0) = 0 THEN 'false' ELSE 'true' END,
+ CASE WHEN COALESCE(s.use_pool_cookies, 1) = 0 THEN 'false' ELSE 'true' END,
  COALESCE(s.updated_at, 0)
 FROM users u LEFT JOIN dl_user_settings s ON s.user_id = u.id
 WHERE u.id = ?1;

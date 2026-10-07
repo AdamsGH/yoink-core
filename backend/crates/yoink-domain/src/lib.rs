@@ -59,6 +59,8 @@ pub enum MediaMode {
     Image,
     Subtitles,
     Formats,
+    Links,
+    AudioLinks,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,6 +268,7 @@ pub struct DownloadParams {
     send_as_file: bool,
     gallery_zip: bool,
     subtitles: Option<SubtitleOptions>,
+    media_info: bool,
 }
 
 impl Default for DownloadParams {
@@ -281,11 +284,19 @@ impl Default for DownloadParams {
             send_as_file: false,
             gallery_zip: false,
             subtitles: None,
+            media_info: false,
         }
     }
 }
 
 impl DownloadParams {
+    pub fn media_info(&self) -> bool {
+        self.media_info
+    }
+    pub fn with_media_info(mut self, enabled: bool) -> Self {
+        self.media_info = enabled;
+        self
+    }
     /// Creates options with an optional maximum video height. Zero is not a meaningful limit.
     pub fn new(max_height: Option<u32>) -> Result<Self, RequestValidationError> {
         if max_height == Some(0) {
@@ -376,7 +387,26 @@ impl DownloadParams {
         mode: MediaMode,
         clip: Option<ClipRange>,
     ) -> Result<(), RequestValidationError> {
-        if mode == MediaMode::Formats {
+        if matches!(mode, MediaMode::Links | MediaMode::AudioLinks) {
+            if clip.is_some()
+                || !matches!(self.max_height, None | Some(720 | 1080 | 480 | 360))
+                || self.video_codec != VideoCodec::H264
+                || self.audio_codec != AudioCodec::Best
+                || self.container != Container::Mp4
+                || !self.send_as_file
+                || !matches!(
+                    self.engine,
+                    Engine::Auto | Engine::YtDlp | Engine::AutoYtDlpV1
+                )
+                || self.playlist.is_some()
+                || !self.clips.is_empty()
+                || self.gallery_zip
+                || self.subtitles.is_some()
+                || (mode == MediaMode::AudioLinks && self.max_height.is_some())
+            {
+                return Err(RequestValidationError::InvalidParameters);
+            }
+        } else if mode == MediaMode::Formats {
             if clip.is_some()
                 || self.max_height.is_some()
                 || self.video_codec != VideoCodec::H264
@@ -1197,7 +1227,10 @@ pub fn automatic_provider_v1(url: &Url, mode: MediaMode) -> Engine {
     if mode == MediaMode::Image {
         return Engine::AutoGalleryV1;
     }
-    if matches!(mode, MediaMode::Subtitles | MediaMode::Formats) {
+    if matches!(
+        mode,
+        MediaMode::Subtitles | MediaMode::Formats | MediaMode::Links | MediaMode::AudioLinks
+    ) {
         return Engine::AutoYtDlpV1;
     }
     let host = url.host_str().unwrap_or("").trim_end_matches('.');

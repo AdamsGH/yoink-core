@@ -447,6 +447,59 @@ impl IdentityStore {
         }
         result
     }
+    pub async fn scan_thread_names(
+        &self,
+        actor: i64,
+        id: i64,
+        topics: &[(i64, String)],
+    ) -> Result<usize, AdminError> {
+        if id >= 0
+            || topics.len() > 10000
+            || topics
+                .iter()
+                .any(|(id, name)| *id <= 0 || name.chars().count() > 256)
+        {
+            return Err(AdminError::InvalidInput);
+        }
+        let mut c = self
+            .database
+            .connection()
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| AdminError::Unavailable)?;
+        let result = async {
+            admin_auth(&tx, actor, self.owner_id, true, true).await?;
+            if !query(include_str!("../sql/admin_group_exists.sql"))
+                .bind(id)
+                .fetch_one(&*tx)
+                .await
+                .map_err(|_| AdminError::Unavailable)?
+                .try_get::<bool, _>(0)
+                .map_err(|_| AdminError::Unavailable)?
+            {
+                return Err(AdminError::NotFound);
+            }
+            for (thread, name) in topics {
+                query(include_str!("../sql/admin_scan_thread.sql"))
+                    .bind(id)
+                    .bind(*thread)
+                    .bind(name.as_str())
+                    .execute(&*tx)
+                    .await
+                    .map_err(|_| AdminError::Unavailable)?;
+            }
+            Ok(topics.len())
+        }
+        .await;
+        let result = finish_admin(tx, result).await;
+        drop(c);
+        if result.is_ok() {
+            self.invalidate();
+        }
+        result
+    }
     pub async fn thread_delete(&self, actor: i64, gid: i64, pid: i64) -> Result<(), AdminError> {
         if gid >= 0 || pid <= 0 {
             return Err(AdminError::InvalidInput);
