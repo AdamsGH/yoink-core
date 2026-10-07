@@ -187,6 +187,18 @@ build-media-fixture: check-build-space
 test-worker-launcher:
     node scripts/test-worker-launcher.mjs
 
+test-inbox-fixtures:
+    node --test scripts/inbox-fixture/*.test.mjs
+
+test-inbox-runtime server fixture ops importer='' frontend='' scenarios='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(--server-image {{quote(server)}} --fixture-image {{quote(fixture)}} --operator-image {{quote(ops)}})
+    if [[ -n {{quote(importer)}} ]]; then args+=(--importer-image {{quote(importer)}}); fi
+    if [[ -n {{quote(frontend)}} ]]; then args+=(--frontend-image {{quote(frontend)}}); fi
+    if [[ -n {{quote(scenarios)}} ]]; then args+=(--scenarios {{quote(scenarios)}}); fi
+    node scripts/test-inbox-runtime.mjs "${args[@]}"
+
 # Disposable native DB, fixture Bot API and real container Python worker.
 test-media scenario="all":
     node scripts/test-media.mjs {{quote(scenario)}}
