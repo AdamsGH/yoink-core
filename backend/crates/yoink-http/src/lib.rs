@@ -184,12 +184,29 @@ pub async fn serve_with_user_session(
     client: Option<std::sync::Arc<yoink_user_session::Client>>,
     shutdown: CancellationToken,
 ) -> std::io::Result<()> {
-    axum::serve(
-        listener,
-        router_with_identity_and_user_session(system, auth, identities, client),
-    )
-    .with_graceful_shutdown(shutdown.cancelled_owned())
-    .await
+    serve_with_user_session_and_inbox(listener, system, auth, identities, client, None, shutdown)
+        .await
+}
+
+/// Inbox is present only after the composition root constructs its real dependencies.
+pub async fn serve_with_user_session_and_inbox(
+    listener: TcpListener,
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    inbox: Option<yoink_inbox::http::HttpState>,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    let app = match inbox {
+        Some(inbox) => {
+            router_with_identity_user_session_and_inbox(system, auth, identities, client, inbox)
+        }
+        None => router_with_identity_and_user_session(system, auth, identities, client),
+    };
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 //! Exact public composition seam, real native storage/identity/JWT; only external
-//! Insight and GitHub boundaries are replaced. No network calls are possible.
+//! Insight and GitHub boundaries are replaced. Network tests use loopback only.
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -53,6 +53,8 @@ struct Fixture {
     storage: yoink_storage::Store,
     app: Router,
     system: yoink_application::SystemService,
+    auth: AuthState,
+    inbox: HttpState,
     tokens: Vec<String>,
 }
 impl Fixture {
@@ -129,15 +131,17 @@ impl Fixture {
         let app = router_with_identity_user_session_and_inbox(
             system.clone(),
             Some(auth.clone()),
-            auth,
+            auth.clone(),
             None,
-            inbox,
+            inbox.clone(),
         );
         Self {
             _dir: dir,
             storage,
             app,
             system,
+            auth,
+            inbox,
             tokens,
         }
     }
@@ -339,4 +343,72 @@ async fn mutation_status_proves_only_the_owned_matching_operation_key() {
         f.app.oneshot(foreign).await.unwrap().status(),
         StatusCode::NOT_FOUND
     );
+}
+
+async fn transport_status(address: std::net::SocketAddr, token: Option<&str>) -> StatusCode {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        let authorization = token
+            .map(|value| format!("Authorization: Bearer {value}\r\n"))
+            .unwrap_or_default();
+        let request = format!(
+            "GET /api/v1/inbox/items HTTP/1.1\r\nHost: localhost\r\n{authorization}Connection: close\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        stream.take(65_537).read_to_end(&mut response).await.unwrap();
+        assert!(response.len() <= 65_536);
+        let response = std::str::from_utf8(&response).unwrap();
+        let status = response.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+        StatusCode::from_u16(status.parse().unwrap()).unwrap()
+    })
+    .await
+    .expect("local HTTP transport exceeded its deadline")
+}
+
+#[tokio::test]
+async fn actual_http_transport_installs_inbox_observes_bans_and_drains() {
+    let f = Fixture::new().await;
+    f.sql("UPDATE users SET role='user' WHERE id=2").await;
+    for (authentication, installed) in [(true, true), (true, false), (false, true)] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let server = tokio::spawn(yoink_http::serve_with_user_session_and_inbox(
+            listener,
+            f.system.clone(),
+            authentication.then(|| f.auth.clone()),
+            f.auth.clone(),
+            None,
+            installed.then(|| f.inbox.clone()),
+            shutdown.clone(),
+        ));
+        if authentication && installed {
+            assert_eq!(
+                transport_status(address, None).await,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                transport_status(address, Some(&f.tokens[1])).await,
+                StatusCode::OK
+            );
+            f.sql("UPDATE users SET role='banned' WHERE id=2").await;
+            assert_eq!(
+                transport_status(address, Some(&f.tokens[1])).await,
+                StatusCode::FORBIDDEN
+            );
+        } else {
+            assert_eq!(
+                transport_status(address, Some(&f.tokens[1])).await,
+                StatusCode::NOT_FOUND
+            );
+        }
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .expect("HTTP server did not drain")
+            .unwrap()
+            .unwrap();
+    }
 }
