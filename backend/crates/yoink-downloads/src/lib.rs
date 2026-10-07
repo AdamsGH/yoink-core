@@ -1504,7 +1504,10 @@ fn worker_request(claim: &Claim, credentials: NetworkCredentials) -> Result<Work
         source_url: HttpSourceUrl::parse(request.source_url().as_str()).map_err(|_| ())?,
         task: TaskKind::Download { media_mode },
         options,
-        network: if credentials.proxy_url.is_some() || credentials.cookie_jar.is_some() {
+        network: if credentials.proxy_url.is_some()
+            || credentials.cookie_jar.is_some()
+            || credentials.youtube_oauth.is_some()
+        {
             Some(credentials)
         } else {
             None
@@ -1641,6 +1644,58 @@ fn is_stale(error: &StoreError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_request_preserves_oauth_only_credentials() {
+        let claim = Claim {
+            operation_id: Uuid::new_v4(),
+            attempt: 1,
+            lease_token: Uuid::new_v4(),
+            worker_id: "fixture".into(),
+            request: DownloadRequest::new(
+                42,
+                "https://youtu.be/abcdefghijk",
+                DomainMediaMode::Video,
+                None,
+                DownloadParams::default(),
+            )
+            .unwrap(),
+            cancel_requested: false,
+            cache_bypassed: false,
+            lease_expires_at: chrono::Utc::now(),
+        };
+        let empty = NetworkCredentials {
+            proxy_url: None,
+            cookie_jar: None,
+            youtube_oauth: None,
+        };
+        assert!(
+            worker_request(&claim, empty.clone())
+                .unwrap()
+                .network
+                .is_none()
+        );
+        let credentials = NetworkCredentials {
+            youtube_oauth: Some(yoink_worker_protocol::youtube_auth::YoutubeOAuth {
+                access_token: "synthetic-access".into(),
+                refresh_token: "synthetic-refresh".into(),
+                expires_at: "2099-01-01T00:00:00Z".into(),
+            }),
+            ..empty
+        };
+        let wire = worker_request(&claim, credentials).unwrap();
+        let decoded: WorkerRequest =
+            serde_json::from_slice(&serde_json::to_vec(&wire).unwrap()).unwrap();
+        let network = decoded
+            .network
+            .expect("OAuth-only credentials must reach the worker");
+        assert!(network.proxy_url.is_none());
+        assert!(network.cookie_jar.is_none());
+        assert_eq!(
+            network.youtube_oauth.unwrap().access_token,
+            "synthetic-access"
+        );
+    }
 
     fn valid_config() -> DownloadConfig {
         DownloadConfig::default()

@@ -1,6 +1,6 @@
 # YouTube authentication execution handoff
 
-The main runtime integrates bounded worker execution and pre-admission refresh. Container topology and public-provider acceptance remain open. Frontend and plugin sources are unchanged.
+The main runtime integrates bounded worker execution and pre-admission refresh. Synthetic container topology and native admission-to-delivery acceptance pass. Public-provider acceptance remains open. Frontend and plugin sources are unchanged.
 
 ## Canonical credential contract (worker5588)
 
@@ -46,15 +46,19 @@ OAuth `/info` uses POST, not secret-bearing query parameters. Metadata is explic
 6. Existing youtubei service Docker source: POST `/info` addition while retaining legacy GET; credential-update listener installed before sign-in; refresh during info rejected; secret-bearing exception logging removed from download catch. Native gateway requires this patched service, not the existing public image's old GET-only API.
 7. Justfile: focused test/clippy/format/worker recipes, one worktree target and resource preflight.
 
-## Runtime integration and remaining packaging gates
+## Runtime integration and remaining acceptance gates
 
 The runtime reads `YOINK_RUST_YOUTUBE_AUTH_ADAPTER_ENABLED`, which defaults to false. Enabling it calls `Executor::with_youtube_auth_adapter()`. Users cannot change the socket or trusted service origins. The same configured Google provider serves management and pre-admission exchange, with `YOINK_RUST_COOKIE_OAUTH_TIMEOUT_SECS` bounding both. Management and execution share the DTO and cookie version function.
 
-Remaining acceptance gates:
-- Package the adapter in a dedicated Node 22+ container/process, supply explicit trusted service origins, and mount only its Unix socket directory into the worker runtime. Socket permissions/UID must permit the confined worker while excluding other tenants. Backend Dockerfile already copies Python worker sources; the adapter is not launched by the Python image.
-- Package/rebuild the existing youtubei Docker service with the identified POST/refresh-observation hunk and pin youtubei.js/Node/bgutil artifacts. Do not reuse an unreviewed public tag as acceptance evidence.
-- Bound trusted service concurrency, memory, CPU, PIDs, writable temporary-disk capacity and lifecycle. The legacy youtubei service buffers/downloads intermediates before response streaming; native artifact bounds do not by themselves bound that separate service's scratch disk. Cancellation/deadline cleanup of upstream jobs and ffmpeg must be accepted in the real container topology.
-- Run deterministic end-to-end native admission -> confined launcher -> Unix gateway -> synthetic services -> real local processing -> delivery fixtures, including refresh races, expiry while queued/processing, byte/item/deadline rejection, ban/version rechecks, quota/replay/send-uncertainty regressions, cookie fallback and bgutil binding. Run the actual public container/provider acceptance separately under coordinator authorization. No production/live provider calls were made here.
+The dedicated adapter, pinned services, socket ownership, resource bounds and isolated container lifecycle are implemented and verified in `youtube-auth-packaging.md`.
+
+`just test-youtube-auth-native` builds fresh static native server/fixture binaries and mounts them, with current Python sources, into the reviewed runtime image. It creates a disposable migrated database and synthetic internal-only service topology. A personal canonical OAuth credential reaches native Telegram admission, the actual launcher, fixed Unix gateway, ffmpeg processing and an acknowledged multipart upload. Assertions cover the frozen secret-free reference, independently probed received media, matching durable receipt/journal, replay after restart without resend and observed-refresh rejection without upload or cache publication. Fixture resources are removed afterward.
+
+The application uses host networking for its loopback Bot API and SQL fixtures. Its worker private/proxy origin allowlists are empty. This is not a claim that the application has the standalone topology worker's `network_mode: none` setting. Trusted synthetic services have no provider egress or published ports.
+
+This fixture uses fresh credentials expiring in 2099 and does not call Google refresh. It caught and reproduces a request-construction defect: OAuth-only resolved credentials were discarded unless a proxy or Netscape jar was also present. The native builder now preserves OAuth-only credentials, with a failing-before/fixed-after regression. The media fixture's obsolete 10-second shutdown setting was also corrected to the required 135-second budget; the fresh native provider-routing scenario passes.
+
+Remaining acceptance includes public-provider behavior, real-account authorization, deterministic runtime refresh injection and the combined OAuth topology's queued/processing expiry, ban/version races, byte/item/deadline and send-uncertainty cases. Existing profile, lifecycle, worker and ordinary-delivery fixtures prove portions of these behaviors separately, not the entire combined chain. No production or live-provider calls were made.
 
 ## Verified checks
 

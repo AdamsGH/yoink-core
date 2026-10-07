@@ -47,6 +47,8 @@ import { runPersonalControlsScenarios } from './media-fixture/personal-controls-
 import { runCookieScenarios } from './media-fixture/cookie-scenarios.mjs';
 import { runCookieUploadScenarios } from './media-fixture/cookie-upload-scenarios.mjs';
 import { runCookieUrlScenarios } from './media-fixture/cookie-url-scenarios.mjs';
+import { startSyntheticYoutubeAuth } from './media-fixture/youtube-auth-topology.mjs';
+import { runYoutubeAuthScenarios } from './media-fixture/youtube-auth-scenarios.mjs';
 import { AuthenticatedProxyFixture, freeLoopbackPort, SourceHttpFixture } from './media-fixture/source-http.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,9 +57,9 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'personal-controls', 'private-user', 'inline', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|personal-controls|private-user|inline|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
-const image = 'yoink/rust-backend:experimental';
-const fixtureImage = 'yoink/rust-backend-fixture:experimental';
+assert(['all', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|personal-controls|private-user|inline|youtube-auth|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+const image = scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend:experimental';
+const fixtureImage = scenario === 'youtube-auth' ? image : 'yoink/rust-backend-fixture:experimental';
 const workspace = fileURLToPath(new URL('../', import.meta.url));
 const nativeFixtures = fileURLToPath(new URL('../crates/yoink-identity/tests/fixtures.sql', import.meta.url));
 const runId = `${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -97,6 +99,7 @@ let groupsEnabled = ['group-admin', 'membership', 'inline'].includes(scenario);
 let gallerySource;
 let providerSource;
 let inlineSource;
+let youtubeAuthTopology;
 let galleryEnabled = false;
 let galleryTrusted = true;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
@@ -106,7 +109,7 @@ const { startContainer } = containerLifecycle;
 // Explicit test-driver-only opt-in: existing images, current fixture executable and worker source.
 // This never changes production configuration or worker strategy selection.
 const localProviderSources = process.env.YOINK_MEDIA_PROVIDER_SOURCE_MOUNT === '1';
-assert(!localProviderSources || ['provider-routing', 'inline'].includes(scenario), 'source mounts are restricted to focused provider-routing/inline fixtures');
+assert(!localProviderSources || ['provider-routing', 'inline', 'youtube-auth'].includes(scenario), 'source mounts are restricted to focused provider-routing/inline/youtube-auth fixtures');
 const providerSourceArgs = localProviderSources ? [
   '--mount', `type=bind,source=${path.join(workspace, 'target/debug/yoink-server')},target=/usr/local/bin/yoink-server,readonly`,
   '--mount', `type=bind,source=${path.join(workspace, 'target/debug/yoink-fixture-server')},target=/usr/local/bin/yoink-fixture-server,readonly`,
@@ -121,6 +124,7 @@ async function cleanup() {
   const failures = [];
   for (const id of containers) { try { await docker(['rm', '--force', '--volumes', id], { timeout: 15000 }); } catch (error) { failures.push(error); } }
   containers.clear();
+  if (youtubeAuthTopology) { try { await youtubeAuthTopology.close(); } catch (error) { failures.push(error); } }
   if (volumeCreated) { try { await docker(['volume', 'rm', volumeName], { timeout: 15000 }); } catch (error) { failures.push(error); } volumeCreated = false; }
   providerSource?.releaseAll();
   inlineSource?.releaseAll();
@@ -158,10 +162,10 @@ async function assertWorkspaceClean() {
   assert.equal((await docker(['exec', appName, 'sh', '-c', 'test -z "$(ls -A /tmp/yoink-work)" && echo clean'])).trim(), 'clean', 'worker workspace must be empty');
 }
 function redact(value) {
-  return boundReport(String(value).split(token).join('[REDACTED_TOKEN]').split(fixtureToken).join('[REDACTED_FIXTURE_TOKEN]').split(fixtureAuthSecret).join('[REDACTED_FIXTURE_AUTH_SECRET]').split(secretMarker).join('[REDACTED_SOURCE]').split(cookieSecret).join('[REDACTED_COOKIE]').split(proxyPassword).join('[REDACTED_PROXY_PASSWORD]').split(proxyUser).join('[REDACTED_PROXY_USER]').split(proxyAuth).join('[REDACTED_PROXY_AUTH]'), maxLog);
+  return boundReport(String(value).split(token).join('[REDACTED_TOKEN]').split(fixtureToken).join('[REDACTED_FIXTURE_TOKEN]').split(fixtureAuthSecret).join('[REDACTED_FIXTURE_AUTH_SECRET]').split(secretMarker).join('[REDACTED_SOURCE]').split(cookieSecret).join('[REDACTED_COOKIE]').split(proxyPassword).join('[REDACTED_PROXY_PASSWORD]').split(proxyUser).join('[REDACTED_PROXY_USER]').split(proxyAuth).join('[REDACTED_PROXY_AUTH]').split('synthetic-access').join('[REDACTED_OAUTH_ACCESS]').split('synthetic-refresh').join('[REDACTED_OAUTH_REFRESH]'), maxLog);
 }
 function assertNoSecret(output, where) {
-  for (const secret of [secretMarker, token, fixtureToken, fixtureAuthSecret, cookieSecret, proxyPassword, proxyUser, proxyAuth]) assert(!output.includes(secret), `${where} leaked fixture credentials`);
+  for (const secret of [secretMarker, token, fixtureToken, fixtureAuthSecret, cookieSecret, proxyPassword, proxyUser, proxyAuth, 'synthetic-access', 'synthetic-refresh']) assert(!output.includes(secret), `${where} leaked fixture credentials`);
   assert(!/fixture-(video|document|audio|photo)-\d+/.test(output), `${where} leaked a Telegram file ID`);
 }
 function safeTelegramSummary() { return recentTelegramCalls(botApi.calls); }
@@ -225,13 +229,14 @@ async function launchApp() {
     '--env',`YOINK_FIXTURE_BIND=127.0.0.1:${fixturePort}`,'--env',`YOINK_FIXTURE_TOKEN=${fixtureToken}`,
     '--mount',`type=volume,source=${volumeName},target=/state`,
     ...providerSourceArgs,
+    ...(scenario === 'youtube-auth' ? [...youtubeAuthTopology.dockerArgs, '--env', 'YOINK_RUST_YOUTUBE_AUTH_ADAPTER_ENABLED=true'] : []),
     ...(scenario === 'inline' ? ['--env',`YOINK_RUST_DOWNLOAD_PROXY_URL=http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}`, '--env','YOINK_RUST_DOWNLOAD_NO_COOKIE_DOMAINS_JSON=["youtube.com"]', '--env','YOINK_RUST_TELEGRAM_INLINE_TIMEOUT_SECS=4','--env','YOINK_RUST_TELEGRAM_INLINE_ACTOR_INTERVAL_MS=50','--env','YOINK_RUST_TELEGRAM_INLINE_REQUESTS_PER_SECOND=100'] : []),
     '--env','YOINK_RUST_DOWNLOADS_ENABLED=true','--env',`YOINK_RUST_HTTP_BIND=127.0.0.1:${appHttpPort}`,
     ...(galleryEnabled ? (galleryTrusted ? gallerySource.dockerArgs : gallerySource.untrustedDockerArgs) : []),
-    '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=${JSON.stringify([`http://127.0.0.1:${sourcePort}`, ...(scenario === 'inline' && galleryEnabled ? ['https://www.youtube.com', 'https://youtube.com'] : []), ...(galleryEnabled ? ['https://imgbox.com', 'https://boards.4chan.org', 'https://a.4cdn.org', 'https://i.4cdn.org', 'https://instagram.com', 'https://www.instagram.com'] : [])])}`,
-    '--env',`YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=["http://127.0.0.1:${proxyPort}"]`,
+    '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=${JSON.stringify(scenario === 'youtube-auth' ? [] : [`http://127.0.0.1:${sourcePort}`, ...(scenario === 'inline' && galleryEnabled ? ['https://www.youtube.com', 'https://youtube.com'] : []), ...(galleryEnabled ? ['https://imgbox.com', 'https://boards.4chan.org', 'https://a.4cdn.org', 'https://i.4cdn.org', 'https://instagram.com', 'https://www.instagram.com'] : [])])}`,
+    '--env',`YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=${JSON.stringify(scenario === 'youtube-auth' ? [] : [`http://127.0.0.1:${proxyPort}`])}`,
     '--env','YOINK_RUST_DOWNLOAD_LEASE_SECS=6','--env','YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1','--env','YOINK_RUST_DELIVERY_TIMEOUT_SECS=2',
-    '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=10','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env',`YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=${workerSocketTimeoutSeconds}`,
+    '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=135','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env',`YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=${workerSocketTimeoutSeconds}`,
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
@@ -326,6 +331,10 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   if (scenario === 'all' || scenario === 'formats') sourceFixture.formatSource = new FormatSource(cookieSecret);
   proxyFixture=new AuthenticatedProxyFixture({originPort:sourcePort,authorization:proxyAuth}); proxyPort=await proxyFixture.start();
   appHttpPort=await freeLoopbackPort(); fixturePort=await freeLoopbackPort();
+  if (scenario === 'youtube-auth') {
+    assert(localProviderSources, 'YouTube acceptance requires freshly built native fixture binaries');
+    youtubeAuthTopology = await startSyntheticYoutubeAuth({ capture: spawnCapture, runId });
+  }
   await launchApp();
   if (scenario === 'all') {
     const sourceUrl = `http://127.0.0.1:${sourcePort}/media?key=${secretMarker}`;
@@ -702,7 +711,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     summaries.push(await runPreferenceScenarios(commandContext));
   }
   downloadTimeoutSeconds = 30;
-  cacheTtlSeconds = 3600;
+  cacheTtlSeconds = scenario === 'youtube-auth' ? 0 : 3600;
   await restartApp();
   if (scenario === 'all') summaries.push(await runBatchScenarios({ ...commandContext, playlistMedia, imageBytes, restartApp }));
   workerSocketTimeoutSeconds = 20;
@@ -736,6 +745,7 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
   if (scenario === 'all' || scenario === 'cookies') summaries.push(await runCookieScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'all' || scenario === 'cookie-uploads') summaries.push(await runCookieUploadScenarios({ ...commandContext, restartApp, cookieSecret, prepareLocalCookieFiles }));
   if (scenario === 'all' || scenario === 'cookie-urls') summaries.push(await runCookieUrlScenarios({ ...commandContext, restartApp, cookieSecret }));
+  if (scenario === 'youtube-auth') summaries.push(await runYoutubeAuthScenarios({ ...commandContext, restartApp, fixtureDir }));
   if (scenario === 'inline') {
     inlineSource = new InlineSource({ mediaBytes, mediaUrl: `http://127.0.0.1:${sourcePort}/media?case=inline-youtube` });
     gallerySource = await startGallerySource({ tempRoot, capture: spawnCapture, helperContainer, image, extraHosts: ['www.youtube.com','youtube.com'], providerResponse: (...args) => inlineSource.response(...args) });
