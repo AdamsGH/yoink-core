@@ -109,7 +109,6 @@ const { startContainer } = containerLifecycle;
 // Explicit test-driver-only opt-in: existing images, current fixture executable and worker source.
 // This never changes production configuration or worker strategy selection.
 const localProviderSources = process.env.YOINK_MEDIA_PROVIDER_SOURCE_MOUNT === '1';
-assert(!localProviderSources || ['provider-routing', 'inline', 'youtube-auth', 'personal-controls'].includes(scenario), 'source mounts are restricted to focused provider-routing/inline/youtube-auth/personal-controls fixtures');
 const cookieWebOrigin = localProviderSources && scenario === 'personal-controls' ? 'https://cookies.example/' : undefined;
 const cookieSyncTokens = new Set();
 const providerSourceArgs = localProviderSources ? [
@@ -164,6 +163,10 @@ async function assertWorkspaceClean() {
   assert.equal((await docker(['exec', appName, 'sh', '-c', 'test -z "$(ls -A /tmp/yoink-work)" && echo clean'])).trim(), 'clean', 'worker workspace must be empty');
 }
 function redact(value) {
+  for (const call of botApi?.calls ?? []) {
+    const match = /\n\n([A-Za-z0-9_-]{32,128})\n\n/.exec(call.data?.text ?? '');
+    if (match) cookieSyncTokens.add(match[1]);
+  }
   for (const secret of cookieSyncTokens) value = String(value).split(secret).join('[REDACTED_COOKIE_SYNC_TOKEN]');
   return boundReport(String(value).split(token).join('[REDACTED_TOKEN]').split(fixtureToken).join('[REDACTED_FIXTURE_TOKEN]').split(fixtureAuthSecret).join('[REDACTED_FIXTURE_AUTH_SECRET]').split(secretMarker).join('[REDACTED_SOURCE]').split(cookieSecret).join('[REDACTED_COOKIE]').split(proxyPassword).join('[REDACTED_PROXY_PASSWORD]').split(proxyUser).join('[REDACTED_PROXY_USER]').split(proxyAuth).join('[REDACTED_PROXY_AUTH]').split('synthetic-access').join('[REDACTED_OAUTH_ACCESS]').split('synthetic-refresh').join('[REDACTED_OAUTH_REFRESH]'), maxLog);
 }

@@ -538,6 +538,18 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_user_help_advertises_personal_cookie_and_proxy_controls() {
+        let catalog = Catalog::embedded().unwrap();
+        for language in [Language::English, Language::Russian] {
+            let help = catalog.render(language, Key::UserHelpEnabled, &[]).unwrap();
+            assert!(help.contains("/cookie"));
+            assert!(help.contains("/proxy"));
+            assert!(!help.contains("nine non-secret"));
+            assert!(!help.contains("девять несекретных"));
+        }
+    }
+
+    #[test]
     fn every_manifest_key_renders_in_both_locales() {
         let catalog = Catalog::embedded().unwrap();
         for key in Key::ALL {

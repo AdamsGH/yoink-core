@@ -88,7 +88,7 @@ export async function runCutSegmentsScenarios(context) {
     const handoff = await session();
     const frozenOriginal = JSON.parse(handoff.original_request_json);
     assert.equal(frozenOriginal.source_url, url, 'Quality->Cut freezes the original source');
-    assert.equal(frozenOriginal.params.engine, 'auto', 'Quality->Cut freezes the original engine');
+    assert.equal(frozenOriginal.params.engine, 'auto', 'Quality->Cut retains automatic engine intent before admission');
     assert.equal(frozenOriginal.params.send_as_file, false, 'explicit format remains separate from DownloadParams');
     assert.deepEqual(frozenOriginal.preference_overrides, { video_codec: 'h264', audio_codec: null, container: 'mp4', send_as_file: true, gallery_zip: null });
     assert.equal(frozenOriginal.target.reply_to_message_id, qualityRequest.id, 'handoff preserves original delivery target');
@@ -227,7 +227,7 @@ export async function runCutSegmentsScenarios(context) {
     assert.equal(operation.params.send_as_file, true, 'Quality->Cut retains explicit file delivery override');
     assert.equal(operation.params.video_codec, 'h264', 'Quality->Cut retains explicit video codec');
     assert.equal(operation.params.container, 'mp4', 'Quality->Cut retains explicit container');
-    assert.equal(operation.params.engine, 'auto', 'Quality->Cut retains selected engine');
+    assert.equal(operation.params.engine, 'auto_yt_dlp_v1', 'admission freezes automatic engine intent to the fixture yt-dlp strategy');
     assert.equal(operation.target.reply_to_message_id, qualityRequest.id, 'multi-cut delivery keeps the original Quality request target');
     assert.equal(await settingsNow(), preferencesBeforeConfirm, 'confirmation and Quality->Cut preserve actor preferences');
     assert(sourceFixture.mediaRequests > readsBeforeChoice, 'confirmed operation contacts source for worker processing');

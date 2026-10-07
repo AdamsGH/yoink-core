@@ -81,19 +81,29 @@ export async function runCommandMediaScenarios(context) {
     assert.equal(Number((await fixtureSql('SELECT count(*) FROM runtime_operations')).trim()), countBeforeInvalid,
       'malformed command input must not be admitted');
 
-    const gateStart = botApi.calls.length;
-    const beforeDenied = Number((await fixtureSql('SELECT count(*) FROM runtime_operations')).trim());
-    botApi.enqueue(43, 43, `/list ${sourceUrl}`);
-    botApi.enqueue(42, -10042, `/audio ${sourceUrl}`);
-    botApi.enqueue(42, 42, `/video@another_bot ${sourceUrl}`);
-    botApi.enqueue(42, 42, '/status');
-    const barrierReply = await waitFor(() => botApi.calls.slice(gateStart).find(call =>
-      call.method === 'sendmessage' && call.data.text.startsWith('Yoink ')), 'owner status barrier reply');
-    assert.equal(botApi.calls.slice(gateStart).filter(call => call.method === 'sendmessage').length, 1,
-      'denied commands must produce no reply before or beyond the distinct status barrier');
-    assert.equal(barrierReply.data.chat_id, 42);
-    assert.equal(Number((await fixtureSql('SELECT count(*) FROM runtime_operations')).trim()), beforeDenied,
-      'denied command forms must not create operations');
+    const previousRole = (await fixtureSql('SELECT role FROM users WHERE id=43')).trim();
+    assert(['user', 'restricted', 'banned', 'moderator', 'admin', 'owner'].includes(previousRole));
+    await fixtureSql("UPDATE users SET role='restricted' WHERE id=43");
+    try {
+      const gateStart = botApi.calls.length;
+      const beforeDenied = Number((await fixtureSql('SELECT count(*) FROM runtime_operations')).trim());
+      botApi.enqueue(43, 43, `/list ${sourceUrl}`);
+      botApi.enqueue(42, -10042, `/audio ${sourceUrl}`);
+      botApi.enqueue(42, 42, `/video@another_bot ${sourceUrl}`);
+      botApi.enqueue(42, 42, '/status');
+      const barrierReply = await waitFor(() => botApi.calls.slice(gateStart).find(call =>
+        call.method === 'sendmessage' && call.data.text.startsWith('Yoink ')), 'owner status barrier reply');
+      const deniedReply = await waitFor(() => botApi.calls.slice(gateStart).find(call =>
+        call.method === 'sendmessage' && Number(call.data.chat_id) === 43), 'restricted actor denial reply');
+      assert.equal(deniedReply.data.text, 'Your account is awaiting approval. Please try again later.');
+      assert.equal(botApi.calls.slice(gateStart).filter(call => call.method === 'sendmessage').length, 2,
+        'only the restricted actor denial and owner status barrier may reply');
+      assert.equal(barrierReply.data.chat_id, 42);
+      assert.equal(Number((await fixtureSql('SELECT count(*) FROM runtime_operations')).trim()), beforeDenied,
+        'denied command forms must not create operations');
+    } finally {
+      await fixtureSql(`UPDATE users SET role='${previousRole}' WHERE id=43`);
+    }
     await assertWorkspaceClean();
     return 'command media acceptance passed; playlist and Gallery assertions cover admission and persisted parameters only, with no live provider integration asserted.';
   } finally {

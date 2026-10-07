@@ -1630,7 +1630,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_help_is_localized_and_does_not_leak_sensitive_controls() {
+    fn ordinary_help_is_localized_and_keeps_system_controls_private() {
         for language in [Language::English, Language::Russian] {
             let enabled = translate(language, Key::UserHelpEnabled, &[]);
             let basic = translate(language, Key::UserHelpBasic, &[]);
@@ -1639,8 +1639,7 @@ mod tests {
                 for forbidden in [
                     "/status",
                     "/uncache",
-                    "/cookie",
-                    "/proxy",
+                    "/runtime",
                     "--height",
                     "--video-codec",
                 ] {
@@ -1658,8 +1657,15 @@ mod tests {
                 "/cut",
                 "/playlist",
                 "/subs",
+                "/cookie",
+                "/proxy",
             ] {
                 assert!(enabled.contains(supported));
+            }
+            for text in [&basic, &pending] {
+                for personal in ["/cookie", "/proxy"] {
+                    assert!(!text.contains(personal));
+                }
             }
             assert!(basic.contains("/start"));
         }

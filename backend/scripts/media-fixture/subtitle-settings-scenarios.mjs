@@ -24,7 +24,7 @@ export async function runSubtitleSettingsScenarios(context) {
   };
   const state = async () => {
     const row = await fields();
-    return { revision: row?.updated_at ?? 0, language: row?.subs_lang ?? 'en', automatic: row?.subs_auto ?? 1 };
+    return { revision: row?.updated_at ?? 0, language: row?.subs_lang ?? 'en', automatic: row?.subs_auto ?? 0 };
   };
   let next = 1_311_000;
   const buttons = message => message.data.reply_markup?.inline_keyboard?.flat() ?? [];
@@ -46,7 +46,7 @@ export async function runSubtitleSettingsScenarios(context) {
     const menu = await send(`/subs${suffix}`, language);
     assert.equal(Number(menu.data.chat_id), 42, 'standalone subtitle settings are delivered to the private owner chat');
     assert(buttons(menu).length > 0, 'subtitle settings menu serves inline buttons');
-    assert(buttons(menu).every(button => /^subs:(lang|auto):/.test(button.callback_data)), 'standalone menu exposes only language and automatic fallback controls');
+    assert(buttons(menu).every(button => /^subs:(lang|auto|enabled|ask):/.test(button.callback_data)), 'standalone menu exposes only subtitle settings controls');
     return menu;
   }
   async function servedChoice(menu, prefix) {
@@ -75,7 +75,9 @@ export async function runSubtitleSettingsScenarios(context) {
     const available = buttons(menu).map(button => button.callback_data);
     const supported = ['en', 'ru', 'zh', 'ja', 'ar', 'hi', 'de', 'fr', 'es', 'pt', 'zh-Hans'];
     for (const code of supported) assert(available.includes(`subs:lang:${code}:0`), `served language option ${code} has revision zero`);
-    assert(available.includes('subs:auto:true:0') || available.includes('subs:auto:false:0'), 'menu exposes only the opposite automatic-subtitle toggle at revision zero');
+    for (const action of ['auto', 'enabled', 'ask']) {
+      assert.equal(available.filter(data => data === `subs:${action}:true:0`).length, 1, `menu serves the opposite ${action} toggle for the false default at revision zero`);
+    }
     assert(buttons(menu).some(button => /^en(?: ✓)?$/.test(button.text)) && buttons(menu).some(button => /^ru(?: ✓)?$/.test(button.text)), 'language menu labels expose language codes');
     await noMenuJobs(initialJobs);
 
@@ -163,10 +165,12 @@ export async function runSubtitleSettingsScenarios(context) {
     // Malformed and legacy embedded-toggle callback data must be rejected without changing the current row.
     const malformed = await open();
     const malformedRow = await settingRow();
-    for (const data of ['subs:lang:xx:0', 'subs:lang:en', 'subs:lang:en:0:extra', 'subs:auto:maybe:0', 'subs:auto:true:-1', 'subs:toggle:true:0', 'subs:auto:on', 'prefs:subs_enabled:true:0']) {
+    for (const data of ['subs:lang:xx:0', 'subs:lang:en', 'subs:lang:en:0:extra', 'subs:auto:maybe:0', 'subs:auto:true:-1', 'subs:toggle:true:0', 'subs:auto:on']) {
       assert.equal((await click(malformed, data)).ack.data.show_alert, true, `reject malformed/legacy data ${data}`);
       assert.equal(await settingRow(), malformedRow);
     }
+    assert.equal((await click(malformed, 'prefs:subs_enabled:true:0')).ack.data.show_alert, true, 'a valid cross-editor callback with stale revision must be rejected');
+    assert.equal(await settingRow(), malformedRow);
     // Each authorization probe starts with a current callback revision so a stale guard cannot mask access control.
     for (const options of [
       { actor: 43 }, { isBot: true }, { inaccessible: true },

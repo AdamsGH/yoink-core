@@ -22,7 +22,9 @@ export async function runOnboardingScenarios(context) {
     await policy('open');
     const welcome = await send(openActor, '/start');
     assert.match(welcome.data.text, /download|video|audio/i);
-    assert.doesNotMatch(welcome.data.text, /\/cookie|\/proxy|\/uncache|\/status(?:\s|$)|\/runtime/i);
+    assert.match(welcome.data.text, /\/cookie/);
+    assert.match(welcome.data.text, /\/proxy/);
+    assert.doesNotMatch(welcome.data.text, /\/uncache|\/status(?:\s|$)|\/runtime/i);
     assert.match(await row(openActor), /^user\|/);
     assert.equal(await fixtureSql(`SELECT first_name FROM users WHERE id=${openActor}`), 'Fixture');
     await fixtureSql(`UPDATE users SET language='ru',theme='mocha' WHERE id=${openActor}`);
@@ -31,6 +33,9 @@ export async function runOnboardingScenarios(context) {
     const before = await fixtureSql(`SELECT role||'|'||language||'|'||theme||'|'||updated_at FROM users WHERE id=${openActor}`);
     const help = await send(openActor, '/help', 'en');
     assert.match(help.data.text, /загруз|видео|аудио/i);
+    assert.match(help.data.text, /\/cookie/);
+    assert.match(help.data.text, /\/proxy/);
+    assert.doesNotMatch(help.data.text, /\/uncache|\/status(?:\s|$)|\/runtime/i);
     assert.equal(await fixtureSql(`SELECT role||'|'||language||'|'||theme||'|'||updated_at FROM users WHERE id=${openActor}`), before, 'help must not invalidate identity-backed menus');
     await restartApp();
     assert.match((await send(openActor, '/help')).data.text, /загруз|видео|аудио/i);
@@ -85,18 +90,24 @@ export async function runOnboardingScenarios(context) {
     const cookies = await fixtureSql('SELECT * FROM cookies ORDER BY id');
     const settings = await fixtureSql(`SELECT * FROM dl_user_settings WHERE user_id=${openActor}`);
     const controlStart = botApi.calls.length;
-    for (const command of [
-      '/status', '/uncache', '/proxy', '/cookie',
-    ]) {
+    for (const command of ['/status', '/uncache']) {
       botApi.enqueue(openActor, openActor, command, messageId++);
     }
     await send(openActor, '/help');
-    assert.equal(await operations(), controlCount, 'ordinary users cannot admit credential or admin operations');
+    assert.equal(botApi.calls.slice(controlStart).filter(c => c.method === 'sendmessage').length, 1, 'admin commands must remain silent');
+    assert(!botApi.calls.slice(controlStart).some(c => c.data?.reply_markup), 'denied admin commands cannot expose menus');
+    const personalReplies = [await send(openActor, '/proxy'), await send(openActor, '/cookie')];
+    assert.equal(await operations(), controlCount, 'personal control menus and denied admin commands cannot admit media operations');
     assert.equal(await fixtureSql('SELECT * FROM cookies ORDER BY id'), cookies);
     assert.equal(await fixtureSql(`SELECT * FROM dl_user_settings WHERE user_id=${openActor}`), settings);
     const controlReplies = botApi.calls.slice(controlStart).filter(c => c.method === 'sendmessage');
-    assert.equal(controlReplies.length, 1, 'ordinary-user credential and admin commands must be silent');
-    assert(!botApi.calls.slice(controlStart).some(c => c.data?.reply_markup), 'owner-private controls must not expose menus');
+    assert.equal(controlReplies.length, 3, 'ordinary users receive personal cookie/proxy menus and help, but no admin replies');
+    for (const reply of personalReplies) {
+      assert.equal(Number(reply.data.chat_id), openActor);
+      for (const button of reply.data.reply_markup?.inline_keyboard?.flat() ?? []) {
+        assert(/^(cookie|proxy):/.test(button.callback_data), 'only caller-private cookie/proxy controls may be served');
+      }
+    }
     assert.equal(await fixtureSql(`SELECT count(*) FROM runtime_cut_sessions WHERE actor_id=${openActor}`), '0');
 
     await fixtureSql(`UPDATE users SET role='restricted' WHERE id=${openActor}`);

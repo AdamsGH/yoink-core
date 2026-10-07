@@ -72,7 +72,7 @@ export async function runCookieScenarios(context) {
       assert.match((await command(`/cookie ${domain}`)).data.text, /invalid|unusable|malformed/i);
     }
     assert.match((await command('/cookie absent.example')).data.text, /no.*cookie|not.*found/i);
-    for (const text of ['/cookie clear extra', '/cookie del', '/cookie del p00.example extra', '/cookie token', `/cookie https://name:${cookieSecret}@redaction.example/file`]) {
+    for (const text of ['/cookie clear extra', '/cookie del', '/cookie del p00.example extra', '/cookie token extra', `/cookie https://name:${cookieSecret}@redaction.example/file`]) {
       const reply = await command(text);
       assert.match(reply.data.text, /\/cookie/);
       assert.equal(buttons(reply).length, 0);

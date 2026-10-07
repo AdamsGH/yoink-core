@@ -27,7 +27,12 @@ export async function runPrivateUserScenarios(context) {
   try {
     await fixtureSql("UPDATE users SET role='user',ban_until=NULL WHERE id=43");
     const menu = await message('/settings', 'Download settings');
-    assert.equal(buttons(menu).length, 9);
+    assert.equal(buttons(menu).length, 15);
+    assert.deepEqual(buttons(menu).map(button => button.callback_data.split(':')[1]).sort(), [
+      'audio_codec', 'codec', 'container', 'gallery_zip', 'keyboard', 'mediainfo',
+      'nsfw_blur', 'quality', 'send_as_file', 'split_size', 'subs_always_ask',
+      'subs_auto', 'subs_enabled', 'subs_lang', 'use_pool_cookies',
+    ].sort());
     const page = await click(menu, 'prefs:quality:_menu', { edit: true });
     const selected = buttons(page.update).find(b => b.callback_data.startsWith('prefs:quality:360:')).callback_data;
     await click(menu, selected, { edit: true });
