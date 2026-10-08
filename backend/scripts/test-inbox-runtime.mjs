@@ -33,5 +33,5 @@ try {
     }
   });
 } catch (error) { failures.push('runtime/cleanup'); console.error(report(error)); }
-console.log(JSON.stringify({ passed, failed: failures, selected, notRunScenarios: SCENARIOS.filter(name => !selected.includes(name)), acceptance: failures.length ? 'failed' : selected.length < SCENARIOS.length ? 'selected-process-gates-passed' : 'implemented-process-gates-passed', remainingGates: ['full PostgreSQL import suite with immutable legacy images', 'admitted confined-worker shutdown with live child'] }));
+console.log(JSON.stringify({ passed, failed: failures, selected, notRunScenarios: SCENARIOS.filter(name => !selected.includes(name)), acceptance: failures.length ? 'failed' : selected.length < SCENARIOS.length ? 'selected-process-gates-passed' : 'implemented-process-gates-passed', remainingGates: ['separate full PostgreSQL import suite'] }));
 if (failures.length) process.exitCode = 1;

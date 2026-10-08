@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { startHeldDns, resolverArgs, bridgeAddress, createOwnedDnsContainer } from './dns-harness.mjs';
 import { createProcessRunner, createContainerLifecycle } from '../media-fixture/process-lifecycle.mjs';
 import { createNativeDbClient } from '../media-fixture/native-db.mjs';
 import { BotApiFixture } from '../media-fixture/bot-api.mjs';
@@ -18,7 +20,7 @@ export async function withRuntime(config, execute) {
   // Registered before any allocation; helpers are tracked even on nonzero exits.
   actions.push(async () => { for (const child of children) child.kill('SIGKILL'); });
   actions.push(async () => { const failures = []; for (const container of containers) { try { await docker(['rm', '--force', container]); } catch { failures.push(container); } } assert.equal(failures.length, 0, 'all owned containers removed'); });
-  let appContainerId, interrupted = false, rejectedNumber = 0;
+  let appContainerId, activeDns, interrupted = false, rejectedNumber = 0;
   async function expectNativeFailure(args, reason, input) {
     const name = `yoink-inbox-rejection-${id}-${rejectedNumber++}`;
     const container = await docker(['create', '--pull', 'never', '--name', name, ...(input === undefined ? [] : ['--interactive']), ...args]);
@@ -34,7 +36,7 @@ export async function withRuntime(config, execute) {
   const fixturePort = await freePort(), httpPort = await freePort();
   const mount = ['--mount', `type=volume,source=${volumeName},target=/state`];
   const db = createNativeDbClient({ getAppContainerId: () => appContainerId, getFixturePort: () => fixturePort, fixtureToken, volumeName, fixtureImage: config['fixture-image'], helperContainer });
-  async function stop() {
+  async function stop({ liveWorker = false } = {}) {
     if (!appContainerId) return;
     const original = appContainerId;
     if (await docker(['inspect', '--format', '{{.State.Running}}', original]) === 'true') {
@@ -50,7 +52,12 @@ export async function withRuntime(config, execute) {
     assert.equal(state.Error, '');
     // fixture_main checks /proc children even with Inbox-only composition. Its
     // media workspace snapshot is not an Inbox workspace proof; inspect that below.
-    assert.match(await docker(['logs', original]), /fixture graceful shutdown verified: adapters drained, worker_children=0, workspaces=0/);
+    const logs = await docker(['logs', original]);
+    assert.match(logs, /fixture graceful shutdown verified: adapters drained, worker_children=0, workspaces=0/);
+    if (liveWorker) {
+      const snapshot = /fixture shutdown signal SIGTERM: worker_children=(\d+), workspaces=\d+/.exec(logs);
+      assert(snapshot && Number(snapshot[1]) > 0, 'original SIGTERM snapshot must observe a live child before cancellation/reaping');
+    }
     await docker(['rm', original]); containers.delete(original); appContainerId = undefined;
   }
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, interrupt);
@@ -73,8 +80,8 @@ export async function withRuntime(config, execute) {
     await helperContainer(['--network', 'none', '--user', '0', ...mount, '--entrypoint', 'sh', config['server-image'], '-c', 'mkdir -p /state/private /state/inbox; chmod 0700 /state/private /state/inbox; chown 10001:10001 /state/private /state/inbox']);
     await helperContainer(['--network', 'none', ...mount, '--env', 'YOINK_RUST_DATABASE_PATH=/state/private/state.db', '--entrypoint', 'yoink-server', config['server-image'], 'migrate']);
     await db.batch("INSERT INTO users(id,role,language,theme,is_premium,created_at,updated_at) VALUES(42,'owner','en','macchiato',0,0,0),(43,'user','en','macchiato',0,0,0);");
-    async function launch({ inbox = true, auth = true, telegram = true, groups = false, deadlines = false } = {}) {
-      checkInterrupted(); assert(!appContainerId);
+    async function launch({ inbox = true, auth = true, telegram = true, groups = false, deadlines = false, dns = activeDns } = {}) {
+      checkInterrupted(); assert(!appContainerId); assert(!(deadlines && dns), 'distinct deadline and live-worker budgets');
       const env = {
         YOINK_FIXTURE_BIND: `127.0.0.1:${fixturePort}`, YOINK_FIXTURE_TOKEN: fixtureToken,
         YOINK_RUST_DATABASE_PATH: '/state/private/state.db', YOINK_RUST_HTTP_BIND: `127.0.0.1:${httpPort}`,
@@ -86,15 +93,31 @@ export async function withRuntime(config, execute) {
         YOINK_RUST_INSIGHT_GATEWAY_BASE: trusted.origin + '/v1', YOINK_RUST_INSIGHT_GATEWAY_KEY: 'fixture-gateway', YOINK_RUST_INSIGHT_MODEL: 'fixture-model',
         YOINK_RUST_INBOX_INTERVAL_MS: '100', YOINK_RUST_INBOX_MAX_ATTEMPTS: '2',
         ...(deadlines ? { YOINK_RUST_INBOX_JOB_TIMEOUT_SECS: '6', YOINK_RUST_INBOX_GITHUB_TIMEOUT_SECS: '4', YOINK_RUST_INBOX_EXECUTOR_TIMEOUT_SECS: '3', YOINK_RUST_INBOX_SOCKET_TIMEOUT_SECS: '2', YOINK_RUST_INBOX_COMPLETION_TIMEOUT_SECS: '3', YOINK_RUST_INBOX_DRAIN_TIMEOUT_SECS: '1' } : {}),
+        ...(dns ? { YOINK_RUST_INBOX_EXECUTOR_TIMEOUT_SECS: '60' } : {}),
         TMPDIR: '/tmp', TURSO_TMPDIR: '/tmp',
       };
-      appContainerId = await startContainer(['--name', `yoink-inbox-app-${id}`, '--network', 'host', '--workdir', '/state/inbox', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '128', '--memory', '512m', '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777', ...mount,
+      appContainerId = await startContainer(['--name', `yoink-inbox-app-${id}`, '--network', 'host', '--workdir', '/state/inbox', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '128', '--memory', '512m', '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777', ...mount, ...(dns ? resolverArgs(dns) : []),
         ...Object.entries(env).flatMap(([key, value]) => ['--env', `${key}=${value}`]), '--entrypoint', 'yoink-fixture-server', config['fixture-image']]);
     }
     async function ready() { await waitFor(async () => { checkInterrupted(); try { return (await fetch(`http://127.0.0.1:${httpPort}/health/ready`, { signal: AbortSignal.timeout(1000) })).status === 200; } catch { return false; } }, 'actual native readiness'); }
     async function workspaceClean() { assert.equal(await helperContainer(['--network', 'none', ...mount, '--entrypoint', 'sh', config['server-image'], '-c', 'test -z "$(ls -A /state/inbox)" && echo clean']), 'clean'); }
     const request = api(`http://127.0.0.1:${httpPort}`);
     const login = async actor => (await request('/api/v1/auth/token', { method: 'POST', body: { init_data: initData(actor, telegramToken) } })).access_token;
+    const startDns = async () => {
+      const dns = await startHeldDns({ startContainer: args => createOwnedDnsContainer({ docker, containers }, args), docker, image: config['server-image'], runId: id, poll: (fn, label, timeout) => waitFor(() => { checkInterrupted(); return fn(); }, label, timeout), removeContainer: async container => { await docker(['rm', '--force', container]); containers.delete(container); } });
+      activeDns = dns.address;
+      const guarded = { ...dns, close: async () => { await dns.close(); if (activeDns === dns.address) activeDns = undefined; } };
+      actions.push(() => guarded.close()); return guarded;
+    };
+    const observeDnsWorker = async address => {
+      assert(appContainerId);
+      const source = await readFile(new URL('./observe-worker.py', import.meta.url), 'utf8');
+      const snapshot = JSON.parse(await docker(['exec', appContainerId, '/usr/local/bin/python', '-I', '-B', '-c', source, bridgeAddress(address)]));
+      const servers = snapshot.resolver.split('\n').map(line => line.trim().split(/\s+/)).filter(parts => parts[0] === 'nameserver').map(parts => parts[1]);
+      assert.deepEqual(servers, [address], 'only this container uses fake DNS; no host/public resolver fallback');
+      assert.match(snapshot.resolver, /timeout:30/); assert.match(snapshot.resolver, /attempts:2/);
+      return snapshot;
+    };
     const ensureReady = async () => { if (!appContainerId) await launch(); await ready(); };
     const diagnostics = async () => {
       const logs = appContainerId ? await docker(['logs', appContainerId]).catch(() => 'native logs unavailable') : 'native process stopped';
@@ -102,7 +125,7 @@ export async function withRuntime(config, execute) {
       const notifications = await db.query('SELECT sequence,state,attempts,error_code FROM inbox_notifications ORDER BY sequence DESC LIMIT 20').catch(() => 'notification snapshot unavailable');
       return report(`jobs:\n${jobs}\nnotifications:\n${notifications}\nnative logs:\n${logs}`, [secret, telegramToken, fixtureToken]);
     };
-    await execute({ ensureReady, diagnostics, config, db, bot, proxy, trusted, launch, ready, stop, request, login, waitFor: (fn, label, timeout) => waitFor(() => { checkInterrupted(); return fn(); }, label, timeout), workspaceClean, helperContainer, expectNativeFailure, mount, httpPort, docker, startContainer, secret, telegramToken });
+    await execute({ startDns, observeDnsWorker, ensureReady, diagnostics, config, db, bot, proxy, trusted, launch, ready, stop, request, login, waitFor: (fn, label, timeout) => waitFor(() => { checkInterrupted(); return fn(); }, label, timeout), workspaceClean, helperContainer, expectNativeFailure, mount, httpPort, docker, startContainer, secret, telegramToken });
     await stop(); await workspaceClean();
   } catch (error) {
     let logs = '';

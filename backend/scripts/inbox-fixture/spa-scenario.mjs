@@ -12,7 +12,7 @@ export async function spaContracts(c) {
   await c.waitFor(async () => (await c.request(`/api/v1/inbox/items/${item.id}`, { token })).status === 'classified', 'SPA native content prerequisite');
   await c.db.batch("INSERT INTO insight_user_settings(user_id,github_token) VALUES(42,'fixture-read') ON CONFLICT(user_id) DO UPDATE SET github_token=excluded.github_token");
   await c.request('/api/v1/inbox/gh_stars/sync', { token, method: 'POST', expected: 202 });
-  await c.waitFor(async () => (await c.request('/api/v1/inbox/gh_stars', { token })).items.length > 0, 'SPA native stars prerequisite');
+  await c.waitFor(async () => (await c.request('/api/v1/inbox/gh_stars', { token })).items.some(star => star.full_name === 'fixture/repo'), 'SPA expected native repository synced, not stale rows from earlier scenarios');
   const server = http.createServer((req, res) => {
     if (req.url === '/__inbox_fixture_session') { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>Fixture session setup</title>'); return; }
     const backend = req.url.startsWith('/api/') || req.url.startsWith('/health/');
@@ -46,6 +46,10 @@ export async function spaContracts(c) {
     await c.waitFor(() => browser.evaluate("document.body.innerText.includes('fixture/http')"), 'SPA reload with native session');
     assert.equal(await browser.evaluate("localStorage.getItem('access_token')"), token);
     assert(calls.slice(beforeReload).some(call => call.path.startsWith('/api/v1/inbox/items') && call.status === 200 && call.authenticated), 'reload authenticates native requests without credential re-seeding');
+  } catch (error) {
+    const page = await browser?.evaluate("({path: location.pathname, text: document.body.innerText.slice(0, 2000)})").catch(() => null);
+    console.error('SPA failure evidence', JSON.stringify({ page, requests: calls.slice(-12) }));
+    throw error;
   } finally {
     try { await browser?.close(); } finally { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); }
   }

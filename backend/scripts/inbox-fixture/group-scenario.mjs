@@ -22,7 +22,7 @@ export async function groupContracts(c) {
   await request(`/groups/${group}/threads`, { method: 'POST', body: { thread_id: 19, enabled: false }, expected: 201 });
   await denied('https://github.com/fixture/topic-denied', 19);
   await c.waitFor(async () => (await c.db.query("SELECT count(*) FROM inbox_jobs WHERE state IN ('running','ready')")) === '0', 'earlier work drained before authority gate');
-  await c.db.batch("INSERT INTO user_permissions(user_id,plugin,feature,granted_by,granted_at) VALUES(43,'inbox','classify',42,0)");
+  await c.db.batch("INSERT INTO user_permissions(user_id,plugin,feature,granted_by,granted_at) VALUES(43,'inbox','classify',42,0) ON CONFLICT DO NOTHING");
   c.trusted.holdRepository = true;
   const heldBefore = c.trusted.held;
   try {

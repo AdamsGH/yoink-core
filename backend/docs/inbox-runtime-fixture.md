@@ -12,7 +12,8 @@ The coordinator verified the integrated native runtime, workspace Clippy/tests
 and the hardened launcher. All nine process scenarios passed with matching
 immutable images. Independent review then identified four false-positive gaps
 in storage, import and SPA checks. After repairs, those three scenarios passed
-again. Live confined-worker shutdown remains an open acceptance gate.
+again. The admitted live confined-worker shutdown gate also passed, followed by
+the complete nine-scenario run.
 
 The supplied images have separate roles: production server for migration,
 fixture image for actual runtime/SQL control, operations image for backup/restore.
@@ -112,7 +113,8 @@ job/notification snapshots.
    feed, detail dialog, stars/folders and session reload. It seeds the actual
    session token once in an inert setup document, not on each navigation. Reload
    must retain the token and issue fresh authenticated native requests. Its
-   prerequisites use actual native routes. No Inbox API response or page is
+   prerequisites use actual native routes and wait for the expected repository,
+   not stale rows left by another scenario's synchronization. No Inbox API response or page is
    reimplemented. Missing frontend image fails this scenario.
 
 All SQL crash-gap changes affect the owned temporary database only. GitHub and
@@ -126,21 +128,30 @@ is separately checked by an offline helper. The seeded fixture_main's workspace
 signal snapshot is **media-only** (`config.media`); its `workspaces=0` line alone
 is not a live Inbox-worker workspace proof.
 
-## Remaining full acceptance gates
+## Full acceptance evidence
 
 * The separate PostgreSQL suite passed against the integrated code: 54 real
   Alembic revisions, independent comparison of 41 tables and 504 cells, TLS
   failures, native reopen and backup/restore safety. `importContracts` checks
   malformed-source rejection only and does not replace that suite. The existing
   `backend/scripts/import-fixture/test-import.mjs` owns full import acceptance.
-* Admitted **live confined-worker child** shutdown/restart needs a deterministic
-  public destination held while the anonymous worker runs, without widening
-  private-origin permissions. The implemented trusted GitHub cancellation gate
-  does not claim to be that gate.
+* `shutdownContracts` also passed the live confined-worker gate. An owned DNS
+  helper runs as a non-root container on the existing Docker bridge, with no
+  published ports, forwarding or address answers. Only the runtime container's
+  resolver changes. The helper accepts allocated private or RFC 6598 shared
+  bridge addresses. No host resolver, route or firewall configuration changes.
+  The gate correlates an unanswered DNS query with the real child's socket inode,
+  checks UID, argv, zero capabilities, no-new-privileges and its `0700` workspace,
+  and requires the original SIGTERM snapshot to observe a live child. Graceful
+  exit must reap all children, empty the Inbox workspace, release both lease
+  fields and restore attempt zero. Restart receives NXDOMAIN and consumes one
+  attempt, without duplicate item/job/completion/Telegram effects. A later actual
+  Content/Insight job succeeds. Failed admission remains resolver-pinned until
+  authoritative Store lookup and a real terminal outcome permit removal.
 
 ## Helper checks
 
-`just test-inbox-fixtures` from `backend/`: 33 passed, zero failed.
+`just test-inbox-fixtures` from `backend/`: 68 passed, zero failed.
 Checks include immutable role-specific images, scenario selection/invalid inputs,
 optional importer handling, deterministic sessions, bounded polling/reports and
 streamed responses, LIFO cleanup despite failures, fake wire formats, lost

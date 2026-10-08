@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { literal } from './helpers.mjs';
+import { liveWorkerShutdown } from './live-worker-scenario.mjs';
 
 export async function telegramContracts(c) {
   let message = 20000;
@@ -89,4 +90,5 @@ export async function shutdownContracts(c) {
   c.trusted.holdStars = false;
   await c.request('/api/v1/inbox/gh_stars/sync', { token, method: 'POST', expected: 202 });
   await c.waitFor(async () => (await c.db.query(`SELECT state FROM inbox_jobs WHERE kind='stars_sync' AND id>${job} ORDER BY id DESC LIMIT 1`)) === 'done', 'terminal retry budget does not stall later eligible work');
+  await liveWorkerShutdown(c);
 }
