@@ -1128,3 +1128,169 @@ async fn cross_user_imports_cannot_disclose_private_github_byok_or_custom_prompt
         assert_eq!(row.try_get::<String, _>(0).unwrap(), secret);
     }
 }
+
+// Poll exactly once, without sleeps or scheduling assumptions. Polling the fence
+// also closes admission before any subsequent assertion/operation.
+async fn assert_fence_pending(
+    mut fence: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
+) {
+    std::future::poll_fn(|cx| {
+        assert!(fence.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn quota_fence_tracks_live_owner_then_drop_cleanup_behind_held_db() {
+    let (_dir, mut service, _) = fixture().await;
+    let gate = Arc::new(Gate {
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Notify::new(),
+    });
+    service.completion = gate.clone();
+    let clone = service.clone();
+    let task = tokio::spawn(async move {
+        clone
+            .summarize(
+                1,
+                request("tldr", "https://example.test/fence"),
+                CancellationToken::new(),
+            )
+            .await
+    });
+    gate.entered.acquire().await.unwrap().forget();
+    let held = service.db.connection().await.unwrap();
+    let clone = service.clone();
+    let mut fence = Box::pin(service.shutdown_quota_cleanup());
+    let mut other_fence = Box::pin(clone.shutdown_quota_cleanup());
+    assert_fence_pending(fence.as_mut()).await;
+    assert_fence_pending(other_fence.as_mut()).await;
+    // Admission must fail without even waiting for the held DB, across clones.
+    assert!(matches!(
+        clone
+            .summarize(
+                1,
+                request("tldr", "https://example.test/late"),
+                CancellationToken::new()
+            )
+            .await,
+        Err(Error::Code("shutting_down"))
+    ));
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    // The owner is gone, but its token moved to DB cleanup: neither fence can
+    // observe an empty tracker while the DB guard blocks that cleanup.
+    assert_fence_pending(fence.as_mut()).await;
+    assert_fence_pending(other_fence.as_mut()).await;
+    // Cancelling a waiter must neither reopen admission nor detach cleanup.
+    drop(fence);
+    let mut fence = Box::pin(service.shutdown_quota_cleanup());
+    assert_fence_pending(fence.as_mut()).await;
+    let count: i64 = query("SELECT count(*) FROM insight_native_reservations")
+        .fetch_one(&*held)
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(count, 1);
+    drop(held);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(fence, other_fence);
+    })
+    .await
+    .unwrap();
+    let count: i64 = query("SELECT count(*) FROM insight_native_reservations")
+        .fetch_one(&service.db)
+        .await
+        .unwrap()
+        .try_get(0)
+        .unwrap();
+    assert_eq!(count, 0);
+    for table in ["insight_native_cache", "insight_usage_log"] {
+        let count: i64 = query(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&service.db)
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+    // Repeated waits remain ready, even while DB access is impossible.
+    let _held = service.db.connection().await.unwrap();
+    let mut repeated = Box::pin(clone.shutdown_quota_cleanup());
+    std::future::poll_fn(|cx| {
+        assert!(repeated.as_mut().poll(cx).is_ready());
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn quota_fence_after_transactional_deletion_has_no_redundant_cleanup() {
+    let (_dir, service, _) = fixture().await;
+    service
+        .summarize(
+            1,
+            request("tldr", "https://example.test/committed"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let _held = service.db.connection().await.unwrap();
+    let mut fence = Box::pin(service.shutdown_quota_cleanup());
+    std::future::poll_fn(|cx| {
+        assert!(fence.as_mut().poll(cx).is_ready());
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn quota_fence_after_explicit_cached_release_has_no_redundant_cleanup() {
+    let (_dir, mut service, _) = fixture().await;
+    service.config.tldr_limit = 0;
+    let r = request("tldr", "https://example.test/released");
+    service
+        .summarize(1, r.clone(), CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        service
+            .summarize(1, r, CancellationToken::new())
+            .await
+            .unwrap()
+            .cached
+    );
+    let _held = service.db.connection().await.unwrap();
+    let mut fence = Box::pin(service.shutdown_quota_cleanup());
+    std::future::poll_fn(|cx| {
+        assert!(fence.as_mut().poll(cx).is_ready());
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn quota_admission_after_empty_shutdown_is_closed_across_clones() {
+    let (_dir, service, llm) = fixture().await;
+    let clone = service.clone();
+    tokio::join!(
+        service.shutdown_quota_cleanup(),
+        clone.shutdown_quota_cleanup()
+    );
+    let _held = service.db.connection().await.unwrap();
+    for command in ["tldr", "summary"] {
+        assert!(matches!(
+            clone
+                .summarize(
+                    1,
+                    request(command, "https://youtu.be/abcdefghijk"),
+                    CancellationToken::new()
+                )
+                .await,
+            Err(Error::Code("shutting_down"))
+        ));
+    }
+    assert_eq!(llm.0.load(Ordering::SeqCst), 0);
+}

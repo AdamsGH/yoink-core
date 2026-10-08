@@ -1,5 +1,10 @@
 //! Insight use cases and product-owned adapters. Content retrieval is delegated to
 //! a confined worker; provider credentials never cross the frontend boundary.
+//!
+//! Before closing the database, coordinators must drain adapters, cancel/join
+//! content and OAuth work, then await [`Insight::shutdown_quota_cleanup`]. The
+//! fence permanently closes quota admission and joins reservation drop cleanup
+//! across all clones; it does not itself cancel live requests.
 pub mod content;
 pub mod http;
 pub mod inbox;

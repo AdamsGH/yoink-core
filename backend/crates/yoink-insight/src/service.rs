@@ -9,8 +9,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{sync::Arc, time::Duration};
-use tokio_util::sync::CancellationToken;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio_util::{
+    sync::CancellationToken,
+    task::{TaskTracker, task_tracker::TaskTrackerToken},
+};
 use turso::transaction::{Transaction, TransactionBehavior};
 use yoink_access::{FeatureSpec, Grant, Principal, Role, effective_grant};
 use yoink_db::{Database, Executor, query};
@@ -71,6 +77,7 @@ pub struct Insight {
     pub completion: Arc<dyn Completion>,
     pub research: Option<Arc<dyn crate::research::Research>>,
     access_change_callback: Option<AccessChangeCallback>,
+    quota_lifecycle: Arc<QuotaLifecycle>,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Request {
@@ -121,7 +128,22 @@ impl Insight {
             completion,
             research: None,
             access_change_callback: None,
+            quota_lifecycle: Arc::new(QuotaLifecycle::default()),
         })
+    }
+    /// Permanently close quota admission across all clones and wait for live
+    /// reservation owners and their drop cleanup. Idempotent and cancellation-safe:
+    /// cancelling this wait does not reopen admission or cancel cleanup. The
+    /// coordinator must drain adapters and cancel/join content and OAuth work
+    /// before awaiting this fence, and keep the DB and Tokio runtime open until it
+    /// returns. DB cleanup failures retain the reservation expiry backstop.
+    pub async fn shutdown_quota_cleanup(&self) {
+        {
+            let mut closing = self.quota_lifecycle.closing.lock().unwrap();
+            *closing = true;
+            self.quota_lifecycle.tracker.close();
+        }
+        self.quota_lifecycle.tracker.wait().await;
     }
     /// Install a notifier before cloning the service into adapters. Builders preserve it.
     pub fn with_access_change_callback(mut self, callback: AccessChangeCallback) -> Self {
@@ -576,11 +598,13 @@ impl Insight {
                 Utc::now().timestamp_nanos_opt().unwrap_or(0)
             ))
         );
-        let cleanup = QuotaReservation {
+        let mut cleanup = QuotaReservation {
             db: self.db.clone(),
             id: reservation_id.clone(),
+            token: Some(self.quota_lifecycle.admit()?),
+            armed: false,
         };
-        let operation = self.run(uid, &request, sink, child.clone(), &reservation_id);
+        let operation = self.run(uid, &request, sink, child.clone(), &mut cleanup);
         let result = tokio::select! {biased;_=cancel.cancelled()=>Err(Error::Code("cancelled")),r=tokio::time::timeout(self.config.request_timeout,operation)=>r.unwrap_or(Err(Error::Code("timeout")))};
         child.cancel();
         cleanup.release().await;
@@ -635,7 +659,7 @@ impl Insight {
         r: &Request,
         sink: Option<&dyn crate::provider::DeltaSink>,
         cancel: CancellationToken,
-        reservation_id: &str,
+        cleanup: &mut QuotaReservation,
     ) -> Result<Summary, Error> {
         let url = normalize(&r.url)?;
         let video = video_id(&url);
@@ -711,11 +735,11 @@ impl Insight {
             self.authorize(&*c, uid, Some(feature), false).await?;
             self.routes(&*c, uid, &r.command).await?
         };
-        let mut reservation = if feature == "tldr" {
-            Some(self.reserve_quota(uid, feature, reservation_id).await?)
-        } else {
-            None
-        };
+        let mut reserved = false;
+        if feature == "tldr" {
+            self.reserve_quota(uid, feature, cleanup).await?;
+            reserved = true;
+        }
         let instruction = prompts::build(
             &r.command,
             &lang,
@@ -844,8 +868,8 @@ impl Insight {
             r.focus.as_deref(),
             &research,
         );
-        if reservation.is_none() {
-            reservation = Some(self.reserve_quota(uid, feature, reservation_id).await?);
+        if !reserved {
+            self.reserve_quota(uid, feature, cleanup).await?;
         }
         let outcome = if let Some(sink) = sink {
             let guarded = AuthorizedSink {
@@ -888,7 +912,7 @@ impl Insight {
                     .map_err(|_| Error::Database)?;
                 let saved=async {
                 if r.focus.is_none() { query("INSERT INTO insight_native_cache(cache_key,user_id,result,expires_at) VALUES(?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET result=excluded.result,expires_at=excluded.expires_at").bind(&key).bind(uid).bind(&result).bind(Utc::now()+chrono::Duration::hours(24)).execute(&*tx).await?; }
-                if let Some(lease) = &reservation { query("DELETE FROM insight_native_reservations WHERE id=?").bind(&lease.id).execute(&*tx).await?; }
+                query("DELETE FROM insight_native_reservations WHERE id=?").bind(&cleanup.id).execute(&*tx).await?;
                 self.log(
                     &*tx,
                     uid,
@@ -912,6 +936,7 @@ impl Insight {
                         return Err(error);
                     }
                 }
+                cleanup.armed = false;
                 Ok(Summary {
                     result,
                     cached: false,
@@ -1011,18 +1036,44 @@ impl crate::provider::DeltaSink for AuthorizedSink<'_> {
     }
 }
 
+/// Shared admission gate and owner/cleanup lifetime tracking across clones.
+#[derive(Default)]
+struct QuotaLifecycle {
+    closing: Mutex<bool>,
+    tracker: TaskTracker,
+}
+impl QuotaLifecycle {
+    fn admit(&self) -> Result<TaskTrackerToken, Error> {
+        let closing = self.closing.lock().unwrap();
+        if *closing {
+            return Err(Error::Code("shutting_down"));
+        }
+        // close() alone permits late tokens/spawns. Serialize registration with
+        // closing, then retain this token until the owner/cleanup is finished.
+        Ok(self.tracker.token())
+    }
+}
 /// A dropped/cancelled future releases its admission lease without permitting a
 /// partial response to commit. The expiry is a crash/restart backstop only.
 struct QuotaReservation {
     db: Database,
     id: String,
+    token: Option<TaskTrackerToken>,
+    armed: bool,
 }
 impl Drop for QuotaReservation {
     fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
         let db = self.db.clone();
         let id = self.id.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let token = self.token.take();
             runtime.spawn(async move {
+                // Move, rather than replace, the live token: no empty-tracker gap
+                // is possible even when shutdown has already closed the tracker.
+                let _token = token;
                 if let Ok(connection) = db.connection().await {
                     let _ = query("DELETE FROM insight_native_reservations WHERE id=?")
                         .bind(id)
@@ -1038,8 +1089,11 @@ impl Insight {
         &self,
         uid: i64,
         feature: &str,
-        reservation_id: &str,
-    ) -> Result<QuotaReservation, Error> {
+        cleanup: &mut QuotaReservation,
+    ) -> Result<(), Error> {
+        if *self.quota_lifecycle.closing.lock().unwrap() {
+            return Err(Error::Code("shutting_down"));
+        }
         let mut connection = self.db.connection().await?;
         self.authorize(&*connection, uid, Some(feature), false)
             .await?;
@@ -1066,23 +1120,29 @@ impl Insight {
             transaction.rollback().await.map_err(|_| Error::Database)?;
             return Err(Error::Code("quota_exceeded"));
         }
-        let id = reservation_id.to_owned();
-        query("INSERT INTO insight_native_reservations(id,user_id,command,created_at,expires_at) VALUES(?,?,?,?,?)").bind(&id).bind(uid).bind(feature).bind(now).bind(now + chrono::Duration::seconds(self.config.request_timeout.as_secs() as i64 + 5)).execute(&*transaction).await?;
+        let id = &cleanup.id;
+        // Arm before insertion/commit: cancellation may leave commit outcome
+        // uncertain. Drop cleanup is serialized behind the held DB connection.
+        cleanup.armed = true;
+        query("INSERT INTO insight_native_reservations(id,user_id,command,created_at,expires_at) VALUES(?,?,?,?,?)").bind(id).bind(uid).bind(feature).bind(now).bind(now + chrono::Duration::seconds(self.config.request_timeout.as_secs() as i64 + 5)).execute(&*transaction).await?;
         transaction.commit().await.map_err(|_| Error::Database)?;
-        Ok(QuotaReservation {
-            db: self.db.clone(),
-            id,
-        })
+        Ok(())
     }
 }
 
 impl QuotaReservation {
-    async fn release(&self) {
-        if let Ok(connection) = self.db.connection().await {
-            let _ = query("DELETE FROM insight_native_reservations WHERE id=?")
+    async fn release(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(connection) = self.db.connection().await
+            && query("DELETE FROM insight_native_reservations WHERE id=?")
                 .bind(&self.id)
                 .execute(&*connection)
-                .await;
+                .await
+                .is_ok()
+        {
+            self.armed = false;
         }
     }
 }

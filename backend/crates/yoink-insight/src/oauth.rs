@@ -3,7 +3,14 @@ use crate::{Error, Insight, invalid};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use turso::transaction::{Transaction, TransactionBehavior};
@@ -24,10 +31,44 @@ struct Flow {
     cancel: CancellationToken,
     generation: u64,
 }
+// Owns an admitted generation until a tracked poller takes responsibility.
+// Drop must also work when the request future is abandoned while awaiting I/O.
+struct AdmissionGuard {
+    flows: Arc<Mutex<HashMap<(i64, bool), Flow>>>,
+    tracker: tokio_util::task::TaskTracker,
+    key: (i64, bool),
+    generation: u64,
+    cancel: CancellationToken,
+    armed: bool,
+}
+impl Drop for AdmissionGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.cancel.cancel();
+        let key = self.key;
+        let generation = self.generation;
+        let remove = move |flows: &mut HashMap<(i64, bool), Flow>| {
+            if flows.get(&key).is_some_and(|f| f.generation == generation) {
+                flows.remove(&key);
+            }
+        };
+        if let Ok(mut flows) = self.flows.try_lock() {
+            remove(&mut flows);
+        } else {
+            let flows = self.flows.clone();
+            self.tracker.spawn(async move {
+                remove(&mut *flows.lock().await);
+            });
+        }
+    }
+}
 #[derive(Clone)]
 pub struct DeviceOAuth {
     service: Insight,
     flows: Arc<Mutex<HashMap<(i64, bool), Flow>>>,
+    next_generation: Arc<AtomicU64>,
     client: reqwest::Client,
     base: String,
     user_url: String,
@@ -114,6 +155,7 @@ impl DeviceOAuth {
         Ok(Self {
             service,
             flows: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: Arc::new(AtomicU64::new(1)),
             client: reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -223,17 +265,23 @@ impl DeviceOAuth {
         let cancel = self.shutdown.child_token();
         let generation = {
             let mut flows = self.flows.lock().await;
+            let now = Utc::now();
             flows.retain(|_, f| {
-                f.status.status == "pending"
-                    || f.status.expires_at + chrono::Duration::hours(1) > Utc::now()
+                let keep = if f.status.status == "pending" {
+                    f.status.expires_at > now
+                } else {
+                    f.status.expires_at + chrono::Duration::hours(1) > now
+                };
+                if !keep {
+                    f.cancel.cancel();
+                }
+                keep
             });
             if flows.len() >= 1024 && !flows.contains_key(&(uid, write)) {
                 return Err(Error::Code("oauth_capacity"));
             }
-            let generation = flows
-                .get(&(uid, write))
-                .map(|f| f.generation + 1)
-                .unwrap_or(1);
+            // Never reuse a generation, including after cancel/retention removes it.
+            let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
             if let Some(old) = flows.remove(&(uid, write)) {
                 old.cancel.cancel()
             }
@@ -255,20 +303,21 @@ impl DeviceOAuth {
             );
             generation
         };
+        let mut admission = AdmissionGuard {
+            flows: self.flows.clone(),
+            tracker: self.tracker.clone(),
+            key: (uid, write),
+            generation,
+            cancel: cancel.clone(),
+            armed: true,
+        };
         let data = self
             .post(
                 "/login/device/code",
                 json!({"client_id":client,"scope":if write{"public_repo"}else{"read:user"}}),
                 &cancel,
             )
-            .await;
-        let data = match data {
-            Ok(data) => data,
-            Err(e) => {
-                self.finish(uid, write, generation, "error").await;
-                return Err(e);
-            }
-        };
+            .await?;
         let code = data["device_code"]
             .as_str()
             .ok_or(Error::Code("oauth_invalid_response"))?
@@ -304,6 +353,7 @@ impl DeviceOAuth {
             this.poll(uid, write, generation, client, code, cancel)
                 .await;
         });
+        admission.armed = false;
         Ok(status)
     }
     pub async fn shutdown(&self) {

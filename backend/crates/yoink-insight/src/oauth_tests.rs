@@ -480,3 +480,186 @@ async fn held_database_fences_shutdown_cancel_and_expiry_for_both_token_types() 
         }
     }
 }
+
+// A notification barrier proves start has admitted its flow and is inside the
+// provider call. No sleeps or external provider behavior determine these races.
+async fn admission_endpoint(
+    oauth: &mut DeviceOAuth,
+    response: Value,
+    revoke: bool,
+) -> (
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+    tokio::task::JoinHandle<()>,
+) {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let e = entered.clone();
+    let r = release.clone();
+    let service = oauth.service.clone();
+    let app = Router::new().route(
+        "/login/device/code",
+        post(move || {
+            let entered = e.clone();
+            let release = r.clone();
+            let response = response.clone();
+            let service = service.clone();
+            async move {
+                entered.notify_one();
+                release.notified().await;
+                if revoke {
+                    query("UPDATE users SET role='banned' WHERE id=1")
+                        .execute(&service.db)
+                        .await
+                        .unwrap();
+                }
+                Json(response)
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    oauth.base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (entered, release, server)
+}
+async fn entered_start(entered: &tokio::sync::Notify) {
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+}
+fn device_response() -> Value {
+    json!({"device_code":"secret", "user_code":"USER", "expires_in":30, "interval":60})
+}
+
+#[tokio::test]
+async fn malformed_device_response_removes_admission_for_both_scopes() {
+    for write in [false, true] {
+        for response in [json!({"user_code":"USER"}), json!({"device_code":"secret"})] {
+            let (_dir, mut o, original) = fixture(json!({})).await;
+            let (entered, release, server) = admission_endpoint(&mut o, response, false).await;
+            let copy = o.clone();
+            let start = tokio::spawn(async move { copy.start(1, write).await });
+            entered_start(&entered).await;
+            let cancel = o.flows.lock().await[&(1, write)].cancel.clone();
+            release.notify_one();
+            assert!(matches!(
+                start.await.unwrap(),
+                Err(Error::Code("oauth_invalid_response"))
+            ));
+            assert!(cancel.is_cancelled());
+            assert_eq!(o.status(1, write).await.unwrap()["status"], "none");
+            o.shutdown().await;
+            original.abort();
+            server.abort();
+        }
+    }
+}
+
+#[tokio::test]
+async fn revocation_during_start_removes_admission() {
+    let (_dir, mut o, original) = fixture(json!({})).await;
+    let (entered, release, server) = admission_endpoint(&mut o, device_response(), true).await;
+    let copy = o.clone();
+    let start = tokio::spawn(async move { copy.start(1, false).await });
+    entered_start(&entered).await;
+    let cancel = o.flows.lock().await[&(1, false)].cancel.clone();
+    release.notify_one();
+    assert!(start.await.unwrap().is_err());
+    assert!(cancel.is_cancelled());
+    assert!(o.flows.lock().await.is_empty());
+    o.shutdown().await;
+    original.abort();
+    server.abort();
+}
+
+#[tokio::test]
+async fn dropped_start_cleans_up_even_when_flow_lock_is_contended() {
+    let (_dir, mut o, original) = fixture(json!({})).await;
+    let (entered, _release, server) = admission_endpoint(&mut o, device_response(), false).await;
+    let copy = o.clone();
+    let start = tokio::spawn(async move { copy.start(1, false).await });
+    entered_start(&entered).await;
+    let flows = o.flows.lock().await;
+    let cancel = flows[&(1, false)].cancel.clone();
+    start.abort();
+    assert!(start.await.unwrap_err().is_cancelled());
+    assert!(cancel.is_cancelled());
+    drop(flows);
+    o.shutdown().await; // Joins the tracked Drop cleanup too.
+    assert!(o.flows.lock().await.is_empty());
+    original.abort();
+    server.abort();
+}
+
+#[tokio::test]
+async fn expired_pending_entries_release_capacity_and_cancel_before_removal() {
+    let (_dir, o, server) = fixture(json!({})).await;
+    let expired = CancellationToken::new();
+    {
+        let mut flows = o.flows.lock().await;
+        for uid in 2..1026 {
+            flows.insert(
+                (uid, false),
+                Flow {
+                    status: Status {
+                        user_code: String::new(),
+                        verification_uri: String::new(),
+                        expires_at: Utc::now() - chrono::Duration::seconds(1),
+                        interval: 5,
+                        status: "pending".into(),
+                        error: None,
+                        username: None,
+                    },
+                    cancel: expired.child_token(),
+                    generation: 0,
+                },
+            );
+        }
+    }
+    let tokens: Vec<_> = o
+        .flows
+        .lock()
+        .await
+        .values()
+        .map(|f| f.cancel.clone())
+        .collect();
+    o.start(1, false).await.unwrap();
+    assert!(tokens.iter().all(CancellationToken::is_cancelled));
+    assert_eq!(o.flows.lock().await.len(), 1);
+    o.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn stale_dropped_start_cannot_remove_replacement_after_cancel() {
+    let (_dir, mut o, original) = fixture(json!({})).await;
+    let (entered, _release, server) = admission_endpoint(&mut o, device_response(), false).await;
+    // Keep the old request future alive even after its cancellation token fires.
+    let mut old = Box::pin(o.start(1, false));
+    tokio::select! {
+        result = &mut old => panic!("unexpected start result: {}", result.is_ok()),
+        _ = entered_start(&entered) => {}
+    }
+    let old_generation = o.flows.lock().await[&(1, false)].generation;
+    o.cancel(1, false).await.unwrap();
+    let copy = o.clone();
+    let replacement = tokio::spawn(async move { copy.start(1, false).await });
+    entered_start(&entered).await;
+    let new_generation = o.flows.lock().await[&(1, false)].generation;
+    assert_ne!(old_generation, new_generation);
+    // Force asynchronous guard cleanup and prove it does not touch the new entry.
+    let flows = o.flows.lock().await;
+    let cancel = flows[&(1, false)].cancel.clone();
+    drop(old);
+    drop(flows);
+    o.tracker.close();
+    o.tracker.wait().await;
+    assert_eq!(o.flows.lock().await[&(1, false)].generation, new_generation);
+    assert!(!cancel.is_cancelled());
+    replacement.abort();
+    assert!(replacement.await.unwrap_err().is_cancelled());
+    o.shutdown().await;
+    assert!(o.flows.lock().await.is_empty());
+    original.abort();
+    server.abort();
+}
