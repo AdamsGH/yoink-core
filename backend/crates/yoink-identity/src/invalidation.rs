@@ -13,6 +13,12 @@ impl IdentityStore {
         self.changes.send_replace(());
     }
 
+    /// Call after a product commits access changes. Subscribers reload current
+    /// authority; the signal carries no grants or identities.
+    pub fn notify_committed_access_change(&self) {
+        self.invalidate();
+    }
+
     pub async fn access_groups_after(&self, after: i64) -> Result<Vec<i64>, IdentityError> {
         query(include_str!("sql/access_groups.sql"))
             .bind(after)

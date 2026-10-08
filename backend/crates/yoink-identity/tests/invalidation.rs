@@ -45,6 +45,24 @@ fn changed(receiver: &mut tokio::sync::watch::Receiver<()>) {
 }
 
 #[tokio::test]
+async fn external_committed_access_changes_signal_without_receivers_or_authority_payload() {
+    let (_dir, store) = setup().await;
+    store.notify_committed_access_change();
+    let mut receiver = store.subscribe_changes();
+    assert!(!receiver.has_changed().unwrap());
+    let before = store.snapshot(43, None).await.unwrap().unwrap();
+    store.notify_committed_access_change();
+    store.notify_committed_access_change();
+    changed(&mut receiver);
+    assert!(!receiver.has_changed().unwrap());
+    let after = store.snapshot(43, None).await.unwrap().unwrap();
+    assert_eq!(after.principal, before.principal);
+    assert_eq!(after.grants, before.grants);
+    assert_eq!(after.providers, before.providers);
+    assert_eq!(after.language, before.language);
+}
+
+#[tokio::test]
 async fn identity_language_role_grant_and_config_changes_signal_only_after_commit() {
     let (_dir, store) = setup().await;
     let mut receiver = store.subscribe_changes();
