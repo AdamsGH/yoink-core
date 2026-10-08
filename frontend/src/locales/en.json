@@ -547,6 +547,15 @@
     "tab_import": "Import History"
   },
   "insight": {
+    "credential": {
+      "replace_placeholder": "New key to replace...",
+      "new_placeholder": "Enter API key...",
+      "stored": "Key stored",
+      "not_set": "Key not set",
+      "will_clear": "Key will be removed on save.",
+      "clear": "Clear stored key",
+      "undo": "Undo key change"
+    },
     "nav_settings": "AI Settings",
     "nav_access": "Insight Access",
     "settings_title": "AI Insight Settings",

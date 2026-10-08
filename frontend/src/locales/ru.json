@@ -547,6 +547,15 @@
     "tab_import": "Импорт истории"
   },
   "insight": {
+    "credential": {
+      "replace_placeholder": "Новый ключ для замены...",
+      "new_placeholder": "Введите API-ключ...",
+      "stored": "Ключ сохранён",
+      "not_set": "Ключ не задан",
+      "will_clear": "Ключ будет удалён при сохранении.",
+      "clear": "Удалить сохранённый ключ",
+      "undo": "Отменить изменение ключа"
+    },
     "nav_settings": "Настройки AI",
     "nav_access": "Доступ к Insight",
     "settings_title": "Настройки AI Insight",
