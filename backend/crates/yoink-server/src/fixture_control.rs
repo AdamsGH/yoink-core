@@ -2,7 +2,7 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::Path,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -16,6 +16,64 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use yoink_storage::Store;
+use yoink_telegram::confirmation_hold::{ArmError, ConfirmationHold, HoldState};
+
+const CONFIRMATION_DURATION: Duration = Duration::from_secs(120);
+type ConfirmationState = Arc<Mutex<Option<ConfirmationHold>>>;
+
+fn hold_response(hold: &ConfirmationHold) -> Value {
+    let status = hold.status().map(|status| {
+        let state = match status.state {
+            HoldState::Armed => "armed",
+            HoldState::Entered => "entered",
+            HoldState::Released => "released",
+            HoldState::Expired => "expired",
+            HoldState::Dropped => "dropped",
+        };
+        json!({"token": status.token, "state": state})
+    });
+    json!({"ok": true, "hold": status})
+}
+
+// Clone only: neither a native hold method nor DB/async work runs under this lock.
+fn confirmation_command(
+    shared: &ConfirmationState,
+    request: &Request,
+) -> Result<Value, FixtureError> {
+    if request.mode == "confirmation_status" && !request.sql.is_empty() {
+        return Err(FixtureError("invalid_request"));
+    }
+    let hold = shared
+        .lock()
+        .map_err(|_| FixtureError("confirmation_unavailable"))?
+        .clone()
+        .ok_or(FixtureError("confirmation_unavailable"))?;
+    match request.mode.as_str() {
+        "confirmation_arm" => hold
+            .arm(&request.sql, CONFIRMATION_DURATION)
+            .map_err(|error| match error {
+                ArmError::Invalid => FixtureError("confirmation_invalid"),
+                ArmError::Outstanding => FixtureError("confirmation_outstanding"),
+            })?,
+        "confirmation_status" => {}
+        "replay_status" => {
+            let fenced = hold
+                .replay_status(&request.sql)
+                .map_err(|error| match error {
+                    ArmError::Invalid => FixtureError("replay_invalid"),
+                    ArmError::Outstanding => FixtureError("replay_outstanding"),
+                })?;
+            return Ok(json!({"ok": true, "token": request.sql, "fenced": fenced}));
+        }
+        "confirmation_release" => {
+            if !hold.release(&request.sql) {
+                return Err(FixtureError("confirmation_release_mismatch"));
+            }
+        }
+        _ => return Err(FixtureError("invalid_request")),
+    }
+    Ok(hold_response(&hold))
+}
 
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -98,8 +156,23 @@ async fn execute(
     expected_token: &str,
     request: Request,
 ) -> Result<Value, FixtureError> {
+    execute_with_confirmation(store, expected_token, request, &Arc::new(Mutex::new(None))).await
+}
+
+async fn execute_with_confirmation(
+    store: &Store,
+    expected_token: &str,
+    request: Request,
+    confirmation: &ConfirmationState,
+) -> Result<Value, FixtureError> {
     if !authenticated(&request.token, expected_token) {
         return Err(FixtureError("unauthorized"));
+    }
+    if matches!(
+        request.mode.as_str(),
+        "confirmation_arm" | "confirmation_status" | "confirmation_release" | "replay_status"
+    ) {
+        return confirmation_command(confirmation, &request);
     }
     if request.sql.is_empty() || request.sql.len() > MAX_SQL_BYTES {
         return Err(FixtureError("invalid_request"));
@@ -182,11 +255,16 @@ async fn read_request(stream: &mut TcpStream) -> Result<Vec<u8>, FixtureError> {
     Ok(line)
 }
 
-async fn handle_connection(mut stream: TcpStream, store: Arc<Store>, token: Arc<String>) {
+async fn handle_connection(
+    mut stream: TcpStream,
+    store: Arc<Store>,
+    token: Arc<String>,
+    confirmation: ConfirmationState,
+) {
     let response = match timeout(REQUEST_TIMEOUT, async {
         let bytes = read_request(&mut stream).await?;
         let request = parse_request(&bytes)?;
-        execute(&store, &token, request).await
+        execute_with_confirmation(&store, &token, request, &confirmation).await
     })
     .await
     {
@@ -221,11 +299,14 @@ pub fn token_from_env() -> Result<String, &'static str> {
     Ok(token)
 }
 
-pub async fn serve(
+/// Fixture-only control with a handle that may be installed after serving starts.
+/// Hold commands are synchronous and never acquire a database connection.
+pub async fn serve_with_confirmation(
     listener: TcpListener,
     store: Arc<Store>,
     token: String,
     shutdown: CancellationToken,
+    confirmation: Arc<Mutex<Option<ConfirmationHold>>>,
 ) -> io::Result<()> {
     let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let mut tasks = JoinSet::new();
@@ -251,9 +332,10 @@ pub async fn serve(
                 };
                 let store = store.clone();
                 let token = Arc::new(token.clone());
+                let confirmation = confirmation.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
-                    handle_connection(stream, store, token).await;
+                    handle_connection(stream, store, token, confirmation).await;
                 });
             }
         }
@@ -299,7 +381,7 @@ mod tests {
 
     struct TempDb {
         directory: std::path::PathBuf,
-        store: Store,
+        store: Arc<Store>,
     }
 
     impl TempDb {
@@ -320,7 +402,10 @@ mod tests {
                 .await
                 .unwrap();
             store.migrate().await.unwrap();
-            Self { directory, store }
+            Self {
+                directory,
+                store: Arc::new(store),
+            }
         }
     }
 
@@ -338,6 +423,210 @@ mod tests {
             sql: sql.to_owned(),
             mode: mode.to_owned(),
         }
+    }
+
+    #[tokio::test]
+    async fn confirmation_auth_and_malformed_requests_do_not_mutate() {
+        let db = TempDb::new().await;
+        let hold = ConfirmationHold::default();
+        let shared = Arc::new(Mutex::new(Some(hold.clone())));
+        for mode in [
+            "confirmation_arm",
+            "confirmation_status",
+            "confirmation_release",
+            "replay_status",
+        ] {
+            let mut bad = request("secret-effect", mode);
+            bad.token = "wrong".into();
+            let error = execute_with_confirmation(&db.store, TOKEN, bad, &shared)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.response(),
+                json!({"ok": false, "error": "unauthorized"})
+            );
+            assert!(hold.status().is_none());
+        }
+        for value in [
+            json!({"token": TOKEN, "sql": "x", "mode": "confirmation_arm", "extra": 1}),
+            json!({"token": TOKEN, "mode": "confirmation_status"}),
+            json!({"token": TOKEN, "sql": null, "mode": "confirmation_release"}),
+            json!({"token": TOKEN, "sql": "", "mode": 1}),
+        ] {
+            assert_eq!(
+                parse_request(&serde_json::to_vec(&value).unwrap())
+                    .unwrap_err()
+                    .0,
+                "invalid_request"
+            );
+        }
+        assert_eq!(
+            confirmation_command(&shared, &request("not empty", "confirmation_status"))
+                .unwrap_err()
+                .0,
+            "invalid_request"
+        );
+        assert!(hold.status().is_none());
+        let line =
+            serde_json::to_vec(&json!({"token": TOKEN, "sql": "", "mode": "confirmation_status"}))
+                .unwrap();
+        assert_eq!(
+            offline_request(&db.store, TOKEN, &line).await["error"],
+            "confirmation_unavailable"
+        );
+    }
+
+    #[test]
+    fn replay_observation_validates_and_preserves_reads() {
+        let shared = Arc::new(Mutex::new(Some(ConfirmationHold::default())));
+        assert_eq!(
+            confirmation_command(&shared, &request("", "replay_status"))
+                .unwrap_err()
+                .0,
+            "replay_invalid"
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                confirmation_command(&shared, &request("effect", "replay_status")).unwrap(),
+                json!({"ok": true, "token": "effect", "fenced": 0})
+            );
+        }
+        assert_eq!(
+            confirmation_command(&shared, &request("other", "replay_status"))
+                .unwrap_err()
+                .0,
+            "replay_outstanding"
+        );
+    }
+
+    #[test]
+    fn confirmation_admission_exact_release_and_status() {
+        let shared = Arc::new(Mutex::new(None));
+        for mode in [
+            "confirmation_arm",
+            "confirmation_status",
+            "confirmation_release",
+        ] {
+            assert_eq!(
+                confirmation_command(&shared, &request("", mode))
+                    .unwrap_err()
+                    .0,
+                "confirmation_unavailable"
+            );
+        }
+        let hold = ConfirmationHold::default();
+        *shared.lock().unwrap() = Some(hold.clone());
+        assert_eq!(
+            confirmation_command(&shared, &request("", "confirmation_status")).unwrap(),
+            json!({"ok": true, "hold": null})
+        );
+        for token in [String::new(), "x".repeat(513)] {
+            assert_eq!(
+                confirmation_command(&shared, &request(&token, "confirmation_arm"))
+                    .unwrap_err()
+                    .0,
+                "confirmation_invalid"
+            );
+        }
+        // No trimming or SQL interpretation: this is the exact durable effect token.
+        let token = " effect:receipt:42 ";
+        assert_eq!(
+            confirmation_command(&shared, &request(token, "confirmation_arm")).unwrap(),
+            json!({"ok": true, "hold": {"token": token, "state": "armed"}})
+        );
+        assert_eq!(
+            confirmation_command(&shared, &request("other", "confirmation_arm"))
+                .unwrap_err()
+                .0,
+            "confirmation_outstanding"
+        );
+        for mismatch in ["effect:receipt:42", "other", ""] {
+            assert_eq!(
+                confirmation_command(&shared, &request(mismatch, "confirmation_release"))
+                    .unwrap_err()
+                    .response(),
+                json!({"ok": false, "error": "confirmation_release_mismatch"})
+            );
+        }
+        assert_eq!(
+            confirmation_command(&shared, &request("", "confirmation_status")).unwrap()["hold"]["state"],
+            "armed"
+        );
+        assert_eq!(
+            confirmation_command(&shared, &request(token, "confirmation_release")).unwrap(),
+            json!({"ok": true, "hold": {"token": token, "state": "released"}})
+        );
+        assert_eq!(
+            confirmation_command(&shared, &request(token, "confirmation_release"))
+                .unwrap_err()
+                .0,
+            "confirmation_release_mismatch"
+        );
+        confirmation_command(&shared, &request("next", "confirmation_arm")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn confirmation_reports_native_expiry() {
+        assert_eq!(CONFIRMATION_DURATION, Duration::from_secs(120));
+        let hold = ConfirmationHold::default();
+        hold.arm("effect", Duration::from_millis(1)).unwrap();
+        let shared = Arc::new(Mutex::new(Some(hold)));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(
+            confirmation_command(&shared, &request("", "confirmation_status")).unwrap()["hold"]["state"],
+            "expired"
+        );
+    }
+
+    #[tokio::test]
+    async fn serving_observes_late_installation() {
+        let db = TempDb::new().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let shared = Arc::new(Mutex::new(None));
+        let shutdown = CancellationToken::new();
+        let server = tokio::spawn(serve_with_confirmation(
+            listener,
+            db.store.clone(),
+            TOKEN.into(),
+            shutdown.clone(),
+            shared.clone(),
+        ));
+        async fn command(address: SocketAddr, sql: &str, mode: &str) -> Value {
+            let mut stream = TcpStream::connect(address).await.unwrap();
+            let mut encoded =
+                serde_json::to_vec(&json!({"token": TOKEN, "sql": sql, "mode": mode})).unwrap();
+            encoded.push(b'\n');
+            stream.write_all(&encoded).await.unwrap();
+            let mut response = String::new();
+            timeout(
+                Duration::from_secs(1),
+                BufReader::new(stream).read_line(&mut response),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            serde_json::from_str(&response).unwrap()
+        }
+        assert_eq!(
+            command(address, "", "confirmation_status").await["error"],
+            "confirmation_unavailable"
+        );
+        *shared.lock().unwrap() = Some(ConfirmationHold::default());
+        assert_eq!(
+            command(address, "effect", "confirmation_arm").await["hold"]["state"],
+            "armed"
+        );
+        assert_eq!(
+            command(address, "", "confirmation_status").await["hold"]["token"],
+            "effect"
+        );
+        assert_eq!(
+            command(address, "effect", "confirmation_release").await["hold"]["state"],
+            "released"
+        );
+        shutdown.cancel();
+        server.await.unwrap().unwrap();
     }
 
     #[tokio::test]

@@ -74,7 +74,8 @@ COPY --from=launcher-build /yoink-worker-launcher /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/yoink-worker-launcher"]
 
 FROM worker-runtime AS runtime-base
-COPY --from=rust-build /yoink-server /yoink-worker-launcher /usr/local/bin/
+COPY --from=rust-build /yoink-server /usr/local/bin/
+COPY --from=launcher-build /yoink-worker-launcher /usr/local/bin/
 EXPOSE 8088
 ENTRYPOINT ["/usr/local/bin/yoink-server"]
 

@@ -118,6 +118,13 @@ test('HTTP helper caps streamed responses before JSON parsing', async () => {
   try { await assert.rejects(api(`http://127.0.0.1:${server.address().port}`)('/large'), /exceeds fixture bound/); }
   finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
+test('unexpected HTTP status never prints issued credentials', async () => {
+  const secret='issued-fixture-credential';
+  const server=http.createServer((req,res)=>{res.writeHead(500);res.end(JSON.stringify({access_token:secret,api_key:secret}));});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {await assert.rejects(api(`http://127.0.0.1:${server.address().port}`)('/api/v1/auth/token'),error=>{assert(!error.message.includes(secret));return true;});}
+  finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});
 test('trusted service rejects oversized request bodies', async () => {
   const service = await new TrustedServices().start();
   try { await assert.rejects(api(service.origin)('/v1/chat/completions', { method: 'POST', body: { messages: [], padding: 'x'.repeat(128 * 1024) } })); }

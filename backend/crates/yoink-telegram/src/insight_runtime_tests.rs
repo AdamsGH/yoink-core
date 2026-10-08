@@ -235,6 +235,7 @@ async fn direct_and_group_dispatch_real_stream_final_and_receipt_binding() {
         assert!(work.await.unwrap());
         upstream.await.unwrap();
         // Same native request cache: no sink deltas, one final render, no LLM call.
+        #[cfg(not(feature = "test-fixtures"))]
         assert!(
             f.runtime
                 .handle(
@@ -244,6 +245,49 @@ async fn direct_and_group_dispatch_real_stream_final_and_receipt_binding() {
                 )
                 .await
         );
+        #[cfg(feature = "test-fixtures")]
+        {
+            use crate::confirmation_hold::HoldState;
+            let hold = f.runtime.delivery.confirmation_hold();
+            let token = format!("insight:123:{chat}:{}:20:0:0", topic.unwrap_or(0));
+            hold.arm(&token, Duration::from_secs(120)).unwrap();
+            let runtime = f.runtime.clone();
+            let cached = tokio::spawn(async move {
+                runtime
+                    .handle(
+                        &message("/tldr https://example.com/a", chat, topic, 20),
+                        42,
+                        "fixture",
+                    )
+                    .await
+            });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while hold.status().unwrap().state != HoldState::Entered {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            // Actual validated final cached Bot API receipt, not a generation delta.
+            let effect = f.ledger.text_effect(&token).await.unwrap().unwrap();
+            assert_ne!(effect.outcome, TextOutcome::Confirmed(91));
+            assert!(effect.identity.unwrap().text.starts_with("Complete"));
+            let drain = f.runtime.drain_handlers();
+            tokio::pin!(drain);
+            assert!(futures::poll!(&mut drain).is_pending());
+            assert!(f.runtime.admit_handler().is_none());
+            cached.abort();
+            assert!(cached.await.unwrap_err().is_cancelled());
+            tokio::time::timeout(Duration::from_secs(2), &mut drain)
+                .await
+                .unwrap();
+            assert_eq!(hold.status().unwrap().state, HoldState::Dropped);
+            assert_ne!(
+                f.ledger.text_effect(&token).await.unwrap().unwrap().outcome,
+                TextOutcome::Confirmed(91)
+            );
+            assert!(f.runtime.active.lock().unwrap().is_empty());
+        }
         let api = tokio::time::timeout(Duration::from_secs(5), telegram)
             .await
             .unwrap()

@@ -9,11 +9,45 @@ pub struct InsightRuntime {
 }
 impl InsightRuntime {
     pub fn new(
+        config: InsightConfig,
+        storage: &yoink_storage::Store,
+        identities: Arc<yoink_identity::IdentityStore>,
+        owner: Option<i64>,
+        shutdown: CancellationToken,
+    ) -> Result<Self, ServerError> {
+        let completion = yoink_insight::provider::HttpCompletion::new(
+            config.service.request_timeout,
+            config.response_bytes,
+        )
+        .map_err(|_| ServerError::InsightStartup)?;
+        Self::compose(config, storage, identities, owner, shutdown, completion)
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn with_fixture_root(
+        config: InsightConfig,
+        storage: &yoink_storage::Store,
+        identities: Arc<yoink_identity::IdentityStore>,
+        owner: Option<i64>,
+        shutdown: CancellationToken,
+        root_der: &[u8],
+    ) -> Result<Self, ServerError> {
+        let completion = yoink_insight::provider::HttpCompletion::with_additional_roots(
+            config.service.request_timeout,
+            config.response_bytes,
+            &[root_der],
+        )
+        .map_err(|_| ServerError::InsightStartup)?;
+        Self::compose(config, storage, identities, owner, shutdown, completion)
+    }
+
+    fn compose(
         mut config: InsightConfig,
         storage: &yoink_storage::Store,
         identities: Arc<yoink_identity::IdentityStore>,
         owner: Option<i64>,
         shutdown: CancellationToken,
+        mut completion: yoink_insight::provider::HttpCompletion,
     ) -> Result<Self, ServerError> {
         config.service.owner_id = owner;
         let executor = yoink_executor::Executor::new(config.executor)
@@ -23,11 +57,6 @@ impl InsightRuntime {
             config.content_timeout,
             config.response_bytes,
             config.content_proxy,
-        )
-        .map_err(|_| ServerError::InsightStartup)?;
-        let mut completion = yoink_insight::provider::HttpCompletion::new(
-            config.service.request_timeout,
-            config.response_bytes,
         )
         .map_err(|_| ServerError::InsightStartup)?;
         if let Some(proxy) = config.openrouter_proxy {

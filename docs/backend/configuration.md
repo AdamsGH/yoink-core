@@ -59,6 +59,7 @@ Telegram is disabled unless enabled explicitly.
 | `YOINK_RUST_OWNER_ID` | unset | Positive ID up to signed 64-bit maximum | Required configured owner identity. |
 | `YOINK_RUST_BOT_API_URL` | unset | HTTP(S) origin without credentials, path, query, or fragment | Optional Bot API endpoint override. |
 | `YOINK_RUST_TELEGRAM_POLL_TIMEOUT_SECS` | `30` | 1 through 50 seconds | Long-poll timeout. |
+| `YOINK_RUST_TELEGRAM_REQUEST_TIMEOUT_SECS` | `60` | 1 through 120 seconds | Total ordinary Bot API request deadline, including response-body reading. Prevents stalled generic replies retaining handler ownership forever. Raw polling keeps its separate twice-poll deadline. |
 | `YOINK_RUST_TELEGRAM_COOKIE_UPLOAD_TIMEOUT_SECS` | `30` | 1 through 60 seconds | Deadline for awaiting Bot API metadata and document content. The file limit is 512 KiB. Local kernel I/O cannot be cancelled, but only one such read can remain outstanding. |
 | `YOINK_RUST_COOKIE_IMPORT_TIMEOUT_SECS` | `30` | 1 through 60 seconds | Total deadline for cookie URL imports, including concurrency wait, DNS, redirects and bounded body streaming. |
 | `YOINK_RUST_COOKIE_IMPORT_PRIVATE_ORIGINS` | `[]` | JSON array of at most 16 exact HTTP(S) literal-IP origins with explicit nonzero ports | Explicit exceptions to the cookie-import public-address policy. No hostname, credentials, path, query, fragment or wildcard. Leave empty unless that private endpoint is deliberately trusted. |

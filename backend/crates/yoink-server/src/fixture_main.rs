@@ -99,6 +99,31 @@ async fn open_store()
     Ok((config, store))
 }
 
+async fn read_insight_fixture_root(
+    path: Option<std::ffi::OsString>,
+) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+    use tokio::io::AsyncReadExt;
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let path = std::path::PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err("fixture Insight root requires an absolute file path".into());
+    }
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| "fixture Insight root file could not be opened")?;
+    let mut bytes = Vec::new();
+    file.take(16385)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|_| "fixture Insight root file could not be read")?;
+    if bytes.is_empty() || bytes.len() > 16384 {
+        return Err("fixture Insight root must contain 1..=16384 DER bytes".into());
+    }
+    Ok(Some(bytes))
+}
+
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let token = fixture_control::token_from_env()
         .map_err(|_| "invalid fixture controller configuration")?;
@@ -106,6 +131,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|_| "fixture controller bind failed")?;
     let signal = termination_signal().map_err(|_| "signal initialization failed")?;
+    let insight_root_der =
+        read_insight_fixture_root(std::env::var_os("YOINK_FIXTURE_INSIGHT_CA_FILE")).await?;
     let (config, store) = open_store().await?;
     // This opt-in belongs exclusively to the fixture entry point. Production
     // startup neither reads the switch nor imports the offline providers.
@@ -130,9 +157,18 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let task_shutdown = control_shutdown.clone();
     let stopped = controller_stopped.clone();
     let task_store = store.clone();
+    let confirmation: runtime::ConfirmationControl = Default::default();
+    let task_confirmation = confirmation.clone();
     let mut controller = tokio::spawn(async move {
         let _stopped = NotifyOnDrop(stopped);
-        fixture_control::serve(listener, task_store, token, task_shutdown).await
+        fixture_control::serve_with_confirmation(
+            listener,
+            task_store,
+            token,
+            task_shutdown,
+            task_confirmation,
+        )
+        .await
     });
     let workspace = config
         .media
@@ -155,22 +191,25 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             _ = controller_stopped.cancelled() => Ok(()),
         }
     };
-    let runtime_result = match cookie_providers {
-        Some((oauth, account, refresh)) => {
-            runtime::run_with_store_and_cookie_providers(
-                config,
-                runtime_signal,
-                store.clone(),
-                Some(runtime::CookieProviderOverrides {
-                    oauth,
-                    refresh,
-                    account,
-                }),
-            )
-            .await
-        }
-        None => runtime::run_with_store(config, runtime_signal, store.clone()).await,
-    };
+    let cookies =
+        cookie_providers.map(
+            |(oauth, account, refresh)| runtime::CookieProviderOverrides {
+                oauth,
+                refresh,
+                account,
+            },
+        );
+    let runtime_result = runtime::run_with_store_and_overrides(
+        config,
+        runtime_signal,
+        store.clone(),
+        runtime::DependencyOverrides {
+            cookies,
+            insight_root_der,
+            confirmation: Some(confirmation),
+        },
+    )
+    .await;
     control_shutdown.cancel();
     let controller_result =
         match tokio::time::timeout(Duration::from_secs(7), &mut controller).await {

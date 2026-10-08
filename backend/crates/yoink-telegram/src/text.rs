@@ -11,6 +11,8 @@ pub struct TextDelivery {
     bot_id: i64,
     ledger: Arc<Store>,
     timeout: Duration,
+    #[cfg(feature = "test-fixtures")]
+    confirmation_hold: crate::confirmation_hold::ConfirmationHold,
 }
 impl TextDelivery {
     /// Timeout bounds connection, body reading and decoding together; valid
@@ -29,7 +31,14 @@ impl TextDelivery {
             bot_id,
             ledger,
             timeout,
+            #[cfg(feature = "test-fixtures")]
+            confirmation_hold: Default::default(),
         })
+    }
+    /// Shared by delivery clones. Coordinator retains this before adapter construction.
+    #[cfg(feature = "test-fixtures")]
+    pub fn confirmation_hold(&self) -> crate::confirmation_hold::ConfirmationHold {
+        self.confirmation_hold.clone()
     }
     pub fn ledger(&self) -> &Arc<Store> {
         &self.ledger
@@ -130,6 +139,8 @@ impl TextDelivery {
             self.ledger.unknown_text(token).await?;
             return Ok(TextOutcome::Unknown);
         }
+        #[cfg(feature = "test-fixtures")]
+        self.confirmation_hold.enter(token).await;
         self.ledger.confirm_text(token, message.id.0).await?;
         Ok(TextOutcome::Confirmed(message.id.0))
     }

@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+[features]
+default = []
+# Isolated fixture trust injection; never enabled by production construction.
+test-fixtures = []
 [dependencies]
 yoink-executor.workspace = true
 yoink-worker-protocol.workspace = true

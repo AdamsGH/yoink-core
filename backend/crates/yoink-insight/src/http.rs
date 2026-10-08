@@ -1,5 +1,6 @@
 //! Product-owned HTTP routes. Shared authentication middleware must insert
-//! AuthenticatedUser only after validating the shared JWT/WebApp/API-key identity.
+//! AuthenticatedUser only after validating the shared user session. M2M API keys
+//! authorize scoped internal operations, not an Insight user identity.
 //! Never deserialize that identity from request JSON or trust frontend roles.
 use crate::{
     ByokTest, ByokUpdate, Error, Insight, ModelProbeOptions, Request, SettingsUpdate,

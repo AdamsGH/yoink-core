@@ -190,11 +190,31 @@ pub fn status(code: u16) -> Error {
         _ => "llm_error",
     })
 }
+/// Errors from explicit, fixture-only additional DER trust anchors.
+#[cfg(feature = "test-fixtures")]
+#[derive(Debug, thiserror::Error)]
+pub enum FixtureTrustError {
+    #[error("provide 1..=8 additional DER certificates (received {0})")]
+    RootCount(usize),
+    #[error("DER certificate {index} must contain 1..=16384 bytes (received {bytes})")]
+    RootSize { index: usize, bytes: usize },
+    #[error(
+        "certificate {index} is not a valid DER trust anchor; supply an X.509 certificate, not PEM or a private key"
+    )]
+    InvalidRoot { index: usize },
+    #[error("invalid completion budgets: timeout must be 1ns..=300s and max_bytes 1024..=4194304")]
+    InvalidBudgets,
+    #[error("could not build fixture TLS client: {0}")]
+    Client(#[source] reqwest::Error),
+}
+
 pub struct HttpCompletion {
     pub(crate) client: reqwest::Client,
     pub(crate) timeout: Duration,
     pub(crate) max_bytes: usize,
     operator_openrouter_proxy: Option<(String, reqwest::Client)>,
+    #[cfg(feature = "test-fixtures")]
+    additional_roots: Vec<reqwest::Certificate>,
 }
 impl HttpCompletion {
     pub fn new(timeout: Duration, max_bytes: usize) -> Result<Self, Error> {
@@ -206,6 +226,8 @@ impl HttpCompletion {
         }
         Ok(Self {
             operator_openrouter_proxy: None,
+            #[cfg(feature = "test-fixtures")]
+            additional_roots: Vec::new(),
             client: reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -216,6 +238,73 @@ impl HttpCompletion {
             max_bytes,
         })
     }
+    /// Add bounded DER roots only in explicitly feature-enabled fixture builds.
+    /// System roots, hostname verification, DNS policy and budgets remain intact.
+    /// No environment variables, resolver overrides or alternate origins are used.
+    #[cfg(feature = "test-fixtures")]
+    pub fn with_additional_roots(
+        timeout: Duration,
+        max_bytes: usize,
+        roots_der: &[&[u8]],
+    ) -> Result<Self, FixtureTrustError> {
+        if roots_der.is_empty() || roots_der.len() > 8 {
+            return Err(FixtureTrustError::RootCount(roots_der.len()));
+        }
+        let mut roots = Vec::with_capacity(roots_der.len());
+        for (index, der) in roots_der.iter().enumerate() {
+            if der.is_empty() || der.len() > 16384 {
+                return Err(FixtureTrustError::RootSize {
+                    index,
+                    bytes: der.len(),
+                });
+            }
+            let root = reqwest::Certificate::from_der(der)
+                .map_err(|_| FixtureTrustError::InvalidRoot { index })?;
+            // reqwest's rustls DER parsing is deferred until client construction.
+            reqwest::Client::builder()
+                .no_proxy()
+                .add_root_certificate(root.clone())
+                .build()
+                .map_err(|_| FixtureTrustError::InvalidRoot { index })?;
+            roots.push(root);
+        }
+        if timeout.is_zero()
+            || timeout > Duration::from_secs(300)
+            || !(1024..=4 * 1024 * 1024).contains(&max_bytes)
+        {
+            return Err(FixtureTrustError::InvalidBudgets);
+        }
+        let mut completion = Self {
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(timeout)
+                .build()
+                .map_err(FixtureTrustError::Client)?,
+            timeout,
+            max_bytes,
+            operator_openrouter_proxy: None,
+            additional_roots: roots,
+        };
+        completion.client = completion
+            .client_builder()
+            .build()
+            .map_err(FixtureTrustError::Client)?;
+        Ok(completion)
+    }
+
+    fn client_builder(&self) -> reqwest::ClientBuilder {
+        let builder = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(self.timeout);
+        #[cfg(feature = "test-fixtures")]
+        let builder = self.additional_roots.iter().fold(builder, |builder, root| {
+            builder.add_root_certificate(root.clone())
+        });
+        builder
+    }
+
     /// Explicit operator-only proxy for an exact configured OpenRouter base.
     /// BYOK always uses pinned public DNS, no proxy and no redirects.
     pub fn with_operator_openrouter_proxy(
@@ -238,11 +327,9 @@ impl HttpCompletion {
         {
             return Err(invalid());
         }
-        let client = reqwest::Client::builder()
-            .no_proxy()
+        let client = self
+            .client_builder()
             .proxy(reqwest::Proxy::all(proxy).map_err(|_| invalid())?)
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(self.timeout)
             .build()
             .map_err(|_| invalid())?;
         self.operator_openrouter_proxy = Some((base.trim_end_matches('/').into(), client));
@@ -390,17 +477,22 @@ impl HttpCompletion {
             .await
             .map_err(|_| Error::Code("provider_unavailable"))?
             .collect::<Vec<_>>();
+        self.pinned_client(host, &addresses)
+    }
+
+    fn pinned_client(
+        &self,
+        host: &str,
+        addresses: &[std::net::SocketAddr],
+    ) -> Result<reqwest::Client, Error> {
         if addresses.is_empty()
             || addresses.len() > 32
             || addresses.iter().any(|a| !public_ip(a.ip()))
         {
             return Err(Error::Code("unsafe_endpoint"));
         }
-        reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(self.timeout)
-            .resolve_to_addrs(host, &addresses)
+        self.client_builder()
+            .resolve_to_addrs(host, addresses)
             .build()
             .map_err(|_| Error::Code("provider_unavailable"))
     }
@@ -570,3 +662,7 @@ impl HttpCompletion {
         Err(Error::Code("catalogue_pagination_invalid"))
     }
 }
+
+#[cfg(all(test, feature = "test-fixtures"))]
+#[path = "provider/tests.rs"]
+mod tests;

@@ -63,7 +63,6 @@ export function api(base) {
     const response = await fetch(base + path, { method, signal: AbortSignal.timeout(7000), headers: {
       ...headers, ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    assert.equal(response.status, expected, `${method} ${path}`);
     let size = 0;
     const chunks = [];
     if (response.body) {
@@ -78,6 +77,7 @@ export function api(base) {
       } finally { reader.releaseLock(); }
     }
     const text = Buffer.concat(chunks).toString('utf8');
+    assert.equal(response.status, expected, `${method} ${path}: unexpected HTTP status`);
     return text ? JSON.parse(text) : null;
   };
 }

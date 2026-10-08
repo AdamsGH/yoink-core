@@ -48,6 +48,9 @@ pub use menus::MenuConfig;
 pub mod inbox_runtime;
 pub mod insight_runtime;
 pub use insight_runtime::InsightRuntime;
+#[cfg(feature = "test-fixtures")]
+pub mod confirmation_hold;
+mod insight_lifecycle;
 mod plain_url;
 mod progress;
 mod proxy;
@@ -133,11 +136,14 @@ impl TelegramAdapter {
         owner_id: u64,
         system: SystemService,
         poll_timeout: Duration,
+        request_timeout: Duration,
     ) -> Result<Self, TelegramError> {
         if owner_id == 0
             || owner_id > i64::MAX as u64
             || !(1..=50).contains(&poll_timeout.as_secs())
             || poll_timeout.subsec_nanos() != 0
+            || !(1..=120).contains(&request_timeout.as_secs())
+            || request_timeout.subsec_nanos() != 0
         {
             return Err(TelegramError::BotInitializationFailed);
         }
@@ -145,6 +151,7 @@ impl TelegramAdapter {
         catalog().map_err(|_| TelegramError::BotInitializationFailed)?;
         let http_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .timeout(request_timeout)
             .build()
             .map_err(|_| TelegramError::BotInitializationFailed)?;
         let mut bot = Bot::with_client(token.clone(), http_client.clone());
@@ -951,6 +958,16 @@ async fn handle_message(
     system: SystemService,
     dependencies: MessageDependencies,
 ) -> Result<(), Infallible> {
+    // Keep ownership through late combined help sends and receipt work, not
+    // merely through the Insight product future or active cancellation map.
+    let _insight_handler = if let Some(insight) = &dependencies.insight {
+        let Some(handler) = insight.admit_handler() else {
+            return Ok(());
+        };
+        Some(handler)
+    } else {
+        None
+    };
     let downloads = dependencies.downloads;
     let upload = dependencies.upload;
     let CookieUrlDependency(cookie_url_config) = dependencies.cookie_url;
@@ -1624,6 +1641,45 @@ mod tests {
     use super::*;
     use yoink_downloads::DeliveryError;
     use yoink_i18n::language_for;
+
+    #[tokio::test]
+    async fn bot_transport_deadline_covers_a_stalled_response_body() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\n{")
+                .await
+                .unwrap();
+            let _ = entered.send(());
+            std::future::pending::<()>().await;
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            TelegramAdapter::prepare(
+                "123456:test".into(),
+                Some(Url::parse(&format!("http://{address}")).unwrap()),
+                42,
+                SystemService::new("test"),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            ),
+        )
+        .await;
+        server.abort();
+        let _ = server.await;
+        assert!(
+            observed.await.is_ok(),
+            "request reached the held response body"
+        );
+        assert!(matches!(
+            result,
+            Ok(Err(TelegramError::ReadinessCheckFailed))
+        ));
+    }
 
     #[tokio::test]
     async fn persisted_identity_language_localizes_without_download_service() {

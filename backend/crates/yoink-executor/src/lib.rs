@@ -1690,10 +1690,21 @@ mod tests {
                 !Path::new(&format!("/proc/{parent}")).exists(),
                 "parent not reaped"
             );
-            // Descendants may briefly be zombies awaiting host init; no live process.
-            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{child}/stat")) {
-                assert!(stat.split_whitespace().nth(2) == Some("Z"));
-            }
+            // Group SIGKILL delivery can precede the descendant's scheduler turn.
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    match std::fs::read_to_string(format!("/proc/{child}/stat")) {
+                        Ok(stat) if stat.split_whitespace().nth(2) != Some("Z") => {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        Ok(_) => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                        Err(error) => panic!("could not inspect descendant: {error}"),
+                    }
+                }
+            })
+            .await
+            .expect("descendant remained live after group termination");
             let ticks = marker.with_extension("ticks");
             let before = std::fs::read(&ticks).unwrap_or_default();
             tokio::time::sleep(Duration::from_millis(100)).await;

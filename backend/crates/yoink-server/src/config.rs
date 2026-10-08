@@ -47,6 +47,7 @@ pub struct TelegramConfig {
     pub owner_id: u64,
     pub api_url: Option<Url>,
     pub poll_timeout: Duration,
+    pub request_timeout: Duration,
     pub progress: yoink_telegram::ProgressConfig,
     pub inline_search: yoink_telegram::InlineSearchConfig,
     pub cookie_upload: yoink_telegram::CookieUploadConfig,
@@ -161,6 +162,17 @@ impl Config {
                 return Err(invalid(
                     "TELEGRAM_POLL_TIMEOUT_SECS",
                     "expected seconds in range 1..=50",
+                ));
+            }
+            let request_timeout = timeout(
+                read("TELEGRAM_REQUEST_TIMEOUT_SECS")?,
+                "TELEGRAM_REQUEST_TIMEOUT_SECS",
+                60,
+            )?;
+            if request_timeout.as_secs() > 120 {
+                return Err(invalid(
+                    "TELEGRAM_REQUEST_TIMEOUT_SECS",
+                    "expected seconds in range 1..=120",
                 ));
             }
             let inline_number = |key: &str,
@@ -303,6 +315,7 @@ impl Config {
                 owner_id,
                 api_url,
                 poll_timeout,
+                request_timeout,
                 progress,
                 inline_search,
                 cookie_upload,
@@ -499,6 +512,24 @@ mod tests {
         for value in ["yes", "1", "", "TRUE"] {
             let mut values = base.to_vec();
             values.push(("YOINK_RUST_TELEGRAM_GROUPS_ENABLED", value));
+            assert!(config(&values).is_err());
+        }
+    }
+
+    #[test]
+    fn ordinary_bot_requests_have_a_bounded_transport_deadline() {
+        let base = [
+            ("YOINK_RUST_TELEGRAM_ENABLED", "true"),
+            ("YOINK_RUST_TELEGRAM_TOKEN", "fixture-token"),
+            ("YOINK_RUST_OWNER_ID", "42"),
+        ];
+        assert_eq!(
+            config(&base).unwrap().telegram.unwrap().request_timeout,
+            Duration::from_secs(60)
+        );
+        for value in ["0", "121", "invalid"] {
+            let mut values = base.to_vec();
+            values.push(("YOINK_RUST_TELEGRAM_REQUEST_TIMEOUT_SECS", value));
             assert!(config(&values).is_err());
         }
     }

@@ -21,6 +21,7 @@ pub struct InsightRuntime {
     groups: bool,
     stop: CancellationToken,
     active: Arc<Mutex<HashMap<Uuid, Work>>>,
+    handlers: crate::insight_lifecycle::Handlers,
 }
 struct Work {
     actor: i64,
@@ -45,6 +46,7 @@ impl InsightRuntime {
             groups,
             stop: CancellationToken::new(),
             active: Arc::new(Mutex::new(HashMap::new())),
+            handlers: crate::insight_lifecycle::Handlers::new(),
         }
     }
     pub(crate) fn service(&self) -> Insight {
@@ -53,9 +55,19 @@ impl InsightRuntime {
     pub(crate) fn shutdown_token(&self) -> CancellationToken {
         self.stop.clone()
     }
-    /// Cancel active work. Await the adapter's run future to drain transport receipts.
+    /// Permanently reject new handlers and cancel active product work.
     pub fn cancel_all(&self) {
+        self.handlers.close();
         self.stop.cancel();
+    }
+    /// Call after adapter drain/abort, before Insight shutdown and DB close.
+    /// Concurrent calls are idempotent; cancelling a waiter does not reopen admission.
+    pub async fn drain_handlers(&self) {
+        self.cancel_all();
+        self.handlers.drain().await;
+    }
+    pub(crate) fn admit_handler(&self) -> Option<crate::insight_lifecycle::Handler> {
+        self.handlers.admit()
     }
     async fn require(
         &self,
@@ -123,6 +135,9 @@ impl InsightRuntime {
         actor: i64,
         language: yoink_i18n::Language,
     ) -> String {
+        let Some(_handler) = self.admit_handler() else {
+            return String::new();
+        };
         let i = TextIdentity {
             bot: self.delivery.bot_id(),
             actor,
@@ -168,6 +183,9 @@ impl InsightRuntime {
         actor: i64,
         language: yoink_i18n::Language,
     ) -> bool {
+        let Some(_handler) = self.admit_handler() else {
+            return true;
+        };
         let text = self.help_for(message, actor, language).await;
         if text.is_empty() {
             return false;
@@ -201,6 +219,9 @@ impl InsightRuntime {
 
     /// Called only after incoming_route established an observed actor/destination.
     pub(crate) async fn handle(&self, message: &Message, actor: i64, username: &str) -> bool {
+        let Some(_handler) = self.admit_handler() else {
+            return true;
+        };
         let Some(text) = message.text() else {
             return false;
         };
@@ -249,14 +270,17 @@ impl InsightRuntime {
             i.message
         );
         // Any existing admission (including Unknown) fences replay, not just success.
-        if !matches!(
-            self.delivery
-                .ledger()
-                .text_effect(&format!("{base}:0:0"))
-                .await,
-            Ok(None)
-        ) {
-            return true;
+        let initial_token = format!("{base}:0:0");
+        match self.delivery.ledger().text_effect(&initial_token).await {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                #[cfg(feature = "test-fixtures")]
+                self.delivery
+                    .confirmation_hold()
+                    .record_replay(&initial_token);
+                return true;
+            }
+            Err(_) => return true,
         }
         let cancel = self.stop.child_token();
         if self.require(&i, command, &cancel).await.is_err() {

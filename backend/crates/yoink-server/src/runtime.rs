@@ -54,12 +54,31 @@ pub struct CookieProviderOverrides {
     pub account: Arc<dyn yoink_downloads::cookie_web_live::AccountProvider>,
 }
 
+#[cfg(feature = "test-fixtures")]
+pub type ConfirmationControl =
+    Arc<std::sync::Mutex<Option<yoink_telegram::confirmation_hold::ConfirmationHold>>>;
+
+#[derive(Default)]
+pub struct DependencyOverrides {
+    pub cookies: Option<CookieProviderOverrides>,
+    #[cfg(feature = "test-fixtures")]
+    pub insight_root_der: Option<Vec<u8>>,
+    #[cfg(feature = "test-fixtures")]
+    pub confirmation: Option<ConfirmationControl>,
+}
+
 #[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 pub async fn run(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
 ) -> Result<(), ServerError> {
-    run_impl(config, shutdown_signal, None, None).await
+    run_impl(
+        config,
+        shutdown_signal,
+        None,
+        DependencyOverrides::default(),
+    )
+    .await
 }
 
 #[cfg(feature = "test-fixtures")]
@@ -86,6 +105,25 @@ pub async fn run_with_store_and_cookie_providers(
     store: Arc<yoink_storage::Store>,
     providers: Option<CookieProviderOverrides>,
 ) -> Result<(), ServerError> {
+    run_with_store_and_overrides(
+        config,
+        shutdown_signal,
+        store,
+        DependencyOverrides {
+            cookies: providers,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "test-fixtures")]
+pub async fn run_with_store_and_overrides(
+    config: Config,
+    shutdown_signal: impl Future<Output = io::Result<()>>,
+    store: Arc<yoink_storage::Store>,
+    overrides: DependencyOverrides,
+) -> Result<(), ServerError> {
     let database = config
         .database
         .as_ref()
@@ -98,14 +136,14 @@ pub async fn run_with_store_and_cookie_providers(
     if configured.as_deref() != Some(store.database().path()) {
         return Err(ServerError::DatabaseStartup);
     }
-    run_impl(config, shutdown_signal, Some(store), providers).await
+    run_impl(config, shutdown_signal, Some(store), overrides).await
 }
 
 async fn run_impl(
     config: Config,
     shutdown_signal: impl Future<Output = io::Result<()>>,
     provided_store: Option<Arc<yoink_storage::Store>>,
-    cookie_providers: Option<CookieProviderOverrides>,
+    overrides: DependencyOverrides,
 ) -> Result<(), ServerError> {
     let system = SystemService::new(env!("CARGO_PKG_VERSION"));
     let cancel = CancellationToken::new();
@@ -120,6 +158,7 @@ async fn run_impl(
     let http_insight = late_insight.clone();
     let mut insight_runtime: Option<crate::insight_runtime::InsightRuntime> = None;
     let mut insight_preflight: Option<tokio::process::Child> = None;
+    let mut insight_handlers: Option<yoink_telegram::InsightRuntime> = None;
     let late_inbox = yoink_http::LateInbox::default();
     let http_inbox = late_inbox.clone();
     let mut inbox_runtime = None;
@@ -219,9 +258,13 @@ async fn run_impl(
                     telegram.owner_id,
                     system.clone(),
                     telegram.poll_timeout,
+                    telegram.request_timeout,
                 )
                 .await
-                .map_err(|_| ServerError::TelegramStartup)?
+                .map_err(|error| {
+                    tracing::error!(?error, "Telegram preparation failed");
+                    ServerError::TelegramStartup
+                })?
                 .with_inline_search(telegram.inline_search)
                 .map_err(|_| ServerError::TelegramStartup)?
                 .with_progress(telegram.progress)
@@ -283,7 +326,7 @@ async fn run_impl(
             } else {
                 service
             };
-            let providers = match cookie_providers {
+            let providers = match overrides.cookies {
                 Some(providers) => providers,
                 None => {
                     let oauth_config = yoink_downloads::cookie_oauth::OAuthProviderConfig::new(
@@ -358,17 +401,42 @@ async fn run_impl(
             if !status.success() {
                 return Err(ServerError::InsightStartup);
             }
-            insight_runtime = Some(crate::insight_runtime::InsightRuntime::new(
+            #[cfg(feature = "test-fixtures")]
+            let composed = match overrides.insight_root_der.as_deref() {
+                Some(root) => crate::insight_runtime::InsightRuntime::with_fixture_root(
+                    insight,
+                    store,
+                    identity.clone(),
+                    inbox_owner,
+                    cancel.child_token(),
+                    root,
+                ),
+                None => crate::insight_runtime::InsightRuntime::new(
+                    insight,
+                    store,
+                    identity.clone(),
+                    inbox_owner,
+                    cancel.child_token(),
+                ),
+            };
+            #[cfg(not(feature = "test-fixtures"))]
+            let composed = crate::insight_runtime::InsightRuntime::new(
                 insight,
                 store,
                 identity.clone(),
                 inbox_owner,
                 cancel.child_token(),
-            )?);
+            );
+            insight_runtime = Some(composed?);
             if let Some(adapter) = telegram.take() {
                 let text = adapter
                     .text_delivery(store.clone(), text_timeout)
                     .map_err(|_| ServerError::InsightStartup)?;
+                #[cfg(feature = "test-fixtures")]
+                if let Some(control) = &overrides.confirmation {
+                    *control.lock().expect("fixture confirmation control") =
+                        Some(text.confirmation_hold());
+                }
                 let handler = yoink_telegram::InsightRuntime::new(
                     insight_runtime
                         .as_ref()
@@ -379,6 +447,7 @@ async fn run_impl(
                     text,
                     groups_enabled,
                 );
+                insight_handlers = Some(handler.clone());
                 telegram = Some(adapter.with_insight(handler));
             }
             if auth_enabled {
@@ -494,6 +563,9 @@ async fn run_impl(
             let result =
                 stop_and_drain(tasks, system, cancel, config.shutdown_timeout, Err(error)).await;
             drain_insight_preflight(&mut insight_preflight).await;
+            if let Some(handlers) = &insight_handlers {
+                handlers.drain_handlers().await;
+            }
             if let Some(runtime) = &insight_runtime {
                 runtime.shutdown().await;
             }
@@ -503,6 +575,9 @@ async fn run_impl(
             let result =
                 stop_and_drain(tasks, system, cancel, config.shutdown_timeout, result).await;
             drain_insight_preflight(&mut insight_preflight).await;
+            if let Some(handlers) = &insight_handlers {
+                handlers.drain_handlers().await;
+            }
             if let Some(runtime) = &insight_runtime {
                 runtime.shutdown().await;
             }
@@ -539,12 +614,17 @@ async fn run_impl(
     system.set_insight_enabled(insight_runtime.is_some());
     if let Some(telegram) = telegram {
         let telegram_cancel = cancel.clone();
-        tasks.spawn(async move {
+        let _telegram_task = tasks.spawn(async move {
             telegram
                 .run(telegram_cancel)
                 .await
                 .map_err(|_| ServerError::Telegram)
         });
+        #[cfg(feature = "test-fixtures")]
+        eprintln!(
+            "fixture Telegram adapter task: task_id={}",
+            _telegram_task.id()
+        );
     }
     system.set_bot_status(telegram_enabled, bot_username);
     system.set_ready(true);
@@ -558,10 +638,22 @@ async fn run_impl(
     )
     .await;
     drain_insight_preflight(&mut insight_preflight).await;
+    if let Some(handlers) = &insight_handlers {
+        handlers.drain_handlers().await;
+        #[cfg(feature = "test-fixtures")]
+        eprintln!("fixture Insight handlers drained");
+    }
     if let Some(runtime) = &insight_runtime {
         runtime.shutdown().await;
     }
-    finish_database(result, database, config.shutdown_timeout).await
+    #[cfg(feature = "test-fixtures")]
+    if insight_runtime.is_some() {
+        eprintln!("fixture concrete Insight shutdown completed");
+    }
+    let result = finish_database(result, database, config.shutdown_timeout).await;
+    #[cfg(feature = "test-fixtures")]
+    eprintln!("fixture database shutdown completed: result={result:?}");
+    result
 }
 
 async fn run_cookie_oauth_lifecycle(
@@ -650,7 +742,16 @@ async fn stop_and_drain(
         Ok(result) => result,
         Err(_) => {
             tasks.abort_all();
-            while tasks.join_next().await.is_some() {}
+            while let Some(completed) = tasks.join_next_with_id().await {
+                #[cfg(feature = "test-fixtures")]
+                if let Err(error) = &completed
+                    && error.is_cancelled()
+                {
+                    eprintln!("fixture adapter aborted and joined: task_id={}", error.id());
+                }
+                #[cfg(not(feature = "test-fixtures"))]
+                let _ = completed;
+            }
             Err(ServerError::ShutdownTimeout)
         }
     };

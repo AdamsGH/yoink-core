@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-test-fixtures = ["dep:turso"]
+test-fixtures = ["dep:turso", "yoink-insight/test-fixtures", "yoink-telegram/test-fixtures"]
 
 [[bin]]
 name = "yoink-fixture-server"
