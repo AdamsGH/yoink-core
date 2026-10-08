@@ -246,7 +246,7 @@ async fn default_cache_and_daily_quota() {
     assert_eq!(stats["total_summaries"], 1);
 }
 #[tokio::test]
-async fn imported_cache_is_preserved() {
+async fn imported_cache_is_preserved_but_quarantined() {
     let (_dir, s, llm) = fixture().await;
     query("INSERT INTO insight_summary_cache(content_key,lang,command,result,created_at,expires_at) VALUES('abcdefghijk','en','about','Imported',0,?)").bind(chrono::Utc::now()+chrono::Duration::hours(1)).execute(&s.db).await.unwrap();
     let result = s
@@ -257,9 +257,18 @@ async fn imported_cache_is_preserved() {
         )
         .await
         .unwrap();
-    assert_eq!(result.result, "Imported");
-    assert!(result.cached);
-    assert_eq!(llm.0.load(Ordering::SeqCst), 0);
+    assert_ne!(result.result, "Imported");
+    assert!(!result.cached);
+    assert_eq!(llm.0.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        query("SELECT result FROM insight_summary_cache")
+            .fetch_one(&s.db)
+            .await
+            .unwrap()
+            .try_get::<String, _>(0)
+            .unwrap(),
+        "Imported"
+    );
 }
 #[tokio::test]
 async fn current_bans_override_owner_and_admin() {
@@ -523,20 +532,29 @@ async fn user_revocation_after_provider_io_denies_result() {
     ));
 }
 #[tokio::test]
-async fn imported_cache_does_not_require_provider_credentials() {
+async fn unverifiable_imported_cache_cannot_bypass_missing_provider_credentials() {
     let (_dir, mut s, llm) = fixture().await;
     s.config.gemini_key.clear();
     query("INSERT INTO insight_summary_cache(content_key,lang,command,result,created_at,expires_at) VALUES('abcdefghijk','en','about','Imported',0,?)").bind(chrono::Utc::now()+chrono::Duration::hours(1)).execute(&s.db).await.unwrap();
-    let result = s
-        .summarize(
+    assert!(
+        s.summarize(
             1,
             request("about", "https://youtu.be/abcdefghijk"),
-            CancellationToken::new(),
+            CancellationToken::new()
         )
         .await
-        .unwrap();
-    assert_eq!(result.result, "Imported");
+        .is_err()
+    );
     assert_eq!(llm.0.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        query("SELECT result FROM insight_summary_cache")
+            .fetch_one(&s.db)
+            .await
+            .unwrap()
+            .try_get::<String, _>(0)
+            .unwrap(),
+        "Imported"
+    );
 }
 #[tokio::test]
 async fn successful_cache_and_usage_are_atomic() {
@@ -638,6 +656,8 @@ impl provider::DeltaSink for DbSink {
 #[tokio::test]
 async fn telegram_stream_commits_once_and_cache_emits_no_fake_deltas() {
     let (_dir, mut s, _) = fixture().await;
+    // TLDR admission precedes cache lookup: leave room for the repeat.
+    s.config.tldr_limit = 2;
     s.completion = Arc::new(StreamingLlm);
     let sink = DbSink {
         db: s.db.clone(),
@@ -710,4 +730,401 @@ async fn revocation_between_deltas_denies_remaining_delivery_and_commit() {
         .try_get(0)
         .unwrap();
     assert_eq!(n, 0);
+}
+
+#[test]
+fn unicode_chunks_brackets_and_youtube_anywhere() {
+    let text = "😀".repeat(4001);
+    let messages = telegram::messages(&text);
+    assert_eq!(messages.concat(), text);
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.encode_utf16().count() <= 4000)
+    );
+    assert!(prompts::glob("[ab].example", "a.example"));
+    assert!(!prompts::glob("[!a-c].example", "b.example"));
+    assert!(prompts::glob("[!a-c].example", "z.example"));
+    assert!(prompts::glob("?.example", "я.example"));
+    let request = telegram::parse(
+        "/summary Please summarize:https://youtu.be/abcdefghijk thanks",
+        &[],
+    )
+    .unwrap();
+    assert_eq!(request.url, "https://youtu.be/abcdefghijk");
+    assert!(request.focus.is_none());
+}
+
+#[tokio::test]
+async fn tldr_quota_precedes_native_cache_but_summary_native_cache_precedes_quota() {
+    let (_directory, mut service, _) = fixture().await;
+    service.config.tldr_limit = 2;
+    query("INSERT INTO insight_summary_cache(content_key,lang,command,result,created_at,expires_at) VALUES('https://example.test/imported','en','tldr:v3','Imported TLDR',0,?)").bind(chrono::Utc::now()+chrono::Duration::hours(1)).execute(&service.db).await.unwrap();
+    let imported = service
+        .summarize(
+            1,
+            request("tldr", "https://example.test/imported"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(!imported.cached);
+    assert_ne!(imported.result, "Imported TLDR");
+    service
+        .summarize(
+            1,
+            request("tldr", "https://example.test/new"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .summarize(
+                1,
+                request("tldr", "https://example.test/imported"),
+                CancellationToken::new()
+            )
+            .await,
+        Err(Error::Code("quota_exceeded"))
+    ));
+    // Summary's own private native cache still precedes quota at the daily limit.
+    let (_summary_directory, summary_service, _) = fixture().await;
+    summary_service
+        .summarize(
+            1,
+            request("summary", "https://youtu.be/abcdefghijk"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        summary_service
+            .summarize(
+                1,
+                request("summary", "https://youtu.be/abcdefghijk"),
+                CancellationToken::new()
+            )
+            .await
+            .unwrap()
+            .cached
+    );
+}
+
+#[tokio::test]
+async fn focus_never_cached_and_native_repeat_does_not_fetch_offline() {
+    let (_directory, mut service, provider) = fixture().await;
+    service.config.tldr_limit = 10;
+    let mut focused = request("tldr", "https://example.test/focus");
+    focused.focus = Some("What changed?".into());
+    for _ in 0..2 {
+        assert!(
+            !service
+                .summarize(1, focused.clone(), CancellationToken::new())
+                .await
+                .unwrap()
+                .cached
+        );
+    }
+    assert_eq!(provider.0.load(Ordering::SeqCst), 2);
+    service
+        .summarize(
+            1,
+            request("tldr", "https://example.test/offline"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    service.content = None;
+    assert!(
+        service
+            .summarize(
+                1,
+                request("tldr", "https://example.test/offline"),
+                CancellationToken::new()
+            )
+            .await
+            .unwrap()
+            .cached
+    );
+}
+
+#[tokio::test]
+async fn executable_summary_grant_not_docstring_tldr_grant_controls_route_precedence() {
+    let (_directory, service, _) = fixture().await;
+    service.byok_toggle(1, Some(true)).await.unwrap();
+    service
+        .save_byok(
+            2,
+            ByokUpdate {
+                provider: "openai".into(),
+                base_url: None,
+                api_key: Some("fixture-key".into()),
+                model: "own-model".into(),
+            },
+        )
+        .await
+        .unwrap();
+    query("INSERT INTO user_permissions(user_id,plugin,feature,granted_by) VALUES(2,'insight','tldr',1)").execute(&service.db).await.unwrap();
+    let result = service
+        .summarize(
+            2,
+            request("tldr", "https://example.test/byok"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.route, "byok");
+    service.grant(1, 2, "en").await.unwrap(); // executable legacy summary gate
+    // Clear usage to isolate routing from this fixture's one-request limit.
+    query("DELETE FROM insight_usage_log WHERE user_id=2")
+        .execute(&service.db)
+        .await
+        .unwrap();
+    let result = service
+        .summarize(
+            2,
+            request("tldr", "https://example.test/gateway"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.route, "gateway");
+}
+
+#[tokio::test]
+async fn stats_preserves_imported_alias_order_cutoff_and_zero_duration_fallback() {
+    let (_directory, service, _) = fixture().await;
+    let now = chrono::Utc::now();
+    for (alias, days, seconds, chars) in [
+        ("zeta", 29, Some(0), 825),
+        ("zeta", 29, Some(60), 0),
+        ("alpha", 31, None, 1000),
+    ] {
+        query("INSERT INTO insight_usage_log(user_id,command,lang,status,created_at,content_chars,video_seconds,alias_key,route) VALUES(1,'tldr','en','ok',?,?,?,?,'gateway')").bind(now-chrono::Duration::days(days)).bind(chars).bind(seconds).bind(alias).execute(&service.db).await.unwrap();
+    }
+    let stats = service.stats(1).await.unwrap();
+    assert_eq!(stats["tldr"]["total"], 3);
+    assert_eq!(
+        stats["tldr"]["by_alias"][0],
+        serde_json::json!({"alias":"zeta","count":2})
+    );
+    assert_eq!(stats["tldr"]["video_minutes_saved"], 2.0);
+    assert_eq!(stats["tldr"]["reading_minutes_saved"], 1.0);
+    assert_eq!(
+        stats["tldr"]["by_day"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|day| day["count"].as_i64().unwrap())
+            .sum::<i64>(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn dropping_inflight_generation_releases_quota_without_partial_commit() {
+    let (_directory, mut service, _) = fixture().await;
+    let gate = Arc::new(Gate {
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Notify::new(),
+    });
+    service.completion = gate.clone();
+    let running = service.clone();
+    let task = tokio::spawn(async move {
+        running
+            .summarize(
+                1,
+                request("tldr", "https://example.test/drop"),
+                CancellationToken::new(),
+            )
+            .await
+    });
+    gate.entered.acquire().await.unwrap().forget();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let reservations: i64 = query("SELECT count(*) FROM insight_native_reservations")
+                .fetch_one(&service.db)
+                .await
+                .unwrap()
+                .try_get(0)
+                .unwrap();
+            if reservations == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    for table in ["insight_native_cache", "insight_usage_log"] {
+        let rows: i64 = query(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&service.db)
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+}
+
+struct UnavailableResearch;
+impl yoink_insight::research::Research for UnavailableResearch {
+    fn search<'a>(
+        &'a self,
+        _: &'a Route,
+        _: &'a str,
+        _: CancellationToken,
+    ) -> FutureResult<'a, Vec<Citation>> {
+        Box::pin(async { Err(Error::Code("provider_unavailable")) })
+    }
+}
+struct NoFabricatedCitations;
+impl Completion for NoFabricatedCitations {
+    fn complete<'a>(
+        &'a self,
+        _: &'a [Route],
+        prompt: &'a str,
+        _: CancellationToken,
+    ) -> FutureResult<'a, String> {
+        Box::pin(async move {
+            assert!(prompt.contains("Independent web research: Not supplied"));
+            assert!(!prompt.contains("https://independent.test/docs"));
+            Ok("degraded but honest".into())
+        })
+    }
+}
+#[tokio::test]
+async fn research_failure_degrades_without_fabricated_citations() {
+    let (_directory, mut service, _) = fixture().await;
+    service = service.with_research(Arc::new(UnavailableResearch));
+    service.completion = Arc::new(NoFabricatedCitations);
+    service
+        .update_settings(
+            1,
+            serde_json::from_value(serde_json::json!({"lang":"en", "use_search":true})).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .summarize(
+                1,
+                request("tldr", "https://example.test/research"),
+                CancellationToken::new()
+            )
+            .await
+            .unwrap()
+            .result,
+        "degraded but honest"
+    );
+}
+
+#[tokio::test]
+async fn telegram_summary_only_user_does_not_need_alias_list_permission() {
+    let (_directory, service, _) = fixture().await;
+    service.grant(1, 2, "ja").await.unwrap();
+    assert!(service.aliases(2).await.is_err());
+    assert!(
+        !telegram::execute(
+            &service,
+            2,
+            "/summary please summarize https://youtu.be/abcdefghijk",
+            CancellationToken::new()
+        )
+        .await
+        .unwrap()
+        .cached
+    );
+}
+
+#[tokio::test]
+async fn cross_user_imports_cannot_disclose_private_github_byok_or_custom_prompts() {
+    let (_directory, mut service, provider) = fixture().await;
+    service.config.tldr_limit = 10;
+    service.config.summary_limit = 10;
+    service.grant(1, 2, "en").await.unwrap();
+    query("INSERT INTO user_permissions(user_id,plugin,feature,granted_by) VALUES(2,'insight','tldr',1)").execute(&service.db).await.unwrap();
+    // These represent legacy producer-user-1 results. The shared table contains
+    // no producer identity, credential, prompt, or route columns to verify them.
+    let imports = [
+        (
+            "https://github.com/acme/private",
+            "tldr:v3",
+            "PRIVATE-GITHUB-USER-1",
+        ),
+        (
+            "https://example.test/byok",
+            "tldr:v3",
+            "BYOK-PRIVATE-USER-1",
+        ),
+        (
+            "https://example.test/custom-alias",
+            "tldr:max:v3",
+            "CUSTOM-ALIAS-USER-1",
+        ),
+        ("abcdefghijk", "about", "ABOUT-PROMPT-OVERRIDE-USER-1"),
+        ("abcdefghijk", "summary", "SUMMARY-PROMPT-OVERRIDE-USER-1"),
+    ];
+    for (key, command, secret) in imports {
+        query("INSERT INTO insight_summary_cache(content_key,lang,command,result,created_at,expires_at) VALUES(?,'en',?,?,0,?)")
+            .bind(key).bind(command).bind(secret)
+            .bind(chrono::Utc::now() + chrono::Duration::hours(1))
+            .execute(&service.db).await.unwrap();
+    }
+    // A reader with no source access must fail rather than receive the imported
+    // private GitHub result. No fetch adapter/token is installed for this step.
+    service.content = None;
+    assert!(matches!(
+        service
+            .summarize(2, request("tldr", imports[0].0), CancellationToken::new())
+            .await,
+        Err(Error::Code("content_unavailable"))
+    ));
+    service.content = Some(Arc::new(Source));
+    for (key, command, secret) in imports.into_iter().skip(1) {
+        let mut req = request(
+            if command.starts_with("tldr") {
+                "tldr"
+            } else {
+                command
+            },
+            if key == "abcdefghijk" {
+                "https://youtu.be/abcdefghijk"
+            } else {
+                key
+            },
+        );
+        if command == "tldr:max:v3" {
+            req.alias = Some("max".into());
+        }
+        let fresh = service
+            .summarize(2, req.clone(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(!fresh.cached);
+        assert!(!fresh.result.contains(secret));
+        // Verified native replay remains offline and bound to this reader.
+        service.content = None;
+        let replay = service
+            .summarize(2, req, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(replay.cached);
+        assert_eq!(replay.result, fresh.result);
+        service.content = Some(Arc::new(Source));
+    }
+    assert_eq!(provider.0.load(Ordering::SeqCst), 4);
+    for (key, command, secret) in imports {
+        let row =
+            query("SELECT result FROM insight_summary_cache WHERE content_key=? AND command=?")
+                .bind(key)
+                .bind(command)
+                .fetch_one(&service.db)
+                .await
+                .unwrap();
+        assert_eq!(row.try_get::<String, _>(0).unwrap(), secret);
+    }
 }

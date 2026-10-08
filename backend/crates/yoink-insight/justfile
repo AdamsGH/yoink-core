@@ -1,0 +1,10 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# Scoped only; reuse the worktree's single backend target directory.
+clippy:
+    cd ../.. && just check-build-space
+    cd ../.. && CARGO_BUILD_JOBS=1 cargo clippy --locked --message-format short -p yoink-insight --all-targets -- -D warnings
+    cd ../.. && just check-build-space
+
+format-check:
+    cd ../.. && cargo fmt -p yoink-insight -- --check

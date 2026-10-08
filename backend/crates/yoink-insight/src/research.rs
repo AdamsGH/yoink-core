@@ -98,7 +98,7 @@ impl Research for ResponsesResearch {
         cancel: CancellationToken,
     ) -> FutureResult<'a, Vec<Citation>> {
         Box::pin(async move {
-            if route.shape != Shape::OpenAi || route.via == "byok" || query.len() > 20000 {
+            if route.shape != Shape::OpenAi || route.is_byok() || query.len() > 20000 {
                 return Err(invalid());
             }
             let operation = async {

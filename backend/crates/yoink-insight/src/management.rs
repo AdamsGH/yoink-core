@@ -21,10 +21,8 @@ pub struct ByokUpdate {
     pub model: String,
 }
 impl Insight {
-    pub async fn update_settings(&self, uid: i64, u: SettingsUpdate) -> Result<Value, Error> {
-        if !matches!(u.lang.as_str(), "en" | "ru")
-            || u.github_token.as_ref().is_some_and(|s| s.len() > 256)
-        {
+    pub async fn update_settings(&self, uid: i64, mut u: SettingsUpdate) -> Result<Value, Error> {
+        if !valid_language(&u.lang) || u.github_token.as_ref().is_some_and(|s| s.len() > 256) {
             return Err(invalid());
         }
         if let Some(p) = &u.prompts
@@ -37,20 +35,30 @@ impl Insight {
         }
         let mut c = self.db.connection().await?;
         self.authorize(&*c, uid, None, false).await?;
-        if u.github_token.is_some() || u.tldr_model.is_some() {
+        if u.github_token.is_some() {
+            self.authorize(&*c, uid, Some("tldr"), false).await?;
+        }
+        if u.tldr_model.is_some() {
             self.authorize_gateway(&*c, uid, "tldr").await?;
         }
         if u.use_search == Some(true) {
-            self.authorize(&*c, uid, Some("search"), false).await?
+            self.authorize_gateway(&*c, uid, "search").await?
+        }
+        let summary = self
+            .authorize(&*c, uid, Some("summary"), false)
+            .await
+            .is_ok();
+        let tldr = self.authorize(&*c, uid, Some("tldr"), false).await.is_ok();
+        if !summary && !tldr {
+            return Err(Error::Code("access_denied"));
+        }
+        if let Some(prompts) = &mut u.prompts {
+            prompts.retain(|command, _| if command == "tldr" { tldr } else { summary });
         }
         if let Some(Some(model)) = &u.tldr_model {
-            let allowed: Vec<String> = serde_json::from_str(
-                &self
-                    .setting(&*c, "insight_tldr_allowed_models", "[]")
-                    .await?,
-            )
-            .map_err(|_| invalid())?;
-            if !allowed.contains(model) {
+            let allowed: Vec<String> =
+                serde_json::from_str(&self.allowed_models(&*c).await?).map_err(|_| invalid())?;
+            if !allowed.contains(model) && !self.is_owner(&*c, uid).await? {
                 return Err(Error::Code("model_not_allowed"));
             }
         }
@@ -83,9 +91,10 @@ impl Insight {
             .bind(uid)
             .fetch_optional(e)
             .await?;
-        let mut out = json!({"enabled":self.byok_enabled(e).await?,"has_config":row.is_some(),"api_key_set":row.is_some(),"api_key_masked":null,"provider":null,"base_url":null,"model":null,"models":[],"models_fetched_at":null,"tested_at":null,"test_error":null,"providers":[{"id":"openai","label":"OpenAI","default_base_url":"https://api.openai.com/v1","requires_base_url":false,"api_shape":"openai","all_websearch":false},{"id":"anthropic","label":"Anthropic","default_base_url":"https://api.anthropic.com/v1","requires_base_url":false,"api_shape":"anthropic","all_websearch":false},{"id":"gemini","label":"Gemini","default_base_url":"https://generativelanguage.googleapis.com/v1beta","requires_base_url":false,"api_shape":"gemini","all_websearch":false},{"id":"openrouter","label":"OpenRouter","default_base_url":"https://openrouter.ai/api/v1","requires_base_url":false,"api_shape":"openai","all_websearch":false},{"id":"perplexity","label":"Perplexity","default_base_url":"https://api.perplexity.ai","requires_base_url":false,"api_shape":"openai","all_websearch":true},{"id":"custom_openai","label":"Custom OpenAI-compatible","requires_base_url":true,"api_shape":"openai","all_websearch":false},{"id":"custom_anthropic","label":"Custom Anthropic-compatible","requires_base_url":true,"api_shape":"anthropic","all_websearch":false}]});
+        let mut out = json!({"enabled":self.byok_enabled(e).await?,"has_config":row.is_some(),"api_key_set":row.is_some(),"api_key_masked":null,"provider":null,"base_url":null,"model":null,"models":[],"models_fetched_at":null,"tested_at":null,"test_error":null,"providers":[{"id":"openai","label":"OpenAI","default_base_url":"https://api.openai.com/v1","requires_base_url":false,"api_shape":"openai","all_websearch":false},{"id":"anthropic","label":"Anthropic","default_base_url":"https://api.anthropic.com/v1","requires_base_url":false,"api_shape":"anthropic","all_websearch":false},{"id":"gemini","label":"Gemini","default_base_url":"https://generativelanguage.googleapis.com/v1beta/openai","requires_base_url":false,"api_shape":"openai","all_websearch":false},{"id":"openrouter","label":"OpenRouter","default_base_url":"https://openrouter.ai/api/v1","requires_base_url":false,"api_shape":"openai","all_websearch":false},{"id":"perplexity","label":"Perplexity","default_base_url":"https://api.perplexity.ai","requires_base_url":false,"api_shape":"openai","all_websearch":true},{"id":"custom_openai","label":"Custom OpenAI-compatible","requires_base_url":true,"api_shape":"openai","all_websearch":false},{"id":"custom_anthropic","label":"Custom Anthropic-compatible","requires_base_url":true,"api_shape":"anthropic","all_websearch":false}]});
         if let Some(r) = row {
             let key: String = r.try_get("api_key")?;
+            out["api_key_set"] = json!(!key.is_empty());
             let chars = key.chars().collect::<Vec<_>>();
             out["api_key_masked"] = if chars.len() > 4 {
                 json!(format!(
@@ -124,15 +133,26 @@ impl Insight {
         mut u: ByokUpdate,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Value, Error> {
+        if cancel.is_cancelled() {
+            return Err(Error::Code("cancelled"));
+        }
         u.model = u.model.trim().into();
         u.base_url = u
             .base_url
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty());
-        u.api_key = u
-            .api_key
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty());
+        u.api_key = u.api_key.map(|s| s.trim().to_owned());
+        if u.api_key.as_deref() == Some("") {
+            let c = self.db.connection().await?;
+            self.authorize_byok_management(&*c, uid).await?;
+            let changed = query("UPDATE insight_user_byok SET api_key='',tested_at=NULL,test_error='api_key_required',updated_at=? WHERE user_id=?").bind(Utc::now()).bind(uid).execute(&*c).await?;
+            if changed.rows_affected() > 0 {
+                self.notify_access_change(Some(uid));
+            }
+            let view = self.byok_on(&*c, uid).await;
+            drop(c);
+            return view;
+        }
         let (route, snapshot) = {
             let c = self.db.connection().await?;
             self.authorize_byok_management(&*c, uid).await?;
@@ -173,7 +193,10 @@ impl Insight {
         // but test_error prevents it becoming a valid credential/provider grant.
         query("INSERT INTO insight_user_byok(user_id,provider,base_url,api_key,model,models_json,models_fetched_at,tested_at,test_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET provider=excluded.provider,base_url=excluded.base_url,api_key=excluded.api_key,model=excluded.model,models_json=CASE WHEN ? THEN excluded.models_json ELSE insight_user_byok.models_json END,models_fetched_at=CASE WHEN ? THEN excluded.models_fetched_at ELSE insight_user_byok.models_fetched_at END,tested_at=CASE WHEN ? THEN excluded.tested_at ELSE insight_user_byok.tested_at END,test_error=excluded.test_error,updated_at=excluded.updated_at")
             .bind(uid).bind(u.provider).bind(u.base_url).bind(&route.key).bind(u.model).bind(models).bind(if ok {Some(now)} else {None}).bind(if ok {Some(now)} else {None}).bind(error).bind(now).bind(now).bind(ok).bind(ok).bind(ok).execute(&*c).await?;
-        self.byok_on(&*c, uid).await
+        self.notify_access_change(Some(uid));
+        let view = self.byok_on(&*c, uid).await;
+        drop(c);
+        view
     }
     async fn byok_revision<E: Executor>(
         &self,
@@ -195,10 +218,14 @@ impl Insight {
     pub async fn delete_byok(&self, uid: i64) -> Result<(), Error> {
         let c = self.db.connection().await?;
         self.authorize(&*c, uid, None, false).await?;
-        query("DELETE FROM insight_user_byok WHERE user_id=?")
+        let deleted = query("DELETE FROM insight_user_byok WHERE user_id=?")
             .bind(uid)
             .execute(&*c)
             .await?;
+        drop(c);
+        if deleted.rows_affected() > 0 {
+            self.notify_access_change(Some(uid));
+        }
         Ok(())
     }
     /// Connectivity probe uses the bounded completion adapter; persisted result is
@@ -260,6 +287,8 @@ impl Insight {
         if n.rows_affected() == 0 {
             return Err(Error::Code("credential_changed"));
         }
+        drop(c);
+        self.notify_access_change(Some(uid));
         Ok(json!({"ok":result.is_ok(),"error":error,"models":models}))
     }
     pub async fn admin_config(&self, uid: i64) -> Result<Value, Error> {
@@ -269,7 +298,7 @@ impl Insight {
     }
     async fn config_on<E: Executor>(&self, e: &E) -> Result<Value, Error> {
         Ok(
-            json!({"allowed_models":serde_json::from_str::<Value>(&self.setting(e,"insight_tldr_allowed_models","[]").await?).unwrap_or(json!([])),"default_model":self.setting(e,"insight_tldr_default_model",&self.config.model).await?,"gateway_base_url":self.setting(e,"insight_tldr_gateway_url",&self.config.gateway_base).await?,"gateway_api_key":"","gateway_api_key_set":!self.setting(e,"insight_tldr_gateway_key",&self.config.gateway_key).await?.is_empty(),"openrouter_api_key":"","openrouter_api_key_set":!self.setting(e,"insight_tldr_openrouter_key",&self.config.openrouter_key).await?.is_empty(),"ai_route_mode":self.setting(e,"insight_tldr_route_mode",&self.config.mode).await?}),
+            json!({"allowed_models":serde_json::from_str::<Value>(&self.allowed_models(e).await?).unwrap_or(json!([])),"default_model":self.setting(e,"insight_tldr_default_model",&self.config.model).await?,"gateway_base_url":self.setting(e,"insight_tldr_gateway_url",&self.config.gateway_base).await?,"gateway_api_key":"","gateway_api_key_set":!self.setting(e,"insight_tldr_gateway_key",&self.config.gateway_key).await?.is_empty(),"openrouter_api_key":"","openrouter_api_key_set":!self.setting(e,"insight_tldr_openrouter_key",&self.config.openrouter_key).await?.is_empty(),"ai_route_mode":self.setting(e,"insight_tldr_route_mode",&self.config.mode).await?}),
         )
     }
     pub async fn update_config(&self, uid: i64, v: Value) -> Result<Value, Error> {
@@ -287,7 +316,11 @@ impl Insight {
             return Err(invalid());
         }
         let base = v["gateway_base_url"].as_str().ok_or_else(invalid)?;
-        let u = url::Url::parse(base).map_err(|_| invalid())?;
+        let u = if base.is_empty() && v["ai_route_mode"] == "openrouter" {
+            url::Url::parse("https://unused.invalid").map_err(|_| invalid())?
+        } else {
+            url::Url::parse(base).map_err(|_| invalid())?
+        };
         if !matches!(u.scheme(), "http" | "https")
             || !u.username().is_empty()
             || u.password().is_some()
@@ -315,7 +348,9 @@ impl Insight {
                 } else {
                     v[name].as_str().unwrap_or("").into()
                 };
-                if (name == "gateway_api_key" || name == "openrouter_api_key") && value.is_empty() {
+                if (name == "gateway_api_key" || name == "openrouter_api_key")
+                    && v.get(name).is_none()
+                {
                     continue;
                 }
                 self.put_setting(&*tx, key, &value).await?
@@ -326,7 +361,10 @@ impl Insight {
         match result {
             Ok(()) => {
                 tx.commit().await.map_err(|_| Error::Database)?;
-                self.config_on(&*c).await
+                self.notify_access_change(None);
+                let view = self.config_on(&*c).await;
+                drop(c);
+                view
             }
             Err(e) => {
                 let _ = tx.rollback().await;
@@ -345,7 +383,12 @@ impl Insight {
             )
             .await?
         }
-        Ok(json!({"enabled":self.byok_enabled(&*c).await?}))
+        if enabled.is_some() {
+            self.notify_access_change(None);
+        }
+        let view = json!({"enabled":self.byok_enabled(&*c).await?});
+        drop(c);
+        Ok(view)
     }
     pub async fn access_list(&self, actor: i64) -> Result<Value, Error> {
         let c = self.db.connection().await?;
@@ -353,7 +396,7 @@ impl Insight {
         self.access_on(&*c).await
     }
     async fn access_on<E: Executor>(&self, e: &E) -> Result<Value, Error> {
-        let rows=query("SELECT a.*,u.username,u.first_name,g.username AS granted_by_username FROM insight_access a LEFT JOIN users u ON u.id=a.user_id LEFT JOIN users g ON g.id=a.granted_by ORDER BY a.granted_at DESC").fetch_all(e).await?;
+        let rows=query("SELECT a.*,u.username,u.first_name,g.username AS granted_by_username FROM insight_access a LEFT JOIN users u ON u.id=a.user_id LEFT JOIN users g ON g.id=a.granted_by ORDER BY a.granted_at ASC").fetch_all(e).await?;
         let mut list = Vec::new();
         for r in rows {
             list.push(json!({"user_id":r.try_get::<i64,_>("user_id")?,"lang":r.try_get::<String,_>("lang")?,"granted_by":r.try_get::<i64,_>("granted_by")?,"granted_at":r.try_get::<chrono::DateTime<Utc>,_>("granted_at")?,"username":r.try_get::<Option<String>,_>("username")?,"first_name":r.try_get::<Option<String>,_>("first_name")?,"granted_by_username":r.try_get::<Option<String>,_>("granted_by_username")?}));
@@ -361,7 +404,7 @@ impl Insight {
         Ok(json!(list))
     }
     pub async fn grant(&self, actor: i64, uid: i64, lang: &str) -> Result<Value, Error> {
-        if uid <= 0 || !matches!(lang, "en" | "ru") {
+        if uid <= 0 || !valid_language(lang) {
             return Err(invalid());
         }
         let mut c = self.db.connection().await?;
@@ -369,11 +412,14 @@ impl Insight {
         let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
             .await
             .map_err(|_| Error::Database)?;
-        let result=async{query("INSERT INTO users(id,created_at,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING").bind(uid).bind(Utc::now()).bind(Utc::now()).execute(&*tx).await?;query("INSERT INTO user_permissions(user_id,plugin,feature,granted_by,granted_at) VALUES(?,'insight','summary',?,?) ON CONFLICT(user_id,plugin,feature) DO UPDATE SET granted_by=excluded.granted_by,granted_at=excluded.granted_at,expires_at=NULL").bind(uid).bind(actor).bind(Utc::now()).execute(&*tx).await?;query("INSERT INTO insight_access(user_id,lang,granted_by,granted_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang,granted_by=excluded.granted_by,granted_at=excluded.granted_at").bind(uid).bind(lang).bind(actor).bind(Utc::now()).execute(&*tx).await?;query("INSERT INTO insight_user_settings(user_id,lang) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang").bind(uid).bind(lang).execute(&*tx).await?;Ok::<_,Error>(())}.await;
+        let result=async{if query("SELECT 1 FROM users WHERE id=?").bind(uid).fetch_optional(&*tx).await?.is_none(){return Err(Error::Code("not_found"));}query("INSERT INTO user_permissions(user_id,plugin,feature,granted_by,granted_at) VALUES(?,'insight','summary',?,?) ON CONFLICT(user_id,plugin,feature) DO UPDATE SET granted_by=excluded.granted_by,granted_at=excluded.granted_at,expires_at=NULL").bind(uid).bind(actor).bind(Utc::now()).execute(&*tx).await?;query("INSERT INTO insight_access(user_id,lang,granted_by,granted_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang,granted_by=excluded.granted_by,granted_at=excluded.granted_at").bind(uid).bind(lang).bind(actor).bind(Utc::now()).execute(&*tx).await?;query("INSERT INTO insight_user_settings(user_id,lang) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET lang=excluded.lang").bind(uid).bind(lang).execute(&*tx).await?;Ok::<_,Error>(())}.await;
         match result {
             Ok(()) => {
                 tx.commit().await.map_err(|_| Error::Database)?;
-                let list = self.access_on(&*c).await?;
+                self.notify_access_change(Some(uid));
+                let list = self.access_on(&*c).await;
+                drop(c);
+                let list = list?;
                 Ok(list
                     .as_array()
                     .and_then(|a| a.iter().find(|v| v["user_id"] == uid))
@@ -392,10 +438,12 @@ impl Insight {
         let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
             .await
             .map_err(|_| Error::Database)?;
-        let result=async{query("DELETE FROM user_permissions WHERE user_id=? AND plugin='insight' AND feature='summary'").bind(uid).execute(&*tx).await?;query("DELETE FROM insight_access WHERE user_id=?").bind(uid).execute(&*tx).await?;Ok::<_,Error>(())}.await;
+        let result=async{if query("SELECT 1 FROM insight_access WHERE user_id=?").bind(uid).fetch_optional(&*tx).await?.is_none(){return Err(Error::Code("not_found"));}query("DELETE FROM user_permissions WHERE user_id=? AND plugin='insight' AND feature='summary'").bind(uid).execute(&*tx).await?;query("DELETE FROM insight_access WHERE user_id=?").bind(uid).execute(&*tx).await?;Ok::<_,Error>(())}.await;
         match result {
             Ok(()) => {
                 tx.commit().await.map_err(|_| Error::Database)?;
+                drop(c);
+                self.notify_access_change(Some(uid));
                 Ok(())
             }
             Err(e) => {
@@ -405,12 +453,13 @@ impl Insight {
         }
     }
     pub async fn lookup(&self, actor: i64, q: &str) -> Result<Value, Error> {
-        if q.len() > 128 {
+        let q = q.trim_start_matches('@');
+        if q.is_empty() || q.len() > 128 {
             return Err(invalid());
         }
         let c = self.db.connection().await?;
         self.authorize(&*c, actor, None, true).await?;
-        let rows=query("SELECT id,username,first_name FROM users WHERE username LIKE ? OR first_name LIKE ? OR CAST(id AS TEXT)=? LIMIT 20").bind(format!("%{q}%")).bind(format!("%{q}%")).bind(q).fetch_all(&*c).await?;
+        let rows=query("SELECT id,username,first_name FROM users WHERE ((?=0 AND username LIKE ? COLLATE NOCASE) OR (?=1 AND CAST(id AS TEXT)=?)) LIMIT 20").bind(q.bytes().all(|b| b.is_ascii_digit())).bind(format!("%{q}%")).bind(q.bytes().all(|b| b.is_ascii_digit())).bind(q).fetch_all(&*c).await?;
         let mut list = Vec::new();
         for r in rows {
             list.push(json!({"id":r.try_get::<i64,_>("id")?,"username":r.try_get::<Option<String>,_>("username")?,"first_name":r.try_get::<Option<String>,_>("first_name")?}))
@@ -435,15 +484,15 @@ impl Insight {
             .base_url
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty());
-        v.api_key = v
-            .api_key
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty());
+        v.api_key = v.api_key.map(|s| s.trim().to_owned());
         let (key, stored_revision) = {
             let c = self.db.connection().await?;
             self.authorize(&*c, uid, None, false).await?;
             self.authorize_byok_management(&*c, uid).await?;
-            if let Some(key) = v.api_key.filter(|s| !s.is_empty()) {
+            if v.api_key.as_deref() == Some("") {
+                return Ok(json!({"ok":false,"error":"api_key_required","models":[]}));
+            }
+            if let Some(key) = v.api_key {
                 (key, None)
             } else {
                 let Some(r) = query("SELECT * FROM insight_user_byok WHERE user_id=?")
@@ -492,7 +541,7 @@ impl Insight {
         self.byok_view(uid).await
     }
     /// Current configured owner or current DB owner role, never a JWT role.
-    async fn is_owner<E: Executor>(&self, e: &E, uid: i64) -> Result<bool, Error> {
+    pub(crate) async fn is_owner<E: Executor>(&self, e: &E, uid: i64) -> Result<bool, Error> {
         self.authorize(e, uid, None, false).await?;
         let role: String = query("SELECT role FROM users WHERE id=?")
             .bind(uid)
@@ -536,12 +585,8 @@ impl Insight {
             let c = self.db.connection().await?;
             if !self.is_owner(&*c, uid).await? {
                 // Legacy deliberately ignores even invalid overrides for nonowners.
-                let allowed: Vec<String> = serde_json::from_str(
-                    &self
-                        .setting(&*c, "insight_tldr_allowed_models", "[]")
-                        .await?,
-                )
-                .map_err(|_| invalid())?;
+                let allowed: Vec<String> = serde_json::from_str(&self.allowed_models(&*c).await?)
+                    .map_err(|_| invalid())?;
                 return Ok(json!(
                     allowed
                         .into_iter()
@@ -692,3 +737,39 @@ pub struct ModelProbeOptions {
 
 // Kept private: this revision includes credentials and must never be logged.
 type ByokRevision = (String, Option<String>, String, String, i64);
+
+pub(crate) fn valid_language(lang: &str) -> bool {
+    matches!(lang, "en" | "ru" | "uk" | "de" | "fr" | "es" | "zh" | "ja")
+}
+
+impl Insight {
+    /// PATCH changes the existing access row only, never grant provenance.
+    pub async fn update_access(&self, actor: i64, uid: i64, lang: &str) -> Result<Value, Error> {
+        if !valid_language(lang) {
+            return Err(invalid());
+        }
+        let c = self.db.connection().await?;
+        self.authorize(&*c, actor, None, true).await?;
+        let n = query("UPDATE insight_access SET lang=? WHERE user_id=?")
+            .bind(lang)
+            .bind(uid)
+            .execute(&*c)
+            .await?;
+        if n.rows_affected() == 0 {
+            return Err(Error::Code("not_found"));
+        }
+        Ok(self
+            .access_on(&*c)
+            .await?
+            .as_array()
+            .and_then(|a| a.iter().find(|v| v["user_id"] == uid))
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+    pub(crate) async fn allowed_models<E: Executor>(&self, e: &E) -> Result<String, Error> {
+        let fallback =
+            serde_json::to_string(&vec![self.config.model.clone()]).map_err(|_| invalid())?;
+        self.setting(e, "insight_tldr_allowed_models", &fallback)
+            .await
+    }
+}

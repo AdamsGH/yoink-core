@@ -10,8 +10,8 @@ impl Insight {
         let now = Utc::now();
         let today = now.date_naive();
         let week = today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
-        let month = today - chrono::Duration::days(30);
-        let rows=query("SELECT strftime('%Y-%m-%d',created_at/1000000,'unixepoch') AS day,command,status,alias_key,route,CASE WHEN video_seconds IS NOT NULL THEN 'youtube' ELSE 'web' END AS kind,count(*) AS n,sum(CASE WHEN video_seconds IS NOT NULL THEN max(0,video_seconds/60.0) ELSE 0 END) AS vm,sum(CASE WHEN video_seconds IS NULL THEN max(0,coalesce(content_chars,0)/1000.0) ELSE 0 END) AS rm FROM insight_usage_log WHERE user_id=? AND status IN ('ok','cached') GROUP BY day,command,status,alias_key,route,kind").bind(uid).fetch_all(&*c).await?;
+        let cutoff = now - chrono::Duration::days(30);
+        let rows=query("SELECT strftime('%Y-%m-%d',created_at/1000000,'unixepoch') AS day,created_at>=? AS recent,command,status,alias_key,route,CASE WHEN video_seconds IS NOT NULL THEN 'youtube' ELSE 'web' END AS kind,count(*) AS n,sum(CASE WHEN video_seconds IS NOT NULL THEN CASE WHEN video_seconds>0 THEN video_seconds/60.0 ELSE max(0,coalesce(content_chars,0)/825.0) END ELSE 0 END) AS vm,sum(CASE WHEN video_seconds IS NULL THEN max(0,coalesce(content_chars,0)/1000.0) ELSE 0 END) AS rm FROM insight_usage_log WHERE user_id=? AND status IN ('ok','cached') GROUP BY day,recent,command,status,alias_key,route,kind").bind(cutoff).bind(uid).fetch_all(&*c).await?;
         let (mut total, mut tw, mut td, mut tt, mut ttw, mut ttd, mut yt, mut web, mut vm, mut rm) =
             (0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0f64, 0f64);
         let mut cmds = BTreeMap::<String, i64>::new();
@@ -21,6 +21,7 @@ impl Insight {
         let mut routes = BTreeMap::<String, i64>::new();
         for r in rows {
             let day: String = r.try_get("day")?;
+            let recent: bool = r.try_get("recent")?;
             let date =
                 chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d").map_err(|_| Error::Database)?;
             let command: String = r.try_get("command")?;
@@ -38,7 +39,7 @@ impl Insight {
                 *cmds
                     .entry(if tldr { "tldr".into() } else { command })
                     .or_default() += n;
-                if date >= month {
+                if recent {
                     *days.entry(day.clone()).or_default() += n
                 }
             }
@@ -66,7 +67,7 @@ impl Insight {
                 rm += w;
                 let route: String = r.try_get("route")?;
                 *routes.entry(route).or_default() += n;
-                if date >= month {
+                if recent {
                     let entry = tdays.entry(day).or_default();
                     entry.0 += n;
                     entry.1 += v + w;
@@ -74,6 +75,8 @@ impl Insight {
                 }
             }
         }
+        let mut aliases = aliases.into_iter().collect::<Vec<_>>();
+        aliases.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         fn round(v: f64) -> f64 {
             (v * 10.0).round() / 10.0
         }

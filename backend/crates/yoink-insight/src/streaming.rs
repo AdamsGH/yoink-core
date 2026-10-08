@@ -247,7 +247,7 @@ impl HttpCompletion {
                     Err(error) => {
                         // Executable services/tldr.py retries gateway errors only
                         // before any text is emitted. A BYOK route has no fallback.
-                        if state.emitted || route.via == "byok" {
+                        if state.emitted || route.is_byok() {
                             return Err(error);
                         }
                         last = error;

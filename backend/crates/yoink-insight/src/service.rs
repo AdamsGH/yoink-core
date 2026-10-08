@@ -30,6 +30,7 @@ pub struct Config {
     pub max_chars: usize,
     pub transcript_languages: Vec<String>,
     pub search_model: String,
+    pub default_lang: String,
     pub request_timeout: Duration,
 }
 impl Default for Config {
@@ -49,6 +50,7 @@ impl Default for Config {
             max_chars: 40000,
             transcript_languages: vec!["en".into(), "ru".into()],
             search_model: String::new(),
+            default_lang: "en".into(),
             request_timeout: Duration::from_secs(120),
         }
     }
@@ -58,6 +60,9 @@ impl std::fmt::Debug for Config {
         f.write_str("InsightConfig([REDACTED])")
     }
 }
+/// Committed authorization changes: Some(user) targets one user; None invalidates all.
+/// The coordinator binds this transport-neutral callback to its identity notifier.
+pub type AccessChangeCallback = Arc<dyn Fn(Option<i64>) + Send + Sync>;
 #[derive(Clone)]
 pub struct Insight {
     pub db: Database,
@@ -65,6 +70,7 @@ pub struct Insight {
     pub content: Option<Arc<dyn ContentSource>>,
     pub completion: Arc<dyn Completion>,
     pub research: Option<Arc<dyn crate::research::Research>>,
+    access_change_callback: Option<AccessChangeCallback>,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct Request {
@@ -103,6 +109,7 @@ impl Insight {
             || !(100..=200000).contains(&config.max_chars)
             || config.summary_limit < 0
             || config.tldr_limit < 0
+            || !crate::management::valid_language(&config.default_lang)
             || !matches!(config.mode.as_str(), "auto" | "a2a" | "openrouter")
         {
             return Err(invalid());
@@ -113,7 +120,18 @@ impl Insight {
             content: None,
             completion,
             research: None,
+            access_change_callback: None,
         })
+    }
+    /// Install a notifier before cloning the service into adapters. Builders preserve it.
+    pub fn with_access_change_callback(mut self, callback: AccessChangeCallback) -> Self {
+        self.access_change_callback = Some(callback);
+        self
+    }
+    pub(crate) fn notify_access_change(&self, user_id: Option<i64>) {
+        if let Some(callback) = &self.access_change_callback {
+            callback(user_id);
+        }
     }
     /// Install the coordinator-owned real content source on this same service.
     pub fn with_content(mut self, content: Arc<dyn ContentSource>) -> Self {
@@ -253,7 +271,7 @@ impl Insight {
                 });
             if effective_grant(&p, &spec, &grants, &[], now).is_none() {
                 // Tested BYOK is a provider grant only while the global tumbler is on.
-                let byok=provider_grants&&plugin=="insight"&&feature=="tldr"&&self.byok_enabled(e).await?&&query("SELECT 1 FROM insight_user_byok WHERE user_id=? AND tested_at IS NOT NULL AND test_error IS NULL").bind(uid).fetch_optional(e).await?.is_some();
+                let byok=provider_grants&&plugin=="insight"&&feature=="tldr"&&self.byok_enabled(e).await?&&query("SELECT 1 FROM insight_user_byok WHERE user_id=? AND tested_at IS NOT NULL AND test_error IS NULL AND api_key<>''").bind(uid).fetch_optional(e).await?.is_some();
                 if !byok {
                     return Err(Error::Code("access_denied"));
                 }
@@ -296,7 +314,7 @@ impl Insight {
     }
     pub async fn aliases(&self, uid: i64) -> Result<Vec<Alias>, Error> {
         let c = self.db.connection().await?;
-        self.authorize(&*c, uid, None, false).await?;
+        self.authorize(&*c, uid, Some("tldr"), false).await?;
         self.load_aliases(&*c, uid).await
     }
     async fn load_aliases<E: Executor>(&self, e: &E, uid: i64) -> Result<Vec<Alias>, Error> {
@@ -321,15 +339,43 @@ impl Insight {
         &self,
         uid: i64,
         id: Option<i64>,
-        a: AliasInput,
+        mut a: AliasInput,
     ) -> Result<Alias, Error> {
-        a.validate()?;
         let c = self.db.connection().await?;
-        self.authorize(&*c, uid, Some("tldr"), false).await?;
+        self.authorize(
+            &*c,
+            uid,
+            if id.is_none() { Some("tldr") } else { None },
+            false,
+        )
+        .await?;
         let rows = self.load_aliases(&*c, uid).await?;
         if id.is_some_and(|id| !rows.iter().any(|r| r.id == id)) {
             return Err(Error::Code("not_found"));
         }
+        if let Some(old) = rows.iter().find(|r| Some(r.id) == id) {
+            a.aliases = a.aliases.or_else(|| old.aliases.clone());
+            a.prompt = a.prompt.or_else(|| old.prompt.clone());
+            a.domains = a.domains.or_else(|| old.domains.clone());
+            a.target_alias = a.target_alias.or_else(|| old.target_alias.clone());
+        }
+        a.aliases = a
+            .aliases
+            .map(|value| prompts::csv(Some(&value)).join(", "))
+            .filter(|value| !value.is_empty());
+        a.domains = a
+            .domains
+            .map(|value| prompts::csv(Some(&value)).join(", "))
+            .filter(|value| !value.is_empty());
+        a.prompt = a
+            .prompt
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        a.target_alias = a
+            .target_alias
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty());
+        a.validate()?;
         if id.is_none() && rows.len() >= 20 {
             return Err(Error::Code("alias_limit"));
         }
@@ -389,11 +435,11 @@ impl Insight {
             }]);
         }
         if self.byok_enabled(e).await?
-            && let Some(r)=query("SELECT * FROM insight_user_byok WHERE user_id=? AND tested_at IS NOT NULL AND test_error IS NULL").bind(uid).fetch_optional(e).await? {return Ok(vec![crate::provider::byok(&r.try_get::<String,_>("provider")?,r.try_get::<Option<String>,_>("base_url")?.as_deref(),r.try_get("api_key")?,r.try_get("model")?)?])
+            && !self.legacy_gateway_precedence(e, uid).await?
+            && let Some(r)=query("SELECT * FROM insight_user_byok WHERE user_id=? AND tested_at IS NOT NULL AND test_error IS NULL AND api_key<>''").bind(uid).fetch_optional(e).await? {return Ok(vec![crate::provider::byok(&r.try_get::<String,_>("provider")?,r.try_get::<Option<String>,_>("base_url")?.as_deref(),r.try_get("api_key")?,r.try_get("model")?)?])
         }
-        let allowed: Vec<String> =
-            serde_json::from_str(&self.setting(e, "insight_tldr_allowed_models", "[]").await?)
-                .map_err(|_| Error::Code("invalid_config"))?;
+        let allowed: Vec<String> = serde_json::from_str(&self.allowed_models(e).await?)
+            .map_err(|_| Error::Code("invalid_config"))?;
         let default = self
             .setting(e, "insight_tldr_default_model", &self.config.model)
             .await?;
@@ -404,7 +450,10 @@ impl Insight {
             .map(|r| r.try_get::<Option<String>, _>("tldr_model"))
             .transpose()?
             .flatten();
-        let model = selected.filter(|m| allowed.contains(m)).unwrap_or(default);
+        let owner = self.is_owner(e, uid).await?;
+        let model = selected
+            .filter(|m| owner || allowed.contains(m))
+            .unwrap_or(default);
         if model.is_empty() {
             return Err(Error::Code("no_route"));
         }
@@ -442,7 +491,7 @@ impl Insight {
                     base: self.config.openrouter_base.clone(),
                     key,
                     model,
-                    via: "gateway",
+                    via: "openrouter",
                 })
             }
         }
@@ -520,9 +569,21 @@ impl Insight {
             return Err(invalid());
         }
         let child = cancel.child_token();
-        let operation = self.run(uid, &request, sink, child.clone());
+        let reservation_id = format!(
+            "{:x}",
+            Sha256::digest(format!(
+                "{uid}:{}",
+                Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            ))
+        );
+        let cleanup = QuotaReservation {
+            db: self.db.clone(),
+            id: reservation_id.clone(),
+        };
+        let operation = self.run(uid, &request, sink, child.clone(), &reservation_id);
         let result = tokio::select! {biased;_=cancel.cancelled()=>Err(Error::Code("cancelled")),r=tokio::time::timeout(self.config.request_timeout,operation)=>r.unwrap_or(Err(Error::Code("timeout")))};
         child.cancel();
+        cleanup.release().await;
         if let Err(error) = &result {
             let code = match error {
                 Error::Code(code) => *code,
@@ -538,13 +599,16 @@ impl Insight {
                     .ok()
                     .flatten()
                     .and_then(|r| r.try_get::<String, _>(0).ok())
-                    .unwrap_or("en".into());
+                    .unwrap_or(self.config.default_lang.clone());
                 let video = normalize(&request.url).ok().and_then(|u| video_id(&u));
                 let route = self
                     .routes(&*c, uid, &request.command)
                     .await
                     .ok()
-                    .and_then(|r| r.first().map(|r| r.via))
+                    .and_then(|r| {
+                        r.first()
+                            .map(|r| if r.is_byok() { "byok" } else { "gateway" })
+                    })
                     .unwrap_or("gateway");
                 let _ = self
                     .log(
@@ -571,6 +635,7 @@ impl Insight {
         r: &Request,
         sink: Option<&dyn crate::provider::DeltaSink>,
         cancel: CancellationToken,
+        reservation_id: &str,
     ) -> Result<Summary, Error> {
         let url = normalize(&r.url)?;
         let video = video_id(&url);
@@ -593,7 +658,7 @@ impl Insight {
                 .as_ref()
                 .map(|r| r.try_get::<String, _>("lang"))
                 .transpose()?
-                .unwrap_or("en".into());
+                .unwrap_or(self.config.default_lang.clone());
             let custom =
                 query("SELECT prompt FROM insight_user_prompts WHERE user_id=? AND command=?")
                     .bind(uid)
@@ -602,7 +667,7 @@ impl Insight {
                     .await?
                     .map(|r| r.try_get::<String, _>("prompt"))
                     .transpose()?;
-            let alias = if r.command == "tldr" {
+            let alias = if r.command == "tldr" && (r.alias.is_some() || r.focus.is_none()) {
                 prompts::resolve(
                     &url,
                     r.alias.as_deref(),
@@ -614,11 +679,20 @@ impl Insight {
             if r.alias.is_some() && alias.is_none() {
                 return Err(Error::Code("unknown_alias"));
             }
-            let search = row
-                .as_ref()
-                .map(|r| r.try_get::<bool, _>("use_search"))
-                .transpose()?
-                .unwrap_or(false);
+            let search = r.command == "tldr"
+                && self
+                    .routes(&*c, uid, &r.command)
+                    .await?
+                    .first()
+                    .is_some_and(|route| {
+                        route.via == "gateway" && route.base != self.config.openrouter_base
+                    })
+                && self.authorize_gateway(&*c, uid, "search").await.is_ok()
+                && row
+                    .as_ref()
+                    .map(|r| r.try_get::<bool, _>("use_search"))
+                    .transpose()?
+                    .unwrap_or(false);
             if search {
                 self.authorize(&*c, uid, Some("search"), false).await?
             }
@@ -629,17 +703,56 @@ impl Insight {
                 .flatten();
             (lang, custom, alias, search, token)
         };
-        // Preserve imported default Gemini cache semantics, without cross-user prompt leakage.
-        if r.command != "tldr" && custom.is_none() {
-            let c = self.db.connection().await?;
-            self.authorize(&*c, uid, Some(feature), false).await?;
-            if let Some(row)=query("SELECT result FROM insight_summary_cache WHERE content_key=? AND lang=? AND command=? AND expires_at>?").bind(video.clone()).bind(&lang).bind(&r.command).bind(Utc::now()).fetch_optional(&*c).await?{let text=row.try_get("result")?;self.log(&*c,uid,r,&lang,"cached",None,video.as_deref(),None,None,None,"gateway").await?;return Ok(Summary{result:text,cached:true,route:"gateway".into(),alias:None})}
-        }
+        // Legacy shared cache rows lack producer/user/prompt/credential provenance.
+        // Preserve them for migration/audit, but never serve their unverifiable results.
+        // Only the user- and configuration-bound native cache below is eligible.
         let routes = {
             let c = self.db.connection().await?;
             self.authorize(&*c, uid, Some(feature), false).await?;
             self.routes(&*c, uid, &r.command).await?
         };
+        let mut reservation = if feature == "tldr" {
+            Some(self.reserve_quota(uid, feature, reservation_id).await?)
+        } else {
+            None
+        };
+        let instruction = prompts::build(
+            &r.command,
+            &lang,
+            "",
+            custom.as_deref(),
+            alias.as_ref().map(|entry| entry.1.as_str()),
+            None,
+            &[],
+        );
+        let key = format!(
+            "{:x}",
+            Sha256::digest(format!(
+                "replay-v1:{uid}\n{}\n{}\n{routes:?}\n{}\n{lang}\n{custom:?}\n{alias:?}\n{token:?}\n{search}\n{instruction}\n{}",
+                url,
+                r.command,
+                routes
+                    .iter()
+                    .map(|r| format!("{}:{}", r.base, r.key))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                self.config.search_model
+            ))
+        );
+        let via = if routes[0].is_byok() {
+            "byok"
+        } else {
+            "gateway"
+        };
+        let alias_key = alias.as_ref().map(|a| a.0.as_str());
+        if r.focus.is_none() {
+            let c = self.db.connection().await?;
+            self.authorize(&*c, uid, Some(feature), false).await?;
+            if let Some(row) = query("SELECT result FROM insight_native_cache WHERE cache_key=? AND user_id=? AND expires_at>?").bind(&key).bind(uid).bind(Utc::now()).fetch_optional(&*c).await? {
+                self.log(&*c, uid, r, &lang, "cached", None, video.as_deref(), None, None, alias_key, via).await?;
+                return Ok(Summary { result: row.try_get("result")?, cached: true, route: via.into(), alias: alias.map(|a| a.0) });
+            }
+        }
         let content = self
             .content
             .as_ref()
@@ -692,13 +805,23 @@ impl Insight {
                 text.chars().take(1200).collect::<String>()
             );
             let items = if let (Some(research), Some(route)) = (&self.research, &research_route) {
-                research.search(route, &query, cancel.clone()).await?
+                match research.search(route, &query, cancel.clone()).await {
+                    Ok(items) => items,
+                    Err(Error::Code("cancelled")) => return Err(Error::Code("cancelled")),
+                    Err(_) => Vec::new(),
+                }
             } else {
-                self.content
+                match self
+                    .content
                     .as_ref()
                     .ok_or(Error::Code("content_unavailable"))?
                     .research(&query, cancel.clone())
-                    .await?
+                    .await
+                {
+                    Ok(items) => items,
+                    Err(Error::Code("cancelled")) => return Err(Error::Code("cancelled")),
+                    Err(_) => Vec::new(),
+                }
             };
             items
                 .into_iter()
@@ -721,52 +844,8 @@ impl Insight {
             r.focus.as_deref(),
             &research,
         );
-        let key = format!(
-            "{:x}",
-            Sha256::digest(format!(
-                "{uid}\n{}\n{}\n{routes:?}\n{}\n{prompt}",
-                url,
-                r.command,
-                routes
-                    .iter()
-                    .map(|r| format!("{}:{}", r.base, r.key))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ))
-        );
-        let via = routes[0].via;
-        let alias_key = alias.as_ref().map(|a| a.0.as_str());
-        let reservation = format!(
-            "{:x}",
-            Sha256::digest(format!(
-                "{key}:{}",
-                Utc::now().timestamp_nanos_opt().unwrap_or(0)
-            ))
-        );
-        {
-            let c = self.db.connection().await?;
-            self.authorize(&*c, uid, Some(feature), false).await?;
-            if let Some(row)=query("SELECT result FROM insight_native_cache WHERE cache_key=? AND user_id=? AND expires_at>?").bind(&key).bind(uid).bind(Utc::now()).fetch_optional(&*c).await?{self.log(&*c,uid,r,&lang,"cached",None,video.as_deref(),Some(text.chars().count() as i32),content.video_seconds,alias_key,via).await?;return Ok(Summary{result:row.try_get("result")?,cached:true,route:via.into(),alias:alias.map(|a|a.0)})}
-            let now = Utc::now();
-            query("DELETE FROM insight_native_reservations WHERE expires_at<=?")
-                .bind(now)
-                .execute(&*c)
-                .await?;
-            query("DELETE FROM insight_native_cache WHERE expires_at<=?")
-                .bind(now)
-                .execute(&*c)
-                .await?;
-            let day = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
-            let limit = if feature == "summary" {
-                self.config.summary_limit
-            } else {
-                self.config.tldr_limit
-            };
-            let n:i64=query("SELECT (SELECT count(*) FROM insight_usage_log WHERE user_id=? AND status='ok' AND created_at>=? AND ((?='tldr' AND command LIKE 'tldr%') OR (?='summary' AND command IN ('summary','about')))) + (SELECT count(*) FROM insight_native_reservations WHERE user_id=? AND command=? AND created_at>=? AND expires_at>?) AS n").bind(uid).bind(day).bind(feature).bind(feature).bind(uid).bind(feature).bind(day).bind(now).fetch_one(&*c).await?.try_get("n")?;
-            if limit > 0 && n >= limit {
-                return Err(Error::Code("quota_exceeded"));
-            }
-            query("INSERT INTO insight_native_reservations(id,user_id,command,created_at,expires_at) VALUES(?,?,?,?,?)").bind(&reservation).bind(uid).bind(feature).bind(now).bind(now+chrono::Duration::seconds(self.config.request_timeout.as_secs() as i64+5)).execute(&*c).await?;
+        if reservation.is_none() {
+            reservation = Some(self.reserve_quota(uid, feature, reservation_id).await?);
         }
         let outcome = if let Some(sink) = sink {
             let guarded = AuthorizedSink {
@@ -786,10 +865,7 @@ impl Insight {
             self.completion.complete(&routes, &prompt, cancel).await
         };
         let mut c = self.db.connection().await?;
-        query("DELETE FROM insight_native_reservations WHERE id=?")
-            .bind(&reservation)
-            .execute(&*c)
-            .await?;
+
         self.authorize(&*c, uid, Some(feature), false).await?;
         if search {
             self.authorize(&*c, uid, Some("search"), false).await?
@@ -811,7 +887,8 @@ impl Insight {
                     .await
                     .map_err(|_| Error::Database)?;
                 let saved=async {
-                query("INSERT INTO insight_native_cache(cache_key,user_id,result,expires_at) VALUES(?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET result=excluded.result,expires_at=excluded.expires_at").bind(&key).bind(uid).bind(&result).bind(Utc::now()+chrono::Duration::hours(24)).execute(&*tx).await?;
+                if r.focus.is_none() { query("INSERT INTO insight_native_cache(cache_key,user_id,result,expires_at) VALUES(?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET result=excluded.result,expires_at=excluded.expires_at").bind(&key).bind(uid).bind(&result).bind(Utc::now()+chrono::Duration::hours(24)).execute(&*tx).await?; }
+                if let Some(lease) = &reservation { query("DELETE FROM insight_native_reservations WHERE id=?").bind(&lease.id).execute(&*tx).await?; }
                 self.log(
                     &*tx,
                     uid,
@@ -887,9 +964,10 @@ impl Insight {
         let summary = self.authorize(e, uid, Some("summary"), false).await.is_ok();
         let tldr = self.authorize(e, uid, Some("tldr"), false).await.is_ok();
         let search = self.authorize(e, uid, Some("search"), false).await.is_ok();
+        let search_gateway = self.authorize_gateway(e, uid, "search").await.is_ok();
         let gateway = self.authorize_gateway(e, uid, "tldr").await.is_ok();
         Ok(
-            json!({"lang":row.as_ref().map(|r|r.try_get::<String,_>("lang")).transpose()?.unwrap_or("en".into()),"has_gemini_access":summary,"has_tldr_access":tldr,"has_tldr_gateway_access":gateway,"has_search_access":search,"has_search_gateway_access":search,"tldr_model":row.as_ref().map(|r|r.try_get::<Option<String>,_>("tldr_model")).transpose()?.flatten(),"tldr_allowed_models":serde_json::from_str::<Value>(&self.setting(e,"insight_tldr_allowed_models","[]").await?).unwrap_or(json!([])),"github_token_set":row.as_ref().map(|r|r.try_get::<Option<String>,_>("github_token")).transpose()?.flatten().is_some(),"use_search":row.as_ref().map(|r|r.try_get::<bool,_>("use_search")).transpose()?.unwrap_or(false),"prompts":prompts,"prompt_defaults":{"summary":prompts::SUMMARY,"about":prompts::ABOUT,"tldr":prompts::TLDR},"alias_defaults":{"max":prompts::builtin("max"),"nobullshit":prompts::builtin("nobullshit"),"noshit":prompts::builtin("noshit"),"tale":prompts::builtin("tale")}}),
+            json!({"lang":row.as_ref().map(|r|r.try_get::<String,_>("lang")).transpose()?.unwrap_or(self.config.default_lang.clone()),"has_gemini_access":summary,"has_tldr_access":tldr,"has_tldr_gateway_access":gateway,"has_search_access":search,"has_search_gateway_access":search_gateway,"tldr_model":if gateway { row.as_ref().map(|r|r.try_get::<Option<String>,_>("tldr_model")).transpose()?.flatten() } else { None },"tldr_allowed_models":if gateway { serde_json::from_str::<Value>(&self.allowed_models(e).await?).unwrap_or(json!([])) } else { json!([]) },"github_token_set":tldr && row.as_ref().map(|r|r.try_get::<Option<String>,_>("github_token")).transpose()?.flatten().is_some(),"use_search":search_gateway && row.as_ref().map(|r|r.try_get::<bool,_>("use_search")).transpose()?.unwrap_or(false),"prompts":prompts,"prompt_defaults":{"summary":prompts::SUMMARY,"about":prompts::ABOUT,"tldr":prompts::TLDR},"alias_defaults":{"max":prompts::builtin("max"),"nobullshit":prompts::builtin("nobullshit"),"noshit":prompts::builtin("noshit"),"tale":prompts::builtin("tale")}}),
         )
     }
 }
@@ -930,5 +1008,96 @@ impl crate::provider::DeltaSink for AuthorizedSink<'_> {
             }
             self.sink.delta(text).await
         })
+    }
+}
+
+/// A dropped/cancelled future releases its admission lease without permitting a
+/// partial response to commit. The expiry is a crash/restart backstop only.
+struct QuotaReservation {
+    db: Database,
+    id: String,
+}
+impl Drop for QuotaReservation {
+    fn drop(&mut self) {
+        let db = self.db.clone();
+        let id = self.id.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                if let Ok(connection) = db.connection().await {
+                    let _ = query("DELETE FROM insight_native_reservations WHERE id=?")
+                        .bind(id)
+                        .execute(&*connection)
+                        .await;
+                }
+            });
+        }
+    }
+}
+impl Insight {
+    async fn reserve_quota(
+        &self,
+        uid: i64,
+        feature: &str,
+        reservation_id: &str,
+    ) -> Result<QuotaReservation, Error> {
+        let mut connection = self.db.connection().await?;
+        self.authorize(&*connection, uid, Some(feature), false)
+            .await?;
+        let transaction = Transaction::new(&mut connection, TransactionBehavior::Immediate)
+            .await
+            .map_err(|_| Error::Database)?;
+        let now = Utc::now();
+        query("DELETE FROM insight_native_reservations WHERE expires_at<=?")
+            .bind(now)
+            .execute(&*transaction)
+            .await?;
+        query("DELETE FROM insight_native_cache WHERE expires_at<=?")
+            .bind(now)
+            .execute(&*transaction)
+            .await?;
+        let day = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let limit = if feature == "summary" {
+            self.config.summary_limit
+        } else {
+            self.config.tldr_limit
+        };
+        let count: i64 = query("SELECT (SELECT count(*) FROM insight_usage_log WHERE user_id=? AND status='ok' AND created_at>=? AND (?='summary' OR command='tldr')) + (SELECT count(*) FROM insight_native_reservations WHERE user_id=? AND (?='summary' OR command='tldr') AND created_at>=? AND expires_at>?) AS n").bind(uid).bind(day).bind(feature).bind(uid).bind(feature).bind(day).bind(now).fetch_one(&*transaction).await?.try_get("n")?;
+        if limit > 0 && count >= limit {
+            transaction.rollback().await.map_err(|_| Error::Database)?;
+            return Err(Error::Code("quota_exceeded"));
+        }
+        let id = reservation_id.to_owned();
+        query("INSERT INTO insight_native_reservations(id,user_id,command,created_at,expires_at) VALUES(?,?,?,?,?)").bind(&id).bind(uid).bind(feature).bind(now).bind(now + chrono::Duration::seconds(self.config.request_timeout.as_secs() as i64 + 5)).execute(&*transaction).await?;
+        transaction.commit().await.map_err(|_| Error::Database)?;
+        Ok(QuotaReservation {
+            db: self.db.clone(),
+            id,
+        })
+    }
+}
+
+impl QuotaReservation {
+    async fn release(&self) {
+        if let Ok(connection) = self.db.connection().await {
+            let _ = query("DELETE FROM insight_native_reservations WHERE id=?")
+                .bind(&self.id)
+                .execute(&*connection)
+                .await;
+        }
+    }
+}
+
+impl Insight {
+    /// The executable legacy resolver checks InsightAccessService, whose feature
+    /// is summary (not the tldr feature named in its docstring).
+    async fn legacy_gateway_precedence<E: Executor>(
+        &self,
+        executor: &E,
+        uid: i64,
+    ) -> Result<bool, Error> {
+        if self.is_owner(executor, uid).await? {
+            return Ok(true);
+        }
+        Ok(query("SELECT 1 FROM user_permissions WHERE user_id=? AND plugin='insight' AND feature='summary' AND (expires_at IS NULL OR expires_at>?)").bind(uid).bind(Utc::now()).fetch_optional(executor).await?.is_some())
     }
 }

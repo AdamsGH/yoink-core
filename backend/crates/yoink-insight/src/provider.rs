@@ -17,6 +17,11 @@ pub struct Route {
     pub model: String,
     pub via: &'static str,
 }
+impl Route {
+    pub fn is_byok(&self) -> bool {
+        self.via == "byok" || self.via.starts_with("byok_")
+    }
+}
 impl fmt::Debug for Route {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Route")
@@ -64,15 +69,20 @@ pub fn byok(
         "perplexity" => (Shape::OpenAi, "https://api.perplexity.ai"),
         "anthropic" => (Shape::Anthropic, "https://api.anthropic.com/v1"),
         "gemini" => (
-            Shape::Gemini,
-            "https://generativelanguage.googleapis.com/v1beta",
+            Shape::OpenAi,
+            "https://generativelanguage.googleapis.com/v1beta/openai",
         ),
         "custom_openai" => (Shape::OpenAi, ""),
         "custom_anthropic" => (Shape::Anthropic, ""),
         _ => return Err(invalid()),
     };
     let base = base.filter(|s| !s.is_empty()).unwrap_or(default);
-    let url = url::Url::parse(base).map_err(|_| invalid())?;
+    let base = if provider == "gemini" && base.trim_end_matches('/').ends_with("/v1beta") {
+        format!("{}/openai", base.trim_end_matches('/'))
+    } else {
+        base.to_owned()
+    };
+    let url = url::Url::parse(&base).map_err(|_| invalid())?;
     // Custom BYOK must not become an SSRF proxy. DNS/IP confinement must also be
     // enforced by deployment egress; redirects and proxy inheritance are disabled.
     if url.scheme() != "https"
@@ -96,7 +106,11 @@ pub fn byok(
         base: base.trim_end_matches('/').into(),
         key,
         model,
-        via: "byok",
+        via: match provider {
+            "openrouter" => "byok_openrouter",
+            "perplexity" => "byok_perplexity",
+            _ => "byok",
+        },
     })
 }
 pub type ProviderContract = (String, Vec<(&'static str, String)>, Value);
@@ -109,7 +123,13 @@ pub fn contract(route: &Route, prompt: &str) -> Result<ProviderContract, Error> 
             json!({"model":route.model,"messages":[{"role":"user","content":prompt}],"stream":false}),
         ),
         Shape::Anthropic => (
-            format!("{base}/messages"),
+            if base.ends_with("/v1/messages") {
+                base.into()
+            } else if base.ends_with("/v1") || !route.is_byok() {
+                format!("{base}/messages")
+            } else {
+                format!("{base}/v1/messages")
+            },
             vec![
                 ("x-api-key", route.key.clone()),
                 ("anthropic-version", "2023-06-01".into()),
@@ -174,6 +194,7 @@ pub struct HttpCompletion {
     pub(crate) client: reqwest::Client,
     pub(crate) timeout: Duration,
     pub(crate) max_bytes: usize,
+    operator_openrouter_proxy: Option<(String, reqwest::Client)>,
 }
 impl HttpCompletion {
     pub fn new(timeout: Duration, max_bytes: usize) -> Result<Self, Error> {
@@ -184,6 +205,7 @@ impl HttpCompletion {
             return Err(invalid());
         }
         Ok(Self {
+            operator_openrouter_proxy: None,
             client: reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -193,6 +215,38 @@ impl HttpCompletion {
             timeout,
             max_bytes,
         })
+    }
+    /// Explicit operator-only proxy for an exact configured OpenRouter base.
+    /// BYOK always uses pinned public DNS, no proxy and no redirects.
+    pub fn with_operator_openrouter_proxy(
+        mut self,
+        base: &str,
+        proxy: &str,
+    ) -> Result<Self, Error> {
+        let base_url = url::Url::parse(base).map_err(|_| invalid())?;
+        let proxy_url = url::Url::parse(proxy).map_err(|_| invalid())?;
+        if base_url.scheme() != "https"
+            || base_url.host_str().is_none()
+            || !base_url.username().is_empty()
+            || base_url.password().is_some()
+            || base_url.query().is_some()
+            || base_url.fragment().is_some()
+            || base.len() > 2048
+            || !matches!(proxy_url.scheme(), "http" | "https" | "socks5" | "socks5h")
+            || proxy_url.host_str().is_none()
+            || proxy.len() > 2048
+        {
+            return Err(invalid());
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .proxy(reqwest::Proxy::all(proxy).map_err(|_| invalid())?)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(self.timeout)
+            .build()
+            .map_err(|_| invalid())?;
+        self.operator_openrouter_proxy = Some((base.trim_end_matches('/').into(), client));
+        Ok(self)
     }
     async fn attempt(&self, r: &Route, prompt: &str) -> Result<String, Error> {
         let (endpoint, headers, body) = contract(r, prompt)?;
@@ -275,7 +329,7 @@ impl Completion for HttpCompletion {
                                 Error::Code("provider_unavailable" | "model_not_found")
                             );
                             last = e;
-                            if !retry {
+                            if route.is_byok() || !retry {
                                 break;
                             }
                         }
@@ -321,7 +375,12 @@ pub fn public_ip(ip: std::net::IpAddr) -> bool {
 }
 impl HttpCompletion {
     pub(crate) async fn route_client(&self, r: &Route) -> Result<reqwest::Client, Error> {
-        if r.via != "byok" {
+        if !r.is_byok() {
+            if let Some((base, client)) = &self.operator_openrouter_proxy
+                && r.base.trim_end_matches('/') == base
+            {
+                return Ok(client.clone());
+            }
             return Ok(self.client.clone());
         }
         let url = url::Url::parse(&r.base).map_err(|_| invalid())?;
@@ -347,7 +406,53 @@ impl HttpCompletion {
     }
     async fn catalogue(&self, r: &Route) -> Result<Vec<Model>, Error> {
         let client = self.route_client(r).await?;
-        let endpoint = format!("{}/models", r.base.trim_end_matches('/'));
+        let base = r.base.trim_end_matches('/');
+        let host = url::Url::parse(base)
+            .map_err(|_| invalid())?
+            .host_str()
+            .unwrap_or("")
+            .to_owned();
+        if r.via.ends_with("openrouter") || host == "openrouter.ai" {
+            let response = client
+                .get(format!("{base}/key"))
+                .bearer_auth(&r.key)
+                .send()
+                .await
+                .map_err(|_| Error::Code("provider_unavailable"))?;
+            if !response.status().is_success() {
+                return Err(status(response.status().as_u16()));
+            }
+        }
+        if r.via.ends_with("perplexity") || host == "api.perplexity.ai" {
+            let response = client.post(format!("{base}/chat/completions")).bearer_auth(&r.key).json(&json!({"model":"sonar","messages":[{"role":"user","content":"ping"}],"max_tokens":1,"stream":false})).send().await.map_err(|_| Error::Code("provider_unavailable"))?;
+            if !response.status().is_success() {
+                return Err(status(response.status().as_u16()));
+            }
+            return Ok([
+                "sonar",
+                "sonar-pro",
+                "sonar-reasoning",
+                "sonar-reasoning-pro",
+                "sonar-deep-research",
+            ]
+            .into_iter()
+            .map(|id| Model {
+                id: id.into(),
+                supports_websearch: true,
+            })
+            .collect());
+        }
+        let catalogue_base = if r.shape == Shape::Anthropic {
+            base.strip_suffix("/messages").unwrap_or(base)
+        } else {
+            base
+        };
+        let endpoint =
+            if r.shape == Shape::Anthropic && r.is_byok() && !catalogue_base.ends_with("/v1") {
+                format!("{catalogue_base}/v1/models")
+            } else {
+                format!("{catalogue_base}/models")
+            };
         let mut cursor: Option<String> = None;
         let mut seen = std::collections::BTreeSet::new();
         let mut models = Vec::new();

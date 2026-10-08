@@ -330,3 +330,95 @@ async fn credential_redirect_is_not_followed_and_custom_loopback_is_denied() {
     t.abort();
     b.abort();
 }
+
+#[tokio::test]
+async fn public_openrouter_catalogue_cannot_validate_invalid_keys() {
+    async fn denied() -> StatusCode {
+        StatusCode::UNAUTHORIZED
+    }
+    async fn public_models() -> Json<Value> {
+        Json(json!({"data":[{"id":"public-model"}]}))
+    }
+    let (base, server) = fixture(
+        Router::new()
+            .route("/key", axum::routing::get(denied))
+            .route("/models", axum::routing::get(public_models)),
+    )
+    .await;
+    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let mut selected = route(&base, Shape::OpenAi);
+    selected.via = "openrouter"; // trusted loopback operator fixture, not BYOK
+    assert!(matches!(
+        client.models(&selected, CancellationToken::new()).await,
+        Err(Error::Code("auth_failed"))
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn perplexity_authenticates_with_tiny_sonar_chat_without_catalogue() {
+    async fn ping(Json(body): Json<Value>) -> Json<Value> {
+        assert_eq!(body["model"], "sonar");
+        assert_eq!(body["max_tokens"], 1);
+        Json(json!({"choices":[{"message":{"content":"pong"}}]}))
+    }
+    let (base, server) = fixture(Router::new().route("/chat/completions", post(ping))).await;
+    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let mut selected = route(&base, Shape::OpenAi);
+    selected.via = "perplexity";
+    let models = client
+        .models(&selected, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(models.len(), 5);
+    assert!(models.iter().all(|model| model.supports_websearch));
+    server.abort();
+}
+
+#[test]
+fn all_seven_byok_provider_urls_are_executable_and_confined() {
+    use yoink_insight::provider::{byok, contract};
+    for (provider, base, endpoint) in [
+        ("openai", None, "https://api.openai.com/v1/chat/completions"),
+        (
+            "openrouter",
+            None,
+            "https://openrouter.ai/api/v1/chat/completions",
+        ),
+        (
+            "perplexity",
+            None,
+            "https://api.perplexity.ai/chat/completions",
+        ),
+        (
+            "gemini",
+            Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        ),
+        (
+            "anthropic",
+            Some("https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/messages",
+        ),
+        (
+            "custom_openai",
+            Some("https://fixture.example/v1"),
+            "https://fixture.example/v1/chat/completions",
+        ),
+        (
+            "custom_anthropic",
+            Some("https://fixture.example/v1/messages"),
+            "https://fixture.example/v1/messages",
+        ),
+    ] {
+        let selected = byok(
+            provider,
+            base,
+            "fixture-secret".into(),
+            "fixture-model".into(),
+        )
+        .unwrap();
+        assert!(selected.is_byok());
+        assert_eq!(contract(&selected, "prompt").unwrap().0, endpoint);
+    }
+}

@@ -32,6 +32,8 @@ impl IntoResponse for Error {
         let status = match code {
             "access_denied" | "byok_disabled" => StatusCode::FORBIDDEN,
             "not_found" => StatusCode::NOT_FOUND,
+            "oauth_not_configured" => StatusCode::NOT_IMPLEMENTED,
+            "alias_conflict" => StatusCode::CONFLICT,
             "quota_exceeded" => StatusCode::TOO_MANY_REQUESTS,
             "database_error" => StatusCode::INTERNAL_SERVER_ERROR,
             "provider_unavailable" | "oauth_unavailable" => StatusCode::BAD_GATEWAY,
@@ -59,7 +61,10 @@ pub fn router(state: HttpState) -> Router {
         .route("/config/tldr", get(config).patch(config_set))
         .route("/access", get(access))
         .route("/access/lookup", get(lookup))
-        .route("/access/{uid}", post(grant).patch(grant).delete(revoke))
+        .route(
+            "/access/{uid}",
+            post(grant).patch(update_access).delete(revoke),
+        )
         .route("/summarize", post(summarize))
         .route("/github/login", post(login))
         .route("/github/login/status", get(login_status))
@@ -209,8 +214,19 @@ async fn grant(
     Extension(u): Extension<AuthenticatedUser>,
     Path(uid): Path<i64>,
     Json(v): Json<Grant>,
+) -> Result<(StatusCode, Json<Value>), Error> {
+    Ok((
+        StatusCode::CREATED,
+        Json(s.insight.grant(u.0, uid, &v.lang).await?),
+    ))
+}
+async fn update_access(
+    State(s): State<HttpState>,
+    Extension(u): Extension<AuthenticatedUser>,
+    Path(uid): Path<i64>,
+    Json(v): Json<Grant>,
 ) -> Result<Json<Value>, Error> {
-    s.insight.grant(u.0, uid, &v.lang).await.map(Json)
+    s.insight.update_access(u.0, uid, &v.lang).await.map(Json)
 }
 async fn revoke(
     State(s): State<HttpState>,

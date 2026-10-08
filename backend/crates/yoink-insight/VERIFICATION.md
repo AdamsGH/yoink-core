@@ -146,3 +146,88 @@ Telegram/frontend end-to-end checks still belong to their owners. Live-provider
 behavior has not been inferred from catalogue fixtures. Jobs=1/single target,
 no sibling/main edits, host Python, shared images, external writes/calls,
 staging or commits in this final session.
+
+## Contract-repair verification on isolated 611ff142 baseline
+
+This supersedes the historical local totals above, not coordinator acceptance.
+All changes are confined to yoink-insight; module SQL/checksums, lib.rs,
+Cargo.toml/lock and worker_content.rs are unchanged. Legacy authority gitlink is
+8209ebb76c624228fae289ac5c1e29e9842d3bc8. See CONTRACT_REPAIRS.md for every audited
+candidate and INTEGRATION.md for exact public hooks and remaining coordinator work.
+
+Final source checks (after all Rust edits):
+
+| Command | Exit/result |
+| --- | --- |
+| `cd backend && CARGO_BUILD_JOBS=1 just check-crate yoink-insight` | 0; all targets |
+| `cd backend && CARGO_BUILD_JOBS=1 just test-crate yoink-insight` | 0; 86 passed, 0 failed/ignored/filtered |
+| `cd backend/crates/yoink-insight && just clippy` | 0; scoped all-target Clippy, `-D warnings`, jobs=1, backend resource pre/postchecks |
+| `cd backend/crates/yoink-insight && just format-check` | 0; scoped rustfmt check |
+| `git diff --check` | 0 |
+
+Test distribution: 10 library/OAuth, 10 Inbox adapter, 18 management contracts,
+12 provider wire, 31 regressions, 5 streaming wire. Original test functions and
+assertions remain; three fixtures were adjusted to preserve their intended scope
+under the confirmed contracts: explicitly configured empty allowlist vs absent
+bootstrap, omitted unchanged key vs explicit empty clear, and sufficient TLDR
+quota room for a cached streaming repeat. New regressions cover those distinctions.
+Earlier resource-bounded first compilation attempts timed out while dependencies
+compiled; early suites exposed those old fixture assumptions and an admission
+cleanup timing issue, all repaired before this final passing run.
+
+Only one worktree backend target directory was used (2.27 GiB at final verification).
+All resource preflights passed. No host Python, live provider calls, shared image
+builds, shared source edits, Git staging or commits were performed. Build cleanup
+uses `cd backend && just clean-builds` after verification. Coordinator integration
+with main migration 24, public identity notifier and content-worker additions is
+not locally verified. Full runtime-process OAuth/menu/disconnect, frontend,
+Telegram delivery and confined worker acceptance remain outside this suite.
+
+## Independent review follow-up: imported cache provenance and OAuth DB wait
+
+The preceding 86-test run is historical. Its imported-cache reuse assertions and
+reader-side isolation claim were incorrect and are superseded by this repair.
+Executable legacy `commands/tldr.py` 459–462 and `commands/_runner.py` 183–185
+write shared entries without producer provenance, including private results. No
+producer identity/prompt/credential/route information exists in the imported cache
+schema. All imported entries are preserved but quarantined from serving. Native
+private replay and its summary/TLDR quota ordering remain supported.
+
+Updated imported-cache tests now assert preserved rows plus quarantine/fresh
+native results, or provider/source failure instead of unsafe fallback. The new
+cross-user regression seeds private GitHub, BYOK, custom alias, and summary/about
+prompt-override imports. It proves no imported result is disclosed to a default
+reader and verifies unchanged rows and private native offline replay.
+
+OAuth final DB acquisition now races cancellation/expiry without holding the
+generation mutex. Persistence rechecks validity after acquisition and after
+transactional authorization, immediately before writing and before commit. The
+transaction rolls back stale attempts; disconnect releases its generation lock
+before awaiting DB acquisition. A test-only notification plus controlled username
+endpoint puts each flow exactly at the contended acquisition boundary. The held-DB
+regression covers shutdown, cancel and expiry for both token types, asserting no
+persisted token and no success; shutdown/expiry terminate with the guard still held.
+
+Final checks for this follow-up:
+
+| Command | Result |
+| --- | --- |
+| `cd backend && CARGO_BUILD_JOBS=1 just check-crate yoink-insight` | Exit 0; all targets |
+| `cd backend && CARGO_BUILD_JOBS=1 just test-crate yoink-insight` | Exit 0; 88 passed, 0 failed/ignored/filtered |
+| `cd backend/crates/yoink-insight && just clippy` | Exit 0; all targets, `-D warnings`, jobs=1 |
+| `cd backend/crates/yoink-insight && just format-check` | Exit 0 |
+| `git diff --check` | Exit 0 |
+
+Distribution: 11 library/OAuth, 10 Inbox adapter, 18 management contracts,
+12 provider wire, 32 regressions, 5 streaming wire. Initial clean-target dependency
+compilation attempts exceeded the tool's 120-second limit; the resumed serialized
+project-recipe test run completed successfully. All backend resource pre/postchecks
+passed. One backend target directory was used, 2.27 GiB before cleanup.
+
+This follow-up changes only service.rs, oauth.rs, oauth_tests.rs,
+tests/regressions.rs, CONTRACT_REPAIRS.md, INTEGRATION.md and VERIFICATION.md relative
+to the previously delivered unstaged patch. No SQL/checksum, Cargo/lock, lib.rs,
+content.rs or worker_content.rs edits. Main was not touched. No host Python, live
+provider calls, shared images, staging or commits. Runtime/frontend integration
+remains coordinator-owned; the explicit-empty frontend credential repair is not
+included here. Own artifacts are removed with `cd backend && just clean-builds`.

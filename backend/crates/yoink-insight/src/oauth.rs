@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use turso::transaction::{Transaction, TransactionBehavior};
 use yoink_db::query;
 #[derive(Clone, Debug, Serialize)]
 pub struct Status {
@@ -34,6 +35,58 @@ pub struct DeviceOAuth {
     write_client: Option<String>,
     shutdown: CancellationToken,
     tracker: tokio_util::task::TaskTracker,
+    username_timeout: Duration,
+    #[cfg(test)]
+    persistence_waiting: Arc<tokio::sync::Notify>,
+}
+/// Trusted operator/fixture configuration, never deserialized from user requests.
+#[derive(Clone, Debug)]
+pub struct OAuthOptions {
+    pub request_timeout: Duration,
+    pub username_timeout: Duration,
+    pub device_base_url: String,
+    pub user_url: String,
+}
+impl Default for OAuthOptions {
+    fn default() -> Self {
+        Self {
+            request_timeout: Duration::from_secs(15),
+            username_timeout: Duration::from_secs(10),
+            device_base_url: "https://github.com".into(),
+            user_url: "https://api.github.com/user".into(),
+        }
+    }
+}
+impl OAuthOptions {
+    fn validate(&self) -> Result<(), Error> {
+        if self.request_timeout.is_zero()
+            || self.request_timeout > Duration::from_secs(300)
+            || self.username_timeout.is_zero()
+            || self.username_timeout > self.request_timeout
+        {
+            return Err(invalid());
+        }
+        for endpoint in [&self.device_base_url, &self.user_url] {
+            let url = url::Url::parse(endpoint).map_err(|_| invalid())?;
+            let loopback = url.host_str().is_some_and(|host| {
+                host == "localhost"
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            });
+            if endpoint.len() > 2048
+                || !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
 }
 impl DeviceOAuth {
     pub fn new(
@@ -42,32 +95,46 @@ impl DeviceOAuth {
         write_client: Option<String>,
         shutdown: CancellationToken,
     ) -> Result<Self, Error> {
+        Self::with_options(
+            service,
+            read_client,
+            write_client,
+            shutdown,
+            OAuthOptions::default(),
+        )
+    }
+    pub fn with_options(
+        service: Insight,
+        read_client: String,
+        write_client: Option<String>,
+        shutdown: CancellationToken,
+        options: OAuthOptions,
+    ) -> Result<Self, Error> {
+        options.validate()?;
         Ok(Self {
             service,
             flows: Arc::new(Mutex::new(HashMap::new())),
             client: reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(15))
+                .timeout(options.request_timeout)
                 .build()
                 .map_err(|_| invalid())?,
-            base: "https://github.com".into(),
-            user_url: "https://api.github.com/user".into(),
+            base: options.device_base_url.trim_end_matches('/').into(),
+            user_url: options.user_url,
             read_client,
             write_client,
             shutdown,
             tracker: tokio_util::task::TaskTracker::new(),
+            username_timeout: options.username_timeout,
+            #[cfg(test)]
+            persistence_waiting: Arc::new(tokio::sync::Notify::new()),
         })
     }
     async fn authorized(&self, uid: i64, write: bool) -> Result<(), Error> {
         let c = self.service.db.connection().await?;
         self.service
-            .authorize(
-                &*c,
-                uid,
-                Some(if write { "inbox:gh_write" } else { "tldr" }),
-                false,
-            )
+            .authorize(&*c, uid, if write { None } else { Some("tldr") }, false)
             .await
     }
     async fn post(
@@ -139,7 +206,7 @@ impl DeviceOAuth {
                 })
                 .map(str::to_owned)
         };
-        tokio::select! {biased;_=cancel.cancelled()=>None,result=tokio::time::timeout(Duration::from_secs(10),lookup)=>result.ok().flatten()}
+        tokio::select! {biased;_=cancel.cancelled()=>None,result=tokio::time::timeout(self.username_timeout,lookup)=>result.ok().flatten()}
     }
     pub async fn start(&self, uid: i64, write: bool) -> Result<Status, Error> {
         self.authorized(uid, write).await?;
@@ -253,10 +320,12 @@ impl DeviceOAuth {
             .unwrap_or(json!({"status":"none"})))
     }
     pub async fn cancel(&self, uid: i64, write: bool) -> Result<(), Error> {
-        let mut flows = self.flows.lock().await;
-        if let Some(f) = flows.remove(&(uid, write)) {
-            f.cancel.cancel()
-        }
+        {
+            let mut flows = self.flows.lock().await;
+            if let Some(f) = flows.remove(&(uid, write)) {
+                f.cancel.cancel()
+            }
+        } // Never hold the generation mutex while acquiring the database.
         let c = self.service.db.connection().await?;
         self.service.authorize(&*c, uid, None, false).await?;
         let sql = if write {
@@ -357,24 +426,79 @@ impl DeviceOAuth {
             // Both executable legacy flows perform a best-effort /user lookup.
             // No generation/DB mutex is held across this bounded network call.
             let username = self.username(token, &cancel).await;
-            // Lock generation through DB reauthorization/persistence; delete/restart cannot
-            // resurrect a superseded credential. No external mutations are performed.
+            // Do not hold the generation mutex while waiting for the database:
+            // disconnect/restart must be able to cancel this flow during that wait.
+            #[cfg(test)]
+            self.persistence_waiting.notify_one();
+            let remaining = (state.expires_at - Utc::now()).to_std().unwrap_or_default();
+            let connection = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    self.finish(uid, write, generation, "cancelled").await;
+                    return;
+                }
+                _ = tokio::time::sleep(remaining) => {
+                    self.finish(uid, write, generation, "expired").await;
+                    return;
+                }
+                result = self.service.db.connection() => result,
+            };
+            let Ok(mut c) = connection else {
+                self.finish(uid, write, generation, "error").await;
+                return;
+            };
+            // Generation is locked only after acquisition. Keep it locked through
+            // the transaction so disconnect/restart and persistence linearize.
             let mut flows = self.flows.lock().await;
             let Some(f) = flows.get_mut(&(uid, write)) else {
                 return;
             };
-            if f.generation != generation || cancel.is_cancelled() {
+            if f.generation != generation {
                 return;
             }
-            if Utc::now() >= state.expires_at {
-                f.status.status = "expired".into();
-                return;
+            let live = || {
+                if cancel.is_cancelled() {
+                    Err(Error::Code("cancelled"))
+                } else if Utc::now() >= state.expires_at {
+                    Err(Error::Code("expired"))
+                } else {
+                    Ok(())
+                }
+            };
+            let saved = async {
+                live()?; // Recheck after acquiring the database and generation lock.
+                let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
+                    .await.map_err(|_| Error::Database)?;
+                let result = async {
+                    self.service.authorize(&*tx, uid, if write { None } else { Some("tldr") }, false).await?;
+                    live()?; // Authorization awaits too: fence immediately before writing.
+                    let sql = if write {
+                        "INSERT INTO insight_user_settings(user_id,github_token_public_repo) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET github_token_public_repo=excluded.github_token_public_repo"
+                    } else {
+                        "INSERT INTO insight_user_settings(user_id,github_token) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET github_token=excluded.github_token"
+                    };
+                    query(sql).bind(uid).bind(token).execute(&*tx).await?;
+                    live()?; // Roll back if cancellation/expiry occurred during the write.
+                    Ok::<_, Error>(())
+                }.await;
+                match result {
+                    Ok(()) => tx.commit().await.map_err(|_| Error::Database),
+                    Err(error) => { let _ = tx.rollback().await; Err(error) }
+                }
+            }.await;
+            f.status.status = match saved {
+                Ok(()) => {
+                    f.status.username = username;
+                    "success"
+                }
+                Err(Error::Code("cancelled")) => "cancelled",
+                Err(Error::Code("expired")) => "expired",
+                Err(_) => {
+                    f.status.error = Some("oauth_failed".into());
+                    "error"
+                }
             }
-            let saved=async{let c=self.service.db.connection().await?;self.service.authorize(&*c,uid,Some(if write{"inbox:gh_write"}else{"tldr"}),false).await?;let sql=if write{"INSERT INTO insight_user_settings(user_id,github_token_public_repo) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET github_token_public_repo=excluded.github_token_public_repo"}else{"INSERT INTO insight_user_settings(user_id,github_token) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET github_token=excluded.github_token"};query(sql).bind(uid).bind(token).execute(&*c).await?;Ok::<_,Error>(())}.await;
-            if saved.is_ok() {
-                f.status.username = username;
-            }
-            f.status.status = if saved.is_ok() { "success" } else { "error" }.into();
+            .into();
             return;
         }
     }

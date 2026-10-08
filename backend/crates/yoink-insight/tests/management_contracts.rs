@@ -198,7 +198,8 @@ async fn stored_key_reuse_and_missing_key_contracts_match_frontend() {
     s.save_byok(1, update()).await.unwrap();
     let mut changed = update();
     changed.provider = "anthropic".into();
-    changed.api_key = Some("  ".into());
+    // Omission is the unchanged-key signal; explicit empty now clears.
+    changed.api_key = None;
     changed.base_url = Some(" https://custom.test/v1 ".into());
     s.save_byok(1, changed).await.unwrap();
     let mut p = probe();
@@ -367,6 +368,9 @@ async fn model_override_roles_and_fallback_contracts() {
     let call = spy.calls.lock().await[0].clone();
     assert_eq!(call.base, "https://unsaved.test/v1");
     assert_eq!(call.key, "unsaved-fixture-secret");
+    // Preserve the explicit empty-list contract; absent settings now bootstrap
+    // from the configured default (covered separately below).
+    query("INSERT INTO bot_settings(key,value,updated_at) VALUES('insight_tldr_allowed_models','[]',0)").execute(&s.db).await.unwrap();
     for uid in [2, 5] {
         assert_eq!(
             s.models_with_options(
@@ -743,4 +747,146 @@ async fn frontend_http_byok_put_test_refresh_disabled_owner_and_failure_shapes()
         view,
         json!({"ok":false,"error":"provider_probe_failed","models":[]})
     );
+}
+
+#[tokio::test]
+async fn absent_allowlist_bootstraps_default_without_provider_io() {
+    let (_directory, service, provider) = fixture().await;
+    let models = service.models(2, CancellationToken::new()).await.unwrap();
+    assert_eq!(models, json!([{"id":"fallback-model"}]));
+    assert!(provider.calls.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn committed_changes_notify_all_clones_including_failed_readiness() {
+    let (_directory, service, provider) = fixture().await;
+    let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = notifications.clone();
+    let service = service.with_access_change_callback(Arc::new(move |user| {
+        captured.lock().unwrap().push(user);
+    }));
+    let cloned = service.clone().with_content(Arc::new(Unused));
+    cloned.byok_toggle(1, Some(true)).await.unwrap();
+    provider.fail.store(true, Ordering::SeqCst);
+    cloned.save_byok(2, update()).await.unwrap();
+    cloned
+        .refresh_byok_models(2, CancellationToken::new())
+        .await
+        .unwrap();
+    cloned.delete_byok(2).await.unwrap();
+    cloned.delete_byok(2).await.unwrap(); // no row, no committed change
+    assert_eq!(
+        *notifications.lock().unwrap(),
+        vec![None, Some(2), Some(2), Some(2)]
+    );
+    assert!(cloned.grant(1, 999, "en").await.is_err());
+    assert_eq!(notifications.lock().unwrap().len(), 4);
+    cloned.grant(1, 2, "ja").await.unwrap();
+    let before = cloned.access_list(1).await.unwrap()[0].clone();
+    let after = cloned.update_access(1, 2, "de").await.unwrap();
+    assert_eq!(after["granted_by"], before["granted_by"]);
+    assert_eq!(after["granted_at"], before["granted_at"]);
+    assert_eq!(after["lang"], "de");
+    cloned.revoke(1, 2).await.unwrap();
+    assert!(matches!(
+        cloned.revoke(1, 2).await,
+        Err(Error::Code("not_found"))
+    ));
+    assert_eq!(
+        *notifications.lock().unwrap(),
+        vec![None, Some(2), Some(2), Some(2), Some(2), Some(2)]
+    );
+}
+
+#[tokio::test]
+async fn credential_patch_presence_and_openrouter_only_config() {
+    let (_directory, service, _) = fixture().await;
+    let mut patch = json!({"allowed_models":["fallback-model"],"default_model":"fallback-model","gateway_base_url":"","ai_route_mode":"openrouter"});
+    let unchanged = service.update_config(1, patch.clone()).await.unwrap();
+    assert_eq!(unchanged["gateway_api_key"], "");
+    assert_eq!(unchanged["gateway_api_key_set"], true);
+    patch["gateway_api_key"] = json!("");
+    let cleared = service.update_config(1, patch).await.unwrap();
+    assert_eq!(cleared["gateway_api_key_set"], false);
+    assert!(!cleared.to_string().contains("stored-fixture-secret"));
+}
+
+#[tokio::test]
+async fn byok_empty_key_clears_readiness_and_never_reuses_stored_key() {
+    let (_directory, service, provider) = fixture().await;
+    service.byok_toggle(1, Some(true)).await.unwrap();
+    service.save_byok(2, update()).await.unwrap();
+    let mut clear = update();
+    clear.api_key = Some(String::new());
+    let view = service.save_byok(2, clear).await.unwrap();
+    assert_eq!(view["api_key_set"], false);
+    assert_eq!(view["api_key_masked"], Value::Null);
+    assert_eq!(service.settings(2).await.unwrap()["has_tldr_access"], false);
+    assert_eq!(provider.calls.lock().await.len(), 1);
+    let mut empty_probe = probe();
+    empty_probe.api_key = Some(String::new());
+    assert_eq!(
+        service
+            .test_byok_input(2, empty_probe, CancellationToken::new())
+            .await
+            .unwrap()["error"],
+        "api_key_required"
+    );
+    assert_eq!(provider.calls.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn byok_settings_languages_prompts_masking_and_alias_partial_merge() {
+    let (_directory, service, _) = fixture().await;
+    service.byok_toggle(1, Some(true)).await.unwrap();
+    service.save_byok(2, update()).await.unwrap();
+    for language in ["en", "ru", "uk", "de", "fr", "es", "zh", "ja"] {
+        let settings = service.update_settings(2, serde_json::from_value(json!({"lang":language,"github_token":"fixture-read-token","prompts":{"about":"inactive", "tldr":"active"}})).unwrap()).await.unwrap();
+        assert_eq!(settings["lang"], language);
+        assert_eq!(settings["github_token_set"], true);
+        assert_eq!(settings["tldr_allowed_models"], json!([]));
+        assert_eq!(settings["tldr_model"], Value::Null);
+        assert_eq!(settings["prompts"], json!({"tldr":"active"}));
+        assert!(!settings.to_string().contains("fixture-read-token"));
+    }
+    assert!(
+        service
+            .update_settings(5, serde_json::from_value(json!({"lang":"en"})).unwrap())
+            .await
+            .is_err()
+    );
+    let alias = service
+        .save_alias(
+            2,
+            None,
+            serde_json::from_value(
+                json!({"aliases":"привет-мир", "prompt":"custom", "domains":"[ab].example"}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let merged = service
+        .save_alias(
+            2,
+            Some(alias.id),
+            serde_json::from_value(json!({"prompt":"updated"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(merged.aliases, alias.aliases);
+    assert_eq!(merged.domains, alias.domains);
+    assert_eq!(merged.prompt.as_deref(), Some("updated"));
+    service.delete_byok(2).await.unwrap();
+    assert!(service.aliases(2).await.is_err());
+    // Existing ownership, not a continuing TLDR grant, authorizes edit/delete.
+    service
+        .save_alias(
+            2,
+            Some(alias.id),
+            serde_json::from_value(json!({"prompt":"still owned"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    service.delete_alias(2, alias.id).await.unwrap();
 }

@@ -1,5 +1,5 @@
-// Included as a private oauth module test so fixture endpoints cannot be set by
-// application callers. No external OAuth or provider calls are made.
+// Fixture endpoints are installed through the trusted typed constructor.
+// No external OAuth or provider calls are made.
 use super::*;
 use crate::{
     Config, FutureResult,
@@ -66,13 +66,6 @@ async fn fixture(response: Value) -> (tempfile::TempDir, DeviceOAuth, tokio::tas
         Arc::new(Unused),
     )
     .unwrap();
-    let mut oauth = DeviceOAuth::new(
-        service,
-        "fixture-client".into(),
-        Some("write-fixture".into()),
-        CancellationToken::new(),
-    )
-    .unwrap();
     async fn start() -> Json<Value> {
         Json(
             json!({"device_code":"never-exposed-secret","user_code":"USER-CODE","interval":1,"expires_in":3}),
@@ -90,8 +83,19 @@ async fn fixture(response: Value) -> (tempfile::TempDir, DeviceOAuth, tokio::tas
         )
         .with_state(response);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    oauth.base = format!("http://{}", listener.local_addr().unwrap());
-    oauth.user_url = format!("{}/user", oauth.base);
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let oauth = DeviceOAuth::with_options(
+        service,
+        "fixture-client".into(),
+        Some("write-fixture".into()),
+        CancellationToken::new(),
+        OAuthOptions {
+            device_base_url: base.clone(),
+            user_url: format!("{base}/user"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (dir, oauth, server)
 }
@@ -265,4 +269,214 @@ async fn revocation_during_username_lookup_cannot_persist_token() {
     o.shutdown().await;
     h.abort();
     user_server.abort();
+}
+
+#[test]
+fn trusted_oauth_options_reject_unbounded_or_credential_bearing_endpoints() {
+    for endpoint in [
+        "http://external.example",
+        "https://user:password@example.com",
+        "https://example.com?token=secret",
+        "file:///tmp/oauth",
+    ] {
+        let options = OAuthOptions {
+            device_base_url: endpoint.into(),
+            ..Default::default()
+        };
+        assert!(options.validate().is_err());
+    }
+    assert!(
+        OAuthOptions {
+            request_timeout: Duration::ZERO,
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        OAuthOptions {
+            device_base_url: "http://127.0.0.1:1234".into(),
+            user_url: "http://127.0.0.1:1234/user".into(),
+            ..Default::default()
+        }
+        .validate()
+        .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn ordinary_user_can_connect_write_token_without_write_operation_grant() {
+    let (_directory, oauth, server) =
+        fixture(json!({"access_token":"fixture-write-secret", "scope":"public_repo"})).await;
+    query("UPDATE users SET role='user' WHERE id=1")
+        .execute(&oauth.service.db)
+        .await
+        .unwrap();
+    let mut options = oauth.service.config.clone();
+    options.owner_id = None;
+    let service = Insight::new(
+        oauth.service.db.clone(),
+        options,
+        Arc::new(Unused),
+        Arc::new(Unused),
+    )
+    .unwrap();
+    let flow = DeviceOAuth::with_options(
+        service,
+        "fixture-read".into(),
+        Some("fixture-write".into()),
+        CancellationToken::new(),
+        OAuthOptions {
+            device_base_url: oauth.base.clone(),
+            user_url: oauth.user_url.clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    flow.start(1, true).await.unwrap();
+    assert_eq!(wait_terminal(&flow, true).await["status"], "success");
+    assert_eq!(
+        flow.service.write_token_status(1).await.unwrap()["enabled"],
+        true
+    );
+    assert!(
+        flow.service
+            .authorize(
+                &*flow.service.db.connection().await.unwrap(),
+                1,
+                Some("inbox:gh_write"),
+                false
+            )
+            .await
+            .is_err()
+    );
+    flow.cancel(1, true).await.unwrap();
+    assert_eq!(
+        flow.service.write_token_status(1).await.unwrap()["enabled"],
+        false
+    );
+    flow.shutdown().await;
+    oauth.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn held_database_fences_shutdown_cancel_and_expiry_for_both_token_types() {
+    for write in [false, true] {
+        for action in ["shutdown", "cancel", "expiry"] {
+            let (_directory, mut oauth, server) =
+                fixture(json!({"access_token":"must-not-persist", "scope":"repo,read:user"})).await;
+            let username_entered = Arc::new(tokio::sync::Notify::new());
+            let username_release = Arc::new(tokio::sync::Notify::new());
+            let entered = username_entered.clone();
+            let release = username_release.clone();
+            let app = Router::new().route(
+                "/user",
+                get(move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        Json(json!({"login":"fixture-user"}))
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            oauth.user_url = format!("http://{}/user", listener.local_addr().unwrap());
+            let user_server =
+                tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let started = oauth.start(1, write).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), username_entered.notified())
+                .await
+                .unwrap();
+            let flow_cancel = oauth
+                .flows
+                .lock()
+                .await
+                .get(&(1, write))
+                .unwrap()
+                .cancel
+                .clone();
+            let database = oauth.service.db.connection().await.unwrap();
+            username_release.notify_one();
+            // Test-only notification is emitted at the exact final DB-acquire
+            // boundary. The held guard makes this an actual contended acquire,
+            // not a timing guess or cancellation before the username request.
+            tokio::time::timeout(Duration::from_secs(1), oauth.persistence_waiting.notified())
+                .await
+                .unwrap();
+            match action {
+                "shutdown" => {
+                    // Joining must complete even with the DB still held.
+                    tokio::time::timeout(Duration::from_secs(1), oauth.shutdown())
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        oauth
+                            .flows
+                            .lock()
+                            .await
+                            .get(&(1, write))
+                            .unwrap()
+                            .status
+                            .status,
+                        "cancelled"
+                    );
+                    drop(database);
+                }
+                "cancel" => {
+                    let copy = oauth.clone();
+                    let disconnect = tokio::spawn(async move { copy.cancel(1, write).await });
+                    tokio::time::timeout(Duration::from_secs(1), flow_cancel.cancelled())
+                        .await
+                        .unwrap();
+                    assert!(!oauth.flows.lock().await.contains_key(&(1, write)));
+                    drop(database);
+                    disconnect.await.unwrap().unwrap();
+                    oauth.shutdown().await;
+                }
+                "expiry" => {
+                    let until_expiry = (started.expires_at - Utc::now())
+                        .to_std()
+                        .unwrap_or_default();
+                    tokio::time::sleep(until_expiry + Duration::from_millis(10)).await;
+                    oauth.tracker.close();
+                    tokio::time::timeout(Duration::from_secs(1), oauth.tracker.wait())
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        oauth
+                            .flows
+                            .lock()
+                            .await
+                            .get(&(1, write))
+                            .unwrap()
+                            .status
+                            .status,
+                        "expired"
+                    );
+                    drop(database);
+                    oauth.shutdown().await;
+                }
+                _ => unreachable!(),
+            }
+            let row = query("SELECT github_token,github_token_public_repo FROM insight_user_settings WHERE user_id=1")
+                .fetch_optional(&oauth.service.db).await.unwrap();
+            if let Some(row) = row {
+                assert!(row.try_get::<Option<String>, _>(0).unwrap().is_none());
+                assert!(row.try_get::<Option<String>, _>(1).unwrap().is_none());
+            }
+            assert!(
+                oauth
+                    .flows
+                    .lock()
+                    .await
+                    .values()
+                    .all(|flow| flow.status.status != "success")
+            );
+            server.abort();
+            user_server.abort();
+        }
+    }
 }

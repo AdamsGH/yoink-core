@@ -44,12 +44,12 @@ impl AliasInput {
             return Err(invalid());
         }
         let keys = csv(self.aliases.as_deref());
+        if keys.iter().any(|k| builtin(k).is_some()) {
+            return Err(Error::Code("alias_conflict"));
+        }
         if keys.iter().any(|k| {
-            k.len() > 32
-                || builtin(k).is_some()
-                || !k
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            !k.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
         }) {
             return Err(invalid());
         }
@@ -60,8 +60,8 @@ impl AliasInput {
         {
             return Err(invalid());
         }
-        if !self.prompt.as_ref().is_some_and(|s| !s.trim().is_empty())
-            && self.target_alias.is_none()
+        if (!keys.is_empty() && !self.prompt.as_ref().is_some_and(|s| !s.trim().is_empty()))
+            || (keys.is_empty() && self.target_alias.is_none())
         {
             return Err(invalid());
         }
@@ -77,30 +77,61 @@ impl AliasInput {
         Ok(())
     }
 }
-/// Bounded wildcard matcher, matching fnmatch's * and ? without regex backtracking.
+/// Bounded fnmatch-style matcher over Unicode characters, including bracket
+/// classes/ranges and negated classes. Dynamic programming avoids backtracking.
 pub fn glob(pattern: &str, text: &str) -> bool {
-    let (p, t) = (pattern.as_bytes(), text.as_bytes());
-    let (mut i, mut j, mut star, mut mark) = (0, 0, None, 0);
-    while j < t.len() {
-        if i < p.len() && (p[i] == b'?' || p[i] == t[j]) {
-            i += 1;
-            j += 1
-        } else if i < p.len() && p[i] == b'*' {
-            star = Some(i);
-            i += 1;
-            mark = j
-        } else if let Some(s) = star {
-            mark += 1;
-            j = mark;
-            i = s + 1
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    if pattern.len() > 512 || text.len() > 4096 {
+        return false;
+    }
+    let mut previous = vec![false; text.len() + 1];
+    previous[0] = true;
+    let mut position = 0;
+    while position < pattern.len() {
+        let token = pattern[position];
+        let mut next = vec![false; text.len() + 1];
+        if token == '*' {
+            next[0] = previous[0];
+            for index in 1..=text.len() {
+                next[index] = previous[index] || next[index - 1];
+            }
+            position += 1;
         } else {
-            return false;
+            let class_end = if token == '[' {
+                let first = position + 1 + usize::from(pattern.get(position + 1) == Some(&'!'));
+                ((first + usize::from(pattern.get(first) == Some(&']')))..pattern.len())
+                    .find(|&index| pattern[index] == ']')
+            } else {
+                None
+            };
+            for index in 1..=text.len() {
+                let character = text[index - 1];
+                let matches = if let Some(end) = class_end {
+                    let negated = pattern.get(position + 1) == Some(&'!');
+                    let mut cursor = position + 1 + usize::from(negated);
+                    let mut member = false;
+                    while cursor < end {
+                        if cursor + 2 < end && pattern[cursor + 1] == '-' {
+                            member |=
+                                pattern[cursor] <= character && character <= pattern[cursor + 2];
+                            cursor += 3;
+                        } else {
+                            member |= pattern[cursor] == character;
+                            cursor += 1;
+                        }
+                    }
+                    member != negated
+                } else {
+                    token == '?' || token == character
+                };
+                next[index] = previous[index - 1] && matches;
+            }
+            position = class_end.map_or(position + 1, |end| end + 1);
         }
+        previous = next;
     }
-    while i < p.len() && p[i] == b'*' {
-        i += 1
-    }
-    i == p.len()
+    previous[text.len()]
 }
 pub fn resolve(url: &Url, key: Option<&str>, entries: &[Alias]) -> Option<(String, String)> {
     if let Some(key) = key {
