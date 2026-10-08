@@ -66,34 +66,20 @@ pub fn normalize(raw: &str) -> Result<Url, crate::Error> {
     Ok(url)
 }
 pub fn video_id(url: &Url) -> Option<String> {
-    let host = url.host_str()?;
-    let id = match host {
-        "youtu.be" => url
-            .path()
-            .trim_start_matches('/')
-            .split('/')
-            .next()?
-            .to_owned(),
-        "youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com" => {
-            if let Some((_, v)) = url.query_pairs().find(|(k, _)| k == "v") {
-                v.into_owned()
-            } else {
-                let mut p = url.path_segments()?;
-                if !matches!(p.next()?, "shorts" | "embed" | "v") {
-                    return None;
-                }
-                p.next()?.to_owned()
-            }
+    yoink_worker_protocol::HttpSourceUrl::parse(url.as_str())
+        .ok()
+        .and_then(|url| yoink_worker_protocol::full_content_video_id(&url))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn youtube_id_matches_worker_query_and_path_semantics() {
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../../worker/youtube_video_ids.json")).unwrap();
+        for case in cases {
+            let url = url::Url::parse(case["url"].as_str().unwrap()).unwrap();
+            assert_eq!(super::video_id(&url).as_deref(), case["id"].as_str());
         }
-        _ => return None,
-    };
-    if id.len() == 11
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-    {
-        Some(id)
-    } else {
-        None
     }
 }

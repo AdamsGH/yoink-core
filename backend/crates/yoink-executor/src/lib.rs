@@ -34,6 +34,9 @@ const MAX_SNIFF_BYTES: usize = 64;
 pub struct Executor {
     config: ExecutorConfig,
     youtube_auth_adapter: bool,
+    full_tasks: tokio_util::task::TaskTracker,
+    full_shutdown: CancellationToken,
+    full_admission: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 #[cfg(test)]
@@ -154,6 +157,8 @@ impl fmt::Debug for ValidatedArtifact {
 pub enum ExecutorError {
     #[error("content network destination denied")]
     ContentDenied,
+    #[error("full content fetch failed: {0}")]
+    FullContent(yoink_worker_protocol::FullContentError),
     #[error("invalid executor configuration")]
     InvalidConfig,
     #[error("worker could not be started")]
@@ -180,11 +185,13 @@ enum ExecutionRequest<'a> {
     Media(&'a WorkerRequest),
     Search(&'a SearchRequest),
     Content(&'a yoink_worker_protocol::ContentRequest),
+    FullContent(&'a yoink_worker_protocol::FullContentRequest),
 }
 enum ExecutionOutput {
     Media(Vec<ValidatedArtifact>),
     Search(Vec<SearchEntry>),
     Content(yoink_worker_protocol::ContentResult),
+    FullContent(yoink_worker_protocol::FullContentResult),
 }
 impl ExecutionRequest<'_> {
     fn identity(&self) -> (u16, uuid::Uuid, u32) {
@@ -192,6 +199,7 @@ impl ExecutionRequest<'_> {
             Self::Media(r) => (r.version, r.operation_id, r.attempt),
             Self::Search(r) => (r.version, r.operation_id, r.attempt),
             Self::Content(r) => (r.version, r.operation_id, r.attempt),
+            Self::FullContent(r) => (r.version, r.operation_id, r.attempt),
         }
     }
     fn frame(&self) -> Result<Vec<u8>, ExecutorError> {
@@ -199,6 +207,7 @@ impl ExecutionRequest<'_> {
             Self::Media(r) => encode_request(r),
             Self::Search(r) => encode_search_request(r),
             Self::Content(r) => yoink_worker_protocol::encode_content_request(r),
+            Self::FullContent(r) => yoink_worker_protocol::encode_full_content_request(r),
         }
         .map_err(|_| ExecutorError::Protocol)
     }
@@ -239,6 +248,9 @@ impl Executor {
         Ok(Self {
             config,
             youtube_auth_adapter: false,
+            full_tasks: tokio_util::task::TaskTracker::new(),
+            full_shutdown: CancellationToken::new(),
+            full_admission: std::sync::Arc::new(std::sync::Mutex::new(())),
         })
     }
 
@@ -311,6 +323,89 @@ impl Executor {
         }
     }
 
+    /// Full fetch always uses the immutable default launcher, never configured args.
+    /// The independently tracked owner survives dropped caller futures and reaps
+    /// its process group before removing the workspace.
+    pub async fn execute_full_content(
+        &self,
+        request: &yoink_worker_protocol::FullContentRequest,
+        cancel: CancellationToken,
+    ) -> Result<yoink_worker_protocol::FullContentResult, ExecutorError> {
+        yoink_worker_protocol::encode_full_content_request(request).map_err(|_| {
+            ExecutorError::FullContent(yoink_worker_protocol::FullContentError::InvalidRequest)
+        })?;
+        if self.full_shutdown.is_cancelled() {
+            return Err(ExecutorError::Cancelled);
+        }
+        let executor = self.full_content_executor(request);
+        self.execute_full_content_owned(request.clone(), cancel, executor)
+            .await
+    }
+
+    fn full_content_executor(&self, request: &yoink_worker_protocol::FullContentRequest) -> Self {
+        let mut executor = self.clone();
+        executor.config.program = "/usr/local/bin/yoink-worker-launcher".into();
+        executor.config.args.clear();
+        executor.config.allowed_private_origins.clear();
+        executor.youtube_auth_adapter = false;
+        executor.config.timeout =
+            Duration::from_secs_f64(request.timeout_secs).min(self.config.timeout);
+        executor.config.max_output_bytes = MAX_FRAME_BYTES + 1;
+        executor
+    }
+
+    async fn execute_full_content_owned(
+        &self,
+        request: yoink_worker_protocol::FullContentRequest,
+        cancel: CancellationToken,
+        executor: Self,
+    ) -> Result<yoink_worker_protocol::FullContentResult, ExecutorError> {
+        let owned_cancel = cancel.child_token();
+        let drop_cancel = owned_cancel.clone().drop_guard();
+        let shutdown = self.full_shutdown.clone();
+        let handle = {
+            let _admission = self
+                .full_admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.full_shutdown.is_cancelled() {
+                return Err(ExecutorError::Cancelled);
+            }
+            self.full_tasks.spawn(async move {
+                let shutdown_cancel = owned_cancel.clone();
+                let watcher = AbortOnDropHandle::new(tokio::spawn(async move {
+                    shutdown.cancelled().await;
+                    shutdown_cancel.cancel();
+                }));
+                let result = executor
+                    .execute_inner(ExecutionRequest::FullContent(&request), owned_cancel, None)
+                    .await;
+                drop(watcher);
+                match result? {
+                    ExecutionOutput::FullContent(result) => Ok(result),
+                    _ => Err(ExecutorError::Protocol),
+                }
+            })
+        };
+        let result = handle.await.map_err(|_| ExecutorError::Io)?;
+        drop_cancel.disarm();
+        result
+    }
+
+    /// Cancels all full fetch owners and joins their bounded drain/reap/cleanup.
+    /// Call during host shutdown before stopping the Tokio runtime.
+    pub async fn shutdown_full_content(&self) {
+        {
+            let _admission = self
+                .full_admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.full_shutdown.cancel();
+            self.full_tasks.close();
+        }
+        self.full_tasks.wait().await;
+    }
+
     async fn execute_inner(
         &self,
         request: ExecutionRequest<'_>,
@@ -380,7 +475,7 @@ impl Executor {
             .kill_on_drop(true)
             .process_group(0);
 
-        if self.youtube_auth_adapter {
+        if self.youtube_auth_adapter && !matches!(request, ExecutionRequest::FullContent(_)) {
             command.env(
                 "YOINK_YOUTUBE_AUTH_SOCKET",
                 "/run/yoink-youtube-auth/adapter.sock",
@@ -405,18 +500,20 @@ impl Executor {
             stdin.shutdown().await.map_err(|_| ())
         }));
         let max_out = if matches!(request, ExecutionRequest::Search(_)) { self.config.max_output_bytes.min(yoink_worker_protocol::MAX_SEARCH_FRAME_BYTES) } else { self.config.max_output_bytes };
+        let request_kind_full = matches!(request, ExecutionRequest::FullContent(_));
         let expected_version = version;
         let expected_operation_id = operation_id;
         let expected_attempt = attempt;
         let progress_sender = progress.clone();
         let out_task = AbortOnDropHandle::new(tokio::spawn(async move {
-            let result = read_frames(
+            let result = read_frames_mode(
                 stdout,
                 max_out,
                 expected_version,
                 expected_operation_id,
                 expected_attempt,
                 progress_sender,
+                !request_kind_full,
             ).await;
             if result.is_err() {
                 terminate_group(pid);
@@ -522,6 +619,15 @@ impl Executor {
             }
         }
         let event = terminal.ok_or(ExecutorError::Protocol)?;
+        if let ExecutionRequest::FullContent(r) = &request {
+            if events.len() != 1 { return Err(ExecutorError::Protocol); }
+            if std::fs::read_dir(&workspace).map_err(|_| ExecutorError::Io)?.next().is_some() { return Err(ExecutorError::UnsafeArtifact); }
+            return match event {
+                WorkerEventKind::FullContentCompleted { result } if result.valid_for(r) => Ok(ExecutionOutput::FullContent(result)),
+                WorkerEventKind::FullContentFailed { error } => Err(ExecutorError::FullContent(error)),
+                _ => Err(ExecutorError::Protocol),
+            };
+        }
         if matches!(request, ExecutionRequest::Content(_)) {
             if std::fs::read_dir(&workspace).map_err(|_| ExecutorError::Io)?.next().is_some() { return Err(ExecutorError::UnsafeArtifact); }
             return match event {
@@ -618,13 +724,15 @@ impl Executor {
     }
 }
 
-async fn read_frames<R: tokio::io::AsyncRead + Unpin>(
+#[allow(clippy::too_many_arguments)]
+async fn read_frames_mode<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
     max_output: usize,
     version: u16,
     operation_id: uuid::Uuid,
     attempt: u32,
     progress: Option<tokio::sync::watch::Sender<Option<WorkerProgress>>>,
+    allow_progress: bool,
 ) -> Result<Vec<WorkerEvent>, ExecutorError> {
     let mut total = 0usize;
     let mut line = Vec::with_capacity(1024);
@@ -638,6 +746,10 @@ async fn read_frames<R: tokio::io::AsyncRead + Unpin>(
             .map_err(|_| ExecutorError::Io)?;
         if n == 0 {
             if !line.is_empty() {
+                if !allow_progress && decode_event_frame(&line).is_ok_and(|e| e.event.is_progress())
+                {
+                    return Err(ExecutorError::Protocol);
+                }
                 parse_line(
                     &line,
                     &mut frames,
@@ -657,6 +769,10 @@ async fn read_frames<R: tokio::io::AsyncRead + Unpin>(
         for &byte in &buffer[..n] {
             if byte == b'\n' {
                 if line.is_empty() {
+                    return Err(ExecutorError::Protocol);
+                }
+                if !allow_progress && decode_event_frame(&line).is_ok_and(|e| e.event.is_progress())
+                {
                     return Err(ExecutorError::Protocol);
                 }
                 parse_line(
@@ -1415,6 +1531,175 @@ mod tests {
         cancel.cancel();
         assert_eq!(task.await.unwrap().unwrap_err(), ExecutorError::Cancelled);
         assert!(temp.path().read_dir().unwrap().next().is_none());
+    }
+
+    fn full_request() -> yoink_worker_protocol::FullContentRequest {
+        use yoink_worker_protocol::*;
+        FullContentRequest {
+            version: 2,
+            operation_id: uuid::Uuid::new_v4(),
+            attempt: 1,
+            task: FullContentTask::FullContentFetch,
+            url: HttpSourceUrl::parse("https://example.com/article").unwrap(),
+            options: FullContentOptions {
+                transcript_only: false,
+                transcript_languages: vec!["fr".into(), "en".into()],
+                max_chars: 100,
+                github_token: None,
+            },
+            timeout_secs: 2.0,
+            max_response_bytes: 1024,
+            proxy_url: None,
+        }
+    }
+    fn full_fixture(mode: &str, root: &Path, marker: Option<&Path>) -> Executor {
+        let mut executor = process_executor(mode, root);
+        executor.config.args = vec![
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/full_content_fixture.mjs")
+                .to_string_lossy()
+                .into_owned(),
+            mode.into(),
+        ];
+        if let Some(marker) = marker {
+            executor
+                .config
+                .args
+                .push(marker.to_string_lossy().into_owned());
+        }
+        executor
+    }
+    #[test]
+    fn full_content_fixed_launcher_no_media_permissions_or_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let original = full_fixture("ok", root.path(), None).with_youtube_auth_adapter();
+        let prepared = original.full_content_executor(&full_request());
+        assert_eq!(
+            prepared.config.program,
+            Path::new("/usr/local/bin/yoink-worker-launcher")
+        );
+        assert!(prepared.config.args.is_empty());
+        assert!(prepared.config.allowed_private_origins.is_empty());
+        assert!(!prepared.youtube_auth_adapter);
+        assert_eq!(
+            prepared.config.allowed_proxy_origins,
+            original.config.allowed_proxy_origins
+        );
+        assert_eq!(prepared.config.max_output_bytes, MAX_FRAME_BYTES + 1);
+        // Original anonymous/media instance is not mutated by full fetch preparation.
+        assert!(!original.config.args.is_empty());
+        assert!(original.youtube_auth_adapter);
+    }
+
+    #[tokio::test]
+    async fn full_content_correlation_one_terminal_and_result_validation() {
+        for (mode, expected) in [
+            ("wrong-id", ExecutorError::Protocol),
+            ("v1", ExecutorError::Protocol),
+            ("duplicate", ExecutorError::Protocol),
+            ("progress", ExecutorError::Protocol),
+            ("cap", ExecutorError::Protocol),
+            ("video", ExecutorError::Protocol),
+            ("artifact", ExecutorError::UnsafeArtifact),
+            (
+                "error",
+                ExecutorError::FullContent(
+                    yoink_worker_protocol::FullContentError::ContentTooLarge,
+                ),
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let executor = full_fixture(mode, root.path(), None);
+            assert_eq!(
+                executor
+                    .execute_full_content_owned(
+                        full_request(),
+                        CancellationToken::new(),
+                        executor.clone()
+                    )
+                    .await
+                    .unwrap_err(),
+                expected,
+                "{mode}"
+            );
+            executor.shutdown_full_content().await;
+            assert!(root.path().read_dir().unwrap().next().is_none());
+        }
+        let root = tempfile::tempdir().unwrap();
+        let executor = full_fixture("ok", root.path(), None);
+        assert!(
+            executor
+                .execute_full_content_owned(
+                    full_request(),
+                    CancellationToken::new(),
+                    executor.clone()
+                )
+                .await
+                .unwrap()
+                .text
+                .contains("real")
+        );
+        executor.shutdown_full_content().await;
+    }
+    #[tokio::test]
+    async fn full_content_dropped_future_cancel_shutdown_reap_group_and_workspace() {
+        for mode in ["drop", "cancel", "shutdown", "timeout"] {
+            let root = tempfile::tempdir().unwrap();
+            let markers = tempfile::tempdir().unwrap();
+            let marker = markers.path().join("child");
+            let mut executor = full_fixture("hang", root.path(), Some(&marker));
+            executor.config.timeout = Duration::from_secs(1);
+            let runner = executor.clone();
+            let cancel = CancellationToken::new();
+            let trigger = cancel.clone();
+            let task = tokio::spawn(async move {
+                runner
+                    .execute_full_content_owned(full_request(), cancel, runner.clone())
+                    .await
+            });
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !marker.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let parent = std::fs::read_to_string(marker.with_extension("parent")).unwrap();
+            let child = std::fs::read_to_string(&marker).unwrap();
+            match mode {
+                "drop" => {
+                    task.abort();
+                    let _ = task.await;
+                }
+                "cancel" => {
+                    trigger.cancel();
+                    assert_eq!(task.await.unwrap().unwrap_err(), ExecutorError::Cancelled);
+                }
+                "shutdown" => {
+                    executor.shutdown_full_content().await;
+                    assert_eq!(task.await.unwrap().unwrap_err(), ExecutorError::Cancelled);
+                }
+                _ => {
+                    assert_eq!(task.await.unwrap().unwrap_err(), ExecutorError::Timeout);
+                }
+            }
+            tokio::time::timeout(Duration::from_secs(3), executor.shutdown_full_content())
+                .await
+                .unwrap();
+            assert!(
+                !Path::new(&format!("/proc/{parent}")).exists(),
+                "parent not reaped"
+            );
+            // Descendants may briefly be zombies awaiting host init; no live process.
+            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{child}/stat")) {
+                assert!(stat.split_whitespace().nth(2) == Some("Z"));
+            }
+            let ticks = marker.with_extension("ticks");
+            let before = std::fs::read(&ticks).unwrap_or_default();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(before, std::fs::read(&ticks).unwrap_or_default());
+            assert!(root.path().read_dir().unwrap().next().is_none());
+        }
     }
 
     fn search_request() -> yoink_worker_protocol::SearchRequest {

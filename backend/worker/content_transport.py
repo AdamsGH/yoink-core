@@ -28,6 +28,14 @@ class Transport:
         before = guard.guard_failure_count()
         try:
             return self._get(url, token, headers)
+        except (TimeoutError, socket.timeout):
+            raise ContentError('content_timeout') from None
+        except Exception as exc:
+            if self.proxy:
+                import requests
+                if isinstance(exc, requests.exceptions.Timeout):
+                    raise ContentError('content_timeout') from None
+            raise
         finally:
             # Relay-thread policy denials must not turn into ordinary fallback misses.
             if guard.guard_failure_count() != before:

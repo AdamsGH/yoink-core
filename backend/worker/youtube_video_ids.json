@@ -1,0 +1,14 @@
+[
+  {"url":"https://www.youtube.com/shorts/abcdefghijk?v=","id":"abcdefghijk"},
+  {"url":"https://www.youtube.com/watch?v=&v=abcdefghijk","id":"abcdefghijk"},
+  {"url":"https://www.youtube.com/watch?v&v=abcdefghijk","id":"abcdefghijk"},
+  {"url":"https://www.youtube.com/watch?v=abcdefghijk&v=ABCDEFGHIJK","id":"abcdefghijk"},
+  {"url":"https://www.youtube.com/shorts/abcdefghijk/extra","id":null},
+  {"url":"https://www.youtube.com//shorts/abcdefghijk?v=","id":"abcdefghijk"},
+  {"url":"https://www.youtube.com/shorts/abcdefghijk///?v=","id":"abcdefghijk"},
+  {"url":"https://www.youtube.com/shorts/abcdefghijk?v=bad&v=ABCDEFGHIJK","id":null},
+  {"url":"https://www.youtube.com/shorts/abcdefghijk?v=+","id":null},
+  {"url":"https://youtu.be/abcdefghijk/extra","id":"abcdefghijk"},
+  {"url":"https://www.youtube.com/shorts/%61bcdefghijk?v=","id":null},
+  {"url":"https://example.com/shorts/abcdefghijk","id":null}
+]

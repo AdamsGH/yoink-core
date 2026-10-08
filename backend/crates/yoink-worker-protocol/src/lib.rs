@@ -8,6 +8,8 @@
 //! before opening or consuming it. Lexical validation does not guarantee
 //! symlink safety, including for paths created by an untrusted executor.
 
+mod full_content;
+pub use full_content::*;
 mod content;
 pub use content::*;
 mod media_info;
@@ -529,6 +531,8 @@ pub enum WorkerEventKind {
     SearchCompleted { entries: Vec<SearchEntry> },
     ContentCompleted { result: ContentResult },
     ContentDenied,
+    FullContentCompleted { result: FullContentResult },
+    FullContentFailed { error: FullContentError },
     Failure { class: FailureClass },
     CancellationAcknowledged,
 }
@@ -575,6 +579,9 @@ impl WorkerEvent {
                 Err(ProtocolError::InvalidEvent)
             }
             WorkerEventKind::ContentCompleted { result } if !result.valid() => {
+                Err(ProtocolError::InvalidEvent)
+            }
+            WorkerEventKind::FullContentCompleted { result } if !result.valid() => {
                 Err(ProtocolError::InvalidEvent)
             }
             WorkerEventKind::SearchCompleted { entries } => validate_entries(entries),

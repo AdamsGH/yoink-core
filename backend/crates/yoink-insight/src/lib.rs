@@ -6,6 +6,7 @@ pub mod inbox;
 mod management;
 pub mod models;
 mod stats;
+pub mod worker_content;
 pub use management::{ByokTest, ByokUpdate, ModelProbeOptions, SettingsUpdate};
 pub mod oauth;
 pub mod prompts;

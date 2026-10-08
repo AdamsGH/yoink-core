@@ -41,14 +41,16 @@ def validate(request):
     return url, options, config
 
 
-def run(request):
+def run(request, *, allowed_proxy_origins=(), validate_destination=None):
     url, options, config = validate(request)
     # No source or private proxy allowlist is accepted from untrusted requests.
-    with guard.guard_context(()):
+    with guard.guard_context((), allowed_proxy_origins):
         guard.validate_source_url(url, ())
+        if validate_destination:
+            validate_destination(url)
         guard.configure_proxy(config.get('proxy_url'))
         with proxy_route(config.get('proxy_url'), config['timeout_secs']) as proxy:
-            transport = Transport(config['timeout_secs'], config['max_bytes'], proxy)
+            transport = Transport(config['timeout_secs'], config['max_bytes'], proxy, validate_destination)
             vid = video_id(url)
             if vid:
                 text, title, seconds, via = youtube_fetch(transport, vid, options['transcript_languages'], options['transcript_only'])

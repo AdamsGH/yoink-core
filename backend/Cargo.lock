@@ -4998,11 +4998,14 @@ dependencies = [
  "tower",
  "turso",
  "url",
+ "uuid",
  "yoink-access",
  "yoink-db",
+ "yoink-executor",
  "yoink-identity",
  "yoink-inbox",
  "yoink-storage",
+ "yoink-worker-protocol",
 ]
 
 [[package]]
