@@ -10,7 +10,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 23] = [
+const MIGRATIONS: [Migration; 24] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -129,6 +129,11 @@ const MIGRATIONS: [Migration; 23] = [
         version: 23,
         sql: include_str!("../migrations-turso/0023_text_effects.sql"),
         expected_tables: 67,
+    },
+    Migration {
+        version: 24,
+        sql: include_str!("../../yoink-insight/sql/native.sql"),
+        expected_tables: 69,
     },
 ];
 
@@ -334,6 +339,10 @@ mod search_tests;
 #[cfg(test)]
 #[path = "schema_inbox_tests.rs"]
 mod inbox_tests;
+
+#[cfg(test)]
+#[path = "schema_insight_tests.rs"]
+mod insight_tests;
 
 #[cfg(test)]
 mod tests {

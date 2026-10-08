@@ -97,7 +97,7 @@ async fn inbox_upgrade_preserves_metadata_and_backfills_only_active_work() {
         .fetch_all(store.database())
         .await
         .unwrap();
-    assert_eq!(versions.len(), 23);
+    assert_eq!(versions.len(), MIGRATIONS.len());
     for (row, migration) in versions.iter().zip(&MIGRATIONS) {
         assert_eq!(row.try_get::<i64, _>("version").unwrap(), migration.version);
     }

@@ -70,6 +70,13 @@ check-crate crate: check-build-space
     cargo check --locked --message-format short -p {{quote(crate)}} --all-targets
     node scripts/build-resources.mjs check
 
+format-crate crate:
+    cargo fmt -p {{quote(crate)}}
+
+lint-crate crate: check-build-space
+    cargo clippy --locked -p {{quote(crate)}} --all-targets -- -D warnings
+    node scripts/build-resources.mjs check
+
 test-crate crate filter='': check-build-space
     cargo test --locked --message-format short -p {{quote(crate)}} {{quote(filter)}}
     node scripts/build-resources.mjs check
