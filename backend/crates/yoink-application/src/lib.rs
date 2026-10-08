@@ -37,6 +37,7 @@ pub struct SystemService {
     version: Arc<str>,
     ready: Arc<AtomicBool>,
     downloads_enabled: Arc<AtomicBool>,
+    insight_enabled: Arc<AtomicBool>,
     started: Arc<Instant>,
     bot_running: Arc<AtomicBool>,
     bot_username: Arc<RwLock<Option<String>>>,
@@ -48,6 +49,7 @@ impl SystemService {
             version: Arc::from(version.into()),
             ready: Arc::new(AtomicBool::new(false)),
             downloads_enabled: Arc::new(AtomicBool::new(false)),
+            insight_enabled: Arc::new(AtomicBool::new(false)),
             started: Arc::new(Instant::now()),
             bot_running: Arc::new(AtomicBool::new(false)),
             bot_username: Arc::new(RwLock::new(None)),
@@ -85,6 +87,10 @@ impl SystemService {
         self.downloads_enabled.store(enabled, Ordering::Release);
     }
 
+    pub fn set_insight_enabled(&self, enabled: bool) {
+        self.insight_enabled.store(enabled, Ordering::Release);
+    }
+
     pub fn snapshot(&self) -> SystemSnapshot {
         SystemSnapshot {
             version: self.version.to_string(),
@@ -93,7 +99,9 @@ impl SystemService {
                 .into_iter()
                 .map(|id| ModuleDescriptor {
                     id,
-                    status: if id == "downloads" && self.downloads_enabled.load(Ordering::Acquire) {
+                    status: if (id == "downloads" && self.downloads_enabled.load(Ordering::Acquire))
+                        || (id == "insight" && self.insight_enabled.load(Ordering::Acquire))
+                    {
                         ModuleStatus::Experimental
                     } else {
                         ModuleStatus::Planned
@@ -131,6 +139,38 @@ mod tests {
         assert_eq!(service.bot_username(), None);
         service.set_bot_status(false, None);
         assert!(!service.bot_running());
+    }
+
+    #[test]
+    fn insight_catalog_follows_shared_configured_runtime() {
+        let service = SystemService::new("test");
+        let adapter = service.clone();
+        service.set_insight_enabled(true);
+        let snapshot = adapter.snapshot();
+        assert!(!snapshot.ready);
+        for module in snapshot.modules {
+            let expected = if module.id == "insight" {
+                ModuleStatus::Experimental
+            } else {
+                ModuleStatus::Planned
+            };
+            assert_eq!(module.status, expected);
+        }
+        service.set_insight_enabled(false);
+        assert!(
+            adapter
+                .snapshot()
+                .modules
+                .iter()
+                .all(|m| m.status == ModuleStatus::Planned)
+        );
+        assert!(
+            SystemService::new("test")
+                .snapshot()
+                .modules
+                .iter()
+                .all(|m| m.status == ModuleStatus::Planned)
+        );
     }
 
     #[test]

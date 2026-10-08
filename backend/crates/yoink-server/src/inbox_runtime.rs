@@ -60,24 +60,43 @@ pub struct InboxRuntime {
     pub executor: yoink_executor::Executor,
 }
 impl InboxRuntime {
+    #[cfg(test)]
     pub fn new(
-        mut config: InboxConfig,
+        config: InboxConfig,
         storage: &yoink_storage::Store,
         identities: Arc<yoink_identity::IdentityStore>,
         owner: Option<i64>,
     ) -> Result<Self, ServerError> {
+        Self::new_with_insight(config, storage, identities, owner, None)
+    }
+    pub fn new_with_insight(
+        mut config: InboxConfig,
+        storage: &yoink_storage::Store,
+        identities: Arc<yoink_identity::IdentityStore>,
+        owner: Option<i64>,
+        shared: Option<yoink_insight::Insight>,
+    ) -> Result<Self, ServerError> {
         config.insight.owner_id = owner;
-        let completion = yoink_insight::provider::HttpCompletion::new(
-            config.insight.request_timeout,
-            1024 * 1024,
-        )
-        .map_err(|_| ServerError::InboxStartup)?;
-        let insight = yoink_insight::Insight::completion_only(
-            storage.database().clone(),
-            config.insight.clone(),
-            Arc::new(completion),
-        )
-        .map_err(|_| ServerError::InboxStartup)?;
+        let insight = if let Some(shared) = shared {
+            config.insight = shared.config.clone();
+            shared
+        } else {
+            let completion = yoink_insight::provider::HttpCompletion::new(
+                config.insight.request_timeout,
+                1024 * 1024,
+            )
+            .map_err(|_| ServerError::InboxStartup)?;
+            let insight = yoink_insight::Insight::completion_only(
+                storage.database().clone(),
+                config.insight.clone(),
+                Arc::new(completion),
+            )
+            .map_err(|_| ServerError::InboxStartup)?;
+            insight.with_access_change_callback(Arc::new({
+                let identities = identities.clone();
+                move |_| identities.notify_committed_access_change()
+            }))
+        };
         let mut github = GithubClient::new(config.github_timeout, None)
             .map_err(|_| ServerError::InboxStartup)?;
         if let Some(endpoint) = config.github_endpoint.clone() {

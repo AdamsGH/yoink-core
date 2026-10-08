@@ -2,6 +2,8 @@ mod auth_config;
 mod config;
 mod inbox_config;
 mod inbox_runtime;
+mod insight_config;
+mod insight_runtime;
 mod media_config;
 mod runtime;
 mod user_session_config;

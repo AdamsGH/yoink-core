@@ -1,5 +1,6 @@
 //! Thin HTTP adapter for Yoink application services.
 
+pub mod activity;
 mod admin;
 mod auth;
 mod configuration;
@@ -8,7 +9,9 @@ mod downloader_settings;
 mod groups;
 mod health;
 mod inbox;
+mod insight;
 pub use inbox::InboxAuthorization;
+pub use insight::LateInsight;
 mod m2m;
 mod nsfw;
 mod user_session;
@@ -363,12 +366,56 @@ pub async fn serve_with_late_inbox(
     inbox: LateInbox,
     shutdown: CancellationToken,
 ) -> std::io::Result<()> {
+    serve_with_late_products(
+        listener,
+        system,
+        auth,
+        identities,
+        client,
+        inbox,
+        LateInsight::default(),
+        shutdown,
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_with_late_products(
+    listener: TcpListener,
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    inbox: LateInbox,
+    insight: LateInsight,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    let app = router_with_late_products(system, auth, identities, client, inbox, insight);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
+}
+pub fn router_with_late_products(
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    inbox: LateInbox,
+    insight: LateInsight,
+) -> Router {
     use tower::ServiceExt;
-    let app = router_with_identity_and_user_session(system, auth, identities, client).fallback(
+    router_with_identity_and_user_session(system, auth, identities, client).fallback(
         move |request: axum::extract::Request| {
             let inbox = inbox.clone();
+            let insight = insight.clone();
             async move {
-                match inbox.0.get() {
+                let path = request.uri().path();
+                let selected =
+                    if path.starts_with("/api/v1/insight/") || path.starts_with("/api/v1/users/") {
+                        insight.get()
+                    } else {
+                        inbox.0.get()
+                    };
+                match selected {
                     Some(router) => router.clone().oneshot(request).await.unwrap(),
                     None => axum::response::IntoResponse::into_response(
                         axum::http::StatusCode::NOT_FOUND,
@@ -376,8 +423,5 @@ pub async fn serve_with_late_inbox(
                 }
             }
         },
-    );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown.cancelled_owned())
-        .await
+    )
 }

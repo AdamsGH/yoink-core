@@ -16,10 +16,19 @@ pub struct InboxConfig {
     pub notifications: yoink_telegram::InboxRuntimeConfig,
 }
 impl InboxConfig {
+    #[cfg(test)]
     pub fn from_lookup(
         read: &mut impl FnMut(&str) -> Result<Option<String>, ConfigError>,
         shutdown: Duration,
         database: bool,
+    ) -> Result<Option<Self>, ConfigError> {
+        Self::from_lookup_with_insight(read, shutdown, database, None)
+    }
+    pub fn from_lookup_with_insight(
+        read: &mut impl FnMut(&str) -> Result<Option<String>, ConfigError>,
+        shutdown: Duration,
+        database: bool,
+        shared: Option<&yoink_insight::Config>,
     ) -> Result<Option<Self>, ConfigError> {
         match read("INBOX_ENABLED")?.as_deref().unwrap_or("false") {
             "false" => return Ok(None),
@@ -101,16 +110,10 @@ impl InboxConfig {
         if insight.max_chars < 100 {
             return Err(invalid("INBOX_CONTENT_MAX_CHARS", "minimum is 100"));
         }
-        for (key, field) in [
-            ("INSIGHT_GATEWAY_BASE", &mut insight.gateway_base),
-            ("INSIGHT_GATEWAY_KEY", &mut insight.gateway_key),
-            ("INSIGHT_OPENROUTER_KEY", &mut insight.openrouter_key),
-            ("INSIGHT_MODEL", &mut insight.model),
-        ] {
-            if let Some(v) = read(key)? {
-                *field = v;
-            }
-        }
+        insight = match shared {
+            Some(config) => config.clone(),
+            None => crate::insight_config::completion_config(read, insight)?,
+        };
         let notification_lease =
             Duration::from_secs(n(read, "INBOX_NOTIFICATION_LEASE_SECS", 120, 3600)?);
         let recovery_batch = n(read, "INBOX_RECOVERY_BATCH", 64, 256)? as usize;

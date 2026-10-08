@@ -69,6 +69,8 @@ fn names(commands: &[BotCommand]) -> Vec<&str> {
 #[test]
 fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
     let ordinary = Eligibility {
+        summary: false,
+        tldr: false,
         ingest: false,
         stars: false,
         approved: true,
@@ -84,6 +86,8 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
         assert_eq!(names(&catalog(ordinary, language)), expected);
         let owner = catalog(
             Eligibility {
+                summary: false,
+                tldr: false,
                 ingest: false,
                 stars: false,
                 owner: true,
@@ -125,6 +129,8 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
 #[test]
 fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     let basic = Eligibility {
+        summary: false,
+        tldr: false,
         ingest: false,
         stars: false,
         approved: true,
@@ -136,6 +142,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     assert_eq!(
         names(&catalog(
             Eligibility {
+                summary: false,
+                tldr: false,
                 ingest: false,
                 stars: false,
                 owner: true,
@@ -148,6 +156,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     assert!(
         catalog(
             Eligibility {
+                summary: false,
+                tldr: false,
                 ingest: false,
                 stars: false,
                 approved: false,
@@ -161,6 +171,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     );
     let group = catalog(
         Eligibility {
+            summary: false,
+            tldr: false,
             ingest: false,
             stars: false,
             group: true,
@@ -231,6 +243,8 @@ async fn personalized_language_removes_both_higher_precedence_overrides() {
     }
     let ru = catalog(
         Eligibility {
+            summary: false,
+            tldr: false,
             ingest: false,
             stars: false,
             approved: true,
@@ -248,6 +262,12 @@ async fn personalized_language_removes_both_higher_precedence_overrides() {
 }
 
 async fn setup() -> (tempfile::TempDir, Arc<IdentityStore>) {
+    let (dir, identities, _) = setup_store(false).await;
+    (dir, identities)
+}
+async fn setup_store(
+    insight: bool,
+) -> (tempfile::TempDir, Arc<IdentityStore>, yoink_storage::Store) {
     let dir = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
@@ -262,7 +282,7 @@ async fn setup() -> (tempfile::TempDir, Arc<IdentityStore>) {
     let identities = Arc::new(IdentityStore::new(
         store.database().clone(),
         Some(42),
-        false,
+        insight,
     ));
     for user_id in [42, 43, 44] {
         identities
@@ -275,7 +295,7 @@ async fn setup() -> (tempfile::TempDir, Arc<IdentityStore>) {
             .await
             .unwrap();
     }
-    (dir, identities)
+    (dir, identities, store)
 }
 fn worker(api: Fake, identities: Arc<IdentityStore>) -> Menus<Fake> {
     Menus {
@@ -293,6 +313,7 @@ fn worker(api: Fake, identities: Arc<IdentityStore>) -> Menus<Fake> {
         groups: false,
         known_groups: Default::default(),
         inbox: false,
+        insight: None,
     }
 }
 async fn until(api: &Fake, predicate: impl Fn(&Saved) -> bool) {
@@ -569,4 +590,74 @@ async fn inbox_menus_are_feature_aware_localized_and_absent_without_transport() 
     );
     snapshot.principal.role = Role::Banned;
     assert!(catalog(menus.inbox_eligibility(&snapshot), Language::English).is_empty());
+}
+
+#[tokio::test]
+async fn shared_insight_menu_reads_current_grants_toggle_readiness_and_ban() {
+    let (_dir, identities, db) = setup_store(true).await;
+    let service = yoink_insight::Insight::completion_only(
+        db.database().clone(),
+        yoink_insight::Config {
+            owner_id: Some(42),
+            model: "fixture".into(),
+            ..Default::default()
+        },
+        Arc::new(
+            yoink_insight::provider::HttpCompletion::new(Duration::from_secs(2), 4096).unwrap(),
+        ),
+    )
+    .unwrap();
+    let api = Fake::default();
+    let menus = worker(api.clone(), identities.clone()).with_insight(Some(service.clone()));
+    menus.target(43, 43).await.unwrap();
+    assert!(!names(&api.state.lock().unwrap().saved[&(private(43), "".into())]).contains(&"tldr"));
+    identities
+        .admin_grant_permission(42, 43, "insight", "summary", None)
+        .await
+        .unwrap();
+    identities
+        .admin_grant_permission(42, 43, "insight", "tldr", None)
+        .await
+        .unwrap();
+    menus.target(43, 43).await.unwrap();
+    let commands = api.state.lock().unwrap().saved[&(private(43), "".into())].clone();
+    for name in ["about", "summary", "tldr", "cancel"] {
+        assert!(names(&commands).contains(&name));
+    }
+    identities
+        .admin_revoke_permission(42, 43, "insight", "tldr")
+        .await
+        .unwrap();
+    menus.target(43, 43).await.unwrap();
+    assert!(!names(&api.state.lock().unwrap().saved[&(private(43), "".into())]).contains(&"tldr"));
+    // Persisted provider grant is recognized only through product settings,
+    // never a second resolver in Telegram.
+    yoink_db::query("INSERT INTO insight_user_byok(user_id,provider,api_key,model,tested_at,test_error,created_at,updated_at) VALUES(43,'openai','fixture-key','fixture',1,NULL,1,1)").execute(db.database()).await.unwrap();
+    yoink_db::query("INSERT INTO bot_settings(key,value,updated_at) VALUES('insight_byok_enabled','true',1) ON CONFLICT(key) DO UPDATE SET value=excluded.value").execute(db.database()).await.unwrap();
+    menus.target(43, 43).await.unwrap();
+    assert!(names(&api.state.lock().unwrap().saved[&(private(43), "".into())]).contains(&"tldr"));
+    yoink_db::query(
+        "UPDATE insight_user_byok SET test_error='provider_probe_failed' WHERE user_id=43",
+    )
+    .execute(db.database())
+    .await
+    .unwrap();
+    menus.target(43, 43).await.unwrap();
+    assert!(!names(&api.state.lock().unwrap().saved[&(private(43), "".into())]).contains(&"tldr"));
+    identities
+        .admin_update_user(
+            42,
+            43,
+            &AdminUserPatch {
+                role: Some(Role::Banned),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    menus.target(43, 43).await.unwrap();
+    assert!(api.state.lock().unwrap().saved[&(private(43), "".into())].is_empty());
+    let disabled = worker(api.clone(), identities);
+    disabled.target(42, 42).await.unwrap();
+    assert!(!names(&api.state.lock().unwrap().saved[&(private(42), "".into())]).contains(&"tldr"));
 }

@@ -46,6 +46,8 @@ mod menus;
 mod raw_polling;
 pub use menus::MenuConfig;
 pub mod inbox_runtime;
+pub mod insight_runtime;
+pub use insight_runtime::InsightRuntime;
 mod plain_url;
 mod progress;
 mod proxy;
@@ -120,6 +122,7 @@ pub struct TelegramAdapter {
     menu_config: MenuConfig,
     menus: Option<menus::Menus>,
     inbox: Option<InboxRuntime>,
+    insight: Option<InsightRuntime>,
 }
 
 impl TelegramAdapter {
@@ -190,6 +193,7 @@ impl TelegramAdapter {
             menu_config: MenuConfig::default(),
             menus: None,
             inbox: None,
+            insight: None,
         })
     }
 
@@ -200,6 +204,12 @@ impl TelegramAdapter {
         timeout: Duration,
     ) -> Result<TextDelivery, yoink_storage::StoreError> {
         TextDelivery::new(self.bot.clone(), self.bot_id as i64, ledger, timeout)
+    }
+
+    /// Inject the shared native Insight runtime before menu initialization.
+    pub fn with_insight(mut self, runtime: InsightRuntime) -> Self {
+        self.insight = Some(runtime);
+        self
     }
 
     /// Installs Inbox commands only. The coordinator separately owns run().
@@ -281,13 +291,20 @@ impl TelegramAdapter {
             self.groups_enabled,
             self.menu_config,
         )
-        .with_inbox(self.inbox.is_some());
+        .with_inbox(self.inbox.is_some())
+        .with_insight(self.insight.as_ref().map(InsightRuntime::service));
         menus.initialize().await;
         self.menus = Some(menus);
     }
 
     /// Polls until cancellation or the first polling failure.
     pub async fn run(mut self, shutdown: CancellationToken) -> Result<(), TelegramError> {
+        let insight_stop = self
+            .insight
+            .as_ref()
+            .map(InsightRuntime::shutdown_token)
+            .unwrap_or_else(|| shutdown.child_token());
+        let _insight_guard = insight_stop.clone().drop_guard();
         if shutdown.is_cancelled() {
             return Ok(());
         }
@@ -330,7 +347,13 @@ impl TelegramAdapter {
             .branch(Update::filter_message().endpoint(handle_message))
             .branch(Update::filter_callback_query().endpoint(handle_callback))
             .branch(Update::filter_inline_query().endpoint(inline::handle));
+        let insight_enabled = self.insight.is_some();
         let mut dispatcher = Dispatcher::builder(self.bot.clone(), handler)
+            .distribution_function(if insight_enabled {
+                insight_distribution
+            } else {
+                chat_distribution
+            })
             .dependencies(dptree::deps![
                 TelegramIdentity {
                     owner_id: self.owner_id,
@@ -352,6 +375,7 @@ impl TelegramAdapter {
                     cookie_url: CookieUrlDependency(self.cookie_url),
                     identities: self.identities,
                     inbox: self.inbox,
+                    insight: self.insight,
                 }
             ])
             .default_handler(|_| async {})
@@ -361,8 +385,10 @@ impl TelegramAdapter {
         let error_handler = {
             let stop = stop.clone();
             let failed = failed.clone();
+            let insight_stop = insight_stop.clone();
             Arc::new(move |error: raw_polling::PollingError| {
                 tracing::error!(category = ?error, "Telegram polling stopped");
+                insight_stop.cancel();
                 failed.store(true, Ordering::SeqCst);
                 stop.stop();
                 async {}
@@ -375,6 +401,7 @@ impl TelegramAdapter {
             () = menus => unreachable!("menu loop runs until dropped"),
             () = progress => unreachable!("progress loop runs until dropped"),
             _ = shutdown.cancelled() => {
+                insight_stop.cancel();
                 stop.stop();
                 (&mut dispatch)
                     .await
@@ -417,6 +444,7 @@ struct MessageDependencies {
     cookie_url: CookieUrlDependency,
     identities: Option<Arc<IdentityStore>>,
     inbox: Option<InboxRuntime>,
+    insight: Option<InsightRuntime>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -784,6 +812,9 @@ fn media_unavailable_response(language: Language) -> String {
 }
 
 fn format_status(system: &SystemService, language: Language) -> String {
+    format_status_with_insight(system, language, false)
+}
+fn format_status_with_insight(system: &SystemService, language: Language, insight: bool) -> String {
     let snapshot = system.snapshot();
     let readiness = translate(
         language,
@@ -797,7 +828,9 @@ fn format_status(system: &SystemService, language: Language) -> String {
     let planned = snapshot
         .modules
         .iter()
-        .filter(|module| module.status == ModuleStatus::Planned)
+        .filter(|module| {
+            module.status == ModuleStatus::Planned && !(insight && module.id == "insight")
+        })
         .map(|module| module.id)
         .collect::<Vec<_>>()
         .join(", ");
@@ -896,6 +929,20 @@ fn admitted_response(admission: Admission, language: Language) -> String {
     )
 }
 
+fn chat_distribution(update: &Update) -> Option<ChatId> {
+    update.chat().map(|chat| chat.id)
+}
+fn insight_distribution(update: &Update) -> Option<ChatId> {
+    if let teloxide::types::UpdateKind::Message(message) = &update.kind
+        && message
+            .text()
+            .is_some_and(insight_runtime::concurrent_command)
+    {
+        return None;
+    }
+    chat_distribution(update)
+}
+
 async fn handle_message(
     bot: Bot,
     message: Message,
@@ -918,6 +965,35 @@ async fn handle_message(
         && inbox.handle(&message, &bot_username).await
     {
         return Ok(());
+    }
+    if let Some(insight) = &dependencies.insight
+        && insight
+            .handle(&message, actor_id as i64, &bot_username)
+            .await
+    {
+        return Ok(());
+    }
+    let product_help = message.text().is_some_and(|text| {
+        text.split_whitespace().count() == 1
+            && matches!(
+                parse_command(text, &bot_username),
+                Some(Command::Start | Command::Help)
+            )
+    });
+    if !message.chat.is_private()
+        && downloads.is_none()
+        && product_help
+        && let Some(insight) = &dependencies.insight
+    {
+        let language =
+            reply_language_with_identity(None, dependencies.identities.as_deref(), actor_id, None)
+                .await;
+        if insight
+            .handle_help(&message, actor_id as i64, language)
+            .await
+        {
+            return Ok(());
+        }
     }
     let private = message.chat.is_private();
     // Inline-granted restricted users can read help without registering or
@@ -988,6 +1064,14 @@ async fn handle_message(
                     fallback,
                 )
                 .await;
+                if product_help
+                    && let Some(insight) = &dependencies.insight
+                    && insight
+                        .handle_help(&message, actor_id as i64, language)
+                        .await
+                {
+                    return Ok(());
+                }
                 let reply = translate(language, Key::RegistrationPending, &[]);
                 let _ = bot.send_message(message.chat.id, reply).await;
                 return Ok(());
@@ -1248,7 +1332,8 @@ async fn handle_message(
         }
     }
     let mut admitted = None;
-    let reply = match command {
+    let insight_help = matches!(command, Command::Start | Command::Help);
+    let mut reply = match command {
         Command::ArmMedia(_)
         | Command::Settings(_)
         | Command::Nsfw(_)
@@ -1276,6 +1361,9 @@ async fn handle_message(
                 },
                 &[],
             )
+        }
+        Command::Status if dependencies.insight.is_some() => {
+            format_status_with_insight(&system, language, true)
         }
         Command::Start
         | Command::Help
@@ -1404,6 +1492,13 @@ async fn handle_message(
         };
         if service.authorize_chat(actor_id, target).await.is_err() {
             return Ok(());
+        }
+    }
+    if insight_help && let Some(insight) = &dependencies.insight {
+        let help = insight.help_for(&message, actor_id as i64, language).await;
+        if !help.is_empty() {
+            reply.push_str("\n\n");
+            reply.push_str(&help);
         }
     }
     let mut send = bot.send_message(message.chat.id, reply);

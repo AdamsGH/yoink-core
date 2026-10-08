@@ -47,6 +47,8 @@ impl MenuConfig {
 
 #[derive(Clone, Copy)]
 struct Eligibility {
+    summary: bool,
+    tldr: bool,
     ingest: bool,
     stars: bool,
     approved: bool,
@@ -81,10 +83,19 @@ const PRIVATE_CONTROLS: &[(&str, Key)] = &[
 const OWNER_CONTROLS: &[(&str, Key)] = &[("uncache", Key::MenuUncache)];
 
 fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
-    if !access.approved && !access.ingest && !access.stars {
+    if !access.approved && !access.ingest && !access.stars && !access.summary && !access.tldr {
         return vec![];
     }
     let mut entries = BASIC.to_vec();
+    if access.summary {
+        entries.extend_from_slice(&[("about", Key::MenuHelp), ("summary", Key::MenuHelp)]);
+    }
+    if access.tldr {
+        entries.push(("tldr", Key::MenuHelp));
+    }
+    if (access.summary || access.tldr) && !(access.approved && access.downloads) {
+        entries.push(("cancel", Key::MenuCancel));
+    }
     if access.ingest {
         entries.extend_from_slice(&[("save", Key::MenuSave), ("inbox", Key::MenuInbox)]);
     }
@@ -112,7 +123,18 @@ fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
     }
     entries
         .into_iter()
-        .map(|(command, key)| BotCommand::new(command, translate(language, key, &[])))
+        .map(|(command, key)| {
+            let description = match (command, language == Language::Russian) {
+                ("about", false) => "About a YouTube video",
+                ("about", true) => "О видео YouTube",
+                ("summary", false) => "Summarize a YouTube video",
+                ("summary", true) => "Краткое содержание видео YouTube",
+                ("tldr", false) => "Summarize a URL",
+                ("tldr", true) => "Краткое содержание по ссылке",
+                _ => return BotCommand::new(command, translate(language, key, &[])),
+            };
+            BotCommand::new(command, description)
+        })
         .collect()
 }
 
@@ -132,6 +154,8 @@ fn eligibility(
         check_thread_policy: false,
     };
     Eligibility {
+        summary: false,
+        tldr: false,
         ingest: false,
         stars: false,
         approved: snapshot.authorize(&policy, None).decision.allowed
@@ -245,6 +269,7 @@ pub(crate) struct Menus<A = BotApi> {
     // until revocation succeeds so removal cannot orphan personalized menus.
     known_groups: std::collections::BTreeSet<i64>,
     inbox: bool,
+    insight: Option<yoink_insight::Insight>,
 }
 impl Menus {
     pub(crate) fn new(
@@ -268,10 +293,15 @@ impl Menus {
             groups,
             known_groups: Default::default(),
             inbox: false,
+            insight: None,
         }
     }
 }
 impl<A: MenuApi> Menus<A> {
+    pub(crate) fn with_insight(mut self, insight: Option<yoink_insight::Insight>) -> Self {
+        self.insight = insight;
+        self
+    }
     pub(crate) fn with_inbox(mut self, enabled: bool) -> Self {
         self.inbox = enabled;
         self
@@ -307,6 +337,8 @@ impl<A: MenuApi> Menus<A> {
             let language = yoink_i18n::language_for(Some(locale));
             let commands = catalog(
                 Eligibility {
+                    summary: false,
+                    tldr: false,
                     ingest: false,
                     stars: false,
                     approved: self.identities.is_some(),
@@ -347,7 +379,7 @@ impl<A: MenuApi> Menus<A> {
             )
             .await;
         }
-        let (access, language) = match &self.identities {
+        let (mut access, language) = match &self.identities {
             Some(store) => match store.snapshot(user, group.then_some((chat, None))).await {
                 Ok(Some(snapshot)) => (
                     self.inbox_eligibility(&snapshot),
@@ -355,6 +387,8 @@ impl<A: MenuApi> Menus<A> {
                 ),
                 Ok(None) => (
                     Eligibility {
+                        summary: false,
+                        tldr: false,
                         ingest: false,
                         stars: false,
                         approved: user == self.owner && !group,
@@ -374,6 +408,8 @@ impl<A: MenuApi> Menus<A> {
             },
             None => (
                 Eligibility {
+                    summary: false,
+                    tldr: false,
                     ingest: false,
                     stars: false,
                     approved: user == self.owner && !group,
@@ -384,6 +420,29 @@ impl<A: MenuApi> Menus<A> {
                 Language::English,
             ),
         };
+        if let Some(insight) = &self.insight
+            && let Some(store) = &self.identities
+            && let Ok(Some(snapshot)) = store.snapshot(user, group.then_some((chat, None))).await
+        {
+            let policy = AccessPolicy {
+                min_role: Role::Restricted,
+                scopes: vec![AccessScope::Private, AccessScope::Group],
+                check_group_enabled: true,
+                check_thread_policy: false,
+            };
+            if (!group || self.groups) && snapshot.authorize(&policy, None).decision.allowed {
+                match insight.settings(user).await {
+                    Ok(settings) => {
+                        access.summary = settings["has_gemini_access"] == true;
+                        access.tldr = settings["has_tldr_access"] == true;
+                    }
+                    Err(_) => {
+                        access.summary = false;
+                        access.tldr = false;
+                    }
+                }
+            }
+        }
         let scope = if group {
             BotCommandScope::ChatMember {
                 chat_id: Recipient::Id(ChatId(chat)),

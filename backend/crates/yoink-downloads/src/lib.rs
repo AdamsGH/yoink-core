@@ -1531,6 +1531,7 @@ fn retryable_executor_error(error: ExecutorError) -> bool {
         | ExecutorError::Protocol
         | ExecutorError::Cancelled
         | ExecutorError::ContentDenied
+        | ExecutorError::FullContent(_)
         | ExecutorError::ResourceLimit
         | ExecutorError::UnsafeArtifact => false,
     }
@@ -1840,6 +1841,7 @@ mod tests {
             ExecutorError::Protocol,
             ExecutorError::ResourceLimit,
             ExecutorError::UnsafeArtifact,
+            ExecutorError::FullContent(yoink_worker_protocol::FullContentError::ContentHttpError),
             ExecutorError::Worker(FailureClass::UnsupportedSource),
             ExecutorError::Worker(FailureClass::InvalidMedia),
         ] {

@@ -56,6 +56,7 @@ pub struct TelegramConfig {
 
 #[derive(Debug)]
 pub struct Config {
+    pub insight: Option<crate::insight_config::InsightConfig>,
     pub inbox: Option<crate::inbox_config::InboxConfig>,
     pub user_session: Option<yoink_user_session::Config>,
     pub auth: Option<crate::auth_config::AuthHttpConfig>,
@@ -351,10 +352,29 @@ impl Config {
         } else {
             None
         };
-        let inbox = crate::inbox_config::InboxConfig::from_lookup(
+        let insight = crate::insight_config::InsightConfig::from_lookup(
             &mut read,
             shutdown_timeout,
             database.is_some(),
+        )?;
+        if let (Some(insight), Some(db)) = (&insight, &database)
+            && insight
+                .service
+                .request_timeout
+                .max(insight.oauth.request_timeout + insight.oauth.username_timeout)
+                + db.acquire_timeout * 4
+                >= shutdown_timeout
+        {
+            return Err(invalid(
+                "INSIGHT_REQUEST_TIMEOUT_SECS",
+                "request and DB recovery budgets must fit shutdown",
+            ));
+        }
+        let inbox = crate::inbox_config::InboxConfig::from_lookup_with_insight(
+            &mut read,
+            shutdown_timeout,
+            database.is_some(),
+            insight.as_ref().map(|c| &c.service),
         )?;
         if let (Some(inbox), Some(database)) = (&inbox, &database) {
             let recovery = database.acquire_timeout * 4;
@@ -369,6 +389,7 @@ impl Config {
             }
         }
         Ok(Self {
+            insight,
             inbox,
             user_session,
             auth,
@@ -733,5 +754,44 @@ mod tests {
             assert!(config(&[("YOINK_RUST_DATABASE_PATH", value)]).is_err());
         }
         assert!(config(&[("YOINK_RUST_DATABASE_PATH", "/tmp/yoink.db")]).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod insight_tests {
+    use super::*;
+    #[test]
+    fn shared_loader_maps_once_and_enforces_db_recovery_budget() {
+        let mut reads = std::collections::BTreeMap::new();
+        let config = Config::from_lookup(|key| {
+            *reads.entry(key.to_string()).or_insert(0) += 1;
+            Ok(match key {
+                "YOINK_RUST_INSIGHT_ENABLED" | "YOINK_RUST_INBOX_ENABLED" => Some("true".into()),
+                "YOINK_RUST_DATABASE_PATH" => Some("/tmp/disposable.db".into()),
+                "YOINK_RUST_SHUTDOWN_TIMEOUT_SECS" => Some("150".into()),
+                "YOINK_RUST_INSIGHT_MODEL" => Some("shared-model".into()),
+                "YOINK_RUST_INSIGHT_GATEWAY_KEY" => Some("credential-marker".into()),
+                _ => None,
+            })
+        })
+        .unwrap();
+        assert!(config.telegram.is_none());
+        assert_eq!(
+            config.insight.as_ref().unwrap().service.model,
+            "shared-model"
+        );
+        assert_eq!(config.inbox.as_ref().unwrap().insight.model, "shared-model");
+        assert_eq!(reads["YOINK_RUST_INSIGHT_MODEL"], 1);
+        assert!(!format!("{config:?}").contains("credential-marker"));
+        let error = Config::from_lookup(|key| {
+            Ok(match key {
+                "YOINK_RUST_INSIGHT_ENABLED" => Some("true".into()),
+                "YOINK_RUST_DATABASE_PATH" => Some("/tmp/disposable.db".into()),
+                "YOINK_RUST_SHUTDOWN_TIMEOUT_SECS" => Some("140".into()),
+                _ => None,
+            })
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("DB recovery"));
     }
 }

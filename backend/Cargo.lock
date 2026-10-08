@@ -4902,6 +4902,7 @@ dependencies = [
  "yoink-executor",
  "yoink-identity",
  "yoink-inbox",
+ "yoink-insight",
  "yoink-storage",
  "yoink-user-session",
 ]
@@ -5112,6 +5113,7 @@ dependencies = [
  "yoink-i18n",
  "yoink-identity",
  "yoink-inbox",
+ "yoink-insight",
  "yoink-storage",
  "yoink-worker-protocol",
 ]

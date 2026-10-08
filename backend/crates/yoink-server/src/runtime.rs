@@ -40,6 +40,8 @@ pub enum ServerError {
     MediaStartup,
     #[error("media execution service failed")]
     Media,
+    #[error("Insight initialization failed")]
+    InsightStartup,
     #[error("Inbox initialization failed")]
     InboxStartup,
     #[error("Inbox owned runtime failed")]
@@ -114,6 +116,10 @@ async fn run_impl(
     tokio::pin!(shutdown_signal);
     let mut tasks = JoinSet::new();
     let mut cookie_oauth_lifecycle = None;
+    let late_insight = yoink_http::LateInsight::default();
+    let http_insight = late_insight.clone();
+    let mut insight_runtime: Option<crate::insight_runtime::InsightRuntime> = None;
+    let mut insight_preflight: Option<tokio::process::Child> = None;
     let late_inbox = yoink_http::LateInbox::default();
     let http_inbox = late_inbox.clone();
     let mut inbox_runtime = None;
@@ -132,13 +138,14 @@ async fn run_impl(
         .map_err(|_| ServerError::Http)?
         .map(Arc::new);
     tasks.spawn(async move {
-        yoink_http::serve_with_late_inbox(
+        yoink_http::serve_with_late_products(
             listener,
             http_system,
             http_auth,
             http_identities,
             user_session,
             http_inbox,
+            http_insight,
             http_cancel,
         )
         .await
@@ -182,7 +189,7 @@ async fn run_impl(
                 owner_id
                     .map(|id| id as i64)
                     .or_else(|| config.auth.as_ref().map(|auth| auth.owner_id)),
-                false,
+                config.insight.is_some(),
             ));
             auth_state
                 .install_identities(identity.clone())
@@ -324,6 +331,69 @@ async fn run_impl(
             telegram = Some(adapter.with_downloads(service.clone()));
             downloads = Some(service);
         }
+        if let Some(insight) = config.insight {
+            let text_timeout = insight.text_timeout;
+            let store = database.as_ref().ok_or(ServerError::InsightStartup)?;
+            let identity = identities.clone().ok_or(ServerError::InsightStartup)?;
+            // Verify the immutable launcher in the configured workspace before readiness.
+            insight_preflight = Some(
+                Command::new("/usr/local/bin/yoink-worker-launcher")
+                    .arg("--check")
+                    .current_dir(&insight.executor.workspace_root)
+                    .env_clear()
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .map_err(|_| ServerError::InsightStartup)?,
+            );
+            let status = insight_preflight
+                .as_mut()
+                .expect("preflight spawned")
+                .wait()
+                .await
+                .map_err(|_| ServerError::InsightStartup)?;
+            insight_preflight = None;
+            if !status.success() {
+                return Err(ServerError::InsightStartup);
+            }
+            insight_runtime = Some(crate::insight_runtime::InsightRuntime::new(
+                insight,
+                store,
+                identity.clone(),
+                inbox_owner,
+                cancel.child_token(),
+            )?);
+            if let Some(adapter) = telegram.take() {
+                let text = adapter
+                    .text_delivery(store.clone(), text_timeout)
+                    .map_err(|_| ServerError::InsightStartup)?;
+                let handler = yoink_telegram::InsightRuntime::new(
+                    insight_runtime
+                        .as_ref()
+                        .expect("installed runtime")
+                        .service
+                        .clone(),
+                    identity,
+                    text,
+                    groups_enabled,
+                );
+                telegram = Some(adapter.with_insight(handler));
+            }
+            if auth_enabled {
+                late_insight
+                    .install(
+                        system.clone(),
+                        auth_state.clone(),
+                        insight_runtime
+                            .as_ref()
+                            .expect("installed runtime")
+                            .http(cancel.child_token()),
+                    )
+                    .map_err(|_| ServerError::InsightStartup)?;
+            }
+        }
         if let Some(inbox) = config.inbox {
             let store = database.as_ref().ok_or(ServerError::InboxStartup)?;
             let identity = identities.clone().ok_or(ServerError::InboxStartup)?;
@@ -341,11 +411,12 @@ async fn run_impl(
             if !status.success() {
                 return Err(ServerError::InboxStartup);
             }
-            let runtime = crate::inbox_runtime::InboxRuntime::new(
+            let runtime = crate::inbox_runtime::InboxRuntime::new_with_insight(
                 inbox,
                 store,
                 identity.clone(),
                 inbox_owner,
+                insight_runtime.as_ref().map(|r| r.service.clone()),
             )?;
             if let Some(adapter) = telegram.take() {
                 let text = adapter
@@ -422,11 +493,19 @@ async fn run_impl(
         Startup::Prepared(Err(error)) => {
             let result =
                 stop_and_drain(tasks, system, cancel, config.shutdown_timeout, Err(error)).await;
+            drain_insight_preflight(&mut insight_preflight).await;
+            if let Some(runtime) = &insight_runtime {
+                runtime.shutdown().await;
+            }
             return finish_database(result, database, config.shutdown_timeout).await;
         }
         Startup::Stopped(result) => {
             let result =
                 stop_and_drain(tasks, system, cancel, config.shutdown_timeout, result).await;
+            drain_insight_preflight(&mut insight_preflight).await;
+            if let Some(runtime) = &insight_runtime {
+                runtime.shutdown().await;
+            }
             return finish_database(result, database, config.shutdown_timeout).await;
         }
     };
@@ -457,6 +536,7 @@ async fn run_impl(
         });
         system.set_downloads_enabled(true);
     }
+    system.set_insight_enabled(insight_runtime.is_some());
     if let Some(telegram) = telegram {
         let telegram_cancel = cancel.clone();
         tasks.spawn(async move {
@@ -477,6 +557,10 @@ async fn run_impl(
         shutdown_signal,
     )
     .await;
+    drain_insight_preflight(&mut insight_preflight).await;
+    if let Some(runtime) = &insight_runtime {
+        runtime.shutdown().await;
+    }
     finish_database(result, database, config.shutdown_timeout).await
 }
 
@@ -571,6 +655,13 @@ async fn stop_and_drain(
         }
     };
     initial.and(drained)
+}
+
+async fn drain_insight_preflight(child: &mut Option<tokio::process::Child>) {
+    if let Some(mut child) = child.take() {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
 }
 
 async fn finish_database(
@@ -684,3 +775,27 @@ mod tests {
 #[cfg(test)]
 #[path = "runtime_cookie_tests.rs"]
 mod cookie_oauth_tests;
+
+#[cfg(test)]
+mod insight_preflight_tests {
+    use super::*;
+    #[tokio::test]
+    async fn interrupted_preflight_is_killed_and_reaped_before_teardown() {
+        let mut child = Some(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.as_ref().unwrap().id().unwrap();
+        timeout(Duration::from_secs(1), drain_insight_preflight(&mut child))
+            .await
+            .unwrap();
+        assert!(child.is_none());
+        #[cfg(target_os = "linux")]
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+        #[cfg(not(target_os = "linux"))]
+        let _ = pid;
+    }
+}

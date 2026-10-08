@@ -26,6 +26,7 @@ yoink-storage.workspace = true
 yoink-identity.workspace = true
 yoink-access.workspace = true
 yoink-worker-protocol.workspace = true
+yoink-insight = { path = "../yoink-insight" }
 yoink-inbox = { path = "../yoink-inbox" }
 yoink-db.workspace = true
 rustix.workspace = true
