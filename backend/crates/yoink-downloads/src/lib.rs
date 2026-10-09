@@ -33,6 +33,7 @@ use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinSet, time};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use uuid::Uuid;
+use yoink_application::metrics::{Counter, Histogram, Metrics};
 use yoink_db::query;
 use yoink_domain::CachedMedia;
 use yoink_domain::{
@@ -166,6 +167,7 @@ impl Default for DownloadConfig {
 
 #[derive(Clone)]
 pub struct DownloadService {
+    metrics: Option<Metrics>,
     store: Arc<Store>,
     identities: Arc<IdentityStore>,
     executor: Executor,
@@ -343,6 +345,7 @@ impl DownloadService {
         );
         let profile = ProfileStore::new(store.database().clone());
         Ok(Self {
+            metrics: None,
             store,
             identities,
             executor,
@@ -356,6 +359,11 @@ impl DownloadService {
             cookie_oauth_work: Arc::new(cookie_oauth::OAuthWork::default()),
             cookie_account_provider: None,
         })
+    }
+
+    pub fn with_metrics(mut self, metrics: Metrics) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Stateless inline lookup. The operator's shared network configuration is
@@ -598,7 +606,7 @@ impl DownloadService {
             .freeze_provider_routing()
             .with_network(selection)
             .map_err(|_| DownloadError::InvalidInput)?;
-        if let Some(context) = telegram {
+        let result = if let Some(context) = telegram {
             self.store
                 .admit_telegram_media_snapshot(
                     &prepared,
@@ -613,7 +621,13 @@ impl DownloadService {
                 .admit_network_snapshot(&prepared, idempotency_key, self.config.admission)
                 .await
                 .map_err(map_store)
+        };
+        if matches!(&result, Err(DownloadError::QuotaExceeded { .. }))
+            && let Some(metrics) = &self.metrics
+        {
+            metrics.increment(Counter::RateLimited, 1);
         }
+        result
     }
 
     pub async fn status(
@@ -755,6 +769,17 @@ impl DownloadService {
             }
         };
         let send_as_file = claim.request.params().send_as_file();
+        let executor = match claim.request.downloader_settings() {
+            Some(settings) => self
+                .executor
+                .with_operation_limits(
+                    Duration::from_secs(settings.download_timeout),
+                    settings.max_file_size_mb * 1024 * 1024,
+                    self.executor.artifact_limits().max_artifacts,
+                )
+                .map_err(|_| DownloadError::InvalidInput)?,
+            None => self.executor.clone(),
+        };
         let is_formats = matches!(
             claim.request.media_mode(),
             DomainMediaMode::Formats | DomainMediaMode::Links | DomainMediaMode::AudioLinks
@@ -767,7 +792,7 @@ impl DownloadService {
                 Ok(Some(batch))
                     if cache::valid_cached_media(
                         &batch.media,
-                        self.executor.artifact_limits(),
+                        executor.artifact_limits(),
                         send_as_file,
                     ) =>
                 {
@@ -786,7 +811,11 @@ impl DownloadService {
         } else {
             None
         };
+        let work_started = std::time::Instant::now();
         let artifacts: Vec<DeliveryArtifact> = if let Some(media) = cache_hit {
+            if let Some(metrics) = &self.metrics {
+                metrics.increment(Counter::CacheHits, 1);
+            }
             media.into_iter().map(DeliveryArtifact::Cached).collect()
         } else {
             let worker_request = match worker_request(&claim, credentials) {
@@ -798,11 +827,17 @@ impl DownloadService {
             };
             let child_cancel = shutdown.child_token();
             let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(None);
-            let execution = self.executor.execute_with_progress(
-                &worker_request,
-                child_cancel.clone(),
-                Some(progress_tx),
-            );
+            let execution = async {
+                if !is_formats
+                    && !child_cancel.is_cancelled()
+                    && let Some(metrics) = &self.metrics
+                {
+                    metrics.increment(Counter::Downloads, 1);
+                }
+                executor
+                    .execute_with_progress(&worker_request, child_cancel.clone(), Some(progress_tx))
+                    .await
+            };
             tokio::pin!(execution);
             let mut progress_open = true;
             let artifacts = loop {
@@ -904,6 +939,13 @@ impl DownloadService {
                 DeliveryArtifact::Cached(cached) => cached.metadata().cloned(),
             })
             .collect::<Option<Vec<_>>>();
+        let work_bytes = artifacts
+            .iter()
+            .filter_map(|a| match a {
+                DeliveryArtifact::Upload(a) => Some(a.size_bytes),
+                _ => None,
+            })
+            .fold(0_u64, u64::saturating_add);
         let units = plan_delivery_units(&artifacts, send_as_file);
         let mut artifacts: Vec<Option<DeliveryArtifact>> =
             artifacts.into_iter().map(Some).collect();
@@ -951,6 +993,7 @@ impl DownloadService {
             .ok_or(DownloadError::InvalidInput)?;
         let mut cancellation_seen = false;
         let mut confirmed_file_ids = Vec::new();
+        let mut work_failed = false;
         for (ordinal, unit) in units.into_iter().enumerate() {
             let ordinal = ordinal as u32;
             if shutdown.is_cancelled() || cancellation_seen {
@@ -1081,6 +1124,13 @@ impl DownloadService {
                     },
                 }
             };
+            let known_rejection = !heartbeat_failed
+                && matches!(
+                    &outcome,
+                    DeliveryOutcome::Rejected
+                        | DeliveryOutcome::InvalidFileId
+                        | DeliveryOutcome::RetryAfter(_)
+                );
             let result = match (outcome, cached_revision) {
                 (DeliveryOutcome::InvalidFileId, Some(revision))
                     if !heartbeat_failed && ordinal == 0 =>
@@ -1175,7 +1225,10 @@ impl DownloadService {
                     return Err(map_store(error));
                 }
                 Ok((false, _, _)) => break,
-                Ok((true, true, _)) => break,
+                Ok((true, true, _)) => {
+                    work_failed = known_rejection;
+                    break;
+                }
                 Ok((true, false, Some(receipts))) => {
                     diagnostic_confirmed = diagnostic.is_some();
                     confirmed_file_ids.extend(receipts.into_iter().map(|receipt| receipt.file_id));
@@ -1200,6 +1253,23 @@ impl DownloadService {
             Ok(HeartbeatEvent::Stale | HeartbeatEvent::Database)
             | Err(mpsc::error::TryRecvError::Disconnected) => confirmed_file_ids.clear(),
             Err(mpsc::error::TryRecvError::Empty) => {}
+        }
+        if !is_formats
+            && cached_revision.is_none()
+            && !shutdown.is_cancelled()
+            && !cancellation_seen
+            && let Some(metrics) = &self.metrics
+        {
+            if confirmed_file_ids.len() == artifacts.len() {
+                metrics.increment(Counter::DownloadsOk, 1);
+                metrics.increment(Counter::DownloadBytes, work_bytes);
+                metrics.observe(
+                    Histogram::DownloadDuration,
+                    work_started.elapsed().as_secs_f64(),
+                );
+            } else if work_failed {
+                metrics.increment(Counter::DownloadsError, 1);
+            }
         }
         if !is_formats
             && cached_revision.is_none()
@@ -1334,6 +1404,13 @@ impl DownloadService {
                 },
                 Err(error) => Err(map_store(error)),
             };
+        }
+        if !matches!(
+            claim.request.media_mode(),
+            DomainMediaMode::Formats | DomainMediaMode::Links | DomainMediaMode::AudioLinks
+        ) && let Some(metrics) = &self.metrics
+        {
+            metrics.increment(Counter::DownloadsError, 1);
         }
         let retryable = retryable_executor_error(error);
         tracing::warn!(
@@ -1636,7 +1713,9 @@ fn map_store(error: StoreError) -> DownloadError {
             DownloadError::QuotaExceeded { retry_after_secs }
         }
         StoreError::NotFoundOrStale => DownloadError::Task,
-        StoreError::Database | StoreError::Schema => DownloadError::Database,
+        StoreError::Database | StoreError::Schema | StoreError::Migration { .. } => {
+            DownloadError::Database
+        }
     }
 }
 fn is_stale(error: &StoreError) -> bool {

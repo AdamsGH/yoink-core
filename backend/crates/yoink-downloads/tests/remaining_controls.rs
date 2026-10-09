@@ -48,6 +48,7 @@ impl Delivery for Recorder {
         artifacts: Vec<DeliveryArtifact>,
     ) -> DeliveryFuture<'_> {
         Box::pin(async move {
+            let mut receipts = Vec::new();
             for a in artifacts {
                 let DeliveryArtifact::Upload(a) = a else {
                     panic!("must not replay metadata output through cache")
@@ -56,11 +57,12 @@ impl Delivery for Recorder {
                     .lock()
                     .unwrap()
                     .push((a.filename.clone(), a.media_info.is_some()));
+                receipts.push(DeliveredMedia {
+                    message_id: 77 + receipts.len() as i64,
+                    file_id: None,
+                });
             }
-            Ok(vec![DeliveredMedia {
-                message_id: 77,
-                file_id: None,
-            }])
+            Ok(receipts)
         })
     }
 }
@@ -108,7 +110,7 @@ async fn fixture_config(
         max_artifact_bytes: 1024 * 1024,
         max_workspace_bytes: 2 * 1024 * 1024,
         max_output_bytes: 1024 * 1024,
-        max_artifacts: 1,
+        max_artifacts: 4,
         allowed_proxy_origins: vec![],
         allowed_private_origins: vec![],
     })
@@ -157,6 +159,43 @@ async fn finish(store: &Store, service: DownloadService, id: uuid::Uuid) {
     runner.await.unwrap().unwrap();
     assert_eq!(result.unwrap(), OperationStatus::Succeeded);
 }
+#[tokio::test]
+async fn playlist_entries_do_not_limit_clip_artifacts() {
+    let (_d, store, service, recorder) = fixture().await;
+    for (limit, playlist, expected) in [
+        (1, None, 2),
+        (
+            2,
+            Some(yoink_domain::PlaylistRange::new(1, Some(2)).unwrap()),
+            4,
+        ),
+    ] {
+        yoink_db::query(include_str!(
+            "../../yoink-storage/sql/test_downloader_setting.sql"
+        ))
+        .bind("dl.max_playlist_count")
+        .bind(limit.to_string())
+        .execute(store.database())
+        .await
+        .unwrap();
+        let params = DownloadParams::default()
+            .with_clips(vec![
+                yoink_domain::ClipRange::new(0.0, 1.0).unwrap(),
+                yoink_domain::ClipRange::new(2.0, 3.0).unwrap(),
+            ])
+            .unwrap()
+            .with_playlist(playlist);
+        let req = request(MediaMode::Video).with_params(params).unwrap();
+        let before = recorder.0.lock().unwrap().len();
+        let operation = service
+            .submit_request(&req, &format!("clips-{limit}"))
+            .await
+            .unwrap();
+        finish(&store, service.clone(), operation.operation_id).await;
+        assert_eq!(recorder.0.lock().unwrap().len() - before, expected);
+    }
+}
+
 #[tokio::test]
 async fn direct_links_use_real_admission_replay_permissions_and_no_cache() {
     let (_d, store, service, recorder) = fixture().await;

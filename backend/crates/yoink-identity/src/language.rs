@@ -1,4 +1,5 @@
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 
 use crate::{IdentityError, IdentityStore};

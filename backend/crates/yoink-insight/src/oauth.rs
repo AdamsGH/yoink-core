@@ -13,7 +13,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 #[derive(Clone, Debug, Serialize)]
 pub struct Status {

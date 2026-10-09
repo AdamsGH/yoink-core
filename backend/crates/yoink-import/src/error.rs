@@ -21,12 +21,18 @@ pub enum ImportError {
     Interrupted,
     #[error("source catalog does not match the supported legacy schema")]
     Catalog,
+    #[error("unsupported source catalog fields or unsafe data: {fields}")]
+    CatalogFields { fields: String },
     #[error("source data cannot be represented safely")]
     Conversion,
     #[error("destination path or ownership checks failed")]
     Destination,
     #[error("destination storage operation failed")]
     Storage,
+    #[error("destination storage operation failed during {stage}")]
+    StorageStage { stage: &'static str },
+    #[error("destination migration {version} failed during {stage}")]
+    StorageMigration { version: i64, stage: &'static str },
     #[error("import deadline exceeded")]
     Deadline,
     #[error("native engine lacks required import constraints")]

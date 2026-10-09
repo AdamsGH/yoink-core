@@ -29,5 +29,5 @@ else
     ARGS="${ARGS} --log=/proc/1/fd/1"
 fi
 
-echo "telegram-bot-api ${ARGS}"
+echo "Starting Telegram Bot API"
 exec telegram-bot-api ${ARGS}

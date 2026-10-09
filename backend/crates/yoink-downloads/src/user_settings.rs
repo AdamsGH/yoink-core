@@ -2,9 +2,10 @@
 use crate::{DownloadError, DownloadService, SettingChange, SettingField};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use yoink_access::{AccessPolicy, AccessScope, Role};
 use yoink_db::Database;
+use yoink_db::Transaction;
 use yoink_db::query;
 use yoink_identity::{IdentitySnapshot, IdentityStore};
 

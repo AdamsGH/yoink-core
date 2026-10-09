@@ -5,6 +5,8 @@ mod inbox_runtime;
 mod insight_config;
 mod insight_runtime;
 mod media_config;
+mod product_config;
+mod product_runtime;
 mod runtime;
 mod user_session_config;
 

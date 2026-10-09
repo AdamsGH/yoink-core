@@ -14,7 +14,8 @@ export function validateYoutubeAuthTopology(config) {
     assert(!service.network_mode && !service.ports?.length, `${name} must not expose host networking/ports`);
   }
   assert.deepEqual(services.youtubei.command, ['node', 'test/synthetic-server.mjs']);
-  assert(services.bgutil.command?.join(' ').includes('synthetic-pot'), 'bgutil must be synthetic');
+  assert(services.bgutil.command?.join(' ').includes('synthetic-pot') ||
+    (services.bgutil.image === 'yoink-youtube-auth-bgutil:fixture' && services.bgutil.command?.join(' ') === '/opt/youtube-auth-bgutil.mjs'), 'bgutil must be synthetic');
   const mount = services.worker.volumes?.find(v => v.target === '/run/yoink-youtube-auth');
   assert(mount?.type === 'volume' && mount.source === 'auth-socket' && mount.read_only === true,
     'worker must mount only the fixed socket volume read-only');
@@ -61,8 +62,38 @@ export async function startSyntheticYoutubeAuth({ capture, runId }) {
       catch { if (attempt < 29) await sleep(500); }
     }
     assert(ready, 'synthetic YouTube auth bounded readiness failed');
+    const internalControl = async (service, action, route) => {
+      assert(['youtubei', 'bgutil'].includes(service));
+      assert(['arm', 'state', 'release', 'reset'].includes(action));
+      assert(route === undefined || (service === 'youtubei' && action === 'arm' && ['info', 'download'].includes(route)));
+      const target = `http://${service}:${service === 'youtubei' ? 9173 : 4416}/__fixture/${action}${route ? `?route=${route}` : ''}`;
+      const code = `const http=require('http');const q=http.request(${JSON.stringify(target)},{method:'POST'},r=>{let b='';r.on('data',c=>{b+=c;if(Buffer.byteLength(b)>16384)q.destroy(Error('response limit'));});r.on('end',()=>{if(r.statusCode!==200)process.exit(1);process.stdout.write(JSON.stringify(JSON.parse(b)));});r.on('error',()=>process.exit(1));});q.on('error',()=>process.exit(1));q.setTimeout(2000,()=>q.destroy(Error('deadline')));q.end();`;
+      return JSON.parse(await docker([...compose, 'exec', '-T', 'gateway', 'node', '-e', code], { timeout: 5000 }));
+    };
+    const gatewayRequest = async (route, payload, { timeoutMs = 5000 } = {}) => {
+      assert(['/pot', '/pot/ping'].includes(route));
+      assert(Number.isInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 5000);
+      const bytes = JSON.stringify(payload);
+      assert(Buffer.byteLength(bytes) <= 16384);
+      const code = `const http=require('http');const b=${JSON.stringify(bytes)};const q=http.request({socketPath:'/run/yoink-youtube-auth/adapter.sock',path:${JSON.stringify(route)},method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(b)}},r=>{let body='';r.on('data',c=>{body+=c;if(Buffer.byteLength(body)>16384)q.destroy(Error('response limit'));});r.on('end',()=>process.stdout.write(JSON.stringify({status:r.statusCode,...(body?{body:JSON.parse(body)}:{})})));r.on('error',()=>process.exit(1));});q.on('error',()=>process.exit(1));q.setTimeout(${timeoutMs},()=>q.destroy(Error('deadline')));q.end(b);`;
+      return JSON.parse(await docker([...compose, 'exec', '-T', 'gateway', 'node', '-e', code], { timeout: timeoutMs + 3000 }));
+    };
+    const restart = async services => {
+      await docker([...compose, 'restart', '--no-deps', ...services], { timeout: 360000 });
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try { await docker([...compose, 'exec', '-T', 'gateway', 'node', '-e', probe], { timeout: 7000 }); return; }
+        catch { if (attempt < 29) await sleep(500); }
+      }
+      throw new Error('synthetic YouTube auth restart readiness failed');
+    };
     return {
       dockerArgs: ['--mount', `type=volume,source=${project}_auth-socket,target=/run/yoink-youtube-auth,readonly`, '--add-host', 'youtu.be:93.184.216.34'],
+      socketVolume: `${project}_auth-socket`,
+      syntheticControl: (action, route) => internalControl('youtubei', action, route),
+      syntheticPotControl: action => internalControl('bgutil', action),
+      gatewayRequest,
+      restartYoutubeAuthGateway: () => restart(['gateway']),
+      restartYoutubeAuthServices: () => restart(['gateway', 'bgutil']),
       close,
     };
   } catch (error) {

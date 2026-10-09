@@ -1,5 +1,6 @@
 use sha2::{Digest, Sha256};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::{Database, query, raw_sql};
 
 use crate::StoreError;
@@ -10,7 +11,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 24] = [
+const MIGRATIONS: [Migration; 26] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -135,21 +136,40 @@ const MIGRATIONS: [Migration; 24] = [
         sql: include_str!("../../yoink-insight/sql/native.sql"),
         expected_tables: 69,
     },
+    Migration {
+        version: 25,
+        sql: include_str!("../migrations-turso/0025_music_resolve_log.sql"),
+        expected_tables: 70,
+    },
+    Migration {
+        version: 26,
+        sql: include_str!("../../yoink-stats/sql/native.sql"),
+        expected_tables: 76,
+    },
 ];
 
 pub(crate) async fn migrate(database: &Database) -> Result<(), StoreError> {
     let mut connection = database
         .connection()
         .await
-        .map_err(|_| StoreError::Database)?;
+        .map_err(|_| StoreError::Migration {
+            version: 0,
+            stage: "connection",
+        })?;
     let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
         .await
-        .map_err(|_| StoreError::Database)?;
+        .map_err(|_| StoreError::Migration {
+            version: 0,
+            stage: "transaction begin",
+        })?;
 
     raw_sql(include_str!("../sql/create_schema.sql"))
         .execute(&*tx)
         .await
-        .map_err(|_| StoreError::Schema)?;
+        .map_err(|_| StoreError::Migration {
+            version: 0,
+            stage: "ledger creation",
+        })?;
     validate_ledger_schema(&tx).await?;
     let history = read_history(&tx).await?;
     let applied = validate_history(&history)?;
@@ -164,7 +184,10 @@ pub(crate) async fn migrate(database: &Database) -> Result<(), StoreError> {
         raw_sql(migration.sql)
             .execute(&*tx)
             .await
-            .map_err(|_| StoreError::Schema)?;
+            .map_err(|_| StoreError::Migration {
+                version: migration.version,
+                stage: "SQL execution",
+            })?;
         let fingerprint = schema_hash(&tx, migration.expected_tables).await?;
         query(include_str!("../sql/record_migration.sql"))
             .bind(migration.version)
@@ -176,7 +199,10 @@ pub(crate) async fn migrate(database: &Database) -> Result<(), StoreError> {
             .map_err(|_| StoreError::Schema)?;
     }
     verify_connection(&tx).await?;
-    tx.commit().await.map_err(|_| StoreError::Database)
+    tx.commit().await.map_err(|_| StoreError::Migration {
+        version: MIGRATIONS.len() as i64,
+        stage: "transaction commit",
+    })
 }
 
 pub(crate) async fn verify(database: &Database) -> Result<(), StoreError> {

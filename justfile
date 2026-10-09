@@ -25,7 +25,8 @@ build target="all" no_cache="":
 # Create host-side data directories required by volume mounts
 data-dirs:
     mkdir -p data/cookies data/kasm/profile/chromium data/tg-bot-api
-    chmod 700 data/tg-bot-api
+    sudo -n install -d -m 0700 -o 10001 -g 10001 data/native data/native-backups data/native-restore
+    sudo -n setfacl -m u:10001:rx,d:u:10001:rx data/tg-bot-api
 
 # Start all services (or a single one). Does NOT rebuild; use `rebuild`.
 up service="":
@@ -146,14 +147,17 @@ verify-host:
 #        just lint --fix            autofix both trees
 #        just lint src/yoink        scope to a path
 # Full ruff lint inside a throwaway container. Forwards args to ruff.
-lint *args="":
+lint:
+    just --justfile backend/justfile lint
+
+lint-py *args="":
     @scripts/lint.sh {{args}}
 
 # Python verify: ruff lint + pytest. Fails fast on first red step.
 # Usage: just verify-py [path]
 verify-py *args="src/tests":
-    just lint
-    just test {{args}}
+    just lint-py
+    just test-legacy {{args}}
 
 # Translation coverage and regression tests across core + plugin frontends.
 verify-i18n:
@@ -168,16 +172,20 @@ verify-fe *args="":
     just test-inbox-frontend
     just tsc {{args}}
 
-# Full verify: python (lint + tests) + frontend (tsc). Mirrors CI.
+# Native backend, deployment contracts and frontend verification.
 verify:
-    just verify-py
+    just --justfile backend/justfile verify
+    node --test scripts/test-native-deployment.mjs
     just verify-fe
 
 # Run tests inside a container against yoink_test DB in the existing postgres.
 # Usage: just test [path]
 # The default is the core suite. Plugin directories without tests are not valid
 # pytest targets and are intentionally not used as the default.
-test *args="src/tests":
+test:
+    just --justfile backend/justfile test
+
+test-legacy *args="src/tests":
     #!/usr/bin/env bash
     set -euo pipefail
     # Ensure yoink_test database exists; cheap if it already does.

@@ -8,7 +8,8 @@ use crate::{
 use chrono::{DateTime, Utc};
 use sha1::{Digest, Sha1};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 pub struct AccountInfo {
     pub label: String,

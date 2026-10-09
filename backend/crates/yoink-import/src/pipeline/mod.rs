@@ -5,14 +5,12 @@ mod value;
 mod verification;
 
 use std::path::Path;
+use yoink_db::Transaction;
 
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
 use tokio_postgres::Client;
-use turso::{
-    Connection, Value,
-    transaction::{Transaction, TransactionBehavior},
-};
+use turso::{Connection, Value, transaction::TransactionBehavior};
 use yoink_db::raw_sql;
 use yoink_storage::Store;
 
@@ -53,15 +51,26 @@ async fn execute_connected(
     source::begin_snapshot(client).await?;
     source::configure_session(client, config).await?;
     catalog::lock_expected_tables(client).await?;
-    let tables = parse_tables(&catalog::validate(client).await?)?;
+    let catalog = catalog::validate(client).await?;
+    catalog::preflight(client, &catalog).await?;
+    let tables = parse_tables(&catalog)?;
     let store = Store::open(path, true, config.lock_timeout)
         .await
-        .map_err(|_| ImportError::Storage)?;
-    store.migrate().await.map_err(|_| ImportError::Storage)?;
+        .map_err(|_| ImportError::StorageStage { stage: "open" })?;
+    store.migrate().await.map_err(|error| match error {
+        yoink_storage::StoreError::Migration { version, stage } => {
+            ImportError::StorageMigration { version, stage }
+        }
+        _ => ImportError::StorageStage {
+            stage: "migration schema validation",
+        },
+    })?;
     store
         .verify_schema()
         .await
-        .map_err(|_| ImportError::Storage)?;
+        .map_err(|_| ImportError::StorageStage {
+            stage: "initial schema verification",
+        })?;
     let mut total = 0u64;
     {
         let mut connection = store

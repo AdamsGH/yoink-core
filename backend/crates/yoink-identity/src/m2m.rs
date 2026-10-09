@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 
 use super::{IdentityStore, admin::AdminError};

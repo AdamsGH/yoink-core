@@ -13,7 +13,9 @@ teloxide.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
 futures = "0.3"
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["json", "multipart", "stream"] }
+yoink-music = { path = "../yoink-music" }
+yoink-stats = { path = "../yoink-stats" }
 yoink-i18n = { path = "../yoink-i18n" }
 tokio.workspace = true
 tokio-util.workspace = true
@@ -32,6 +34,7 @@ yoink-worker-protocol.workspace = true
 yoink-insight = { path = "../yoink-insight" }
 yoink-inbox = { path = "../yoink-inbox" }
 yoink-db.workspace = true
+turso = { version = "=0.7.2", default-features = false }
 rustix.workspace = true
 
 [dev-dependencies]

@@ -69,6 +69,8 @@ fn names(commands: &[BotCommand]) -> Vec<&str> {
 #[test]
 fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
     let ordinary = Eligibility {
+        music: false,
+        stats: false,
         summary: false,
         tldr: false,
         ingest: false,
@@ -86,6 +88,8 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
         assert_eq!(names(&catalog(ordinary, language)), expected);
         let owner = catalog(
             Eligibility {
+                music: false,
+                stats: false,
                 summary: false,
                 tldr: false,
                 ingest: false,
@@ -129,6 +133,8 @@ fn catalog_is_native_localized_unique_and_never_elevates_ordinary_users() {
 #[test]
 fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     let basic = Eligibility {
+        music: false,
+        stats: false,
         summary: false,
         tldr: false,
         ingest: false,
@@ -142,6 +148,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     assert_eq!(
         names(&catalog(
             Eligibility {
+                music: false,
+                stats: false,
                 summary: false,
                 tldr: false,
                 ingest: false,
@@ -156,6 +164,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     assert!(
         catalog(
             Eligibility {
+                music: false,
+                stats: false,
                 summary: false,
                 tldr: false,
                 ingest: false,
@@ -171,6 +181,8 @@ fn catalog_respects_disabled_downloads_blocking_and_group_private_boundaries() {
     );
     let group = catalog(
         Eligibility {
+            music: false,
+            stats: false,
             summary: false,
             tldr: false,
             ingest: false,
@@ -243,6 +255,8 @@ async fn personalized_language_removes_both_higher_precedence_overrides() {
     }
     let ru = catalog(
         Eligibility {
+            music: false,
+            stats: false,
             summary: false,
             tldr: false,
             ingest: false,
@@ -264,6 +278,68 @@ async fn personalized_language_removes_both_higher_precedence_overrides() {
 async fn setup() -> (tempfile::TempDir, Arc<IdentityStore>) {
     let (dir, identities, _) = setup_store(false).await;
     (dir, identities)
+}
+
+#[tokio::test]
+async fn product_menus_refresh_grants_and_bans_without_downloader_authority() {
+    let (_dir, identities) = setup().await;
+    let api = Fake::default();
+    let mut menus = worker(api.clone(), identities.clone()).with_products(true, true);
+    menus.downloads = false;
+    identities
+        .admin_grant_permission(42, 43, "music", "inline", None)
+        .await
+        .unwrap();
+    menus.target(43, 43).await.unwrap();
+    let entries = api.state.lock().unwrap().saved[&(private(43), "".into())].clone();
+    assert!(names(&entries).contains(&"music"));
+    assert!(names(&entries).contains(&"song"));
+    assert!(!names(&entries).contains(&"download"));
+    let snapshot = identities.snapshot(43, None).await.unwrap().unwrap();
+    let mut restricted = snapshot.clone();
+    restricted.principal.role = Role::Restricted;
+    let granted = catalog(menus.inbox_eligibility(&restricted), Language::Russian);
+    assert!(names(&granted).contains(&"music"));
+    assert!(!names(&granted).contains(&"stats"));
+    assert_eq!(
+        granted
+            .iter()
+            .find(|c| c.command == "music")
+            .unwrap()
+            .description,
+        translate(Language::Russian, Key::MenuMusic, &[])
+    );
+    identities
+        .admin_update_user(
+            42,
+            43,
+            &AdminUserPatch {
+                role: Some(Role::User),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    menus.target(43, 43).await.unwrap();
+    assert!(names(&api.state.lock().unwrap().saved[&(private(43), "".into())]).contains(&"stats"));
+    identities
+        .admin_update_user(
+            42,
+            43,
+            &AdminUserPatch {
+                role: Some(Role::Banned),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    menus.target(43, 43).await.unwrap();
+    assert!(api.state.lock().unwrap().saved[&(private(43), "".into())].is_empty());
+    let disabled = worker(api.clone(), identities);
+    disabled.target(42, 42).await.unwrap();
+    let state = api.state.lock().unwrap();
+    assert!(!names(&state.saved[&(private(42), "".into())]).contains(&"music"));
+    assert!(!names(&state.saved[&(private(42), "".into())]).contains(&"stats"));
 }
 async fn setup_store(
     insight: bool,
@@ -314,6 +390,8 @@ fn worker(api: Fake, identities: Arc<IdentityStore>) -> Menus<Fake> {
         known_groups: Default::default(),
         inbox: false,
         insight: None,
+        music: false,
+        stats: false,
     }
 }
 async fn until(api: &Fake, predicate: impl Fn(&Saved) -> bool) {

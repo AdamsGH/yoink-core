@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use rand::{RngCore, rngs::OsRng};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 
 use super::{AdminError, IdentityStore, admin_auth, finish_admin};

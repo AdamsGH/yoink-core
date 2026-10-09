@@ -118,8 +118,25 @@ impl IdentityStore {
         // Hold the connection guard for the full transaction lifetime so all reads
         // observe one consistent database snapshot.
         let mut connection = self.database.connection().await?;
-        let transaction = turso::transaction::Transaction::new(
-            &mut connection,
+        self.snapshot_on(&mut connection, user_id, group).await
+    }
+
+    /// Read under the caller's existing guard from this store's database.
+    /// Keep that guard until the protected operation finishes; do not nest a transaction.
+    pub async fn snapshot_on(
+        &self,
+        connection: &mut turso::Connection,
+        user_id: i64,
+        group: Option<(i64, Option<i64>)>,
+    ) -> Result<Option<IdentitySnapshot>, IdentityError> {
+        if user_id <= 0
+            || self.owner_id.is_some_and(|id| id <= 0)
+            || group.is_some_and(|(id, thread)| id >= 0 || thread.is_some_and(|v| v <= 0))
+        {
+            return Err(IdentityError::InvalidId);
+        }
+        let transaction = yoink_db::Transaction::new(
+            connection,
             turso::transaction::TransactionBehavior::Deferred,
         )
         .await
@@ -148,21 +165,38 @@ impl IdentityStore {
         }
     }
 
+    /// Caller owns an active transaction on this store's shared database guard.
+    /// Reads identical identity semantics without acquiring or committing a transaction.
+    pub async fn snapshot_in_transaction(
+        &self,
+        connection: &turso::Connection,
+        user_id: i64,
+        group: Option<(i64, Option<i64>)>,
+    ) -> Result<Option<IdentitySnapshot>, IdentityError> {
+        if user_id <= 0
+            || self.owner_id.is_some_and(|id| id <= 0)
+            || group.is_some_and(|(id, thread)| id >= 0 || thread.is_some_and(|v| v <= 0))
+        {
+            return Err(IdentityError::InvalidId);
+        }
+        self.read_snapshot(connection, user_id, group).await
+    }
+
     async fn read_snapshot(
         &self,
-        transaction: &turso::transaction::Transaction<'_>,
+        transaction: &turso::Connection,
         user_id: i64,
         group: Option<(i64, Option<i64>)>,
     ) -> Result<Option<IdentitySnapshot>, IdentityError> {
         let now = query(include_str!("sql/database_now.sql"))
-            .fetch_one(&**transaction)
+            .fetch_one(transaction)
             .await?
             .try_get::<DateTime<Utc>, _>(0)
             .map_err(|_| IdentityError::Database)?;
 
         let Some(row) = query(include_str!("sql/user.sql"))
             .bind(user_id)
-            .fetch_optional(&**transaction)
+            .fetch_optional(transaction)
             .await?
         else {
             return Ok(None);
@@ -190,7 +224,7 @@ impl IdentityStore {
 
         let grant_rows = query(include_str!("sql/grants.sql"))
             .bind(user_id)
-            .fetch_all(&**transaction)
+            .fetch_all(transaction)
             .await?;
         let mut grants = Vec::with_capacity(grant_rows.len());
         for row in grant_rows {
@@ -217,7 +251,7 @@ impl IdentityStore {
         let mut providers = Vec::new();
         if self.insight_enabled {
             let setting_row = query(include_str!("sql/byok_enabled.sql"))
-                .fetch_optional(&**transaction)
+                .fetch_optional(transaction)
                 .await?;
             let setting_value = setting_row
                 .map(|row| row.try_get::<Option<String>, _>(0))
@@ -230,7 +264,7 @@ impl IdentityStore {
             if setting {
                 let ready = query(include_str!("sql/byok_ready.sql"))
                     .bind(user_id)
-                    .fetch_one(&**transaction)
+                    .fetch_one(transaction)
                     .await?
                     .try_get::<bool, _>(0)
                     .map_err(|_| IdentityError::Database)?;
@@ -247,7 +281,7 @@ impl IdentityStore {
             let row = query(include_str!("sql/group_context.sql"))
                 .bind(user_id)
                 .bind(group_id)
-                .fetch_optional(&**transaction)
+                .fetch_optional(transaction)
                 .await?
                 .ok_or(IdentityError::Database)?;
             let enabled = row.try_get(0).map_err(|_| IdentityError::Database)?;
@@ -263,7 +297,7 @@ impl IdentityStore {
             let threads = query(include_str!("sql/thread_context.sql"))
                 .bind(group_id)
                 .bind(thread_id)
-                .fetch_one(&**transaction)
+                .fetch_one(transaction)
                 .await?;
             let matching = threads
                 .try_get::<Option<bool>, _>(0)
@@ -481,6 +515,184 @@ mod tests {
 
     async fn exec(db: &Database, sql: &str) {
         query(sql).execute(db).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_recovers_after_cancelled_rollback_and_engine_rollback_terminal_error() {
+        for engine_rollback in [false, true] {
+            let (_dir, db, identity) = store(false, Some(1)).await;
+            exec(
+                &db,
+                "INSERT INTO users(id,role,language) VALUES(1,'user','en')",
+            )
+            .await;
+            {
+                let mut c = db.connection().await.unwrap();
+                let tx = yoink_db::Transaction::new(
+                    &mut c,
+                    turso::transaction::TransactionBehavior::Immediate,
+                )
+                .await
+                .unwrap();
+                tx.execute("UPDATE users SET role='banned' WHERE id=1", ())
+                    .await
+                    .unwrap();
+                if engine_rollback {
+                    assert!(
+                        tx.execute(
+                            "INSERT OR ROLLBACK INTO users(id,role,language) VALUES(1,'user','en')",
+                            ()
+                        )
+                        .await
+                        .is_err()
+                    );
+                    assert!(tx.is_autocommit().unwrap());
+                    assert!(tx.commit().await.is_err());
+                } else {
+                    assert!(!tx.is_autocommit().unwrap());
+                    drop(tx.rollback());
+                }
+            }
+            for _ in 0..2 {
+                let snapshot = identity.snapshot(1, None).await.unwrap().unwrap();
+                assert_eq!(snapshot.principal.role, Role::Owner);
+                assert_eq!(
+                    query("SELECT role FROM users WHERE id=1")
+                        .fetch_one(&db)
+                        .await
+                        .unwrap()
+                        .try_get::<String, _>("role")
+                        .unwrap(),
+                    "user"
+                );
+            }
+            let mut c = db.connection().await.unwrap();
+            yoink_db::Transaction::new(&mut c, turso::transaction::TransactionBehavior::Immediate)
+                .await
+                .unwrap()
+                .commit()
+                .await
+                .unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn snapshot_in_transaction_sees_revocation_after_wait_and_never_commits() {
+        use yoink_db::Executor;
+        let (_dir, db, identity) = store(false, Some(1)).await;
+        let identity = std::sync::Arc::new(identity);
+        exec(
+            &db,
+            "INSERT INTO users(id,role,language) VALUES(1,'user','en'),(2,'moderator','en')",
+        )
+        .await;
+        exec(
+            &db,
+            "INSERT INTO groups(id,enabled,auto_grant_role) VALUES(-10,1,'user')",
+        )
+        .await;
+        exec(&db,"INSERT INTO user_group_policies(group_id,user_id,role_override) VALUES(-10,2,'moderator')").await;
+        exec(
+            &db,
+            "INSERT INTO thread_policies(group_id,thread_id,enabled) VALUES(-10,8,0)",
+        )
+        .await;
+        let c = db.connection().await.unwrap();
+        let clone = identity.clone();
+        let waiter = tokio::spawn(async move {
+            let c = clone.database.connection().await.unwrap();
+            c.batch("BEGIN IMMEDIATE").await.unwrap();
+            let snapshot = clone
+                .snapshot_in_transaction(&c, 2, Some((-10, Some(8))))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.principal.role, Role::Restricted);
+            let group = snapshot.group.unwrap();
+            assert_eq!(group.role_override, None);
+            assert!(!group.thread_allowed);
+            query("UPDATE users SET role='admin' WHERE id=2")
+                .execute(&*c)
+                .await
+                .unwrap();
+            let elevated = clone
+                .snapshot_in_transaction(&c, 2, None)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(elevated.principal.role, Role::Admin);
+            c.batch("ROLLBACK").await.unwrap();
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        query("UPDATE users SET role='restricted' WHERE id=2")
+            .execute(&*c)
+            .await
+            .unwrap();
+        query("DELETE FROM user_group_policies WHERE user_id=2")
+            .execute(&*c)
+            .await
+            .unwrap();
+        drop(c);
+        waiter.await.unwrap();
+        assert_eq!(
+            identity
+                .snapshot(2, None)
+                .await
+                .unwrap()
+                .unwrap()
+                .principal
+                .role,
+            Role::Restricted
+        );
+        let c = db.connection().await.unwrap();
+        c.batch("BEGIN IMMEDIATE").await.unwrap();
+        query("UPDATE users SET ban_until=4102444800000000 WHERE id=1")
+            .execute(&*c)
+            .await
+            .unwrap();
+        let owner = identity
+            .snapshot_in_transaction(&c, 1, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(owner.principal.role, Role::User);
+        assert!(owner.principal.is_blocked(owner.now));
+        c.batch("ROLLBACK").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_on_preserves_authority_without_reacquiring_the_guard() {
+        let (_dir, db, identity) = store(false, Some(1)).await;
+        exec(
+            &db,
+            "INSERT INTO users (id, role, language) VALUES (1, 'user', 'en')",
+        )
+        .await;
+        let mut connection = db.connection().await.unwrap();
+        let owner = tokio::time::timeout(
+            Duration::from_secs(1),
+            identity.snapshot_on(&mut connection, 1, None),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        assert_eq!(owner.principal.role, Role::Owner);
+        query("UPDATE users SET ban_until=4102444800000000 WHERE id=1")
+            .execute(&*connection)
+            .await
+            .unwrap();
+        let banned = identity
+            .snapshot_on(&mut connection, 1, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(banned.principal.role, Role::User);
+        assert!(banned.principal.is_blocked(banned.now));
+        assert_eq!(
+            identity.snapshot_on(&mut connection, 0, None).await,
+            Err(IdentityError::InvalidId)
+        );
     }
 
     #[tokio::test]

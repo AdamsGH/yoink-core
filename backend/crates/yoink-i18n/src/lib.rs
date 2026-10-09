@@ -53,6 +53,10 @@ define_keys! {
     InboxSyncQueued => "telegram.inbox_sync_queued";
     InboxEmpty => "telegram.inbox_empty";
     MenuSave => "telegram.menu_save";
+    MenuMusic => "telegram.menu_music";
+    MenuSong => "telegram.menu_song";
+    MenuStats => "telegram.menu_stats";
+    MusicHelp => "telegram.music_help";
     MenuInbox => "telegram.menu_inbox";
     MenuStars => "telegram.menu_stars";
     MenuStarsSync => "telegram.menu_stars_sync";

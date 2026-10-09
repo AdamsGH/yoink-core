@@ -2,38 +2,39 @@
 
 Telegram bot platform with a plugin system, REST API, and React WebApp. Handles auth, RBAC, groups, settings, and provides a plugin protocol that each plugin implements.
 
-Plugins are git submodules under `plugins/`. Each is an independent Python package with its own handlers, routes, models, migrations, and frontend pages.
+The default bot/API runtime is Rust with native Turso storage. Download, Music, Stats, Insight and Inbox share current authorization and bounded lifecycle ownership. See [native deployment](docs/backend/deployment.md) for configuration, cutover, backups and rollback. Python sources and PostgreSQL remain legacy reference/rollback assets; plugin frontends remain under `plugins/`.
 
-## Entrypoints
+## Legacy Python entrypoints
 
 | Script | Module | Description |
 |---|---|---|
-| `yoink-combined` | `yoink.combined_main:main` | **Production default.** Bot + API in a single asyncio loop; shared session_factory and bot_data. Used by docker entrypoint. |
+| `yoink-combined` | `yoink.combined_main:main` | **Legacy deployment.** Bot + API in a single asyncio loop; shared session_factory and bot_data. Used by docker entrypoint. |
 | `yoink` | `yoink.main:main` | Bot only (no API). Useful when API runs separately. |
 | `yoink-api` | `yoink.api_main_cli:main` | API only via uvicorn (programmatic). |
 | `yoink.api_main` | ASGI app object | For external ASGI servers: `uvicorn yoink.api_main:app`. |
 
-In split-deploy scenarios run `yoink` + `yoink-api` in separate containers. For single-container deploys use `yoink-combined`.
+For legacy split-deploy scenarios run `yoink` + `yoink-api` in separate containers. For single-container deploys use `yoink-combined`.
 
 ## Quick start
 
 ```bash
 cp .env.example .env        # fill in required vars
-just data-dirs              # create data/ subdirectories
+just data-dirs              # create private data directories (sudo required)
 just build all              # build yoink + frontend images
 just up                     # start services
-just migrate up             # run migrations
+just build backup           # build the native archive operator
+# Native schemas migrate and verify automatically at startup.
 ```
 
 ## Services
 
 | Service | Description | Port |
 |---|---|---|
-| `yoink` | Bot + API | 8003 |
-| `yoink-postgres` | PostgreSQL 16 | - |
+| `yoink` | Native Rust bot + API | 8003 |
+| `yoink-postgres` | Retained legacy PostgreSQL 16 | - |
 | `yoink-frontend` | React SPA (nginx) | 3010 |
 | `tg-bot-api` | Custom tdlight Bot API server | 8082 |
-| `yoink-backup` | pg_dump + S3 (profile `backup`) | - |
+| `yoink-backup` | pg_dump + S3 (legacy profile `legacy-backup`) | - |
 | `yoink-browser` | Kasmweb Chromium (profile `cookies`) | 6902 |
 | `yoink-youtubei` | Node.js youtubei.js sidecar for OAuth YouTube downloads | 9173 |
 

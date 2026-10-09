@@ -116,7 +116,7 @@ async fn post_import_admission_runs_after_rows_arrive_and_is_transactional() {
     assert!(jobs(&store).await.is_empty());
     {
         let mut connection = store.database().connection().await.unwrap();
-        let transaction = turso::transaction::Transaction::new(
+        let transaction = yoink_db::Transaction::new(
             &mut connection,
             turso::transaction::TransactionBehavior::Immediate,
         )
@@ -161,7 +161,13 @@ async fn invalid_imported_owner_rolls_back_the_entire_inbox_upgrade() {
         .await
         .unwrap();
     let before = snapshot(&store).await;
-    assert_eq!(store.migrate().await, Err(StoreError::Schema));
+    assert_eq!(
+        store.migrate().await,
+        Err(StoreError::Migration {
+            version: 20,
+            stage: "SQL execution",
+        })
+    );
     assert_eq!(snapshot(&store).await, before);
     let count: i64 = query("SELECT count(*) FROM runtime_migrations")
         .fetch_one(store.database())

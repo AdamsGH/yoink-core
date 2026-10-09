@@ -12,9 +12,11 @@ log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
 run_build() {
-  local name="$1" dockerfile="$2" image="$3"
+  local name="$1" dockerfile="$2" image="$3" context="${4:-.}" target="${5:-}"
+  local target_args=()
+  if [ -n "$target" ]; then target_args=(--target "$target"); fi
   printf 'Building %-10s' "$name"
-  if docker build "${common[@]}" -f "$dockerfile" -t "$image" . >"$log" 2>&1; then
+  if docker build "${common[@]}" "${target_args[@]}" -f "$dockerfile" -t "$image" "$context" >"$log" 2>&1; then
     printf ' OK\n'
   else
     printf ' FAILED\n\n%s\n' "$(cat "$log")" >&2
@@ -23,13 +25,13 @@ run_build() {
 }
 
 case "$target" in
-  yoink)    run_build yoink docker/Dockerfile yoink/yoink:latest ;;
+  yoink)    just --justfile backend/justfile check-build-space; run_build yoink backend/Dockerfile yoink/rust-backend:latest backend; run_build gateway backend/Dockerfile.youtube-auth-gateway yoink/youtube-auth-gateway:native ;;
   frontend) run_build frontend docker/Dockerfile.frontend yoink/frontend:latest ;;
   nginx)    run_build nginx docker/Dockerfile.nginx yoink/nginx:latest ;;
   tg)       run_build tg docker/Dockerfile.tg-bot-api yoink/tg-bot-api:latest ;;
-  backup)   run_build backup docker/Dockerfile.backup yoink/backup:latest ;;
+  backup)   just --justfile backend/justfile check-build-space; run_build backup backend/Dockerfile yoink/rust-operations:native backend operations ;;
   all)
-    run_build yoink docker/Dockerfile yoink/yoink:latest
+    just --justfile backend/justfile check-build-space; run_build yoink backend/Dockerfile yoink/rust-backend:latest backend; run_build gateway backend/Dockerfile.youtube-auth-gateway yoink/youtube-auth-gateway:native
     run_build frontend docker/Dockerfile.frontend yoink/frontend:latest
     run_build nginx docker/Dockerfile.nginx yoink/nginx:latest
     ;;

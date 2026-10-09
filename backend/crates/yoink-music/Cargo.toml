@@ -1,0 +1,31 @@
+[package]
+name = "yoink-music"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+yoink-access.workspace = true
+yoink-identity.workspace = true
+yoink-db.workspace = true
+yoink-storage.workspace = true
+yoink-executor.workspace = true
+yoink-worker-protocol.workspace = true
+yoink-i18n = { path = "../yoink-i18n" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

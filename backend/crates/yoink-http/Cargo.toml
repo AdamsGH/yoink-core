@@ -6,15 +6,18 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+yoink-stats = { path = "../yoink-stats" }
+yoink-music = { path = "../yoink-music" }
 yoink-insight = { path = "../yoink-insight" }
 yoink-inbox = { path = "../yoink-inbox" }
 yoink-user-session = { path = "../yoink-user-session" }
-axum.workspace = true
+axum = { workspace = true, features = ["multipart"] }
 tower.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 yoink-application.workspace = true
+yoink-domain.workspace = true
 yoink-auth.workspace = true
 yoink-identity.workspace = true
 yoink-downloads = { path = "../yoink-downloads" }

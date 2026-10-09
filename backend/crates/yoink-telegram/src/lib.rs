@@ -47,7 +47,13 @@ mod raw_polling;
 pub use menus::MenuConfig;
 pub mod inbox_runtime;
 pub mod insight_runtime;
+pub mod music_runtime;
+pub mod stats_runtime;
 pub use insight_runtime::InsightRuntime;
+pub use music_runtime::MusicRuntime;
+pub use stats_runtime::StatsRuntime;
+mod product_dispatch;
+pub use product_dispatch::TelegramHandlerLifecycle;
 #[cfg(feature = "test-fixtures")]
 pub mod confirmation_hold;
 mod insight_lifecycle;
@@ -96,6 +102,13 @@ impl std::fmt::Display for TelegramError {
 
 impl std::error::Error for TelegramError {}
 
+/// Durable product observation completes before the polling offset acknowledges it.
+pub type UpdateObserver = Arc<
+    dyn Fn(serde_json::Value) -> futures::future::BoxFuture<'static, Result<(), TelegramError>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Clone, Copy)]
 struct TelegramIdentity {
     owner_id: u64,
@@ -126,6 +139,10 @@ pub struct TelegramAdapter {
     menus: Option<menus::Menus>,
     inbox: Option<InboxRuntime>,
     insight: Option<InsightRuntime>,
+    update_observer: Option<UpdateObserver>,
+    music: Option<(MusicRuntime, Duration)>,
+    stats: Option<StatsRuntime>,
+    lifecycle: TelegramHandlerLifecycle,
 }
 
 impl TelegramAdapter {
@@ -201,6 +218,10 @@ impl TelegramAdapter {
             menus: None,
             inbox: None,
             insight: None,
+            update_observer: None,
+            music: None,
+            stats: None,
+            lifecycle: TelegramHandlerLifecycle::new(),
         })
     }
 
@@ -217,6 +238,38 @@ impl TelegramAdapter {
     pub fn with_insight(mut self, runtime: InsightRuntime) -> Self {
         self.insight = Some(runtime);
         self
+    }
+
+    pub fn with_music(mut self, runtime: MusicRuntime, observation_max_age: Duration) -> Self {
+        self.music = Some((runtime, observation_max_age));
+        self
+    }
+
+    pub fn with_stats(mut self, runtime: StatsRuntime) -> Self {
+        self.stats = Some(runtime);
+        self
+    }
+
+    pub fn bot_id(&self) -> i64 {
+        self.bot_id as i64
+    }
+
+    pub fn music_delivery(
+        &self,
+        budget: music_runtime::MusicTransportBudget,
+    ) -> Result<music_runtime::NativeMusicDelivery, yoink_music::MusicError> {
+        music_runtime::NativeMusicDelivery::new(self.bot.clone(), self.bot_id(), budget)
+    }
+
+    pub fn stats_membership_provider(
+        &self,
+        budget: stats_runtime::LookupBudget,
+    ) -> Result<stats_runtime::BotMembershipProvider, yoink_stats::Error> {
+        stats_runtime::BotMembershipProvider::new(self.bot.clone(), budget)
+    }
+
+    pub fn handler_lifecycle(&self) -> TelegramHandlerLifecycle {
+        self.lifecycle.clone()
     }
 
     /// Installs Inbox commands only. The coordinator separately owns run().
@@ -266,6 +319,11 @@ impl TelegramAdapter {
         self
     }
 
+    pub fn with_update_observer(mut self, observer: UpdateObserver) -> Self {
+        self.update_observer = Some(observer);
+        self
+    }
+
     pub fn with_menu_config(mut self, config: MenuConfig) -> Result<Self, TelegramError> {
         if !config.valid() {
             return Err(TelegramError::BotInitializationFailed);
@@ -299,6 +357,7 @@ impl TelegramAdapter {
             self.menu_config,
         )
         .with_inbox(self.inbox.is_some())
+        .with_products(self.music.is_some(), self.stats.is_some())
         .with_insight(self.insight.as_ref().map(InsightRuntime::service));
         menus.initialize().await;
         self.menus = Some(menus);
@@ -306,6 +365,9 @@ impl TelegramAdapter {
 
     /// Polls until cancellation or the first polling failure.
     pub async fn run(mut self, shutdown: CancellationToken) -> Result<(), TelegramError> {
+        let lifecycle = self.lifecycle.clone();
+        let _lifecycle_stop = lifecycle.stop.clone().drop_guard();
+        let _products_stop = product_dispatch::ProductStop(self.music.clone(), self.stats.clone());
         let insight_stop = self
             .insight
             .as_ref()
@@ -346,7 +408,11 @@ impl TelegramAdapter {
             self.poll_timeout,
             i64::try_from(self.bot_id).expect("validated bot identity"),
             observer,
-        );
+        )
+        .with_update_observer(product_dispatch::compose_observers(
+            self.update_observer,
+            self.stats.as_ref().map(StatsRuntime::observer),
+        ));
         let stop = listener.stop_token();
         let failed = Arc::new(AtomicBool::new(false));
         let progress = progress::run(self.bot.clone(), self.downloads.clone(), self.progress);
@@ -383,6 +449,9 @@ impl TelegramAdapter {
                     identities: self.identities,
                     inbox: self.inbox,
                     insight: self.insight,
+                    music: self.music,
+                    stats: self.stats,
+                    lifecycle: lifecycle.clone(),
                 }
             ])
             .default_handler(|_| async {})
@@ -393,9 +462,14 @@ impl TelegramAdapter {
             let stop = stop.clone();
             let failed = failed.clone();
             let insight_stop = insight_stop.clone();
+            let lifecycle = lifecycle.clone();
+            let products =
+                product_dispatch::ProductStop(_products_stop.0.clone(), _products_stop.1.clone());
             Arc::new(move |error: raw_polling::PollingError| {
                 tracing::error!(category = ?error, "Telegram polling stopped");
                 insight_stop.cancel();
+                lifecycle.cancel_all();
+                products.cancel();
                 failed.store(true, Ordering::SeqCst);
                 stop.stop();
                 async {}
@@ -404,26 +478,26 @@ impl TelegramAdapter {
         let dispatch = dispatcher.try_dispatch_with_listener(listener, error_handler);
         tokio::pin!(dispatch);
 
-        tokio::select! {
+        let dispatch_result = tokio::select! {
             () = menus => unreachable!("menu loop runs until dropped"),
             () = progress => unreachable!("progress loop runs until dropped"),
             _ = shutdown.cancelled() => {
+                lifecycle.cancel_all();
                 insight_stop.cancel();
                 stop.stop();
-                (&mut dispatch)
-                    .await
-                    .map_err(|_| TelegramError::PollingFailed)?;
+                (&mut dispatch).await.map_err(|_| TelegramError::PollingFailed)
             }
             result = &mut dispatch => {
-                result.map_err(|_| TelegramError::PollingFailed)?;
-                if !shutdown.is_cancelled() {
-                    searches.shutdown().await;
-                    return Err(TelegramError::PollingFailed);
-                }
+                if !shutdown.is_cancelled() { Err(TelegramError::PollingFailed) }
+                else { result.map_err(|_| TelegramError::PollingFailed) }
             }
-        }
+        };
 
+        lifecycle.cancel_all();
+        _products_stop.cancel();
         searches.shutdown().await;
+        lifecycle.drain_handlers().await;
+        dispatch_result?;
         if failed.load(Ordering::SeqCst) {
             return Err(TelegramError::PollingFailed);
         }
@@ -452,6 +526,9 @@ struct MessageDependencies {
     identities: Option<Arc<IdentityStore>>,
     inbox: Option<InboxRuntime>,
     insight: Option<InsightRuntime>,
+    music: Option<(MusicRuntime, Duration)>,
+    stats: Option<StatsRuntime>,
+    lifecycle: TelegramHandlerLifecycle,
 }
 
 #[derive(Clone, PartialEq)]
@@ -958,6 +1035,24 @@ async fn handle_message(
     system: SystemService,
     dependencies: MessageDependencies,
 ) -> Result<(), Infallible> {
+    let Some(_handler) = dependencies.lifecycle.handlers.admit() else {
+        return Ok(());
+    };
+    let stop = dependencies.lifecycle.stop.clone();
+    tokio::select! {
+        _ = stop.cancelled() => Ok(()),
+        result = handle_message_admitted(bot, message, identity, bot_username, system, dependencies) => result,
+    }
+}
+
+async fn handle_message_admitted(
+    bot: Bot,
+    message: Message,
+    identity: TelegramIdentity,
+    bot_username: String,
+    system: SystemService,
+    dependencies: MessageDependencies,
+) -> Result<(), Infallible> {
     // Keep ownership through late combined help sends and receipt work, not
     // merely through the Insight product future or active cancellation map.
     let _insight_handler = if let Some(insight) = &dependencies.insight {
@@ -968,14 +1063,27 @@ async fn handle_message(
     } else {
         None
     };
-    let downloads = dependencies.downloads;
-    let upload = dependencies.upload;
-    let CookieUrlDependency(cookie_url_config) = dependencies.cookie_url;
+    let downloads = dependencies.downloads.clone();
+    let upload = dependencies.upload.clone();
+    let CookieUrlDependency(cookie_url_config) = dependencies.cookie_url.clone();
     let bot_id = identity.bot_id;
     let Some((actor_id, target)) = incoming_route(identity, &message) else {
         return Ok(());
     };
     if !system.snapshot().ready {
+        return Ok(());
+    }
+    if product_dispatch::message(
+        &bot,
+        &message,
+        actor_id,
+        identity,
+        &bot_username,
+        &dependencies,
+        &system,
+    )
+    .await
+    {
         return Ok(());
     }
     if let Some(inbox) = &dependencies.inbox
@@ -1548,6 +1656,22 @@ async fn handle_message(
 }
 
 async fn handle_callback(
+    bot: Bot,
+    query: CallbackQuery,
+    identity: TelegramIdentity,
+    downloads: DownloadsDependency,
+    dependencies: MessageDependencies,
+) -> Result<(), Infallible> {
+    let Some(_handler) = dependencies.lifecycle.handlers.admit() else {
+        return Ok(());
+    };
+    tokio::select! {
+        _ = dependencies.lifecycle.stop.cancelled() => Ok(()),
+        result = handle_callback_admitted(bot, query, identity, downloads) => result,
+    }
+}
+
+async fn handle_callback_admitted(
     bot: Bot,
     query: CallbackQuery,
     identity: TelegramIdentity,

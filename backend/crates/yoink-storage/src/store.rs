@@ -1,7 +1,8 @@
 use std::{path::Path, time::Duration};
+use yoink_db::Transaction;
 
 use chrono::{DateTime, Utc};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
 use yoink_db::{Database, query};
 use yoink_domain::{DownloadRequest, NetworkSelection};
@@ -92,7 +93,10 @@ impl Store {
         self.database
             .verify_files()
             .await
-            .map_err(|_| StoreError::Database)?;
+            .map_err(|_| StoreError::Migration {
+                version: 0,
+                stage: "file verification",
+            })?;
         crate::schema::migrate(&self.database).await
     }
 
@@ -239,6 +243,9 @@ impl Store {
     ) -> Result<Admission, StoreError> {
         validate_key(idempotency_key)?;
         validate_policy(policy)?;
+        if request.downloader_settings().is_some() {
+            return Err(StoreError::InvalidInput);
+        }
         // The caller cannot supply a forced classification. Only durable marks below can.
         let request = &request.clone().with_force_nsfw(false);
         let cache_key = request
@@ -276,7 +283,11 @@ impl Store {
             } else if preserve_first_network {
                 same_request_intent(&current, request)?
             } else {
-                current.with_force_nsfw(false) == *request
+                current
+                    .with_force_nsfw(false)
+                    .with_downloader_settings(None)
+                    .map_err(|_| StoreError::InvalidStoredData)?
+                    == *request
             };
             if !same_intent {
                 return Err(StoreError::Conflict);
@@ -316,6 +327,10 @@ impl Store {
                 return Err(StoreError::Unauthorized);
             }
         }
+        let (prepared, policy, quota_limits) =
+            crate::downloader_settings::admission_settings(&tx, request, policy, self.quota_limits)
+                .await?;
+        let request = &prepared;
         let counts = query(include_str!("../sql/admit_counts.sql"))
             .bind(request.actor_id() as i64)
             .fetch_one(&*tx)
@@ -344,7 +359,7 @@ impl Store {
         crate::quota::charge(
             &tx,
             request.actor_id(),
-            self.quota_limits,
+            quota_limits,
             self.quota_owner_id,
             now,
         )
@@ -1109,7 +1124,9 @@ fn same_request_intent(
     requested: &DownloadRequest,
 ) -> Result<bool, StoreError> {
     let normalize_route = |r: &DownloadRequest| -> Result<DownloadRequest, StoreError> {
-        let r = without_network(r)?;
+        let r = without_network(r)?
+            .with_downloader_settings(None)
+            .map_err(|_| StoreError::InvalidStoredData)?;
         let engine = match r.params().engine() {
             yoink_domain::Engine::AutoYtDlpV1
             | yoink_domain::Engine::AutoGalleryV1

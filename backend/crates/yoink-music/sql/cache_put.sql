@@ -1,0 +1,1 @@
+INSERT INTO file_cache(cache_key,file_id,file_type,title,created_at,expires_at) VALUES(?,?,'audio',?,CAST(unixepoch('subsec')*1000000 AS INTEGER),CAST(unixepoch('subsec')*1000000 AS INTEGER)+?) ON CONFLICT(cache_key) DO UPDATE SET file_id=excluded.file_id,file_type='audio',title=excluded.title,created_at=excluded.created_at,expires_at=excluded.expires_at;

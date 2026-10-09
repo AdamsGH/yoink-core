@@ -47,6 +47,8 @@ impl MenuConfig {
 
 #[derive(Clone, Copy)]
 struct Eligibility {
+    music: bool,
+    stats: bool,
     summary: bool,
     tldr: bool,
     ingest: bool,
@@ -83,10 +85,23 @@ const PRIVATE_CONTROLS: &[(&str, Key)] = &[
 const OWNER_CONTROLS: &[(&str, Key)] = &[("uncache", Key::MenuUncache)];
 
 fn catalog(access: Eligibility, language: Language) -> Vec<BotCommand> {
-    if !access.approved && !access.ingest && !access.stars && !access.summary && !access.tldr {
+    if !access.music
+        && !access.stats
+        && !access.approved
+        && !access.ingest
+        && !access.stars
+        && !access.summary
+        && !access.tldr
+    {
         return vec![];
     }
     let mut entries = BASIC.to_vec();
+    if access.music {
+        entries.extend_from_slice(&[("music", Key::MenuMusic), ("song", Key::MenuSong)]);
+    }
+    if access.stats {
+        entries.push(("stats", Key::MenuStats));
+    }
     if access.summary {
         entries.extend_from_slice(&[("about", Key::MenuHelp), ("summary", Key::MenuHelp)]);
     }
@@ -154,6 +169,8 @@ fn eligibility(
         check_thread_policy: false,
     };
     Eligibility {
+        music: false,
+        stats: false,
         summary: false,
         tldr: false,
         ingest: false,
@@ -270,6 +287,8 @@ pub(crate) struct Menus<A = BotApi> {
     known_groups: std::collections::BTreeSet<i64>,
     inbox: bool,
     insight: Option<yoink_insight::Insight>,
+    music: bool,
+    stats: bool,
 }
 impl Menus {
     pub(crate) fn new(
@@ -294,10 +313,17 @@ impl Menus {
             known_groups: Default::default(),
             inbox: false,
             insight: None,
+            music: false,
+            stats: false,
         }
     }
 }
 impl<A: MenuApi> Menus<A> {
+    pub(crate) fn with_products(mut self, music: bool, stats: bool) -> Self {
+        self.music = music;
+        self.stats = stats;
+        self
+    }
     pub(crate) fn with_insight(mut self, insight: Option<yoink_insight::Insight>) -> Self {
         self.insight = insight;
         self
@@ -314,6 +340,18 @@ impl<A: MenuApi> Menus<A> {
             check_group_enabled: true,
             check_thread_policy: false,
         };
+        if !access.group || self.groups {
+            access.music = self.music
+                && snapshot
+                    .authorize(&policy, Some(("music", "inline")))
+                    .decision
+                    .allowed;
+            let stats_policy = AccessPolicy {
+                min_role: Role::User,
+                ..policy.clone()
+            };
+            access.stats = self.stats && snapshot.authorize(&stats_policy, None).decision.allowed;
+        }
         if self.inbox && (!access.group || self.groups) {
             access.ingest = snapshot
                 .authorize(&policy, Some(("inbox", "ingest")))
@@ -337,6 +375,8 @@ impl<A: MenuApi> Menus<A> {
             let language = yoink_i18n::language_for(Some(locale));
             let commands = catalog(
                 Eligibility {
+                    music: false,
+                    stats: false,
                     summary: false,
                     tldr: false,
                     ingest: false,
@@ -387,6 +427,8 @@ impl<A: MenuApi> Menus<A> {
                 ),
                 Ok(None) => (
                     Eligibility {
+                        music: false,
+                        stats: false,
                         summary: false,
                         tldr: false,
                         ingest: false,
@@ -408,6 +450,8 @@ impl<A: MenuApi> Menus<A> {
             },
             None => (
                 Eligibility {
+                    music: false,
+                    stats: false,
                     summary: false,
                     tldr: false,
                     ingest: false,

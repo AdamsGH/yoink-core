@@ -12,6 +12,7 @@ serde_json.workspace = true
 tantivy = { version = "=0.26.2", default-features = false, features = ["mmap", "lz4-compression"] }
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 turso = { version = "=0.7.2", default-features = false }
 yoink-db.workspace = true
 

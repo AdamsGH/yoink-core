@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use yoink_access::Role;
+use yoink_db::Transaction;
 use yoink_db::query;
 
 use crate::{IdentityError, IdentityStore};
@@ -289,7 +290,7 @@ fn decode_profile(row: yoink_db::Row) -> Result<UserProfile, IdentityError> {
 }
 
 async fn finish<T>(
-    transaction: turso::transaction::Transaction<'_>,
+    transaction: yoink_db::Transaction<'_>,
     result: Result<T, IdentityError>,
 ) -> Result<T, IdentityError> {
     match result {

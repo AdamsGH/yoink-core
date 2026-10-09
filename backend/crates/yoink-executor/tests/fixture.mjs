@@ -49,7 +49,14 @@ const spawnMarkerWriter = (marker) => spawn(process.execPath, ["-e", `
   setInterval(() => fs.appendFileSync(marker, "x"), 10);
 `, marker], { detached: false, stdio: "ignore" });
 
-if (mode.startsWith("content-")) {
+if (mode.startsWith("music-")) {
+  if (mode === "music-artifact") await writeArtifact("unexpected.mp4");
+  if (mode === "music-audio") {
+    const bytes = Buffer.from("ID3fixtureaudio");
+    await fs.writeFile("song.mp3", bytes);
+    emit(completed([{path:"song.mp3",size_bytes:bytes.length,media_type:"audio/mpeg"}]));
+  } else emit({type:"music_completed",result:{kind:"metadata",metadata:{title:"Song",artist:"Artist",thumbnail_url:null}}});
+} else if (mode.startsWith("content-")) {
   if (mode === 'content-denied') emit({type:'content_denied'});
   else if (mode === 'content-artifact') { await writeArtifact('unexpected.mp4'); emit({type:'content_completed',result:{text:'body',title:null}}); }
   else emit({type:'content_completed',result:{text: mode === 'content-bound' ? 'x'.repeat(131073) : 'body',title:'Title'}});

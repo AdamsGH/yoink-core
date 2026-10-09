@@ -33,6 +33,7 @@ export class BotApiFixture {
   #menuGate;
   #inlineMode = 'success';
   commandMenus = new CommandMenus();
+  beforePollAcknowledgement;
 
   constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024 }) {
     this.mediaBytes = mediaBytes;
@@ -133,7 +134,9 @@ export class BotApiFixture {
       message.reply_to_message.from.is_bot = true;
     }
     message.from.language_code = language;
-    this.#updates.push({ update_id: this.#updateId++, message });
+    const updateId = this.#updateId++;
+    this.#updates.push({ update_id: updateId, message });
+    return updateId;
   }
   enqueueMembership(chat, subject, status, { bot = false, tag, date = Math.floor(Date.now() / 1000), oldStatus = 'left', present = true, title = 'Observed group' } = {}) {
     const updateId = this.#updateId++;
@@ -210,6 +213,7 @@ export class BotApiFixture {
       assert(Number.isInteger(offset) && offset >= 0, 'poll offset must be nonnegative');
       const allowed = data.allowed_updates ?? ['message', 'callback_query', 'my_chat_member'];
       assert(Array.isArray(allowed), 'allowed_updates must be an array');
+      await this.beforePollAcknowledgement?.(offset);
       this.#polls.push({ offset, allowed_updates: [...allowed] });
       if (this.#polls.length > 256) this.#polls.shift();
       this.#updates = this.#updates.filter(update => update.update_id >= offset);

@@ -1,7 +1,8 @@
 use crate::QualityChoice;
 use crate::codec;
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
+use yoink_db::Transaction;
 use yoink_db::{Row, query};
 use yoink_domain::{
     ClipRange, DeliveryTarget, DownloadParams, DownloadRequest, MediaMode, NetworkSelection,
@@ -661,7 +662,7 @@ fn valid_time(v: f64) -> bool {
     v.is_finite() && v >= 0.0
 }
 async fn get(
-    tx: &turso::transaction::Transaction<'_>,
+    tx: &yoink_db::Transaction<'_>,
     actor: u64,
     target: DeliveryTarget,
 ) -> Result<Option<Row>, StoreError> {
@@ -681,7 +682,7 @@ pub(crate) async fn current_in_transaction(
     get(tx, actor, target).await?.map(decode).transpose()
 }
 async fn require(
-    tx: &turso::transaction::Transaction<'_>,
+    tx: &yoink_db::Transaction<'_>,
     actor: u64,
     target: DeliveryTarget,
     id: Uuid,
@@ -703,7 +704,7 @@ async fn require(
     }
     Ok(s)
 }
-async fn put(tx: &turso::transaction::Transaction<'_>, s: &CutSession) -> Result<(), StoreError> {
+async fn put(tx: &yoink_db::Transaction<'_>, s: &CutSession) -> Result<(), StoreError> {
     // Capture only this scope's outgoing reference before the UPSERT replaces it.
     // Cleanup after the save observes both current quality and cut consumers in
     // the same transaction, so revisions/admission replay keep needed originals.

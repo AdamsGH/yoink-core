@@ -3,6 +3,117 @@ use super::*;
 use yoink_domain::{DeliveryTarget, DownloadParams, MediaMode};
 
 const NOW: i64 = 1_700_000_000_000_000;
+#[tokio::test]
+async fn playlist_entry_limits_reject_reverse_and_tail_ranges_without_charging() {
+    let (_dir, store) = fixture(QuotaLimits::default(), None).await;
+    query(include_str!("../sql/test_downloader_setting.sql"))
+        .bind("dl.max_playlist_count")
+        .bind("1")
+        .execute(store.database())
+        .await
+        .unwrap();
+    for (index, (start, end)) in [(2, Some(1)), (-2, None), (-2, Some(-3))]
+        .into_iter()
+        .enumerate()
+    {
+        let req = request(7, 9, 7, None)
+            .with_params(
+                DownloadParams::default()
+                    .with_playlist(Some(yoink_domain::PlaylistRange::new(start, end).unwrap())),
+            )
+            .unwrap();
+        assert_eq!(
+            admit(&store, &req, &format!("range-{index}"), NOW).await,
+            Err(StoreError::InvalidInput)
+        );
+        assert!(counters(&store, 7).await.is_empty());
+    }
+    let req = request(7, 9, 7, None)
+        .with_params(
+            DownloadParams::default()
+                .with_playlist(Some(yoink_domain::PlaylistRange::new(2, None).unwrap())),
+        )
+        .unwrap();
+    admit(&store, &req, "single-entry", NOW).await.unwrap();
+}
+
+#[tokio::test]
+async fn global_downloader_limits_are_atomic_frozen_and_do_not_recharge_replay() {
+    let (_dir, store) = fixture(
+        QuotaLimits {
+            minute: 100,
+            hour: 100,
+            day: 100,
+        },
+        None,
+    )
+    .await;
+    for (key, value) in [
+        ("dl.download_timeout", "60"),
+        ("dl.download_retries", "2"),
+        ("dl.rate_limit_per_minute", "1"),
+    ] {
+        query(include_str!("../sql/test_downloader_setting.sql"))
+            .bind(key)
+            .bind(value)
+            .execute(store.database())
+            .await
+            .unwrap();
+    }
+    let req = request(7, 9, 7, None);
+    let first = store
+        .admit_inner(&req, "snapshot", policy(), false, Some(NOW), None)
+        .await
+        .unwrap();
+    query(include_str!("../sql/test_downloader_setting.sql"))
+        .bind("dl.download_timeout")
+        .bind("120")
+        .execute(store.database())
+        .await
+        .unwrap();
+    let replay = store
+        .admit_inner(&req, "snapshot", policy(), false, Some(NOW), None)
+        .await
+        .unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.operation_id, first.operation_id);
+    assert!(matches!(
+        store
+            .admit_inner(&req, "second", policy(), false, Some(NOW), None)
+            .await,
+        Err(StoreError::QuotaExceeded { .. })
+    ));
+    assert_eq!(
+        store
+            .get(7, first.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .max_attempts,
+        2
+    );
+    let claim = store
+        .claim("snapshot-worker", Duration::from_secs(60))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        claim
+            .request
+            .downloader_settings()
+            .unwrap()
+            .download_timeout,
+        60
+    );
+    let forged = req
+        .clone()
+        .with_downloader_settings(claim.request.downloader_settings())
+        .unwrap();
+    assert_eq!(
+        store.admit_bounded(&forged, "forged", policy()).await,
+        Err(StoreError::InvalidInput)
+    );
+}
 fn policy() -> AdmissionPolicy {
     AdmissionPolicy {
         max_attempts: 3,

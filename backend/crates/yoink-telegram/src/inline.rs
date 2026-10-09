@@ -250,6 +250,90 @@ async fn process(
     lifetime: QueryLifetime,
     search_allowed: bool,
 ) {
+    let Some(_handler) = dependencies.lifecycle.handlers.admit() else {
+        return;
+    };
+    if search_allowed
+        && let Some((music, _)) = &dependencies.music
+        && !yoink_music::extract_links(&query.query, &[], 10).is_empty()
+        && let Ok(actor) = i64::try_from(query.from.id.0)
+        && match lifetime
+            .wait(crate::product_dispatch::music_allowed(
+                &dependencies,
+                actor,
+                None,
+            ))
+            .await
+        {
+            Some(allowed) => allowed,
+            None => return,
+        }
+    {
+        let Ok(_permit) = searches.slots.clone().try_acquire_owned() else {
+            let Some(language) = lifetime
+                .wait(reply_language_with_identity(
+                    dependencies.downloads.as_ref(),
+                    dependencies.identities.as_deref(),
+                    query.from.id.0,
+                    query.from.language_code.as_deref(),
+                ))
+                .await
+            else {
+                return;
+            };
+            answer(
+                &bot,
+                &query,
+                vec![],
+                Some(Key::InlineBusy),
+                language,
+                &lifetime,
+            )
+            .await;
+            return;
+        };
+        let result = tokio::select! {
+            _ = dependencies.lifecycle.stop.cancelled() => return,
+            result = lifetime.wait(music.handle_inline(&query)) => result,
+        };
+        match result {
+            Some(Ok(crate::music_runtime::MusicInlineOutcome::Unsupported)) => {}
+            Some(Err(yoink_music::MusicError::Denied))
+                if lifetime
+                    .wait(authorized(dependencies.identities.as_deref(), &query))
+                    .await
+                    == Some(true) => {}
+            Some(Err(error)) => {
+                let Some(language) = lifetime
+                    .wait(reply_language_with_identity(
+                        dependencies.downloads.as_ref(),
+                        dependencies.identities.as_deref(),
+                        query.from.id.0,
+                        query.from.language_code.as_deref(),
+                    ))
+                    .await
+                else {
+                    return;
+                };
+                let hint = if error == yoink_music::MusicError::Denied {
+                    Key::ErrorDenied
+                } else {
+                    Key::InlineUnavailable
+                };
+                let request = bot
+                    .answer_inline_query(query.id.clone(), Vec::<InlineQueryResult>::new())
+                    .cache_time(0)
+                    .is_personal(true)
+                    .button(InlineQueryResultsButton {
+                        text: crate::translate(language, hint, &[]),
+                        kind: InlineQueryResultsButtonKind::StartParameter("music_help".into()),
+                    });
+                let _ = lifetime.wait(async { request.await }).await;
+                return;
+            }
+            _ => return,
+        }
+    }
     let store = dependencies.identities.as_deref();
     let Some(allowed) = lifetime.wait(authorized(store, &query)).await else {
         return;
@@ -387,6 +471,9 @@ mod tests {
             assert!(searches.begin(43).unwrap().1);
             let query: InlineQuery = serde_json::from_value(serde_json::json!({"id":"held-throttle", "from":{"id":43,"is_bot":false,"first_name":"Fixture"}, "query":"cats", "offset":""})).unwrap();
             let dependencies = MessageDependencies {
+                music: None,
+                stats: None,
+                lifecycle: crate::TelegramHandlerLifecycle::new(),
                 inbox: None,
                 insight: None,
                 downloads: None,
@@ -519,6 +606,9 @@ mod tests {
         );
         let query: InlineQuery = serde_json::from_value(serde_json::json!({"id":"cumulative-answer", "from":{"id":43,"is_bot":false,"first_name":"Fixture"}, "query":"https://example.com/video", "offset":""})).unwrap();
         let dependencies = MessageDependencies {
+            music: None,
+            stats: None,
+            lifecycle: crate::TelegramHandlerLifecycle::new(),
             inbox: None,
             insight: None,
             downloads: None,
@@ -661,6 +751,9 @@ mod tests {
                 panic!("raw help not decoded");
             };
             let dependencies = crate::MessageDependencies {
+                music: None,
+                stats: None,
+                lifecycle: crate::TelegramHandlerLifecycle::new(),
                 inbox: None,
                 insight: None,
                 downloads: None,

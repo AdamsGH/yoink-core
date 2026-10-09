@@ -19,6 +19,7 @@ pub(crate) enum PollingError {
     InvalidResponse,
     InvalidMembership,
     MembershipCommit,
+    ProductCommit,
 }
 
 pub(crate) type Observer =
@@ -31,6 +32,7 @@ pub(crate) struct RawPolling {
     timeout: Duration,
     bot_id: i64,
     observer: Option<Observer>,
+    update_observer: Option<crate::UpdateObserver>,
     offset: i64,
     pending: VecDeque<Update>,
     stop_token: StopToken,
@@ -53,6 +55,7 @@ impl RawPolling {
             timeout,
             bot_id,
             observer,
+            update_observer: None,
             offset: 0,
             pending: VecDeque::new(),
             stop_token,
@@ -61,7 +64,26 @@ impl RawPolling {
         }
     }
 
+    pub(crate) fn with_update_observer(mut self, observer: Option<crate::UpdateObserver>) -> Self {
+        self.update_observer = observer;
+        self
+    }
+
     async fn fetch(&self) -> Result<Vec<Value>, PollingError> {
+        let mut allowed = vec![
+            "message",
+            "callback_query",
+            "inline_query",
+            "my_chat_member",
+            "chat_member",
+        ];
+        if self.update_observer.is_some() {
+            allowed.extend([
+                "edited_message",
+                "message_reaction",
+                "message_reaction_count",
+            ]);
+        }
         let mut response = self
             .client
             .post(self.endpoint.clone())
@@ -70,7 +92,7 @@ impl RawPolling {
                 "offset": self.offset,
                 "limit": 100,
                 "timeout": self.timeout.as_secs(),
-                "allowed_updates": ["message", "callback_query", "inline_query", "my_chat_member", "chat_member"]
+                "allowed_updates": allowed
             }))
             .send()
             .await
@@ -114,6 +136,9 @@ impl RawPolling {
         let mut decoded = VecDeque::new();
         let mut next_offset = self.offset;
         for value in updates {
+            if self.stop_flag.is_stopped() {
+                return Ok(());
+            }
             // Teloxide captures raw JSON during decoding; from_value silently
             // turns otherwise valid updates into UpdateKind::Error.
             let encoded = serde_json::to_vec(&value).map_err(|_| PollingError::InvalidResponse)?;
@@ -124,6 +149,11 @@ impl RawPolling {
                     .map_err(|_| PollingError::InvalidMembership)?
             {
                 observer(observation).await?;
+            }
+            if let Some(observer) = &self.update_observer {
+                observer(value.clone())
+                    .await
+                    .map_err(|_| PollingError::ProductCommit)?;
             }
             next_offset = next_offset.max(i64::from(update.id.0) + 1);
             // Malformed inline payloads decode to Error; do not dispatch them.
@@ -147,6 +177,9 @@ impl RawPolling {
         }
         // A failed batch leaves the previous offset intact. Committed observations
         // can replay after restart; membership ordering makes those replays harmless.
+        if self.stop_flag.is_stopped() {
+            return Ok(());
+        }
         self.offset = next_offset;
         self.pending = decoded;
         Ok(())
@@ -355,6 +388,67 @@ mod tests {
             assert!(listener.pending.is_empty());
             assert_eq!(listener.offset, 52);
         }
+    }
+
+    #[tokio::test]
+    async fn product_commit_failure_does_not_acknowledge_the_batch() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let received = calls.clone();
+        let observer: crate::UpdateObserver = Arc::new(move |value| {
+            let received = received.clone();
+            Box::pin(async move {
+                assert_eq!(value["update_id"], 42);
+                assert_eq!(value["chat_member"]["new_chat_member"]["tag"], "Download");
+                received.fetch_add(1, Ordering::SeqCst);
+                Err(crate::TelegramError::PollingFailed)
+            })
+        });
+        let mut listener = listener(None).with_update_observer(Some(observer));
+        assert_eq!(
+            listener.ingest(vec![membership(42)]).await,
+            Err(PollingError::ProductCommit)
+        );
+        assert_eq!(listener.offset, 0);
+        assert!(listener.pending.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        listener.update_observer = Some(Arc::new(|_| Box::pin(async { Ok(()) })));
+        listener.ingest(vec![membership(42)]).await.unwrap();
+        assert_eq!(listener.offset, 43);
+        assert_eq!(listener.pending.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stopping_during_a_product_observation_does_not_acknowledge_the_partial_batch() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut listener = listener(None);
+        let stop = listener.stop_token();
+        let (signal, wait, observed) = (entered.clone(), release.clone(), calls.clone());
+        listener.update_observer = Some(Arc::new(move |_| {
+            let (signal, wait, observed) = (signal.clone(), wait.clone(), observed.clone());
+            Box::pin(async move {
+                if observed.fetch_add(1, Ordering::SeqCst) != 0 {
+                    return Err(crate::TelegramError::PollingFailed);
+                }
+                signal.notify_one();
+                wait.notified().await;
+                Ok(())
+            })
+        }));
+        let task = tokio::spawn(async move {
+            let result = listener.ingest(vec![membership(42), membership(43)]).await;
+            (listener, result)
+        });
+        entered.notified().await;
+        stop.stop();
+        release.notify_one();
+        let (listener, result) = task.await.unwrap();
+        assert!(result.is_ok());
+        assert!(!listener.failed);
+        assert_eq!(listener.offset, 0);
+        assert!(listener.pending.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

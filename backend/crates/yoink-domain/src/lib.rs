@@ -10,6 +10,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod content;
+pub mod downloader_settings;
 pub use content::ContentMetadata;
 pub mod cache;
 pub use cache::{CachedMedia, CachedMediaError, CachedMediaKind};
@@ -119,6 +120,14 @@ impl PlaylistRange {
     }
     pub const fn end(&self) -> Option<i32> {
         self.end
+    }
+
+    pub fn entry_count(self) -> usize {
+        match self.end {
+            Some(end) => (i64::from(end) - i64::from(self.start)).unsigned_abs() as usize + 1,
+            None if self.start > 0 => 1,
+            None => self.start.unsigned_abs() as usize,
+        }
     }
 }
 
@@ -467,6 +476,7 @@ pub struct DownloadRequest {
     target: Option<DeliveryTarget>,
     network: NetworkSelection,
     preference_overrides: Option<DownloadPreferenceOverrides>,
+    downloader_settings: Option<downloader_settings::DownloaderSettings>,
     force_nsfw: bool,
 }
 
@@ -520,6 +530,7 @@ impl DownloadRequest {
             target: None,
             network: NetworkSelection::NONE,
             preference_overrides: None,
+            downloader_settings: None,
             force_nsfw: false,
         })
     }
@@ -570,6 +581,24 @@ impl DownloadRequest {
     pub fn with_preference_overrides(mut self, overrides: DownloadPreferenceOverrides) -> Self {
         self.preference_overrides = Some(overrides);
         self
+    }
+
+    pub const fn downloader_settings(&self) -> Option<downloader_settings::DownloaderSettings> {
+        self.downloader_settings
+    }
+
+    /// Admission-owned snapshot, excluded from replay intent and worker input.
+    pub fn with_downloader_settings(
+        mut self,
+        settings: Option<downloader_settings::DownloaderSettings>,
+    ) -> Result<Self, RequestValidationError> {
+        if let Some(settings) = settings {
+            settings
+                .validate()
+                .map_err(|_| RequestValidationError::InvalidParameters)?;
+        }
+        self.downloader_settings = settings;
+        Ok(self)
     }
 
     pub fn with_params(mut self, params: DownloadParams) -> Result<Self, RequestValidationError> {
@@ -1115,6 +1144,14 @@ mod tests {
         assert!(PlaylistRange::new(-101, None).is_err());
         assert!(PlaylistRange::new(i32::MIN, None).is_err());
         assert!(PlaylistRange::new(-2, Some(-3)).is_ok());
+        for (start, end, count) in [
+            (2, Some(1), 2),
+            (-2, None, 2),
+            (2, None, 1),
+            (-2, Some(-3), 2),
+        ] {
+            assert_eq!(PlaylistRange::new(start, end).unwrap().entry_count(), count);
+        }
         assert_eq!(
             DeliveryTarget::new(0, 42, None, None),
             Err(RequestValidationError::InvalidDeliveryTarget)

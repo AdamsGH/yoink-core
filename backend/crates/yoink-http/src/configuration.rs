@@ -19,7 +19,7 @@ async fn openapi(
         .await?;
     Ok(no_store(
         serde_json::from_str::<serde_json::Value>(include_str!("configuration-openapi.json"))
-            .expect("checked-in configuration OpenAPI is valid JSON"),
+            .expect("checked-in native OpenAPI is valid JSON"),
     ))
 }
 

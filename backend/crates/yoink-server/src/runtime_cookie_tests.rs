@@ -147,6 +147,8 @@ async fn cookie_oauth_lifecycle_cleans_expiry_and_drains_cancelled_request_befor
             cancel,
             Duration::from_secs(5),
             async { Ok(()) },
+            &yoink_http::LateMusicStats::default(),
+            None,
         )
         .await;
         finish_database(result, Some(database), Duration::from_secs(5)).await

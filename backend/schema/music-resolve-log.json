@@ -1,0 +1,98 @@
+{
+  "name": "music_resolve_log",
+  "columns": [
+    {
+      "ordinal": 1,
+      "name": "id",
+      "type": "integer",
+      "udt": "int4",
+      "kind": "b",
+      "not_null": true,
+      "default_value": "nextval('music_resolve_log_id_seq'::regclass)",
+      "generated": "",
+      "sequence": "public.music_resolve_log_id_seq"
+    },
+    {
+      "ordinal": 2,
+      "name": "user_id",
+      "type": "bigint",
+      "udt": "int8",
+      "kind": "b",
+      "not_null": true,
+      "default_value": null,
+      "generated": "",
+      "sequence": null
+    },
+    {
+      "ordinal": 3,
+      "name": "source_platform",
+      "type": "character varying(32)",
+      "udt": "varchar",
+      "kind": "b",
+      "not_null": true,
+      "default_value": null,
+      "generated": "",
+      "sequence": null
+    },
+    {
+      "ordinal": 4,
+      "name": "artist",
+      "type": "character varying(256)",
+      "udt": "varchar",
+      "kind": "b",
+      "not_null": false,
+      "default_value": null,
+      "generated": "",
+      "sequence": null
+    },
+    {
+      "ordinal": 5,
+      "name": "title",
+      "type": "character varying(256)",
+      "udt": "varchar",
+      "kind": "b",
+      "not_null": false,
+      "default_value": null,
+      "generated": "",
+      "sequence": null
+    },
+    {
+      "ordinal": 6,
+      "name": "platforms_found",
+      "type": "integer",
+      "udt": "int4",
+      "kind": "b",
+      "not_null": true,
+      "default_value": null,
+      "generated": "",
+      "sequence": null
+    },
+    {
+      "ordinal": 7,
+      "name": "created_at",
+      "type": "timestamp with time zone",
+      "udt": "timestamptz",
+      "kind": "b",
+      "not_null": true,
+      "default_value": null,
+      "generated": "",
+      "sequence": null
+    }
+  ],
+  "constraints": [
+    {
+      "name": "music_resolve_log_pkey",
+      "kind": "p",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "music_resolve_log_user_id_fkey",
+      "kind": "f",
+      "definition": "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+    }
+  ],
+  "indexes": [
+    "CREATE UNIQUE INDEX music_resolve_log_pkey ON public.music_resolve_log USING btree (id)",
+    "CREATE INDEX idx_music_resolve_user_date ON public.music_resolve_log USING btree (user_id, created_at)"
+  ]
+}

@@ -191,6 +191,113 @@ mod tests {
         assert_eq!(digest(&[Value::Real(-0.0)]), digest(&[Value::Real(0.0)]));
     }
 
+    #[tokio::test]
+    async fn music_import_fixture_preserves_named_values_and_detects_drift() {
+        use super::super::{
+            table::{insert_sql, parse_tables, projection},
+            value::row_values,
+        };
+        use crate::catalog::validate_document;
+        use yoink_db::{query, raw_sql};
+        let mut document: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../schema/legacy-postgres.json")).unwrap();
+        document["tables"].as_array_mut().unwrap().push(
+            serde_json::from_str(include_str!("../../../../schema/music-resolve-log.json"))
+                .unwrap(),
+        );
+        let mut tables = parse_tables(&validate_document(document).unwrap()).unwrap();
+        let mut table = tables.remove(
+            tables
+                .iter()
+                .position(|t| t.name == "music_resolve_log")
+                .unwrap(),
+        );
+        table.columns.reverse();
+        assert!(
+            projection(&table)
+                .contains("trunc(extract(epoch FROM \"created_at\") * 1000000)::text")
+        );
+        assert_eq!(
+            table.foreign_keys,
+            vec![(vec!["user_id".into()], "users".into(), vec!["id".into()])]
+        );
+        assert_eq!(
+            table
+                .columns
+                .iter()
+                .find(|c| c.name == "id")
+                .unwrap()
+                .sequence
+                .as_deref(),
+            Some("public.music_resolve_log_id_seq")
+        );
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        let store = yoink_storage::Store::open(
+            &directory.path().join("music-import.db"),
+            true,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        query("INSERT INTO users(id,created_at,updated_at) VALUES(?1,1,1)")
+            .bind(9_007_199_254_740_993_i64)
+            .execute(store.database())
+            .await
+            .unwrap();
+        let connection = store.database().connection().await.unwrap();
+        let mut hash = Sha256::new();
+        for encoded in [
+            r#"{"id":40,"user_id":9007199254740993,"source_platform":"spotify","artist":"Исполнитель","title":null,"platforms_found":3,"created_at":"-1"}"#,
+            r#"{"id":41,"user_id":9007199254740993,"source_platform":"youtube","artist":null,"title":"English title","platforms_found":0,"created_at":"1728000000000001"}"#,
+        ] {
+            let values = row_values(encoded, &table, 4096).unwrap();
+            digest_values(&mut hash, &values).unwrap();
+            connection
+                .execute(&insert_sql(&table), values)
+                .await
+                .unwrap();
+        }
+        let expected: [u8; 32] = hash.finalize().into();
+        verify_content(&connection, &table, &expected, 2)
+            .await
+            .unwrap();
+        raw_sql("UPDATE music_resolve_log SET title='' WHERE id=40")
+            .execute(&*connection)
+            .await
+            .unwrap();
+        assert_eq!(
+            verify_content(&connection, &table, &expected, 2).await,
+            Err(ImportError::Storage)
+        );
+        raw_sql("UPDATE music_resolve_log SET title=NULL WHERE id=40")
+            .execute(&*connection)
+            .await
+            .unwrap();
+        verify_content(&connection, &table, &expected, 2)
+            .await
+            .unwrap();
+        drop(connection);
+        let id = store
+            .insert_music_resolve_log(&yoink_storage::NewMusicResolveLog {
+                user_id: 9_007_199_254_740_993,
+                source_platform: "spotify".into(),
+                artist: None,
+                title: None,
+                platforms_found: 1,
+                created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(id, 42);
+    }
+
     #[test]
     fn digest_rejects_non_finite_float() {
         let mut hash = Sha256::new();

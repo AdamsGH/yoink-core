@@ -1,6 +1,7 @@
 use std::fmt;
+use yoink_db::Transaction;
 
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use yoink_db::query;
 use yoink_domain::DeliveryTarget;
 

@@ -19,6 +19,8 @@ mod links;
 pub use links::*;
 mod search;
 pub use search::*;
+mod music;
+pub use music::*;
 
 use std::fmt;
 use std::path::Path;
@@ -529,6 +531,7 @@ pub enum WorkerEventKind {
     Progress { percent: f32, stage: ProgressStage },
     Completed { artifacts: Vec<ArtifactDescriptor> },
     SearchCompleted { entries: Vec<SearchEntry> },
+    MusicCompleted { result: MusicResult },
     ContentCompleted { result: ContentResult },
     ContentDenied,
     FullContentCompleted { result: FullContentResult },
@@ -573,6 +576,9 @@ impl WorkerEvent {
             return Err(ProtocolError::InvalidEvent);
         }
         match &self.event {
+            WorkerEventKind::MusicCompleted { result } if !result.valid() => {
+                Err(ProtocolError::InvalidEvent)
+            }
             WorkerEventKind::Progress { percent, .. }
                 if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
             {

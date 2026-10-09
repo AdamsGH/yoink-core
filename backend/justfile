@@ -226,7 +226,10 @@ check-scripts:
 test-media-fixtures:
     node --test scripts/media-fixture/*.test.mjs
 
-verify: fmt check lint test smoke check-scripts check-schema-source test-media-fixtures test-build-resources check-docs
+test-http-contracts:
+    node --test crates/yoink-http/tests/openapi-contracts.test.mjs
+
+verify: fmt check lint test smoke check-scripts check-schema-source test-media-fixtures test-http-contracts test-build-resources check-docs
 
 verify-db: verify test-db
 

@@ -57,6 +57,8 @@ pub struct TelegramConfig {
 
 #[derive(Debug)]
 pub struct Config {
+    pub music: Option<crate::product_config::MusicConfig>,
+    pub stats: Option<crate::product_config::StatsConfig>,
     pub insight: Option<crate::insight_config::InsightConfig>,
     pub inbox: Option<crate::inbox_config::InboxConfig>,
     pub user_session: Option<yoink_user_session::Config>,
@@ -401,7 +403,19 @@ impl Config {
                 ));
             }
         }
+        let music = crate::product_config::MusicConfig::from_lookup(
+            &mut read,
+            database.is_some(),
+            telegram.is_some(),
+        )?;
+        let stats = crate::product_config::StatsConfig::from_lookup(
+            &mut read,
+            database.is_some(),
+            telegram.is_some(),
+        )?;
         Ok(Self {
+            music,
+            stats,
             insight,
             inbox,
             user_session,

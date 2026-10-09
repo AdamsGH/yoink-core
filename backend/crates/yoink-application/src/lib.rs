@@ -1,4 +1,5 @@
 //! Application services shared by transports. No framework or database types.
+pub mod metrics;
 
 use std::{
     sync::{
@@ -38,19 +39,28 @@ pub struct SystemService {
     ready: Arc<AtomicBool>,
     downloads_enabled: Arc<AtomicBool>,
     insight_enabled: Arc<AtomicBool>,
+    music_enabled: Arc<AtomicBool>,
+    stats_enabled: Arc<AtomicBool>,
+    inbox_enabled: Arc<AtomicBool>,
     started: Arc<Instant>,
+    metrics: metrics::Metrics,
     bot_running: Arc<AtomicBool>,
     bot_username: Arc<RwLock<Option<String>>>,
 }
 
 impl SystemService {
     pub fn new(version: impl Into<String>) -> Self {
+        let started = Arc::new(Instant::now());
         Self {
             version: Arc::from(version.into()),
             ready: Arc::new(AtomicBool::new(false)),
             downloads_enabled: Arc::new(AtomicBool::new(false)),
             insight_enabled: Arc::new(AtomicBool::new(false)),
-            started: Arc::new(Instant::now()),
+            music_enabled: Arc::new(AtomicBool::new(false)),
+            stats_enabled: Arc::new(AtomicBool::new(false)),
+            inbox_enabled: Arc::new(AtomicBool::new(false)),
+            metrics: metrics::Metrics::new(started.clone()),
+            started,
             bot_running: Arc::new(AtomicBool::new(false)),
             bot_username: Arc::new(RwLock::new(None)),
         }
@@ -62,6 +72,9 @@ impl SystemService {
 
     pub fn uptime_seconds(&self) -> f64 {
         self.started.elapsed().as_secs_f64()
+    }
+    pub fn metrics(&self) -> metrics::Metrics {
+        self.metrics.clone()
     }
 
     pub fn set_bot_status(&self, running: bool, username: Option<String>) {
@@ -91,6 +104,18 @@ impl SystemService {
         self.insight_enabled.store(enabled, Ordering::Release);
     }
 
+    pub fn set_music_enabled(&self, enabled: bool) {
+        self.music_enabled.store(enabled, Ordering::Release);
+    }
+
+    pub fn set_stats_enabled(&self, enabled: bool) {
+        self.stats_enabled.store(enabled, Ordering::Release);
+    }
+
+    pub fn set_inbox_enabled(&self, enabled: bool) {
+        self.inbox_enabled.store(enabled, Ordering::Release);
+    }
+
     pub fn snapshot(&self) -> SystemSnapshot {
         SystemSnapshot {
             version: self.version.to_string(),
@@ -101,6 +126,9 @@ impl SystemService {
                     id,
                     status: if (id == "downloads" && self.downloads_enabled.load(Ordering::Acquire))
                         || (id == "insight" && self.insight_enabled.load(Ordering::Acquire))
+                        || (id == "music" && self.music_enabled.load(Ordering::Acquire))
+                        || (id == "stats" && self.stats_enabled.load(Ordering::Acquire))
+                        || (id == "inbox" && self.inbox_enabled.load(Ordering::Acquire))
                     {
                         ModuleStatus::Experimental
                     } else {
@@ -182,6 +210,46 @@ mod tests {
                 .modules
                 .iter()
                 .all(|module| module.status == ModuleStatus::Planned)
+        );
+    }
+
+    #[test]
+    fn product_catalog_tracks_independent_shared_installations() {
+        let service = SystemService::new("test");
+        let observer = service.clone();
+        service.set_music_enabled(true);
+        service.set_stats_enabled(true);
+        service.set_inbox_enabled(true);
+        for module in observer.snapshot().modules {
+            assert_eq!(
+                module.status,
+                if ["music", "stats", "inbox"].contains(&module.id) {
+                    ModuleStatus::Experimental
+                } else {
+                    ModuleStatus::Planned
+                }
+            );
+        }
+        service.set_music_enabled(false);
+        assert_eq!(
+            observer
+                .snapshot()
+                .modules
+                .iter()
+                .find(|m| m.id == "music")
+                .unwrap()
+                .status,
+            ModuleStatus::Planned
+        );
+        assert_eq!(
+            observer
+                .snapshot()
+                .modules
+                .iter()
+                .find(|m| m.id == "stats")
+                .unwrap()
+                .status,
+            ModuleStatus::Experimental
         );
     }
 }

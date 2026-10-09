@@ -23,7 +23,7 @@ function hooks({ failUp = false, residual = false, topology = config() } = {}) {
 test('isolated no-build/pull topology returns exact hooks and idempotent own cleanup', async () => {
   const h = hooks();
   const fixture = await startSyntheticYoutubeAuth({ capture: h.capture, runId: 'test' });
-  assert.deepEqual(Object.keys(fixture).sort(), ['close', 'dockerArgs']);
+  assert.deepEqual(Object.keys(fixture).sort(), ['close', 'dockerArgs', 'gatewayRequest', 'restartYoutubeAuthGateway', 'restartYoutubeAuthServices', 'socketVolume', 'syntheticControl', 'syntheticPotControl']);
   assert.equal(fixture.dockerArgs[0], '--mount');
   assert.match(fixture.dockerArgs[1], /^type=volume,source=yoink-auth-test-[a-f0-9]{8}_auth-socket,target=\/run\/yoink-youtube-auth,readonly$/);
   assert.deepEqual(fixture.dockerArgs.slice(2), ['--add-host', 'youtu.be:93.184.216.34']);

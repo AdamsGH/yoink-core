@@ -1,0 +1,502 @@
+[
+  {
+    "path": "/tables/api_keys/columns/created_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/api_keys/columns/revoked/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/api_keys/columns/scopes/default_value",
+    "op": "replace",
+    "expected": "'[]'::json",
+    "value": null
+  },
+  {
+    "path": "/tables/cookies/columns/is_pool/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/cookies/columns/is_valid/default_value",
+    "op": "replace",
+    "expected": "true",
+    "value": null
+  },
+  {
+    "path": "/tables/cookies/indexes",
+    "op": "replace",
+    "expected": [
+      "CREATE INDEX ix_cookies_content_hash ON public.cookies USING btree (content_hash)",
+      "CREATE INDEX ix_cookies_is_pool_domain ON public.cookies USING btree (is_pool, domain)",
+      "CREATE INDEX ix_cookies_session_key ON public.cookies USING btree (session_key)",
+      "CREATE UNIQUE INDEX cookies_personal_unique ON public.cookies USING btree (user_id, domain) WHERE (is_pool = false)",
+      "CREATE UNIQUE INDEX cookies_pkey ON public.cookies USING btree (id)"
+    ],
+    "value": [
+      "CREATE INDEX ix_cookies_content_hash ON public.cookies USING btree (content_hash)",
+      "CREATE INDEX ix_cookies_session_key ON public.cookies USING btree (session_key)",
+      "CREATE UNIQUE INDEX cookies_pkey ON public.cookies USING btree (id)"
+    ]
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/args_json/default_value",
+    "op": "replace",
+    "expected": "'{}'::json",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/audio_codec/default_value",
+    "op": "replace",
+    "expected": "'best'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/codec/default_value",
+    "op": "replace",
+    "expected": "'avc1'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/container/default_value",
+    "op": "replace",
+    "expected": "'mp4'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/gallery_zip/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/keyboard/default_value",
+    "op": "replace",
+    "expected": "'2x3'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/mediainfo/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/nsfw_blur/default_value",
+    "op": "replace",
+    "expected": "true",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/proxy_enabled/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/quality/default_value",
+    "op": "replace",
+    "expected": "'best'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/send_as_file/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/split_size/default_value",
+    "op": "replace",
+    "expected": "'2043000000'::bigint",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/subs_always_ask/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/subs_auto/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/subs_enabled/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/subs_lang/default_value",
+    "op": "replace",
+    "expected": "'en'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/use_pool_cookies/default_value",
+    "op": "replace",
+    "expected": "true",
+    "value": null
+  },
+  {
+    "path": "/tables/dl_user_settings/columns/youtube_auth_mode/default_value",
+    "op": "replace",
+    "expected": "'cookies'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/download_log/columns/status/default_value",
+    "op": "replace",
+    "expected": "'ok'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/file_cache/indexes",
+    "op": "replace",
+    "expected": [
+      "CREATE INDEX idx_file_cache_expires ON public.file_cache USING btree (expires_at)",
+      "CREATE INDEX idx_file_cache_file_id ON public.file_cache USING btree (file_id)",
+      "CREATE UNIQUE INDEX file_cache_pkey ON public.file_cache USING btree (cache_key)"
+    ],
+    "value": [
+      "CREATE INDEX idx_file_cache_expires ON public.file_cache USING btree (expires_at)",
+      "CREATE UNIQUE INDEX file_cache_pkey ON public.file_cache USING btree (cache_key)"
+    ]
+  },
+  {
+    "path": "/tables/groups/columns/allow_pm/default_value",
+    "op": "replace",
+    "expected": "true",
+    "value": null
+  },
+  {
+    "path": "/tables/groups/columns/auto_grant_role/default_value",
+    "op": "replace",
+    "expected": "'user'::userrole",
+    "value": null
+  },
+  {
+    "path": "/tables/groups/columns/enabled/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/groups/columns/nsfw_allowed/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_admin_settings/columns/updated_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_categories/columns/kind/default_value",
+    "op": "replace",
+    "expected": "'user'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_folders/columns/is_pinned/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_folders/columns/sort_order/default_value",
+    "op": "replace",
+    "expected": "0",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_stars/columns/archived/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_stars/columns/can_unstar/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_stars/columns/fork/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_stars/columns/stargazers_count/default_value",
+    "op": "replace",
+    "expected": "0",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_sync_state/columns/created_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_sync_state/columns/stars_count/default_value",
+    "op": "replace",
+    "expected": "0",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_gh_sync_state/columns/updated_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_items/columns/kind/default_value",
+    "op": "replace",
+    "expected": "'link'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_items/columns/source/default_value",
+    "op": "replace",
+    "expected": "'bot'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_items/columns/status/default_value",
+    "op": "replace",
+    "expected": "'pending'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_rules/columns/enabled/default_value",
+    "op": "replace",
+    "expected": "true",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_rules/columns/priority/default_value",
+    "op": "replace",
+    "expected": "100",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_team_members/columns/role/default_value",
+    "op": "replace",
+    "expected": "'member'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_user_settings/columns/created_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/inbox_user_settings/columns/updated_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/insight_access/columns/lang/default_value",
+    "op": "replace",
+    "expected": "'en'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/insight_summary_cache/columns/created_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/insight_summary_cache/constraints/uq_insight_cache_key",
+    "op": "remove",
+    "expected": {
+      "name": "uq_insight_cache_key",
+      "kind": "u",
+      "definition": "UNIQUE (content_key, lang, command)"
+    }
+  },
+  {
+    "path": "/tables/insight_summary_cache/indexes",
+    "op": "replace",
+    "expected": [
+      "CREATE INDEX idx_insight_cache_expires ON public.insight_summary_cache USING btree (expires_at)",
+      "CREATE UNIQUE INDEX insight_summary_cache_pkey ON public.insight_summary_cache USING btree (id)",
+      "CREATE UNIQUE INDEX uq_insight_cache_key ON public.insight_summary_cache USING btree (content_key, lang, command)"
+    ],
+    "value": [
+      "CREATE UNIQUE INDEX insight_summary_cache_pkey ON public.insight_summary_cache USING btree (id)"
+    ]
+  },
+  {
+    "path": "/tables/insight_tldr_aliases/columns/created_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/insight_tldr_aliases/constraints/ck_insight_tldr_alias_shape",
+    "op": "remove",
+    "expected": {
+      "name": "ck_insight_tldr_alias_shape",
+      "kind": "c",
+      "definition": "CHECK ((((aliases IS NOT NULL) AND (prompt IS NOT NULL)) OR (target_alias IS NOT NULL) OR (domains IS NOT NULL)))"
+    }
+  },
+  {
+    "path": "/tables/insight_usage_log/columns/route/default_value",
+    "op": "replace",
+    "expected": "'gateway'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/insight_user_prompts/columns/updated_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/insight_user_settings/columns/lang/default_value",
+    "op": "replace",
+    "expected": "'en'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/insight_user_settings/columns/use_search/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/rate_limits/columns/count/default_value",
+    "op": "replace",
+    "expected": "0",
+    "value": null
+  },
+  {
+    "path": "/tables/stats_chat_admins/constraints/pk_stats_chat_admins",
+    "op": "remove",
+    "expected": {
+      "name": "pk_stats_chat_admins",
+      "kind": "p",
+      "definition": "PRIMARY KEY (user_id, chat_id)"
+    }
+  },
+  {
+    "path": "/tables/stats_chat_admins/constraints/stats_chat_admins_pkey",
+    "op": "add",
+    "value": {
+      "name": "stats_chat_admins_pkey",
+      "kind": "p",
+      "definition": "PRIMARY KEY (user_id, chat_id)"
+    }
+  },
+  {
+    "path": "/tables/stats_chat_admins/indexes",
+    "op": "replace",
+    "expected": [
+      "CREATE INDEX idx_sca_chat_id ON public.stats_chat_admins USING btree (chat_id)",
+      "CREATE UNIQUE INDEX pk_stats_chat_admins ON public.stats_chat_admins USING btree (user_id, chat_id)"
+    ],
+    "value": [
+      "CREATE UNIQUE INDEX stats_chat_admins_pkey ON public.stats_chat_admins USING btree (user_id, chat_id)"
+    ]
+  },
+  {
+    "path": "/tables/stats_messages/columns/is_edited/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/stats_messages/columns/msg_type/default_value",
+    "op": "replace",
+    "expected": "'text'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/stats_messages/indexes",
+    "op": "replace",
+    "expected": [
+      "CREATE INDEX idx_stats_msg_chat ON public.stats_messages USING btree (chat_id)",
+      "CREATE INDEX idx_stats_msg_chat_date ON public.stats_messages USING btree (chat_id, date)",
+      "CREATE INDEX idx_stats_msg_chat_msgid ON public.stats_messages USING btree (chat_id, message_id)",
+      "CREATE INDEX idx_stats_msg_fts ON public.stats_messages USING gin (text_search)",
+      "CREATE INDEX idx_stats_msg_thread ON public.stats_messages USING btree (chat_id, message_thread_id) WHERE (message_thread_id IS NOT NULL)",
+      "CREATE INDEX idx_stats_msg_type ON public.stats_messages USING btree (msg_type)",
+      "CREATE INDEX idx_stats_msg_user_date ON public.stats_messages USING btree (from_user, date)",
+      "CREATE UNIQUE INDEX stats_messages_pkey ON public.stats_messages USING btree (id)"
+    ],
+    "value": [
+      "CREATE INDEX idx_stats_msg_chat_date ON public.stats_messages USING btree (chat_id, date)",
+      "CREATE INDEX idx_stats_msg_type ON public.stats_messages USING btree (msg_type)",
+      "CREATE INDEX idx_stats_msg_user_date ON public.stats_messages USING btree (from_user, date)",
+      "CREATE INDEX ix_stats_messages_chat_id ON public.stats_messages USING btree (chat_id)",
+      "CREATE UNIQUE INDEX stats_messages_pkey ON public.stats_messages USING btree (id)"
+    ]
+  },
+  {
+    "path": "/tables/thread_policies/columns/enabled/default_value",
+    "op": "replace",
+    "expected": "true",
+    "value": null
+  },
+  {
+    "path": "/tables/user_permissions/columns/granted_at/default_value",
+    "op": "replace",
+    "expected": "now()",
+    "value": null
+  },
+  {
+    "path": "/tables/users/columns/is_premium/default_value",
+    "op": "replace",
+    "expected": "false",
+    "value": null
+  },
+  {
+    "path": "/tables/users/columns/language/default_value",
+    "op": "replace",
+    "expected": "'en'::character varying",
+    "value": null
+  },
+  {
+    "path": "/tables/users/columns/role/default_value",
+    "op": "replace",
+    "expected": "'user'::userrole",
+    "value": null
+  },
+  {
+    "path": "/tables/users/columns/theme/default_value",
+    "op": "replace",
+    "expected": "'macchiato'::character varying",
+    "value": null
+  },
+  {
+    "path": "/triggers",
+    "op": "replace",
+    "expected": [
+      {
+        "table": "stats_messages",
+        "name": "stats_messages_tsvector_trigger",
+        "definition": "CREATE TRIGGER stats_messages_tsvector_trigger BEFORE INSERT OR UPDATE ON stats_messages FOR EACH ROW EXECUTE FUNCTION stats_messages_tsvector_update()",
+        "function": "CREATE OR REPLACE FUNCTION public.stats_messages_tsvector_update()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\n        BEGIN\n            NEW.text_search := to_tsvector(\n                'simple',\n                COALESCE(NEW.text, '') || ' ' || COALESCE(NEW.caption, '')\n            );\n            RETURN NEW;\n        END;\n        $function$\n"
+      }
+    ],
+    "value": []
+  }
+]

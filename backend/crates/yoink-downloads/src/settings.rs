@@ -1,5 +1,6 @@
 //! Editable, non-secret preferences. Network credentials and raw engine args are excluded.
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 use yoink_domain::{DeliveryTarget, SubtitleOptions};
 

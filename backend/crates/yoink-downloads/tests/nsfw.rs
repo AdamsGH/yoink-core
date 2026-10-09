@@ -21,6 +21,7 @@ struct Recorder {
     store: Arc<Store>,
     calls: AtomicUsize,
     revoke: bool,
+    outcome: AtomicUsize,
 }
 impl Delivery for Recorder {
     fn bot_id(&self) -> i64 {
@@ -39,6 +40,11 @@ impl Delivery for Recorder {
         Box::pin(async move {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(spoiler, target.chat_id() > 0);
+            match self.outcome.load(Ordering::SeqCst) {
+                1 => return Err(yoink_downloads::DeliveryError::Rejected),
+                2 => return Err(yoink_downloads::DeliveryError::Unknown),
+                _ => {}
+            }
             if self.revoke {
                 yoink_db::query(include_str!(
                     "../../yoink-identity/tests/nsfw_change_group.sql"
@@ -100,6 +106,7 @@ async fn fixture_worker(
         store: store.clone(),
         calls: AtomicUsize::new(0),
         revoke,
+        outcome: AtomicUsize::new(0),
     });
     let identities = Arc::new(IdentityStore::new(
         store.database().clone(),
@@ -244,6 +251,114 @@ async fn nsfw_cached_metadata_group_block_and_private_spoiler() {
             assert_eq!(record.status, OperationStatus::Succeeded);
             assert_eq!(delivery.calls.load(Ordering::SeqCst), 1);
         }
+    }
+}
+#[tokio::test]
+async fn metrics_count_real_cache_fresh_success_and_executor_error_events() {
+    use yoink_application::metrics::Metrics;
+    let (_dir, store, _, service) = fixture(false).await;
+    let metrics = Metrics::default();
+    let service = service.with_metrics(metrics.clone());
+    warm(&store, &service, true, 1).await;
+    assert!(metrics.snapshot().counters.is_empty());
+    assert_eq!(
+        finish(&store, service, 44).await.status,
+        OperationStatus::Succeeded
+    );
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.counters.len(), 1);
+    assert_eq!(snapshot.counters["cache_hits"], 1);
+    assert!(snapshot.histograms.is_empty());
+    store.close().await.unwrap();
+    let (_dir, store, _, service) = fixture_worker(false, true).await;
+    let metrics = Metrics::default();
+    let service = service.with_metrics(metrics.clone());
+    assert_eq!(
+        finish(&store, service, 44).await.status,
+        OperationStatus::Succeeded
+    );
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.counters["downloads_total"], 1);
+    assert_eq!(snapshot.counters["downloads_ok"], 1);
+    assert_eq!(snapshot.counters["download_bytes_total"], 16);
+    assert!(!snapshot.counters.contains_key("downloads_error"));
+    assert_eq!(snapshot.histograms["download_duration_seconds"].count, 1);
+    store.close().await.unwrap();
+    let (_dir, store, _, service) = fixture(false).await;
+    let metrics = Metrics::default();
+    let service = service.with_metrics(metrics.clone());
+    let failed = finish(&store, service, 44).await;
+    assert_eq!(failed.status, OperationStatus::Failed);
+    assert_eq!(failed.attempt, failed.max_attempts);
+    assert!(failed.attempt > 1);
+    let snapshot = metrics.snapshot();
+    assert_eq!(
+        snapshot.counters["downloads_total"],
+        u64::from(failed.attempt)
+    );
+    assert_eq!(
+        snapshot.counters["downloads_error"],
+        u64::from(failed.attempt)
+    );
+    assert!(!snapshot.counters.contains_key("downloads_ok"));
+    assert!(snapshot.histograms.is_empty());
+    store.close().await.unwrap();
+}
+#[tokio::test]
+async fn metrics_count_native_quota_denial_not_admission_or_idempotent_replay() {
+    let (_dir, store, _, service) = fixture(false).await;
+    yoink_db::query(include_str!(
+        "../../yoink-storage/sql/test_downloader_setting.sql"
+    ))
+    .bind("dl.rate_limit_per_minute")
+    .bind("1")
+    .execute(store.database())
+    .await
+    .unwrap();
+    let metrics = yoink_application::metrics::Metrics::default();
+    let service = service.with_metrics(metrics.clone());
+    assert!(
+        service
+            .submit_request(&request(44), "one")
+            .await
+            .unwrap()
+            .created
+    );
+    assert!(
+        !service
+            .submit_request(&request(44), "one")
+            .await
+            .unwrap()
+            .created
+    );
+    assert!(metrics.snapshot().counters.is_empty());
+    assert!(matches!(
+        service.submit_request(&request(44), "two").await,
+        Err(yoink_downloads::DownloadError::QuotaExceeded { .. })
+    ));
+    assert_eq!(metrics.snapshot().counters["rate_limited"], 1);
+    assert_eq!(metrics.snapshot().counters.len(), 1);
+    store.close().await.unwrap();
+}
+#[tokio::test]
+async fn metrics_count_confirmed_rejection_but_not_unknown_delivery_as_error() {
+    for outcome in [1, 2] {
+        let (_dir, store, delivery, service) = fixture_worker(false, true).await;
+        delivery.outcome.store(outcome, Ordering::SeqCst);
+        let metrics = yoink_application::metrics::Metrics::default();
+        let service = service.with_metrics(metrics.clone());
+        let record = finish(&store, service, 44).await;
+        assert_ne!(record.status, OperationStatus::Succeeded);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.counters["downloads_total"], 1);
+        assert!(!snapshot.counters.contains_key("downloads_ok"));
+        assert!(!snapshot.counters.contains_key("download_bytes_total"));
+        assert_eq!(
+            snapshot.counters.get("downloads_error").copied(),
+            if outcome == 1 { Some(1) } else { None }
+        );
+        assert!(snapshot.histograms.is_empty());
+        store.close().await.unwrap();
     }
 }
 #[tokio::test]

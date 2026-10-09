@@ -1,0 +1,30 @@
+[package]
+name = "yoink-stats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+turso = { version = "=0.7.2", default-features = false }
+yoink-db.workspace = true
+yoink-identity.workspace = true
+yoink-access.workspace = true
+yoink-stats-search = { path = "../yoink-stats-search" }
+yoink-user-session = { path = "../yoink-user-session" }
+yoink-i18n = { path = "../yoink-i18n" }
+
+[dev-dependencies]
+tempfile = "3"
+yoink-storage.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

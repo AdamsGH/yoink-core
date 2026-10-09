@@ -713,6 +713,9 @@ async fn actual_shared_handler_keeps_incoming_admission_and_optional_injection()
             identity_enabled: true,
         };
         let deps = crate::MessageDependencies {
+            music: None,
+            stats: None,
+            lifecycle: crate::TelegramHandlerLifecycle::new(),
             downloads: None,
             upload: crate::CookieUploadDependency {
                 config: None,
@@ -827,6 +830,9 @@ async fn restricted_help_is_product_authority_not_media_elevation_and_is_durable
         identity_enabled: true,
     };
     let deps = crate::MessageDependencies {
+        music: None,
+        stats: None,
+        lifecycle: crate::TelegramHandlerLifecycle::new(),
         downloads: None,
         upload: crate::CookieUploadDependency {
             config: None,

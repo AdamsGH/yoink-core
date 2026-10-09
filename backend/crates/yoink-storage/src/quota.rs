@@ -1,6 +1,6 @@
 //! Anchored fixed-duration quotas over the preserved/imported legacy counters.
 //! Called only inside the NEW-operation Immediate transaction, after replay and capacity.
-use turso::transaction::Transaction;
+use yoink_db::Transaction;
 use yoink_db::query;
 
 use crate::{QuotaLimits, StoreError};

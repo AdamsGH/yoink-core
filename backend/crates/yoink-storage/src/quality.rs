@@ -1,5 +1,6 @@
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
+use yoink_db::Transaction;
 use yoink_db::{Row, query};
 use yoink_domain::{DeliveryTarget, DownloadParams, DownloadRequest, MediaMode, NetworkSelection};
 

@@ -101,7 +101,12 @@ async fn request(
             "Bearer"
         );
     }
-    let bytes = to_bytes(response.into_body(), 100_000).await.unwrap();
+    let limit = if uri == "/api/v1/_meta/openapi.json" {
+        1024 * 1024
+    } else {
+        100_000
+    };
+    let bytes = to_bytes(response.into_body(), limit).await.unwrap();
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, body)
 }

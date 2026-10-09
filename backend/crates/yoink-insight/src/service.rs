@@ -17,8 +17,9 @@ use tokio_util::{
     sync::CancellationToken,
     task::{TaskTracker, task_tracker::TaskTrackerToken},
 };
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use yoink_access::{FeatureSpec, Grant, Principal, Role, effective_grant};
+use yoink_db::Transaction;
 use yoink_db::{Database, Executor, query};
 #[derive(Clone)]
 pub struct Config {

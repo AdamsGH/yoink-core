@@ -1,6 +1,7 @@
 //! Trusted Telegram admission context, never serialized into worker or cache metadata.
 use crate::{Store, StoreError};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 use yoink_domain::{DeliveryTarget, DownloadRequest, MediaMode};
 

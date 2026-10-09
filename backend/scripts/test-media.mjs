@@ -1,5 +1,8 @@
 // End-to-end media acceptance against an isolated native database fixture and the built backend image.
 import assert from 'node:assert/strict';
+import { configuredImages, fingerprintImages } from './media-fixture/immutable-images.mjs';
+import { runNativeProductsScenarios } from './media-fixture/native-products-scenarios.mjs';
+import { startUserSessionFixture } from './media-fixture/user-session-scenarios.mjs';
 import { createProcessRunner, createContainerLifecycle } from './media-fixture/process-lifecycle.mjs';
 import { createNativeDbClient } from './media-fixture/native-db.mjs';
 import { boundReport, recentTelegramCalls, writeFailureReport } from './media-fixture/failure-report.mjs';
@@ -59,9 +62,12 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['all', 'admission', 'delivery', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [all|admission|delivery|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
-const image = scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend:experimental';
-const fixtureImage = scenario === 'youtube-auth' ? image : 'yoink/rust-backend-fixture:experimental';
+assert(['native-products', 'all', 'admission', 'delivery', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [native-products|all|admission|delivery|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+const selectedImages = configuredImages(process.env, {
+  image: scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend:experimental',
+  fixtureImage: scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend-fixture:experimental',
+}, process.env.YOINK_MEDIA_PROVIDER_SOURCE_MOUNT === '1');
+const { image, fixtureImage } = selectedImages;
 const workspace = fileURLToPath(new URL('../', import.meta.url));
 const nativeFixtures = fileURLToPath(new URL('../crates/yoink-identity/tests/fixtures.sql', import.meta.url));
 const runId = `${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -80,6 +86,7 @@ const fixtureDir = path.join(tempRoot, 'fixture');
 const cookieFileDir = path.join(tempRoot, 'cookie-files');
 const containers = new Set();
 const children = new Set();
+const userSessionTokens = new Set();
 const maxLog = 24 * 1024;
 let interrupted = false;
 let mediaBytes;
@@ -94,6 +101,7 @@ let sourcePort;
 let proxyPort;
 let volumeCreated = false;
 let downloadMaxAttempts;
+let youtubeAuthLimits;
 let downloadTimeoutSeconds = scenario === 'provider-routing' ? 180 : 3;
 let workerSocketTimeoutSeconds = scenario === 'provider-routing' ? 120 : 1;
 let cacheTtlSeconds;
@@ -105,6 +113,8 @@ let youtubeAuthTopology;
 let browserTopology;
 let galleryEnabled = false;
 let galleryTrusted = true;
+let nativeProductsEnabled = false;
+let userSessionFixture;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
 const { capture: spawnCapture, docker } = processRunner;
 const containerLifecycle = createContainerLifecycle({ docker, capture: spawnCapture, containers, assert, runId });
@@ -132,7 +142,7 @@ async function cleanup() {
   if (volumeCreated) { try { await docker(['volume', 'rm', volumeName], { timeout: 15000 }); } catch (error) { failures.push(error); } volumeCreated = false; }
   providerSource?.releaseAll();
   inlineSource?.releaseAll();
-  for (const fixture of [botApi, sourceFixture, proxyFixture, gallerySource]) { if (!fixture) continue; try { await fixture.close(); } catch (error) { failures.push(error); } }
+  for (const fixture of [botApi, sourceFixture, proxyFixture, gallerySource, userSessionFixture]) { if (!fixture) continue; try { await fixture.close(); } catch (error) { failures.push(error); } }
   try { await rm(tempRoot, { recursive: true, force: true }); } catch (error) { failures.push(error); }
   if (failures.length) throw new AggregateError(failures, 'one or more fixture cleanup actions failed');
 }
@@ -171,10 +181,11 @@ function redact(value) {
     if (match) cookieSyncTokens.add(match[1]);
   }
   for (const secret of cookieSyncTokens) value = String(value).split(secret).join('[REDACTED_COOKIE_SYNC_TOKEN]');
+  for (const secret of userSessionTokens) value = String(value).split(secret).join('[REDACTED_USER_SESSION_TOKEN]');
   return boundReport(String(value).split(token).join('[REDACTED_TOKEN]').split(fixtureToken).join('[REDACTED_FIXTURE_TOKEN]').split(fixtureAuthSecret).join('[REDACTED_FIXTURE_AUTH_SECRET]').split(secretMarker).join('[REDACTED_SOURCE]').split(cookieSecret).join('[REDACTED_COOKIE]').split(proxyPassword).join('[REDACTED_PROXY_PASSWORD]').split(proxyUser).join('[REDACTED_PROXY_USER]').split(proxyAuth).join('[REDACTED_PROXY_AUTH]').split('synthetic-access').join('[REDACTED_OAUTH_ACCESS]').split('synthetic-refresh').join('[REDACTED_OAUTH_REFRESH]'), maxLog);
 }
 function assertNoSecret(output, where) {
-  for (const secret of [secretMarker, token, fixtureToken, fixtureAuthSecret, cookieSecret, proxyPassword, proxyUser, proxyAuth, 'synthetic-access', 'synthetic-refresh']) assert(!output.includes(secret), `${where} leaked fixture credentials`);
+  for (const secret of [secretMarker, token, fixtureToken, fixtureAuthSecret, cookieSecret, proxyPassword, proxyUser, proxyAuth, 'synthetic-access', 'synthetic-refresh', ...userSessionTokens]) assert(!output.includes(secret), `${where} leaked fixture credentials`);
   assert(!/fixture-(video|document|audio|photo)-\d+/.test(output), `${where} leaked a Telegram file ID`);
 }
 function safeTelegramSummary() { return recentTelegramCalls(botApi.calls); }
@@ -232,8 +243,21 @@ async function launchApp() {
     '--env','YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT=/cookie-files/allowed',
     '--mount',`type=bind,source=${cookieFileDir},target=/cookie-files,readonly`,
     '--env','YOINK_RUST_TELEGRAM_ENABLED=true','--env',`YOINK_RUST_TELEGRAM_TOKEN=${token}`,'--env','YOINK_RUST_OWNER_ID=42',
-    ...(scenario === 'cookie-browser' ? ['--env', 'YOINK_FIXTURE_COOKIE_PROVIDERS=1'] : []),
-    ...(['admin', 'menus', 'group-admin', 'membership', 'nsfw', 'cookie-browser'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
+    ...(['cookie-browser', 'youtube-auth'].includes(scenario) ? ['--env', 'YOINK_FIXTURE_COOKIE_PROVIDERS=1'] : []),
+    ...(['admin', 'menus', 'group-admin', 'membership', 'nsfw', 'cookie-browser', 'native-products'].includes(scenario) ? ['--env','YOINK_RUST_AUTH_ENABLED=true','--env',`YOINK_RUST_API_SECRET_KEY=${fixtureAuthSecret}`] : []),
+    ...(nativeProductsEnabled ? [
+      '--env','YOINK_RUST_MUSIC_ENABLED=true','--env','YOINK_RUST_STATS_ENABLED=true',
+      '--env','YOINK_RUST_MUSIC_WORKSPACE=/tmp/yoink-work',
+      '--env','YOINK_RUST_STATS_INDEX_DIR=/state/private/stats-search',
+      '--env','YOINK_RUST_STATS_IMPORT_ROOT=/state/private/stats-import',
+      '--env','YOINK_RUST_STATS_IMPORT_MAX_BYTES=16777216','--env','YOINK_RUST_STATS_IMPORT_MAX_MESSAGES=100000',
+      '--env','YOINK_RUST_STATS_IMPORT_MAX_JOBS=2','--env','YOINK_RUST_STATS_IMPORT_TIMEOUT_SECS=120',
+      '--env','YOINK_RUST_STATS_USERNAME_FIRST_DELAY_SECS=300','--env','YOINK_RUST_STATS_REFRESH_INTERVAL_SECS=3600',
+      '--env','YOINK_RUST_STATS_SEARCH_REFRESH_INTERVAL_SECS=2',
+      '--env',`YOINK_RUST_USER_SESSION_URL=${userSessionFixture.origin}`,
+      '--env','YOINK_RUST_USER_SESSION_TOKEN_FILE=/state/private/tdlight-token',
+      '--env','YOINK_RUST_USER_SESSION_TIMEOUT_SECS=3',
+    ] : []),
     '--env',`YOINK_RUST_TELEGRAM_GROUPS_ENABLED=${groupsEnabled}`,
     '--env',`YOINK_RUST_BOT_API_URL=http://127.0.0.1:${apiPort}`,'--env','TURSO_TMPDIR=/tmp/yoink-db','--env','TMPDIR=/tmp/yoink-db',
     '--env','YOINK_RUST_DATABASE_PATH=/state/private/state.db',
@@ -253,6 +277,7 @@ async function launchApp() {
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
     ...(['all', 'admission', 'delivery', 'private-user', 'inline', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
     ...(scenario === 'provider-routing' ? ['--env','YOINK_RUST_DOWNLOAD_MAX_BYTES=65536','--env','YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES=196608','--env','YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=1'] : []),
+    ...(youtubeAuthLimits ? ['--env',`YOINK_RUST_DOWNLOAD_MAX_BYTES=${youtubeAuthLimits.maxBytes}`, '--env',`YOINK_RUST_DOWNLOAD_MAX_ITEMS=${youtubeAuthLimits.maxItems}`] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
     '--entrypoint','yoink-fixture-server',fixtureImage]);
@@ -264,6 +289,35 @@ async function launchApp() {
     try { return (await fetch(`http://127.0.0.1:${appHttpPort}/health/ready`)).status === 200; }
     catch (error) { if (error.cause?.code === 'ECONNREFUSED') return false; throw error; }
   }, 'application readiness after launch');
+  if (scenario === 'cookie-browser') {
+    const control = createCookieBrowserProviderControl(fixtureSql);
+    await control.enable();
+    await control.restore();
+  }
+}
+async function stopProductsGracefully() {
+  const id = appContainerId;
+  assert(id);
+  await docker(['kill', '--signal', 'TERM', id]);
+  const exit = (await docker(['wait', id], { timeout: 145000 })).trim();
+  assert.equal(exit, '0', 'native products must exit normally, never via force-removal');
+  const state = JSON.parse(await docker(['inspect', '--format', '{{json .State}}', id]));
+  assert.equal(state.Running, false);
+  assert.equal(state.ExitCode, 0);
+  assert.equal(state.OOMKilled, false);
+  assert.equal(state.Error, '');
+  const logs = await docker(['logs', id]);
+  assertNoSecret(logs, 'native products original process shutdown logs');
+  const signal = logs.indexOf('fixture shutdown signal SIGTERM:');
+  const closed = logs.indexOf('fixture database shutdown completed: result=Ok(())');
+  const drained = logs.indexOf('fixture graceful shutdown verified: adapters drained, worker_children=0, workspaces=0');
+  assert(signal >= 0 && closed > signal && drained > closed, 'original process must join drains and close database before exit');
+  console.log(redact(logs));
+  const proof = { id, exit, state, signal, closed, drained };
+  await docker(['rm', id]);
+  containers.delete(id);
+  appContainerId = undefined;
+  return proof;
 }
 async function stopApp() {
   if (!appContainerId) return;
@@ -314,6 +368,7 @@ async function seedFixtureRows() {
 }
 
 try {
+  if (selectedImages.immutable) await fingerprintImages(docker, selectedImages);
   await mkdir(fixtureDir); await chmod(fixtureDir,0o777);
 await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 });
   await seedDatabase();
@@ -343,12 +398,12 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   proxyFixture=new AuthenticatedProxyFixture({originPort:sourcePort,authorization:proxyAuth}); proxyPort=await proxyFixture.start();
   appHttpPort=await freeLoopbackPort(); fixturePort=await freeLoopbackPort();
   if (scenario === 'cookie-browser') {
-    assert(localProviderSources, 'browser acceptance requires freshly built native fixture binaries');
+    assert(localProviderSources || selectedImages.immutable, 'browser acceptance requires fresh source binaries or explicit immutable runtime/fixture image IDs');
     browserTopology = await startBrowserTopology({ workspace, tempRoot, runId, backendPort: appHttpPort, freeLoopbackPort, capture: spawnCapture, startContainer });
     cookieWebOrigin = `${browserTopology.origin}/`;
   }
   if (scenario === 'youtube-auth') {
-    assert(localProviderSources, 'YouTube acceptance requires freshly built native fixture binaries');
+    assert(localProviderSources || selectedImages.immutable, 'YouTube acceptance requires explicit immutable images or source mode');
     youtubeAuthTopology = await startSyntheticYoutubeAuth({ capture: spawnCapture, runId });
   }
   await launchApp();
@@ -722,16 +777,31 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   const commandContext = {
     botApi, sourcePort, sourceFixture, fixtureSql, queryJob, waitFor, helperContainer, image, assertWorkspaceClean,
   };
+  if (scenario === 'native-products') summaries.push(await runNativeProductsScenarios({
+    ...commandContext, appHttpPort, telegramToken: token,
+    get userSessionFixture() { return userSessionFixture; },
+    enableProducts: async () => {
+      await stopProductsGracefully();
+      userSessionFixture = await startUserSessionFixture(value => helperContainer([
+        '--network','none','--interactive','--mount',`type=volume,source=${volumeName},target=/state`,
+        '--entrypoint','sh',image,'-c','umask 077; cat > /state/private/tdlight-token',
+      ], 15000, value), value => userSessionTokens.add(value));
+      nativeProductsEnabled = true;
+      await launchApp();
+    },
+    stopProducts: stopProductsGracefully,
+    reopenProducts: launchApp,
+  }));
   if (scenario === 'all' || scenario === 'admission') {
     summaries.push(await runCommandMediaScenarios(commandContext));
     summaries.push(await runPreferenceScenarios(commandContext));
   }
   downloadTimeoutSeconds = 30;
   cacheTtlSeconds = scenario === 'youtube-auth' ? 0 : 3600;
-  await restartApp();
+  if (scenario !== 'native-products') await restartApp();
   if (scenario === 'all' || scenario === 'delivery') summaries.push(await runBatchScenarios({ ...commandContext, playlistMedia, imageBytes, restartApp }));
   workerSocketTimeoutSeconds = 20;
-  await restartApp();
+  if (scenario !== 'native-products') await restartApp();
   if (scenario === 'all' || scenario === 'delivery') summaries.push(await runProgressScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'subtitles') summaries.push(await runSubtitleScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'subtitle-settings') summaries.push(await runSubtitleSettingsScenarios({ ...commandContext, restartApp,
@@ -761,10 +831,24 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
   if (scenario === 'all' || scenario === 'cookies') summaries.push(await runCookieScenarios({ ...commandContext, restartApp, cookieSecret }));
   if (scenario === 'all' || scenario === 'cookie-uploads') summaries.push(await runCookieUploadScenarios({ ...commandContext, restartApp, cookieSecret, prepareLocalCookieFiles }));
   if (scenario === 'all' || scenario === 'cookie-urls') summaries.push(await runCookieUrlScenarios({ ...commandContext, restartApp, cookieSecret }));
-  if (scenario === 'youtube-auth') summaries.push(await runYoutubeAuthScenarios({ ...commandContext, restartApp, fixtureDir }));
+  if (scenario === 'youtube-auth') summaries.push(await runYoutubeAuthScenarios({ ...commandContext, restartApp, fixtureDir,
+    currentImageAcceptance: selectedImages.immutable,
+    syntheticControl: youtubeAuthTopology.syntheticControl,
+    syntheticPotControl: youtubeAuthTopology.syntheticPotControl,
+    gatewayRequest: youtubeAuthTopology.gatewayRequest,
+    restartYoutubeAuthServices: youtubeAuthTopology.restartYoutubeAuthServices,
+    restartYoutubeAuthGateway: youtubeAuthTopology.restartYoutubeAuthGateway,
+    refreshGate: action => nativeDb.request('', 'oauth_refresh_' + action),
+    restartYoutubeAuth: async limits => { youtubeAuthLimits = limits; downloadMaxAttempts = 1; downloadTimeoutSeconds = limits.processingTimeoutSeconds; workerSocketTimeoutSeconds = limits.processingTimeoutSeconds; await restartApp(); },
+    runSyntheticPotWorker: async () => {
+      const probe = "import youtube_auth_pot; youtube_auth_pot.install(); from yt_dlp.extractor.youtube.pot.provider import _pot_providers, PoTokenContext; from types import SimpleNamespace; cls=next(p for p in _pot_providers.value.values() if 'YoinkBgutil' in str(p)); provider=object.__new__(cls); result=provider._real_request_pot(SimpleNamespace(internal_client_name='web', context=PoTokenContext.PLAYER, video_id='abcdefghijk', innertube_context={'client':{'clientName':'WEB'}}, bypass_cache=False)); assert result.po_token=='synthetic-pot'";
+      await helperContainer(['--network','none', '--mount','type=volume,source=' + youtubeAuthTopology.socketVolume + ',target=/run/yoink-youtube-auth,readonly', '--env','YOINK_YOUTUBE_AUTH_SOCKET=/run/yoink-youtube-auth/adapter.sock','--env','PYTHONPATH=/opt/yoink-worker','--entrypoint','python',image,'-c',probe], 30000);
+      return true;
+    },
+  }));
   if (scenario === 'cookie-browser') {
     const { runCookieBrowserScenarios } = await import('./media-fixture/cookie-browser-scenarios.mjs');
-    summaries.push(JSON.stringify(await runCookieBrowserScenarios({ ...commandContext, restartApp, fixtureDir, cookieBrowserProviders: createCookieBrowserProviderControl(fixtureSql), telegramToken: token, origin: browserTopology.origin, certificateSpki: browserTopology.spki, registerCookieSyncToken: value => cookieSyncTokens.add(value) })));
+    summaries.push(JSON.stringify(await runCookieBrowserScenarios({ ...commandContext, appHttpPort, restartApp, fixtureDir, cookieBrowserProviders: createCookieBrowserProviderControl(fixtureSql), telegramToken: token, origin: browserTopology.origin, certificateSpki: browserTopology.spki, registerCookieSyncToken: value => cookieSyncTokens.add(value) })));
   }
   if (scenario === 'inline') {
     inlineSource = new InlineSource({ mediaBytes, mediaUrl: `http://127.0.0.1:${sourcePort}/media?case=inline-youtube` });
@@ -791,6 +875,7 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
   if (scenario === 'all' || scenario === 'delivery' || scenario === 'urls') summaries.push(await runGroupScenarios({ ...commandContext, playlistMedia, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
+  if (scenario === 'native-products') await stopProductsGracefully();
   console.log(`Media acceptance (${scenario}) passed. ${summaries.join('. ')}.`);
 } catch (error) {
   await reportFailure(error, 'scenario');

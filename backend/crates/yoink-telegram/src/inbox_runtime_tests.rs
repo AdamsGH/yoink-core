@@ -1135,6 +1135,112 @@ async fn failure_to_prepare_response_rolls_back_ingestion_and_jobs() {
 }
 
 #[tokio::test]
+async fn dropped_save_and_binding_transactions_roll_back_before_connection_reuse() {
+    for reconcile in [false, true] {
+        let (listener, api) = no_wire().await;
+        let mut f = fixture(api).await;
+        let item = if reconcile {
+            let item = item(&f).await;
+            f.ledger
+                .begin_text("initial", &identity(item))
+                .await
+                .unwrap();
+            f.ledger.confirm_text("initial", 99).await.unwrap();
+            Some(item)
+        } else {
+            None
+        };
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (_resume_tx, resume_rx) = oneshot::channel();
+        let hooks = Arc::get_mut(&mut f.runtime.hooks).unwrap();
+        let gate = if reconcile {
+            &mut hooks.after_reconcile_write
+        } else {
+            &mut hooks.after_save_write
+        };
+        *gate.get_mut() = Some((entered_tx, resume_rx));
+        let runtime = f.runtime.clone();
+        let task = tokio::spawn(async move {
+            if reconcile {
+                runtime.reconcile_bindings().await.unwrap();
+            } else {
+                runtime
+                    .prepare_save(
+                        "save",
+                        identity(1),
+                        "https://example.com/a",
+                        Language::English,
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(5), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), f.ledger.database().connection())
+                .await
+                .is_err()
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(
+            f.runtime
+                .identities
+                .snapshot(42, None)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        if let Some(item) = item {
+            assert_eq!(binding(&f, item).await, None);
+            assert!(
+                !f.ledger
+                    .text_effect("initial")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .bound
+            );
+            f.runtime.reconcile_bindings().await.unwrap();
+            assert_eq!(binding(&f, item).await, Some(99));
+        } else {
+            for table in ["inbox_items", "inbox_jobs", "runtime_text_effects"] {
+                assert_eq!(
+                    query(&format!("SELECT count(*) FROM {table}"))
+                        .fetch_one(f.ledger.database())
+                        .await
+                        .unwrap()
+                        .try_get::<i64, _>(0)
+                        .unwrap(),
+                    0
+                );
+            }
+            f.runtime
+                .prepare_save(
+                    "save",
+                    identity(1),
+                    "https://example.com/a",
+                    Language::English,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                f.ledger.text_effect("save").await.unwrap().unwrap().outcome,
+                TextOutcome::Prepared
+            );
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn post_admission_revocation_with_advancing_clock_seals_and_loop_continues() {
     let (listener, api) = no_wire().await;
     let (accepted_tx, accepted_rx) = oneshot::channel();

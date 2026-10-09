@@ -4,11 +4,13 @@ services:
     command: [node, test/synthetic-server.mjs]
     networks: !override [services]
   bgutil:
-    image: yoink-youtube-auth-gateway:review
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile.youtube-auth-bgutil-fixture
+    image: yoink-youtube-auth-bgutil:fixture
     user: "10001:10001"
-    entrypoint: [node, -e]
-    command:
-      - "require('http').createServer((q,s)=>{q.resume();s.setHeader('Content-Type','application/json');s.end(JSON.stringify(q.url==='/ping'?{version:'2.0.0'}:{poToken:'synthetic-pot'}))}).listen(4416)"
+    entrypoint: [node]
+    command: [/opt/youtube-auth-bgutil.mjs]
     networks: !override [services]
     tmpfs: !override ['/tmp:size=16m,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev']
   worker:

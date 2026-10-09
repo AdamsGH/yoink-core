@@ -37,6 +37,9 @@ pub struct Executor {
     full_tasks: tokio_util::task::TaskTracker,
     full_shutdown: CancellationToken,
     full_admission: std::sync::Arc<std::sync::Mutex<()>>,
+    music_tasks: tokio_util::task::TaskTracker,
+    music_shutdown: CancellationToken,
+    music_admission: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 #[cfg(test)]
@@ -184,12 +187,14 @@ pub enum ExecutorError {
 enum ExecutionRequest<'a> {
     Media(&'a WorkerRequest),
     Search(&'a SearchRequest),
+    Music(&'a yoink_worker_protocol::MusicRequest),
     Content(&'a yoink_worker_protocol::ContentRequest),
     FullContent(&'a yoink_worker_protocol::FullContentRequest),
 }
 enum ExecutionOutput {
     Media(Vec<ValidatedArtifact>),
     Search(Vec<SearchEntry>),
+    Music(yoink_worker_protocol::MusicResult),
     Content(yoink_worker_protocol::ContentResult),
     FullContent(yoink_worker_protocol::FullContentResult),
 }
@@ -198,6 +203,7 @@ impl ExecutionRequest<'_> {
         match self {
             Self::Media(r) => (r.version, r.operation_id, r.attempt),
             Self::Search(r) => (r.version, r.operation_id, r.attempt),
+            Self::Music(r) => (r.version, r.operation_id, r.attempt),
             Self::Content(r) => (r.version, r.operation_id, r.attempt),
             Self::FullContent(r) => (r.version, r.operation_id, r.attempt),
         }
@@ -206,6 +212,7 @@ impl ExecutionRequest<'_> {
         match self {
             Self::Media(r) => encode_request(r),
             Self::Search(r) => encode_search_request(r),
+            Self::Music(r) => yoink_worker_protocol::encode_music_request(r),
             Self::Content(r) => yoink_worker_protocol::encode_content_request(r),
             Self::FullContent(r) => yoink_worker_protocol::encode_full_content_request(r),
         }
@@ -221,6 +228,39 @@ impl Executor {
             max_workspace_bytes: self.config.max_workspace_bytes,
             max_artifacts: self.config.max_artifacts,
         }
+    }
+
+    /// Lower per-operation budgets without replacing the shared child lifecycle.
+    pub fn with_operation_limits(
+        &self,
+        timeout: Duration,
+        max_artifact_bytes: u64,
+        max_artifacts: usize,
+    ) -> Result<Self, ExecutorError> {
+        if timeout.is_zero()
+            || timeout > Duration::from_secs(86400)
+            || timeout.subsec_nanos() != 0
+            || max_artifact_bytes == 0
+            || max_artifact_bytes > 2 * 1024 * 1024 * 1024
+            || max_artifacts == 0
+            || max_artifacts > 500
+        {
+            return Err(ExecutorError::InvalidConfig);
+        }
+        let mut executor = self.clone();
+        executor.config.timeout = timeout.min(self.config.timeout);
+        executor.config.processing_timeout =
+            self.config.processing_timeout.min(executor.config.timeout);
+        executor.config.socket_timeout = self.config.socket_timeout.min(executor.config.timeout);
+        executor.config.max_artifact_bytes = max_artifact_bytes.min(self.config.max_artifact_bytes);
+        executor.config.max_workspace_bytes = self.config.max_workspace_bytes.min(
+            executor
+                .config
+                .max_artifact_bytes
+                .saturating_mul(max_artifacts.min(self.config.max_artifacts) as u64),
+        );
+        executor.config.max_artifacts = max_artifacts.min(self.config.max_artifacts);
+        Ok(executor)
     }
 
     /// Creates an executor. The configured workspace_root must already exist and
@@ -251,6 +291,9 @@ impl Executor {
             full_tasks: tokio_util::task::TaskTracker::new(),
             full_shutdown: CancellationToken::new(),
             full_admission: std::sync::Arc::new(std::sync::Mutex::new(())),
+            music_tasks: tokio_util::task::TaskTracker::new(),
+            music_shutdown: CancellationToken::new(),
+            music_admission: std::sync::Arc::new(std::sync::Mutex::new(())),
         })
     }
 
@@ -321,6 +364,94 @@ impl Executor {
             ExecutionOutput::Content(result) => Ok(result),
             _ => Err(ExecutorError::Protocol),
         }
+    }
+
+    pub async fn execute_music(
+        &self,
+        request: &yoink_worker_protocol::MusicRequest,
+        cancel: CancellationToken,
+        timeout: Duration,
+    ) -> Result<yoink_worker_protocol::MusicResult, ExecutorError> {
+        let mut executor = self.clone();
+        if timeout.is_zero() || timeout > Duration::from_secs(120) {
+            return Err(ExecutorError::InvalidConfig);
+        }
+        executor.config.timeout = timeout.min(self.config.timeout);
+        match self
+            .execute_music_owned(request.clone(), cancel, executor)
+            .await?
+        {
+            ExecutionOutput::Music(result) => Ok(result),
+            _ => Err(ExecutorError::Protocol),
+        }
+    }
+    pub async fn execute_music_audio(
+        &self,
+        request: &yoink_worker_protocol::MusicRequest,
+        cancel: CancellationToken,
+    ) -> Result<Vec<ValidatedArtifact>, ExecutorError> {
+        if !matches!(
+            request.task,
+            yoink_worker_protocol::MusicTask::MusicAudio { .. }
+        ) {
+            return Err(ExecutorError::Protocol);
+        }
+        match self
+            .execute_music_owned(request.clone(), cancel, self.clone())
+            .await?
+        {
+            ExecutionOutput::Media(artifacts) => Ok(artifacts),
+            _ => Err(ExecutorError::Protocol),
+        }
+    }
+
+    // Like full-content, the owner outlives a dropped caller until reap/cleanup.
+    async fn execute_music_owned(
+        &self,
+        request: yoink_worker_protocol::MusicRequest,
+        cancel: CancellationToken,
+        executor: Self,
+    ) -> Result<ExecutionOutput, ExecutorError> {
+        let owned_cancel = cancel.child_token();
+        let drop_cancel = owned_cancel.clone().drop_guard();
+        let shutdown = self.music_shutdown.clone();
+        let handle = {
+            let _admission = self
+                .music_admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if shutdown.is_cancelled() {
+                return Err(ExecutorError::Cancelled);
+            }
+            self.music_tasks.spawn(async move {
+                let shutdown_cancel = owned_cancel.clone();
+                let watcher = AbortOnDropHandle::new(tokio::spawn(async move {
+                    shutdown.cancelled().await;
+                    shutdown_cancel.cancel();
+                }));
+                let result = executor
+                    .execute_inner(ExecutionRequest::Music(&request), owned_cancel, None)
+                    .await;
+                watcher.0.as_ref().expect("watcher").abort();
+                let _ = watcher.join().await;
+                result
+            })
+        };
+        let result = handle.await.map_err(|_| ExecutorError::Io)?;
+        drop_cancel.disarm();
+        result
+    }
+    /// Permanently close Music admission and await process-group reap and workspace cleanup.
+    pub async fn shutdown_music(&self) {
+        {
+            let _admission = self
+                .music_admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.music_shutdown.cancel();
+            self.music_tasks.close();
+        }
+        self.music_tasks.wait().await;
     }
 
     /// Full fetch always uses the immutable default launcher, never configured args.
@@ -412,6 +543,7 @@ impl Executor {
         cancel: CancellationToken,
         progress: Option<tokio::sync::watch::Sender<Option<WorkerProgress>>>,
     ) -> Result<ExecutionOutput, ExecutorError> {
+        let music_operation = matches!(request, ExecutionRequest::Music(_));
         if cancel.is_cancelled() {
             return Err(ExecutorError::Cancelled);
         }
@@ -428,6 +560,7 @@ impl Executor {
         .await
         .map_err(|_| ExecutorError::Io)?
         .map_err(|_| ExecutorError::Io)?;
+        let temp = std::sync::Arc::new(temp);
         if cancel.is_cancelled() {
             return Err(ExecutorError::Cancelled);
         }
@@ -493,7 +626,7 @@ impl Executor {
         let stdout = child.stdout.take().ok_or(ExecutorError::Spawn)?;
         let stderr = child.stderr.take().ok_or(ExecutorError::Spawn)?;
 
-        let write_task = AbortOnDropHandle::new(tokio::spawn(async move {
+        let write_task = AbortOnDropHandle::new(self.spawn_operation_task(music_operation, async move {
             let mut stdin = stdin;
             stdin.write_all(&frame).await.map_err(|_| ())?;
             stdin.write_all(b"\n").await.map_err(|_| ())?;
@@ -505,7 +638,7 @@ impl Executor {
         let expected_operation_id = operation_id;
         let expected_attempt = attempt;
         let progress_sender = progress.clone();
-        let out_task = AbortOnDropHandle::new(tokio::spawn(async move {
+        let out_task = AbortOnDropHandle::new(self.spawn_operation_task(music_operation, async move {
             let result = read_frames_mode(
                 stdout,
                 max_out,
@@ -520,7 +653,7 @@ impl Executor {
             }
             result
         }));
-        let err_task = AbortOnDropHandle::new(tokio::spawn(async move {
+        let err_task = AbortOnDropHandle::new(self.spawn_operation_task(music_operation, async move {
             let within_limit = drain_stderr(stderr, max_out).await;
             if !within_limit {
                 terminate_group(pid);
@@ -544,7 +677,8 @@ impl Executor {
                 _ = monitor.tick() => {
                     let root = workspace.clone();
                     let budget = self.config.max_workspace_bytes;
-                    let check_task = tokio::task::spawn_blocking(move || workspace_usage(&root, budget));
+                    let keepalive = music_operation.then(||temp.clone());
+                    let check_task = self.spawn_operation_blocking(music_operation, move || { let _keepalive = keepalive; workspace_usage(&root, budget) });
                     let check = tokio::select! {
                         _ = cancel.cancelled() => {
                             terminate_group(pid);
@@ -586,7 +720,8 @@ impl Executor {
                 let stderr_ok = err_task.join().await.map_err(|_| ExecutorError::Protocol)?;
                 let root = workspace.clone();
                 let budget = self.config.max_workspace_bytes;
-                tokio::task::spawn_blocking(move || workspace_usage(&root, budget))
+                let keepalive = music_operation.then(||temp.clone());
+                self.spawn_operation_blocking(music_operation, move || { let _keepalive = keepalive; workspace_usage(&root, budget) })
                     .await
                     .map_err(|_| ExecutorError::Io)?
                     .map_err(|error| match error {
@@ -627,6 +762,10 @@ impl Executor {
                 WorkerEventKind::FullContentFailed { error } => Err(ExecutorError::FullContent(error)),
                 _ => Err(ExecutorError::Protocol),
             };
+        }
+        if matches!(request, ExecutionRequest::Music(r) if !matches!(r.task, yoink_worker_protocol::MusicTask::MusicAudio { .. })) {
+            if std::fs::read_dir(&workspace).map_err(|_| ExecutorError::Io)?.next().is_some() { return Err(ExecutorError::UnsafeArtifact); }
+            return match event { WorkerEventKind::MusicCompleted { result } => Ok(ExecutionOutput::Music(result)), WorkerEventKind::Failure { class } => Err(ExecutorError::Worker(class)), _ => Err(ExecutorError::Protocol) };
         }
         if matches!(request, ExecutionRequest::Content(_)) {
             if std::fs::read_dir(&workspace).map_err(|_| ExecutorError::Io)?.next().is_some() { return Err(ExecutorError::UnsafeArtifact); }
@@ -687,7 +826,9 @@ impl Executor {
             ExecutionRequest::Media(WorkerRequest { task: yoink_worker_protocol::TaskKind::Download {
                 media_mode: yoink_worker_protocol::MediaMode::Video | yoink_worker_protocol::MediaMode::Audio | yoink_worker_protocol::MediaMode::Image | yoink_worker_protocol::MediaMode::Best
             }, options: yoink_worker_protocol::DownloadOptions { media_info: true, .. }, .. }));
-        let artifact_task = tokio::task::spawn_blocking(move || {
+        let keepalive = music_operation.then(||temp.clone());
+        let artifact_task = self.spawn_operation_blocking(music_operation, move || {
+            let _keepalive = keepalive;
             let mut validated = Vec::with_capacity(artifacts.len());
             let mut total = 0u64;
             for descriptor in &artifacts {
@@ -721,6 +862,28 @@ impl Executor {
         let _ = child.wait().await;
         guard.0 = None;
         result
+    }
+    fn spawn_operation_task<F>(&self, music: bool, future: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        if music {
+            self.music_tasks.spawn(future)
+        } else {
+            tokio::spawn(future)
+        }
+    }
+    fn spawn_operation_blocking<F, T>(&self, music: bool, task: F) -> tokio::task::JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        if music {
+            self.music_tasks.spawn_blocking(task)
+        } else {
+            tokio::task::spawn_blocking(task)
+        }
     }
 }
 
@@ -1427,6 +1590,37 @@ mod tests {
             allowed_private_origins: vec![],
         };
         assert!(Executor::new(config.clone()).is_ok());
+        let original = Executor::new(config.clone()).unwrap();
+        let lowered = original
+            .with_operation_limits(Duration::from_secs(1), 512, 1)
+            .unwrap();
+        assert_eq!(lowered.config.max_artifact_bytes, 512);
+        assert_eq!(lowered.config.max_workspace_bytes, 512);
+        assert_eq!(lowered.config.max_artifacts, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            &lowered.full_admission,
+            &original.full_admission
+        ));
+        let unchanged = original
+            .with_operation_limits(Duration::from_secs(86400), 8192, 500)
+            .unwrap();
+        assert_eq!(unchanged.config.timeout, config.timeout);
+        assert_eq!(unchanged.config.max_artifact_bytes, 1024);
+        assert_eq!(unchanged.config.max_artifacts, config.max_artifacts);
+        for (duration, bytes, count) in [
+            (Duration::ZERO, 1, 1),
+            (Duration::from_millis(500), 1, 1),
+            (Duration::from_secs(86401), 1, 1),
+            (Duration::from_secs(1), 0, 1),
+            (Duration::from_secs(1), 1, 0),
+            (Duration::from_secs(1), 1, 501),
+        ] {
+            assert!(
+                original
+                    .with_operation_limits(duration, bytes, count)
+                    .is_err()
+            );
+        }
         let mut fractional = config.clone();
         fractional.processing_timeout = Duration::from_millis(500);
         assert!(matches!(
@@ -1443,6 +1637,58 @@ mod tests {
 
     fn process_executor(mode: &str, root: &Path) -> Executor {
         process_executor_args(mode, root, Duration::from_secs(3), Vec::new())
+    }
+    #[tokio::test]
+    async fn music_metadata_and_mp3_share_confined_cleanup_and_limits() {
+        use yoink_worker_protocol::{
+            MusicCredentials, MusicProvider, MusicRequest, MusicTask, PROTOCOL_VERSION,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let mut request = MusicRequest {
+            version: PROTOCOL_VERSION,
+            operation_id: uuid::Uuid::new_v4(),
+            attempt: 1,
+            task: MusicTask::MusicParse {
+                provider: MusicProvider::Spotify,
+                url: yoink_worker_protocol::HttpSourceUrl::parse(
+                    "https://open.spotify.com/track/abc",
+                )
+                .unwrap(),
+            },
+            proxy_url: None,
+            credentials: MusicCredentials::default(),
+            request_timeout_ms: 1000,
+            response_max_bytes: 1024,
+            max_requests: 10,
+        };
+        assert!(
+            process_executor("music-metadata", root.path())
+                .execute_music(&request, CancellationToken::new(), Duration::from_secs(3))
+                .await
+                .is_ok()
+        );
+        assert!(matches!(
+            process_executor("music-artifact", root.path())
+                .execute_music(&request, CancellationToken::new(), Duration::from_secs(3))
+                .await,
+            Err(ExecutorError::UnsafeArtifact)
+        ));
+        request.task = MusicTask::MusicAudio {
+            url: yoink_worker_protocol::HttpSourceUrl::parse(
+                "https://music.youtube.com/watch?v=abcdefghijk",
+            )
+            .unwrap(),
+            title: "Song".into(),
+            artist: "Artist".into(),
+            thumbnail_url: None,
+        };
+        let artifacts = process_executor("music-audio", root.path())
+            .execute_music_audio(&request, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(artifacts[0].media_type, "audio/mpeg");
+        assert_eq!(artifacts[0].size_bytes, 15);
+        assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
     }
 
     fn process_executor_args(
@@ -1698,7 +1944,13 @@ mod tests {
                             tokio::time::sleep(Duration::from_millis(10)).await;
                         }
                         Ok(_) => break,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::NotFound
+                                || error.raw_os_error()
+                                    == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+                        {
+                            break;
+                        }
                         Err(error) => panic!("could not inspect descendant: {error}"),
                     }
                 }
@@ -1713,6 +1965,119 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn music_metadata_and_audio_drop_cancel_shutdown_timeout_reap_and_cleanup() {
+        use yoink_worker_protocol::*;
+        for audio in [false, true] {
+            for mode in ["drop", "cancel", "shutdown", "timeout"] {
+                let root = tempfile::tempdir().unwrap();
+                let markers = tempfile::tempdir().unwrap();
+                let marker = markers.path().join("child");
+                let mut executor = full_fixture("hang", root.path(), Some(&marker));
+                executor.config.timeout = Duration::from_secs(1);
+                let url =
+                    HttpSourceUrl::parse("https://music.youtube.com/watch?v=abcdefghijk").unwrap();
+                let request = MusicRequest {
+                    version: PROTOCOL_VERSION,
+                    operation_id: uuid::Uuid::new_v4(),
+                    attempt: 1,
+                    task: if audio {
+                        MusicTask::MusicAudio {
+                            url,
+                            title: "Song".into(),
+                            artist: "Artist".into(),
+                            thumbnail_url: None,
+                        }
+                    } else {
+                        MusicTask::MusicParse {
+                            provider: MusicProvider::Ytmusic,
+                            url,
+                        }
+                    },
+                    proxy_url: None,
+                    credentials: MusicCredentials::default(),
+                    request_timeout_ms: 1000,
+                    response_max_bytes: 1024,
+                    max_requests: 1,
+                };
+                let runner = executor.clone();
+                let cancel = CancellationToken::new();
+                let trigger = cancel.clone();
+                let task = tokio::spawn(async move {
+                    if audio {
+                        runner
+                            .execute_music_audio(&request, cancel)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        runner
+                            .execute_music(&request, cancel, Duration::from_secs(1))
+                            .await
+                            .map(|_| ())
+                    }
+                });
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    while !marker.exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                let parent = std::fs::read_to_string(marker.with_extension("parent")).unwrap();
+                let child = std::fs::read_to_string(&marker).unwrap();
+                match mode {
+                    "drop" => {
+                        task.abort();
+                        let _ = task.await;
+                    }
+                    "cancel" => {
+                        trigger.cancel();
+                        assert_eq!(task.await.unwrap(), Err(ExecutorError::Cancelled));
+                    }
+                    "shutdown" => {
+                        executor.shutdown_music().await;
+                        assert_eq!(task.await.unwrap(), Err(ExecutorError::Cancelled));
+                    }
+                    _ => {
+                        assert_eq!(task.await.unwrap(), Err(ExecutorError::Timeout));
+                    }
+                }
+                tokio::time::timeout(Duration::from_secs(3), executor.shutdown_music())
+                    .await
+                    .unwrap();
+                assert!(
+                    !Path::new(&format!("/proc/{parent}")).exists(),
+                    "Music parent not reaped"
+                );
+                tokio::time::timeout(Duration::from_secs(3), async {
+                    loop {
+                        match std::fs::read_to_string(format!("/proc/{child}/stat")) {
+                            Ok(stat) if stat.split_whitespace().nth(2) != Some("Z") => {
+                                tokio::time::sleep(Duration::from_millis(10)).await
+                            }
+                            Ok(_) => break,
+                            Err(error)
+                                if error.kind() == std::io::ErrorKind::NotFound
+                                    || error.raw_os_error()
+                                        == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+                            {
+                                break;
+                            }
+                            Err(error) => panic!("Music descendant inspection failed: {error}"),
+                        }
+                    }
+                })
+                .await
+                .unwrap();
+                let ticks = marker.with_extension("ticks");
+                let before = std::fs::read(&ticks).unwrap_or_default();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_eq!(before, std::fs::read(&ticks).unwrap_or_default());
+                assert!(root.path().read_dir().unwrap().next().is_none());
+                assert_eq!(executor.music_tasks.len(), 0);
+            }
+        }
+    }
     fn search_request() -> yoink_worker_protocol::SearchRequest {
         yoink_worker_protocol::SearchRequest {
             version: yoink_worker_protocol::PROTOCOL_VERSION,

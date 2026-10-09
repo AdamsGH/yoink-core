@@ -2,7 +2,8 @@ use crate::{Error, Insight, invalid, provider};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::{Executor, query};
 #[derive(Deserialize)]
 pub struct SettingsUpdate {

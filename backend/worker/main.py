@@ -110,6 +110,9 @@ def _validate_request(raw: bytes) -> dict[str, Any]:
     def reject_constant(_value: str) -> Any:
         raise ValueError("invalid request")
     request = json.loads(raw, parse_constant=reject_constant, object_pairs_hook=_unique_object)
+    if isinstance(request, dict) and isinstance(request.get("task"), dict) and request["task"].get("kind", "").startswith("music_"):
+        from music_engine import validate
+        return validate(request)
     if isinstance(request, dict) and isinstance(request.get("task"), dict) and request["task"].get("kind") == "full_content_fetch":
         from full_content import validate
         return validate(request)
@@ -298,7 +301,10 @@ def main() -> int:
     except BaseException:
         sys.stderr.write("invalid worker request or settings: use version 2 download/content with source_url, or youtube_search with a bounded query and no source_url/options/cookies\n")
         return 2
-    if request["task"]["kind"] == "full_content_fetch":
+    if request["task"]["kind"].startswith("music_"):
+        from music_engine import execute
+        execute(request, settings, _emit, _event_prefix)
+    elif request["task"]["kind"] == "full_content_fetch":
         from full_content import execute
         execute(request, settings, _emit, _event_prefix(request))
     elif request["task"]["kind"] in ("content_get", "content_readability", "content_trafilatura"):

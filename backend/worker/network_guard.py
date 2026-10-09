@@ -19,6 +19,8 @@ _CONFIGURED_PROXY: tuple[str, int] | None = None
 _ACTIVE_RELAY_ORIGIN: tuple[str, int] | None = None
 _REQUESTS_SESSION = None
 _ORIGINAL_REQUESTS_SEND = None
+_SOURCE_WIRE_ADMISSION = None
+_INHERIT_WIRE_ADMISSION = object()
 
 
 _GUARD_FAILURE_COUNT = 0
@@ -190,6 +192,8 @@ def _validate_proxy_request(url: str) -> None:
 
 def _guarded_opener_open(self, fullurl, data=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
     url = fullurl.full_url if hasattr(fullurl, "full_url") else fullurl
+    if _SOURCE_WIRE_ADMISSION is not None:
+        _SOURCE_WIRE_ADMISSION()
     _validate_source_request(url)
     return _ORIGINAL_OPENER_OPEN(self, fullurl, data, timeout)
 
@@ -200,6 +204,8 @@ def _guarded_proxy_open(self, req, proxy, type):
 
 
 def _guarded_requests_send(self, request, **kwargs):
+    if _SOURCE_WIRE_ADMISSION is not None:
+        _SOURCE_WIRE_ADMISSION()
     _validate_source_request(request.url)
     proxies = kwargs.get("proxies") or {}
     for scheme, proxy_url in proxies.items():
@@ -246,6 +252,7 @@ def restore_guard() -> None:
     """Restore original networking methods and clear all guard configuration."""
     global _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _ACTIVE_RELAY_ORIGIN
     global _REQUESTS_SESSION, _ORIGINAL_REQUESTS_SEND
+    global _SOURCE_WIRE_ADMISSION
     socket.getaddrinfo = _ORIGINAL_GETADDRINFO
     OpenerDirector.open = _ORIGINAL_OPENER_OPEN
     ProxyHandler.proxy_open = _ORIGINAL_PROXY_OPEN
@@ -257,23 +264,37 @@ def restore_guard() -> None:
     _ALLOWED_PROXY_ORIGINS = frozenset()
     _CONFIGURED_PROXY = None
     _ACTIVE_RELAY_ORIGIN = None
+    _SOURCE_WIRE_ADMISSION = None
 
 
 @contextmanager
 def guard_context(
     allowed_origins: tuple[str, ...],
     allowed_proxy_origins: tuple[str, ...] = (),
+    *, source_wire_admission=_INHERIT_WIRE_ADMISSION,
 ):
-    """Install guard configuration temporarily, restoring any enclosing configuration on exit."""
+    """Restore enclosing policy on exit. Optional wire admission precedes source DNS.
+
+    Omitted admission inherits the enclosing callback; explicit None disables it.
+    """
     global _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY
-    previous = (_ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY)
+    global _SOURCE_WIRE_ADMISSION
+    previous = (_ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _SOURCE_WIRE_ADMISSION)
+    previous_send = _REQUESTS_SESSION.send if _REQUESTS_SESSION is not None else None
     was_installed = socket.getaddrinfo is guarded_getaddrinfo
     install_guard(allowed_origins, allowed_proxy_origins)
+    # Process-wide like the guard itself, including downloader fragment threads.
+    if source_wire_admission is not _INHERIT_WIRE_ADMISSION:
+        _SOURCE_WIRE_ADMISSION = source_wire_admission
+    if _SOURCE_WIRE_ADMISSION is not None and getattr(previous_send, "_source_wire_guard", None) is _guarded_requests_send:
+        _REQUESTS_SESSION.send = previous_send
     try:
         yield
     finally:
         if was_installed:
-            _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY = previous
+            _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _SOURCE_WIRE_ADMISSION = previous
             _ensure_guarded()
+            if _SOURCE_WIRE_ADMISSION is not None and getattr(previous_send, "_source_wire_guard", None) is _guarded_requests_send:
+                _REQUESTS_SESSION.send = previous_send
         else:
             restore_guard()

@@ -16,5 +16,15 @@ if (r.task.media_mode === 'links' || r.task.media_mode === 'audio_links') {
     metadata:{title:'Fixture',description:'',tags:[],categories:[]}};
   if (r.options.media_info) descriptor.media_info={size_bytes:bytes.length,streams:[{kind:'video',codec:'h264',width:1280,height:720}]};
 }
+const playlist = r.options.playlist;
+const entries = playlist ? (playlist.end === null ? (playlist.start > 0 ? 1 : -playlist.start) : Math.abs(playlist.end - playlist.start) + 1) : 1;
+const count = Math.max(1, r.options.clips?.length ?? 0) * entries;
+const artifacts = [descriptor];
+for (let i = 1; i < count; i++) {
+  const path = `clip-${i}.mp4`;
+  const bytes = Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom0000')]);
+  await writeFile(path, bytes);
+  artifacts.push({...descriptor, path});
+}
 process.stdout.write(JSON.stringify({version:r.version,operation_id:r.operation_id,attempt:r.attempt,
-  event:{type:'completed',artifacts:[descriptor]}})+'\n');
+  event:{type:'completed',artifacts}})+'\n');

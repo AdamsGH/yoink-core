@@ -15,6 +15,8 @@ pub enum StoreError {
     Unauthorized,
     #[error("storage database operation failed")]
     Database,
+    #[error("storage migration {version} failed during {stage}")]
+    Migration { version: i64, stage: &'static str },
     #[error("storage schema is missing or incompatible")]
     Schema,
     #[error("stored request data is invalid")]

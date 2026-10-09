@@ -2,8 +2,9 @@
 use chrono::{DateTime, Utc};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use yoink_access::Role;
+use yoink_db::Transaction;
 use yoink_db::query;
 use yoink_domain::ContentMetadata;
 

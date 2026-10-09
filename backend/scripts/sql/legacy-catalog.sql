@@ -16,7 +16,7 @@ SELECT json_build_object(
       ) a) AS columns,
       (SELECT json_agg(json_build_object('name', co.conname, 'kind', co.contype, 'definition', pg_get_constraintdef(co.oid)) ORDER BY co.conname)
        FROM pg_constraint co WHERE co.conrelid = c.oid) AS constraints,
-      (SELECT json_agg(pg_get_indexdef(i.indexrelid) ORDER BY i.indexrelid)
+      (SELECT json_agg(pg_get_indexdef(i.indexrelid) ORDER BY pg_get_indexdef(i.indexrelid))
        FROM pg_index i WHERE i.indrelid = c.oid) AS indexes
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind = 'r'

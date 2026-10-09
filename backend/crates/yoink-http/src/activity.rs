@@ -21,6 +21,7 @@ pub enum ActivityError {
     Unavailable,
 }
 pub trait ActivityProvider: Send + Sync {
+    /// Numeric last_at values use native microseconds; HTTP emits RFC3339 timestamps.
     fn activity(&self, subject: i64) -> ActivityCall<'_>;
 }
 impl ActivityProvider for yoink_insight::Insight {
@@ -30,6 +31,20 @@ impl ActivityProvider for yoink_insight::Insight {
                 yoink_insight::Error::Database => ActivityError::Unavailable,
                 _ => ActivityError::Forbidden,
             })
+        })
+    }
+}
+impl ActivityProvider for yoink_music::NativeMusicPersistence {
+    fn activity(&self, subject: i64) -> ActivityCall<'_> {
+        Box::pin(async move {
+            let activity = self
+                .activity(subject)
+                .await
+                .map_err(|_| ActivityError::Unavailable)?;
+            let mut activity =
+                serde_json::to_value(activity).map_err(|_| ActivityError::Unavailable)?;
+            activity["extra"] = json!({});
+            Ok(activity)
         })
     }
 }
@@ -80,18 +95,19 @@ impl Activity {
         if !snapshot.authorize(&policy, None).decision.allowed {
             return Err(ApiError(StatusCode::FORBIDDEN, "Access denied"));
         }
-        let profile = identities
+        let profile_error = |e| match e {
+            yoink_identity::IdentityError::Unauthorized => {
+                ApiError(StatusCode::NOT_FOUND, "Not found")
+            }
+            yoink_identity::IdentityError::Forbidden => {
+                ApiError(StatusCode::FORBIDDEN, "Access denied")
+            }
+            _ => ApiError(StatusCode::SERVICE_UNAVAILABLE, "Service unavailable"),
+        };
+        identities
             .current_profile(subject)
             .await
-            .map_err(|e| match e {
-                yoink_identity::IdentityError::Unauthorized => {
-                    ApiError(StatusCode::NOT_FOUND, "Not found")
-                }
-                yoink_identity::IdentityError::Forbidden => {
-                    ApiError(StatusCode::FORBIDDEN, "Access denied")
-                }
-                _ => ApiError(StatusCode::SERVICE_UNAVAILABLE, "Service unavailable"),
-            })?;
+            .map_err(profile_error)?;
         let mut plugins = vec![];
         let providers: Vec<_> = self
             .0
@@ -101,13 +117,27 @@ impl Activity {
             .cloned()
             .collect();
         for provider in providers {
-            plugins.push(provider.activity(subject).await.map_err(|e| match e {
+            let mut activity = provider.activity(subject).await.map_err(|e| match e {
                 ActivityError::Unavailable => {
                     ApiError(StatusCode::SERVICE_UNAVAILABLE, "Service unavailable")
                 }
                 ActivityError::Forbidden => ApiError(StatusCode::FORBIDDEN, "Access denied"),
-            })?);
+            })?;
+            if let Some(timestamp) = activity["last_at"].as_i64() {
+                activity["last_at"] = chrono::DateTime::from_timestamp_micros(timestamp)
+                    .ok_or(ApiError(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Service unavailable",
+                    ))?
+                    .to_rfc3339()
+                    .into();
+            }
+            plugins.push(activity);
         }
+        let profile = identities
+            .current_profile(subject)
+            .await
+            .map_err(profile_error)?;
         // Recheck the viewing principal after provider I/O: demotion/ban cannot
         // authorize an already in-flight request for another subject.
         let current = identities

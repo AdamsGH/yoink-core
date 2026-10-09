@@ -11,9 +11,14 @@ use std::{
     },
 };
 use tokio::sync::Mutex;
-use turso::transaction::{Transaction, TransactionBehavior};
+use tokio_util::task::TaskTracker;
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::{Database, query};
 
+#[cfg(test)]
+#[path = "cancellation_tests.rs"]
+mod cancellation_tests;
 #[cfg(test)]
 #[path = "recovery_tests.rs"]
 mod recovery_tests;
@@ -50,6 +55,7 @@ pub struct RefreshReport {
 
 pub struct SearchService {
     database: Database,
+    tasks: TaskTracker,
     index: Arc<StdMutex<NativeIndex>>,
     operation: Mutex<()>,
     needs_rebuild: AtomicBool,
@@ -63,21 +69,31 @@ impl SearchService {
         database: Database,
         index_dir: impl AsRef<Path>,
     ) -> Result<Self, SearchError> {
+        Self::open_with_tasks(database, index_dir, TaskTracker::new()).await
+    }
+
+    /// Retain the tracker before awaiting startup. After stopping callers, close
+    /// and wait for it even if startup or a search future was canceled.
+    pub async fn open_with_tasks(
+        database: Database,
+        index_dir: impl AsRef<Path>,
+        tasks: TaskTracker,
+    ) -> Result<Self, SearchError> {
         database
             .verify_files()
             .await
             .map_err(|_| SearchError::Database)?;
         let path = index_dir.as_ref().to_path_buf();
         let database_path = database.path().to_path_buf();
-        let (index, binding) = tokio::task::spawn_blocking(move || {
+        let (index, binding) = tracked_blocking(&tasks, move || {
             let binding = source::file_binding(&database_path)?;
             let index = NativeIndex::open(&path).map_err(SearchError::Index)?;
             Ok::<_, SearchError>((index, binding))
         })
-        .await
-        .map_err(|_| SearchError::Task)??;
+        .await?;
         let service = Self {
             database,
+            tasks,
             index: Arc::new(StdMutex::new(index)),
             operation: Mutex::new(()),
             needs_rebuild: AtomicBool::new(false),
@@ -259,11 +275,29 @@ impl SearchService {
         action: impl FnOnce(&mut NativeIndex) -> Result<T, String> + Send + 'static,
     ) -> Result<T, SearchError> {
         let index = self.index.clone();
-        tokio::task::spawn_blocking(move || {
+        tracked_blocking(&self.tasks, move || {
             let mut index = index.lock().map_err(|_| SearchError::Task)?;
             action(&mut index).map_err(SearchError::Index)
         })
         .await
-        .map_err(|_| SearchError::Task)?
     }
+}
+
+/// Retains blocking work and undelivered results until the tracker drains.
+/// Stop and join callers before closing and waiting on their tracker.
+pub async fn tracked_blocking<T: Send + 'static>(
+    tasks: &TaskTracker,
+    action: impl FnOnce() -> Result<T, SearchError> + Send + 'static,
+) -> Result<T, SearchError> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    // The tracked async owner joins the blocking worker and drops undelivered
+    // results before finishing, including a newly opened index's writer lock.
+    tasks.spawn(async move {
+        let result = tokio::task::spawn_blocking(action)
+            .await
+            .map_err(|_| SearchError::Task)
+            .and_then(std::convert::identity);
+        let _ = send.send(result);
+    });
+    receive.await.map_err(|_| SearchError::Task)?
 }

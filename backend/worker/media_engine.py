@@ -132,6 +132,8 @@ def _ffmpeg_args(ffmpeg: str, source: Path, destination: Path, options: dict[str
         audio = options.get("audio_codec", "best")
         codec = {"best": "aac", "aac": "aac", "mp3": "libmp3lame", "opus": "libopus"}[audio]
         args += ["-vn", "-c:a", codec]
+        if audio == "mp3" and options.get("_music_audio_bitrate") == 192:
+            args += ["-b:a", "192k"]
         if audio == "mp3":
             args += ["-f", "mp3"]
         elif audio == "opus":
@@ -324,7 +326,8 @@ def _gallery_download(url: str, workspace: Path, progress: Callable[[float], Non
 
 
 def download_media(request: dict[str, Any], settings: Any,
-                   emit_progress: Callable[[float], None]) -> list[dict[str, Any]]:
+                   emit_progress: Callable[[float], None], *,
+                   youtube_dl_factory=None) -> list[dict[str, Any]]:
     """Download and process one request in its already-private current directory."""
     workspace = Path.cwd().resolve()
     socket_timeout = int(settings.socket_timeout_secs)
@@ -445,6 +448,8 @@ def download_media(request: dict[str, Any], settings: Any,
                 if status.get("status") == "downloading" and estimate:
                     emit_progress(min(70.0, downloaded * 70.0 / estimate))
             def match_filter(info, *, incomplete=False):
+                if not incomplete and options.get("_music_audio_bitrate") == 192 and "Music" not in (info.get("categories") or []):
+                    raise MediaFailure("unsupported_source")
                 if not incomplete:
                     metadata.add(info)
                 known_size = info.get("filesize") or info.get("filesize_approx")
@@ -480,7 +485,7 @@ def download_media(request: dict[str, Any], settings: Any,
             if mode == "formats":
                 return download_format_report(request, opts, workspace, max_bytes, max_total, max_items, emit_progress)
             # Constructor/context configuration is local setup, never a provider phase.
-            with yt_dlp.YoutubeDL(opts) as downloader:
+            with (youtube_dl_factory or yt_dlp.YoutubeDL)(opts) as downloader:
                 from network_guard import guard_failure_count
                 guard_baseline = guard_failure_count()
                 try:

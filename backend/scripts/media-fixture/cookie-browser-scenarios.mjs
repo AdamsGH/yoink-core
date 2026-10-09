@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { launchBrowser } from './browser-client.mjs';
+import { runCookieLifecycleScenarios } from './cookie-lifecycle-scenarios.mjs';
 
 const ACTOR = 1900000042;
 const FOREIGN = 1900000099;
@@ -304,11 +305,21 @@ export async function runCookieBrowserScenarios(context) {
       const links = reply.data.reply_markup?.inline_keyboard?.flat() ?? [];
       check(links.some(b => b.text === 'Manage cookies' && b.web_app?.url === new URL('/cookies', origin).href), 'Telegram cookie HTTPS WebApp deep link');
     }
+    stage = 'combined lifecycle';
+    const foreignInitData = signedInitData(telegramToken, FOREIGN);
+    registerCookieSyncToken(foreignInitData);
+    const foreignAuth = await browser.evaluate(`fetch('/api/v1/auth/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({init_data:${JSON.stringify(foreignInitData)}})}).then(async r=>({status:r.status,data:await r.json()}))`);
+    check(foreignAuth.status === 200 && typeof foreignAuth.data.access_token === 'string', 'foreign actor real auth exchange');
+    registerCookieSyncToken(foreignAuth.data.access_token);
+    // No React polling may race the HTTP lifecycle runner or process restart.
+    await browser.close();
+    browser = undefined;
+    const lifecycle = await runCookieLifecycleScenarios({ ...context, providers, actorId: ACTOR, foreignId: FOREIGN, jwt, foreignJwt: foreignAuth.data.access_token });
     check(await untouched() === baseline, 'nonfixture cookie rows unchanged');
     check(await otherSettings() === settingsBaseline, 'nonfixture settings unchanged');
-    return { browser: 'real React HTTPS SPA', auth: ['live Telegram exchange', 'cached reload', 'deep link'], uploads: ['file', 'paste', 'HttpOnly manual domain', 'unsuitable rejection', 'replace', 'delete'], validation: ['valid', 'invalid', 'error'], sync: ['secure clipboard', 'JWT-free submit', 'replay rejected'], authority: ['ordinary hidden', 'owner pool toggle', 'authorized inheritance', 'foreign denied', 'revoked denied'], tv: ['pending', 'cancel', 'ok', 'expired', 'error', 'start_error'] };
+    return { browser: 'real React HTTPS SPA', auth: ['live Telegram exchange', 'cached reload', 'deep link'], uploads: ['file', 'paste', 'HttpOnly manual domain', 'unsuitable rejection', 'replace', 'delete'], validation: ['valid', 'invalid', 'error'], sync: ['secure clipboard', 'JWT-free submit', 'replay rejected'], authority: ['ordinary hidden', 'owner pool toggle', 'authorized inheritance', 'foreign denied', 'revoked denied'], tv: ['pending', 'cancel', 'ok', 'expired', 'error', 'start_error'], lifecycle };
   } catch (error) {
-    if (error instanceof Error && (error.message.startsWith('Cookie browser assertion failed:') || error.message.startsWith('timeout waiting for cookie browser:'))) throw error;
+    if (error instanceof Error && (error.message.startsWith('Cookie browser assertion failed:') || error.message.startsWith('Cookie lifecycle assertion failed:') || error.message.startsWith('timeout waiting for cookie browser:'))) throw error;
     // SQL/provider/DOM errors may contain sensitive data; do not propagate causes.
     throw new Error('Cookie browser scenario execution failed');
   } finally {

@@ -56,10 +56,58 @@ impl TextDelivery {
         token: &str,
         identity: &TextIdentity,
     ) -> Result<TextOutcome, StoreError> {
+        reject_delivery_metadata(identity)?;
+        self.dispatch_entities(token, identity, None, false).await
+    }
+    /// Accept only the b/pre markup and named escapes emitted by native Stats.
+    /// Convert to Telegram entities so receipt echo is exact plain text, not markup.
+    pub async fn dispatch_html(
+        &self,
+        token: &str,
+        identity: &TextIdentity,
+    ) -> Result<TextOutcome, StoreError> {
+        let (identity, entities) = Self::html_identity(identity)?;
+        self.dispatch_entities(token, &identity, Some(entities), false)
+            .await
+    }
+    pub(crate) fn html_identity(
+        identity: &TextIdentity,
+    ) -> Result<(TextIdentity, serde_json::Value), StoreError> {
+        reject_delivery_metadata(identity)?;
+        if !identity.valid() {
+            return Err(StoreError::InvalidInput);
+        }
+        let (plain, entities) = stats_html(&identity.text)?;
+        let binding = serde_json::json!({"_yoink_text_delivery":{"format":"stats-html-v2","markup":identity.text,"plain":plain,"entities":entities},"application":identity.payload});
+        let mut identity = identity.clone();
+        identity.text = plain;
+        identity.payload = binding;
+        if !identity.valid() {
+            return Err(StoreError::InvalidInput);
+        }
+        Ok((identity, entities))
+    }
+    /// Stats has already atomically reauthorized and admitted the bound identity.
+    pub(crate) async fn send_admitted_html(
+        &self,
+        token: &str,
+        identity: &TextIdentity,
+    ) -> Result<TextOutcome, StoreError> {
+        let (identity, entities) = Self::html_identity(identity)?;
+        self.dispatch_entities(token, &identity, Some(entities), true)
+            .await
+    }
+    async fn dispatch_entities(
+        &self,
+        token: &str,
+        identity: &TextIdentity,
+        entities: Option<serde_json::Value>,
+        admitted: bool,
+    ) -> Result<TextOutcome, StoreError> {
         if identity.bot != self.bot_id {
             return Err(StoreError::Conflict);
         }
-        if !self.ledger.begin_text(token, identity).await? {
+        if !admitted && !self.ledger.begin_text(token, identity).await? {
             return Ok(self
                 .ledger
                 .text_effect(token)
@@ -78,6 +126,9 @@ impl TextDelivery {
             endpoint.set_query(None);
             endpoint.set_fragment(None);
             let mut payload = serde_json::json!({"chat_id":identity.chat,"text":identity.text,"link_preview_options":{"is_disabled":true}});
+            if let Some(entities) = entities {
+                payload["entities"] = entities;
+            }
             if identity.edit {
                 payload["message_id"] = identity.message.into();
             } else {
@@ -144,4 +195,74 @@ impl TextDelivery {
         self.ledger.confirm_text(token, message.id.0).await?;
         Ok(TextOutcome::Confirmed(message.id.0))
     }
+}
+
+fn reject_delivery_metadata(identity: &TextIdentity) -> Result<(), StoreError> {
+    // Plain prepared identities stay byte-for-byte compatible. Application
+    // payloads may not claim delivery-owned transport metadata in either mode.
+    if identity.payload.get("_yoink_text_delivery").is_some()
+        || identity.payload["format"] == "stats-html-v1"
+    {
+        return Err(StoreError::Conflict);
+    }
+    Ok(())
+}
+
+fn stats_html(markup: &str) -> Result<(String, serde_json::Value), StoreError> {
+    let mut rest = markup;
+    let mut plain = String::new();
+    let mut offset = 0;
+    let mut stack = Vec::new();
+    let mut entities = Vec::new();
+    while !rest.is_empty() {
+        if rest.starts_with('<') {
+            let end = rest.find('>').ok_or(StoreError::InvalidInput)?;
+            let tag = &rest[1..end];
+            match tag {
+                "b" | "pre" => {
+                    // Telegram pre entities cannot overlap any formatting. Native
+                    // Stats emits separate heading/body entities, never nesting.
+                    if !stack.is_empty() {
+                        return Err(StoreError::InvalidInput);
+                    }
+                    stack.push((tag, offset));
+                }
+                "/b" | "/pre" => {
+                    let (open, start) = stack.pop().ok_or(StoreError::InvalidInput)?;
+                    if open != &tag[1..] || offset == start {
+                        return Err(StoreError::InvalidInput);
+                    }
+                    entities.push(serde_json::json!({"type":if open == "b" {"bold"} else {"pre"},"offset":start,"length":offset-start}));
+                }
+                _ => return Err(StoreError::InvalidInput),
+            }
+            rest = &rest[end + 1..];
+        } else {
+            let c = if rest.starts_with('&') {
+                let end = rest.find(';').ok_or(StoreError::InvalidInput)?;
+                let c = match &rest[..=end] {
+                    "&amp;" => '&',
+                    "&lt;" => '<',
+                    "&gt;" => '>',
+                    "&quot;" => '"',
+                    _ => return Err(StoreError::InvalidInput),
+                };
+                rest = &rest[end + 1..];
+                c
+            } else {
+                let c = rest.chars().next().ok_or(StoreError::InvalidInput)?;
+                rest = &rest[c.len_utf8()..];
+                c
+            };
+            plain.push(c);
+            offset += c.len_utf16();
+            if offset > 4096 {
+                return Err(StoreError::InvalidInput);
+            }
+        }
+    }
+    if !stack.is_empty() || plain.is_empty() {
+        return Err(StoreError::InvalidInput);
+    }
+    Ok((plain, entities.into()))
 }

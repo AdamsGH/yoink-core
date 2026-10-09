@@ -13,7 +13,15 @@ mod insight;
 pub use inbox::InboxAuthorization;
 pub use insight::LateInsight;
 mod m2m;
+mod metrics;
+mod music;
+pub use music::router as music_router;
+mod music_stats;
+pub use music_stats::LateMusicStats;
 mod nsfw;
+mod stats;
+pub mod stats_import;
+pub use stats::{router as stats_router, router_with_imports as stats_router_with_imports};
 mod user_session;
 pub use auth::{AuthService, AuthState};
 pub use user_session::router as user_session_router;
@@ -31,7 +39,10 @@ struct HealthStatus {
 
 /// Build the diagnostics HTTP router.
 pub fn router(system: SystemService) -> Router {
-    diagnostics(system.clone()).merge(health::router(system, None))
+    metrics::instrument(
+        diagnostics(system.clone()).merge(health::router(system.clone(), None)),
+        system,
+    )
 }
 
 fn diagnostics(system: SystemService) -> Router {
@@ -45,12 +56,14 @@ fn diagnostics(system: SystemService) -> Router {
 pub fn router_with_auth(system: SystemService, auth: Option<AuthState>) -> Router {
     let diagnostics =
         diagnostics(system.clone()).merge(health::router(system.clone(), auth.clone()));
-    match auth {
+    let app = match auth {
         Some(state) => diagnostics
             .merge(cookie_web::public_router(state.clone(), system.clone()))
-            .merge(authenticated_routes(state, system, None)),
+            .merge(metrics::router(system.clone(), state.clone()))
+            .merge(authenticated_routes(state, system.clone(), None)),
         None => diagnostics,
-    }
+    };
+    metrics::instrument(app, system)
 }
 
 pub fn router_with_identity(
@@ -74,10 +87,12 @@ pub fn router_with_identity_and_user_session(
         system.clone(),
     ));
     let app = match auth {
-        Some(state) => diagnostics.merge(authenticated_routes(state, system.clone(), client)),
+        Some(state) => diagnostics
+            .merge(metrics::router(system.clone(), state.clone()))
+            .merge(authenticated_routes(state, system.clone(), client)),
         None => diagnostics,
     };
-    app.merge(m2m::router(identities, system))
+    metrics::instrument(app.merge(m2m::router(identities, system.clone())), system)
 }
 
 /// Compose native Inbox dependencies supplied by the application root.
@@ -94,10 +109,11 @@ pub fn router_with_identity_user_session_and_inbox(
 ) -> Router {
     let app =
         router_with_identity_and_user_session(system.clone(), auth.clone(), identities, client);
-    match auth {
-        Some(auth) => app.merge(inbox::router(system, auth, inbox)),
+    let app = match auth {
+        Some(auth) => app.merge(inbox::router(system.clone(), auth, inbox)),
         None => app,
-    }
+    };
+    metrics::instrument(app, system)
 }
 
 fn authenticated_routes(
@@ -402,19 +418,68 @@ pub fn router_with_late_products(
     inbox: LateInbox,
     insight: LateInsight,
 ) -> Router {
+    router_with_late_music_stats(
+        system,
+        auth,
+        identities,
+        client,
+        inbox,
+        insight,
+        LateMusicStats::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_with_late_music_stats(
+    listener: TcpListener,
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    inbox: LateInbox,
+    insight: LateInsight,
+    music_stats: LateMusicStats,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    let app = router_with_late_music_stats(
+        system,
+        auth,
+        identities,
+        client,
+        inbox,
+        insight,
+        music_stats,
+    );
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
+}
+
+pub fn router_with_late_music_stats(
+    system: SystemService,
+    auth: Option<AuthState>,
+    identities: AuthState,
+    client: Option<std::sync::Arc<yoink_user_session::Client>>,
+    inbox: LateInbox,
+    insight: LateInsight,
+    music_stats: LateMusicStats,
+) -> Router {
     use tower::ServiceExt;
-    router_with_identity_and_user_session(system, auth, identities, client).fallback(
-        move |request: axum::extract::Request| {
+    let app = router_with_identity_and_user_session(system.clone(), auth, identities, client)
+        .fallback(move |request: axum::extract::Request| {
             let inbox = inbox.clone();
             let insight = insight.clone();
+            let music_stats = music_stats.clone();
             async move {
                 let path = request.uri().path();
-                let selected =
-                    if path.starts_with("/api/v1/insight/") || path.starts_with("/api/v1/users/") {
-                        insight.get()
-                    } else {
-                        inbox.0.get()
-                    };
+                let selected = if let Some(router) = music_stats.routes_for(path) {
+                    Some(router)
+                } else if path.starts_with("/api/v1/insight/") || path.starts_with("/api/v1/users/")
+                {
+                    insight.get()
+                } else {
+                    inbox.0.get()
+                };
                 match selected {
                     Some(router) => router.clone().oneshot(request).await.unwrap(),
                     None => axum::response::IntoResponse::into_response(
@@ -422,6 +487,6 @@ pub fn router_with_late_products(
                     ),
                 }
             }
-        },
-    )
+        });
+    metrics::instrument(app, system)
 }

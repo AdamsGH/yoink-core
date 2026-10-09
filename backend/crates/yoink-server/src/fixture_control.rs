@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use crate::fixture_refresh_gate::RefreshGate;
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -156,17 +157,44 @@ async fn execute(
     expected_token: &str,
     request: Request,
 ) -> Result<Value, FixtureError> {
-    execute_with_confirmation(store, expected_token, request, &Arc::new(Mutex::new(None))).await
+    execute_with_controls(
+        store,
+        expected_token,
+        request,
+        &Arc::new(Mutex::new(None)),
+        None,
+    )
+    .await
 }
 
+#[cfg(test)]
 async fn execute_with_confirmation(
     store: &Store,
     expected_token: &str,
     request: Request,
     confirmation: &ConfirmationState,
 ) -> Result<Value, FixtureError> {
+    execute_with_controls(store, expected_token, request, confirmation, None).await
+}
+
+async fn execute_with_controls(
+    store: &Store,
+    expected_token: &str,
+    request: Request,
+    confirmation: &ConfirmationState,
+    refresh: Option<&RefreshGate>,
+) -> Result<Value, FixtureError> {
     if !authenticated(&request.token, expected_token) {
         return Err(FixtureError("unauthorized"));
+    }
+    if request.mode.starts_with("oauth_refresh_") {
+        if !request.sql.is_empty() {
+            return Err(FixtureError("invalid_request"));
+        }
+        return refresh
+            .ok_or(FixtureError("refresh_gate_unavailable"))?
+            .command(&request.mode)
+            .map_err(FixtureError);
     }
     if matches!(
         request.mode.as_str(),
@@ -260,11 +288,12 @@ async fn handle_connection(
     store: Arc<Store>,
     token: Arc<String>,
     confirmation: ConfirmationState,
+    refresh: Option<Arc<RefreshGate>>,
 ) {
     let response = match timeout(REQUEST_TIMEOUT, async {
         let bytes = read_request(&mut stream).await?;
         let request = parse_request(&bytes)?;
-        execute_with_confirmation(&store, &token, request, &confirmation).await
+        execute_with_controls(&store, &token, request, &confirmation, refresh.as_deref()).await
     })
     .await
     {
@@ -301,12 +330,24 @@ pub fn token_from_env() -> Result<String, &'static str> {
 
 /// Fixture-only control with a handle that may be installed after serving starts.
 /// Hold commands are synchronous and never acquire a database connection.
+#[cfg(test)]
 pub async fn serve_with_confirmation(
     listener: TcpListener,
     store: Arc<Store>,
     token: String,
     shutdown: CancellationToken,
     confirmation: Arc<Mutex<Option<ConfirmationHold>>>,
+) -> io::Result<()> {
+    serve_with_controls(listener, store, token, shutdown, confirmation, None).await
+}
+
+pub async fn serve_with_controls(
+    listener: TcpListener,
+    store: Arc<Store>,
+    token: String,
+    shutdown: CancellationToken,
+    confirmation: Arc<Mutex<Option<ConfirmationHold>>>,
+    refresh: Option<Arc<RefreshGate>>,
 ) -> io::Result<()> {
     let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let mut tasks = JoinSet::new();
@@ -333,9 +374,10 @@ pub async fn serve_with_confirmation(
                 let store = store.clone();
                 let token = Arc::new(token.clone());
                 let confirmation = confirmation.clone();
+                let refresh = refresh.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
-                    handle_connection(stream, store, token, confirmation).await;
+                    handle_connection(stream, store, token, confirmation, refresh).await;
                 });
             }
         }

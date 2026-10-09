@@ -46,6 +46,14 @@ pub enum ServerError {
     InboxStartup,
     #[error("Inbox owned runtime failed")]
     Inbox,
+    #[error("Music initialization failed")]
+    MusicStartup,
+    #[error("Music owned runtime failed")]
+    Music,
+    #[error("Stats initialization failed")]
+    StatsStartup,
+    #[error("Stats owned runtime failed")]
+    Stats,
 }
 
 pub struct CookieProviderOverrides {
@@ -159,8 +167,13 @@ async fn run_impl(
     let mut insight_runtime: Option<crate::insight_runtime::InsightRuntime> = None;
     let mut insight_preflight: Option<tokio::process::Child> = None;
     let mut insight_handlers: Option<yoink_telegram::InsightRuntime> = None;
+    let mut telegram_handlers: Option<yoink_telegram::TelegramHandlerLifecycle> = None;
     let late_inbox = yoink_http::LateInbox::default();
     let http_inbox = late_inbox.clone();
+    let late_music_stats = yoink_http::LateMusicStats::default();
+    let http_music_stats = late_music_stats.clone();
+    let activity = yoink_http::activity::Activity::default();
+    let mut products = crate::product_runtime::Products::default();
     let mut inbox_runtime = None;
     let mut inbox_telegram = None;
     let auth_state =
@@ -176,8 +189,9 @@ async fn run_impl(
         .transpose()
         .map_err(|_| ServerError::Http)?
         .map(Arc::new);
+    let stats_session = user_session.clone();
     tasks.spawn(async move {
-        yoink_http::serve_with_late_products(
+        yoink_http::serve_with_late_music_stats(
             listener,
             http_system,
             http_auth,
@@ -185,6 +199,7 @@ async fn run_impl(
             user_session,
             http_inbox,
             http_insight,
+            http_music_stats,
             http_cancel,
         )
         .await
@@ -251,8 +266,8 @@ async fn run_impl(
                 .map_err(|_| ServerError::DatabaseStartup)?;
         }
         let mut telegram = match config.telegram {
-            Some(telegram) => Some(
-                TelegramAdapter::prepare(
+            Some(telegram) => {
+                let adapter = TelegramAdapter::prepare(
                     telegram.token.into_inner(),
                     telegram.api_url,
                     telegram.owner_id,
@@ -264,14 +279,18 @@ async fn run_impl(
                 .map_err(|error| {
                     tracing::error!(?error, "Telegram preparation failed");
                     ServerError::TelegramStartup
-                })?
-                .with_inline_search(telegram.inline_search)
-                .map_err(|_| ServerError::TelegramStartup)?
-                .with_progress(telegram.progress)
-                .with_cookie_upload(telegram.cookie_upload)
-                .with_cookie_url(telegram.cookie_url)
-                .with_group_access(telegram.groups_enabled),
-            ),
+                })?;
+                telegram_handlers = Some(adapter.handler_lifecycle());
+                Some(
+                    adapter
+                        .with_inline_search(telegram.inline_search)
+                        .map_err(|_| ServerError::TelegramStartup)?
+                        .with_progress(telegram.progress)
+                        .with_cookie_upload(telegram.cookie_upload)
+                        .with_cookie_url(telegram.cookie_url)
+                        .with_group_access(telegram.groups_enabled),
+                )
+            }
             None => None,
         };
         if let Some(identities) = identities.clone() {
@@ -313,6 +332,7 @@ async fn run_impl(
                 media.downloads,
             )
             .map_err(|_| ServerError::MediaStartup)?
+            .with_metrics(system.metrics())
             .with_network_config(media.network)
             .with_group_access(groups_enabled);
             service
@@ -451,14 +471,24 @@ async fn run_impl(
                 telegram = Some(adapter.with_insight(handler));
             }
             if auth_enabled {
+                activity
+                    .install_insight(
+                        insight_runtime
+                            .as_ref()
+                            .expect("installed runtime")
+                            .service
+                            .clone(),
+                    )
+                    .map_err(|_| ServerError::InsightStartup)?;
                 late_insight
-                    .install(
+                    .install_with_activity(
                         system.clone(),
                         auth_state.clone(),
                         insight_runtime
                             .as_ref()
                             .expect("installed runtime")
                             .http(cancel.child_token()),
+                        activity.clone(),
                     )
                     .map_err(|_| ServerError::InsightStartup)?;
             }
@@ -513,8 +543,55 @@ async fn run_impl(
             }
             inbox_runtime = Some(runtime);
         }
+        if let Some(music) = config.music {
+            let adapter = telegram.take().ok_or(ServerError::MusicStartup)?;
+            telegram = Some(
+                products
+                    .music(
+                        music,
+                        database.clone().ok_or(ServerError::MusicStartup)?,
+                        identities.clone().ok_or(ServerError::MusicStartup)?,
+                        adapter,
+                        groups_enabled,
+                    )
+                    .await?,
+            );
+            if let Some(persistence) = &products.persistence {
+                activity
+                    .install("music", persistence.clone())
+                    .map_err(|_| ServerError::MusicStartup)?;
+            }
+        }
+        if let Some(stats) = config.stats {
+            let adapter = telegram.take().ok_or(ServerError::StatsStartup)?;
+            telegram = Some(
+                products
+                    .stats(
+                        stats,
+                        database.clone().ok_or(ServerError::StatsStartup)?,
+                        identities.clone().ok_or(ServerError::StatsStartup)?,
+                        stats_session,
+                        adapter,
+                    )
+                    .await?,
+            );
+        }
         if let Some(adapter) = &mut telegram {
             adapter.initialize_menus().await;
+        }
+        if auth_enabled
+            && (insight_runtime.is_some() || products.music.is_some() || products.stats.is_some())
+        {
+            late_music_stats
+                .install_with_stats_imports(
+                    system.clone(),
+                    auth_state.clone(),
+                    products.persistence.clone(),
+                    products.stats.clone(),
+                    activity.clone(),
+                    products.imports.clone(),
+                )
+                .map_err(|_| ServerError::Http)?;
         }
         Ok(telegram)
     };
@@ -560,8 +637,16 @@ async fn run_impl(
     let telegram = match startup {
         Startup::Prepared(Ok(telegram)) => telegram,
         Startup::Prepared(Err(error)) => {
-            let result =
-                stop_and_drain(tasks, system, cancel, config.shutdown_timeout, Err(error)).await;
+            let result = stop_and_drain(
+                tasks,
+                system,
+                cancel,
+                config.shutdown_timeout,
+                Err(error),
+                &late_music_stats,
+                telegram_handlers.as_ref(),
+            )
+            .await;
             drain_insight_preflight(&mut insight_preflight).await;
             if let Some(handlers) = &insight_handlers {
                 handlers.drain_handlers().await;
@@ -569,11 +654,20 @@ async fn run_impl(
             if let Some(runtime) = &insight_runtime {
                 runtime.shutdown().await;
             }
+            let result = result.and(products.shutdown().await);
             return finish_database(result, database, config.shutdown_timeout).await;
         }
         Startup::Stopped(result) => {
-            let result =
-                stop_and_drain(tasks, system, cancel, config.shutdown_timeout, result).await;
+            let result = stop_and_drain(
+                tasks,
+                system,
+                cancel,
+                config.shutdown_timeout,
+                result,
+                &late_music_stats,
+                telegram_handlers.as_ref(),
+            )
+            .await;
             drain_insight_preflight(&mut insight_preflight).await;
             if let Some(handlers) = &insight_handlers {
                 handlers.drain_handlers().await;
@@ -581,11 +675,22 @@ async fn run_impl(
             if let Some(runtime) = &insight_runtime {
                 runtime.shutdown().await;
             }
+            let result = result.and(products.shutdown().await);
             return finish_database(result, database, config.shutdown_timeout).await;
         }
     };
+    system.set_inbox_enabled(inbox_runtime.is_some());
     if let Some(runtime) = inbox_runtime {
         tasks.spawn(runtime.run(cancel.child_token()));
+    }
+    if let (Some(runtime), Some(settings)) =
+        (&products.stats_handlers, products.stats_config.take())
+    {
+        tasks.spawn(crate::product_runtime::run_stats_jobs(
+            runtime.clone(),
+            settings,
+            cancel.child_token(),
+        ));
     }
     if let Some((runtime, interval)) = inbox_telegram {
         let token = cancel.child_token();
@@ -612,6 +717,8 @@ async fn run_impl(
         system.set_downloads_enabled(true);
     }
     system.set_insight_enabled(insight_runtime.is_some());
+    system.set_music_enabled(products.music.is_some());
+    system.set_stats_enabled(products.stats.is_some());
     if let Some(telegram) = telegram {
         let telegram_cancel = cancel.clone();
         let _telegram_task = tasks.spawn(async move {
@@ -635,6 +742,8 @@ async fn run_impl(
         cancel,
         config.shutdown_timeout,
         shutdown_signal,
+        &late_music_stats,
+        telegram_handlers.as_ref(),
     )
     .await;
     drain_insight_preflight(&mut insight_preflight).await;
@@ -650,6 +759,7 @@ async fn run_impl(
     if insight_runtime.is_some() {
         eprintln!("fixture concrete Insight shutdown completed");
     }
+    let result = result.and(products.shutdown().await);
     let result = finish_database(result, database, config.shutdown_timeout).await;
     #[cfg(feature = "test-fixtures")]
     eprintln!("fixture database shutdown completed: result={result:?}");
@@ -694,12 +804,23 @@ async fn supervise(
     cancel: CancellationToken,
     shutdown_timeout: Duration,
     shutdown_signal: impl Future<Output = io::Result<()>>,
+    http_products: &yoink_http::LateMusicStats,
+    telegram_handlers: Option<&yoink_telegram::TelegramHandlerLifecycle>,
 ) -> Result<(), ServerError> {
     let initial = tokio::select! {
         signal = shutdown_signal => signal.map_err(|_| ServerError::Signal),
         completed = tasks.join_next() => Err(adapter_exit(completed)),
     };
-    stop_and_drain(tasks, system, cancel, shutdown_timeout, initial).await
+    stop_and_drain(
+        tasks,
+        system,
+        cancel,
+        shutdown_timeout,
+        initial,
+        http_products,
+        telegram_handlers,
+    )
+    .await
 }
 
 fn adapter_exit(
@@ -718,9 +839,15 @@ async fn stop_and_drain(
     cancel: CancellationToken,
     shutdown_timeout: Duration,
     initial: Result<(), ServerError>,
+    http_products: &yoink_http::LateMusicStats,
+    telegram_handlers: Option<&yoink_telegram::TelegramHandlerLifecycle>,
 ) -> Result<(), ServerError> {
     system.set_ready(false);
     system.set_bot_status(false, None);
+    http_products.cancel_all();
+    if let Some(handlers) = telegram_handlers {
+        handlers.stop_admission();
+    }
     cancel.cancel();
     let drain = timeout(shutdown_timeout, async {
         let mut error = None;
@@ -735,12 +862,21 @@ async fn stop_and_drain(
                 }
             }
         }
+        if let Some(handlers) = telegram_handlers {
+            handlers.cancel_all();
+            handlers.drain_handlers().await;
+        }
+        http_products.drain().await;
         error.map_or(Ok(()), Err)
     })
     .await;
     let drained = match drain {
         Ok(result) => result,
         Err(_) => {
+            http_products.cancel_all();
+            if let Some(handlers) = telegram_handlers {
+                handlers.cancel_all();
+            }
             tasks.abort_all();
             while let Some(completed) = tasks.join_next_with_id().await {
                 #[cfg(feature = "test-fixtures")]
@@ -752,6 +888,10 @@ async fn stop_and_drain(
                 #[cfg(not(feature = "test-fixtures"))]
                 let _ = completed;
             }
+            if let Some(handlers) = telegram_handlers {
+                handlers.drain_handlers().await;
+            }
+            http_products.drain().await;
             Err(ServerError::ShutdownTimeout)
         }
     };
@@ -802,7 +942,9 @@ mod tests {
                 system.clone(),
                 cancel.clone(),
                 Duration::from_secs(1),
-                async { Ok(()) }
+                async { Ok(()) },
+                &yoink_http::LateMusicStats::default(),
+                None,
             )
             .await,
             Ok(())
@@ -829,7 +971,9 @@ mod tests {
                 system.clone(),
                 cancel.clone(),
                 Duration::from_secs(1),
-                std::future::pending()
+                std::future::pending(),
+                &yoink_http::LateMusicStats::default(),
+                None,
             )
             .await,
             Err(ServerError::UnexpectedExit)
@@ -848,7 +992,9 @@ mod tests {
                 SystemService::new("test"),
                 CancellationToken::new(),
                 Duration::from_millis(10),
-                async { Ok(()) }
+                async { Ok(()) },
+                &yoink_http::LateMusicStats::default(),
+                None,
             )
             .await,
             Err(ServerError::ShutdownTimeout)
@@ -865,7 +1011,9 @@ mod tests {
                 SystemService::new("test"),
                 CancellationToken::new(),
                 Duration::from_secs(1),
-                std::future::pending()
+                std::future::pending(),
+                &yoink_http::LateMusicStats::default(),
+                None,
             )
             .await,
             Err(ServerError::Http)
@@ -876,6 +1024,10 @@ mod tests {
 #[cfg(test)]
 #[path = "runtime_cookie_tests.rs"]
 mod cookie_oauth_tests;
+
+#[cfg(test)]
+#[path = "runtime_http_tests.rs"]
+mod http_lifecycle_tests;
 
 #[cfg(test)]
 mod insight_preflight_tests {

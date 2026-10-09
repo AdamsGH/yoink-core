@@ -2,16 +2,17 @@ import assert from 'node:assert/strict';
 import { writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { commandHarness } from './command-harness.mjs';
+import { assertCurrentImageHooks, runYoutubeAuthCurrentImage } from './youtube-auth-current-image.mjs';
 
 const literal = value => value === null ? 'NULL' : typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
 const access = 'synthetic-access';
 const refresh = 'synthetic-refresh';
 const observed = 'synthetic-refresh-observed';
-const content = token => '__oauth2__' + JSON.stringify({ access_token: token, refresh_token: refresh, expires_at: '2099-01-01T00:00:00Z' });
+const content = (token, expiry = '2099-01-01T00:00:00Z') => '__oauth2__' + JSON.stringify({ access_token: token, refresh_token: refresh, expires_at: expiry });
 
 export function assertYoutubeAuthEvidence(value) {
   const evidence = typeof value === 'string' ? value : JSON.stringify(value);
-  for (const secret of [access, refresh, observed, 'synthetic-native-access', 'synthetic-native-refresh', '__oauth2__']) {
+  for (const secret of [access, refresh, observed, 'synthetic-native-access', 'synthetic-native-refresh', 'yoink-fixture-synthetic-access-not-a-real-token', 'yoink-fixture-synthetic-refresh-not-a-real-token', '__oauth2__']) {
     assert(!evidence.includes(secret), 'synthetic OAuth credential exposed in persisted/reply evidence');
   }
 }
@@ -52,6 +53,7 @@ export function assertYoutubeAuthDelivery(call, receipt, sends) {
 }
 
 export async function runYoutubeAuthScenarios(context) {
+  if (context.currentImageAcceptance) assertCurrentImageHooks(context);
   const { botApi, fixtureSql, waitFor, queryJob, helperContainer, image, fixtureDir, restartApp, assertWorkspaceClean } = context;
   const h = commandHarness(context, 3_100_000);
   const fields = ['youtube_auth_mode', 'proxy_enabled', 'proxy_url', 'use_pool_cookies', 'quality', 'codec', 'container', 'audio_codec', 'send_as_file', 'updated_at'];
@@ -114,6 +116,12 @@ export async function runYoutubeAuthScenarios(context) {
     assertYoutubeAuthEvidence(botApi.calls.slice(sent.callStart));
     assert(!botApi.error, 'BotApi fixture reported an error');
     await assertWorkspaceClean();
+    if (context.currentImageAcceptance) {
+      const combined = await runYoutubeAuthCurrentImage(context, {
+        cookieId, credential: expiry => content(access, expiry), assertEvidence: assertYoutubeAuthEvidence, assertRequest: assertYoutubeAuthRequest,
+      });
+      return `synthetic canonical OAuth multipart receipt/replay/rotation rejection; ${combined} (not live-provider or real PoToken issuance)`;
+    }
     return 'deterministic synthetic native YouTube OAuth multipart delivery, frozen reference, receipt/journal, restart replay and observed-refresh rejection (not real-provider or refresh-admission acceptance)';
   } finally {
     botApi.setExpectedUpload(null);

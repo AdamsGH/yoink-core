@@ -57,50 +57,77 @@ services:
         condition: service_healthy
 
   yoink:
-    image: yoink/yoink:latest
     container_name: yoink
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
     restart: unless-stopped
     env_file: .env
+    extra_hosts: [host.docker.internal:host-gateway]
+    networks: [yoink]
+    ports: ["8003:8000"]
+    logging:
+      driver: local
+      options: {max-size: "500M", max-file: "3"}
+    image: "${yoink_rust_image:-yoink/rust-backend:latest}"
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 165s
+    tmpfs:
+      - /tmp/yoink-work:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+      - /tmp/yoink-downloads:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+      - /tmp/yoink-music:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+      - /tmp/yoink-insight:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
+      - /tmp/yoink-inbox:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
     environment:
-      BOT_API_URL: "http://tg-bot-api:8082"
-      MUSIC_PROXY_URL: "${proxy_url:-}"
+      YOINK_RUST_SHUTDOWN_TIMEOUT_SECS: "150"
+      YOINK_RUST_HTTP_BIND: "0.0.0.0:8000"
+      YOINK_RUST_DATABASE_PATH: /state/native.db
+      YOINK_RUST_TELEGRAM_ENABLED: "true"
+      YOINK_RUST_TELEGRAM_TOKEN: "${bot_token}"
+      YOINK_RUST_OWNER_ID: "${owner_id}"
+      YOINK_RUST_BOT_API_FILE_ROOT: /var/lib/telegram-bot-api
+      YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT: /telegram-files
+      YOINK_RUST_BOT_API_URL: "http://tg-bot-api:8082"
+      YOINK_RUST_TELEGRAM_GROUPS_ENABLED: "true"
+      YOINK_RUST_AUTH_ENABLED: "true"
+      YOINK_RUST_API_SECRET_KEY: "${api_secret_key}"
+      YOINK_RUST_DOWNLOADS_ENABLED: "true"
+      YOINK_RUST_MUSIC_ENABLED: "true"
+      YOINK_RUST_STATS_ENABLED: "true"
+      YOINK_RUST_INSIGHT_ENABLED: "true"
+      YOINK_RUST_INBOX_ENABLED: "true"
+      YOINK_RUST_YOUTUBE_AUTH_ADAPTER_ENABLED: "true"
+      YOINK_RUST_COOKIE_WEB_ORIGIN: "https://${yoink_domain}/"
+      YOINK_RUST_DOWNLOAD_WORKSPACE: /tmp/yoink-downloads
+      YOINK_RUST_MUSIC_WORKSPACE: /tmp/yoink-music
+      YOINK_RUST_INSIGHT_WORKSPACE: /tmp/yoink-insight
+      YOINK_RUST_INBOX_WORKSPACE: /tmp/yoink-inbox
+      YOINK_RUST_STATS_INDEX_DIR: /state/stats-search
+      YOINK_RUST_STATS_IMPORT_ROOT: /state/stats-import
+      TMPDIR: /tmp/yoink-work
+      TURSO_TMPDIR: /tmp/yoink-work
+    volumes: !override
+      - ./data/native:/state
+      - ./data/tg-bot-api:/telegram-files:ro
+      - native-youtube-auth:/run/yoink-youtube-auth:ro
     depends_on:
-      yoink-postgres:
-        condition: service_healthy
-      yoink-redis:
-        condition: service_healthy
-      tg-bot-api:
-        condition: service_healthy
-      bgutil:
-        condition: service_healthy
-      yoink-proxy:
+      tg-bot-api: {condition: service_healthy}
+      yoink-proxy: {condition: service_started}
+      native-youtube-auth-gateway:
         condition: service_started
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ./data/cookies:/app/data/cookies
-      - ./data/kasm/profile/chromium:/app/data/browser-profile:ro
-      - ./data/tg-bot-api:/app/data/tg-bot-api:ro
-    networks:
-      - yoink
-    ports:
-      - "8003:8000"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
-    logging:
-      driver: local
-      options:
-        max-size: "500M"
-        max-file: "3"
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
 
   yoink-arq-worker:
+    profiles: [legacy]
     image: yoink/yoink:latest
     container_name: yoink-arq-worker
     build:
@@ -344,6 +371,47 @@ services:
         max-size: "50M"
         max-file: "3"
 
+  native-youtube-auth-init:
+    image: yoink/youtube-auth-gateway:native
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.youtube-auth-gateway
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 16
+    command: [sh, -ec, 'chown 10001:10001 /socket; chmod 0700 /socket']
+    volumes: [native-youtube-auth:/socket]
+  native-youtube-auth-gateway:
+    image: yoink/youtube-auth-gateway:native
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.youtube-auth-gateway
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 165s
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 32
+    environment:
+      YOINK_YOUTUBE_AUTH_SOCKET: /run/yoink-youtube-auth/adapter.sock
+      YOINK_TRUSTED_YOUTUBEI_URL: http://yoink-youtubei:9173
+      YOINK_TRUSTED_BGUTIL_URL: http://bgutil:4416
+    depends_on:
+      yoink-youtubei: {condition: service_healthy}
+      bgutil: {condition: service_healthy}
+      native-youtube-auth-init:
+        condition: service_completed_successfully
+    volumes: [native-youtube-auth:/run/yoink-youtube-auth]
+    networks: [yoink]
 networks:
   yoink:
     name: yoink
@@ -355,3 +423,4 @@ networks:
 volumes:
   postgres-data:
   redis-data:
+  native-youtube-auth:

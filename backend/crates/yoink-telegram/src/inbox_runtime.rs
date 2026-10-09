@@ -3,8 +3,10 @@ use crate::{text::TextDelivery, translate};
 use std::{sync::Arc, time::Duration};
 use teloxide::types::Message;
 use tokio_util::sync::CancellationToken;
+use turso::transaction::TransactionBehavior;
 use yoink_access::{AccessPolicy, AccessScope, Role};
-use yoink_db::{Executor, query};
+use yoink_db::Transaction;
+use yoink_db::query;
 use yoink_i18n::{Key, Language};
 use yoink_identity::IdentityStore;
 use yoink_inbox::{
@@ -136,29 +138,33 @@ impl InboxRuntime {
         if let Some(barrier) = &self.hooks.before_preparation {
             barrier.wait().await;
         }
-        let c = self.store.db.connection().await?;
-        c.batch("BEGIN IMMEDIATE").await?;
+        let mut c = self.store.db.connection().await?;
+        let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
+            .await
+            .map_err(yoink_db::Error::from)?;
         let result=async {
-            if let Some(effect)=yoink_storage::Store::text_effect_on(&*c,token).await.map_err(external)? {
+            if let Some(effect)=yoink_storage::Store::text_effect_on(&*tx,token).await.map_err(external)? {
                 let old=effect.identity.ok_or(Error::External)?;
                 if !same_command(&old,&i) { return Err(Error::External); }
                 return Ok(old);
             }
-            let saved=Store::ingest_on(&*c,i.actor,url,"bot",self.now()).await?;
+            let saved=Store::ingest_on(&*tx,i.actor,url,"bot",self.now()).await?;
             i.item=Some(saved.item_id);
             i.payload["bind_item"]=saved.created.into();
             i.payload["save_result"]=serde_json::json!({"item_id":saved.item_id,"normalized_url":saved.normalized_url,"created":saved.created});
             i.text=translate(language,if saved.created {Key::InboxSaved} else {Key::InboxDuplicate},&[]);
-            yoink_storage::Store::prepare_text_on(&*c,token,&i).await.map_err(external)?;
+            yoink_storage::Store::prepare_text_on(&*tx,token,&i).await.map_err(external)?;
+            #[cfg(test)]
+            pause(&self.hooks.after_save_write).await;
             Ok(i)
         }.await;
         match result {
             Ok(i) => {
-                c.batch("COMMIT").await?;
+                tx.commit().await.map_err(yoink_db::Error::from)?;
                 Ok(i)
             }
             Err(e) => {
-                let _ = c.batch("ROLLBACK").await;
+                let _ = tx.rollback().await;
                 Err(e)
             }
         }
@@ -235,22 +241,26 @@ impl InboxRuntime {
             let (Some(item), TextOutcome::Confirmed(receipt)) = (i.item, e.outcome) else {
                 continue;
             };
-            let c = self.store.db.connection().await?;
-            c.batch("BEGIN IMMEDIATE").await?;
+            let mut c = self.store.db.connection().await?;
+            let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
+                .await
+                .map_err(yoink_db::Error::from)?;
             let result = async {
                 let changed = query("UPDATE inbox_items SET tg_chat_id=?,tg_reply_message_id=? WHERE id=? AND user_id=? AND source='bot' AND ((tg_chat_id IS NULL AND tg_reply_message_id IS NULL) OR (tg_chat_id=? AND tg_reply_message_id=?))")
-                    .bind(i.chat).bind(receipt).bind(item).bind(i.actor).bind(i.chat).bind(receipt).execute(&*c).await?.rows_affected();
+                    .bind(i.chat).bind(receipt).bind(item).bind(i.actor).bind(i.chat).bind(receipt).execute(&*tx).await?.rows_affected();
                 if changed == 1 {
-                    query("UPDATE inbox_notifications SET chat_id=?,message_id=?,state='ready' WHERE item_id=? AND user_id=? AND state='waiting'").bind(i.chat).bind(receipt).bind(item).bind(i.actor).execute(&*c).await?;
+                    query("UPDATE inbox_notifications SET chat_id=?,message_id=?,state='ready' WHERE item_id=? AND user_id=? AND state='waiting'").bind(i.chat).bind(receipt).bind(item).bind(i.actor).execute(&*tx).await?;
                 }
                 // First binding wins. Conflicting receipts are never retargeted.
-                query("UPDATE runtime_text_effects SET bound=1 WHERE token=? AND state='confirmed'").bind(&e.token).execute(&*c).await?;
+                query("UPDATE runtime_text_effects SET bound=1 WHERE token=? AND state='confirmed'").bind(&e.token).execute(&*tx).await?;
+                #[cfg(test)]
+                pause(&self.hooks.after_reconcile_write).await;
                 Ok::<_,Error>(())
             }.await;
             match result {
-                Ok(()) => c.batch("COMMIT").await?,
+                Ok(()) => tx.commit().await.map_err(yoink_db::Error::from)?,
                 Err(e) => {
-                    let _ = c.batch("ROLLBACK").await;
+                    let _ = tx.rollback().await;
                     return Err(e);
                 }
             }
@@ -681,6 +691,8 @@ type Pause = tokio::sync::Mutex<
 #[cfg(test)]
 #[derive(Default)]
 struct TestHooks {
+    after_save_write: Pause,
+    after_reconcile_write: Pause,
     after_admission: Pause,
     after_preparation: Pause,
     before_preparation: Option<Arc<tokio::sync::Barrier>>,

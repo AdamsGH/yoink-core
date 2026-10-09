@@ -3,6 +3,8 @@
 import { createApp } from '../index.js';
 import { config, job } from '../lifecycle.mjs';
 import { mkdir, readFile } from 'node:fs/promises';
+import http from 'node:http';
+import { createYoutubeAuthGate } from './youtube-auth-gate.mjs';
 const settings = config();
 const dir = '/tmp/synthetic'; await mkdir(dir, { recursive: true });
 const ctx = job({ ...settings, deadlineMs: 10000 });
@@ -11,7 +13,15 @@ try {
   await ctx.ffmpeg(['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:a', 'aac', dir + '/audio.m4a'], dir + '/audio.m4a');
 } finally { ctx.dispose(); }
 const video = await readFile(dir + '/video.mp4'), audio = await readFile(dir + '/audio.m4a');
-createApp({ settings, session: async (tokens, update) => {
+const app = createApp({ settings, session: async (tokens, update) => {
   if (tokens.access_token === 'synthetic-refresh-observed') update(tokens);
   return { getBasicInfo: async () => ({ basic_info: { title: 'Synthetic topology', duration: 1, author: 'Fixture' }, download: async options => new ReadableStream({ start(c) { c.enqueue(options.type === 'audio' ? audio : video); c.close(); } }) }) };
-} }).listen(settings.port);
+} });
+const gate = createYoutubeAuthGate();
+const server = http.createServer((req, res) => {
+  gate.handle(req, res, () => app(req, res)).catch(() => {
+    if (!res.headersSent) res.writeHead(500).end(); else res.destroy();
+  });
+});
+server.once('close', () => gate.close());
+server.listen(settings.port);

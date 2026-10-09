@@ -10,7 +10,37 @@ use axum::{
 use yoink_downloads::{DownloadError, UserSettingsPatch};
 
 pub(crate) fn router() -> Router<AuthState> {
-    Router::new().route("/api/v1/dl/settings", get(read).patch(patch))
+    Router::new()
+        .route("/api/v1/dl/settings", get(read).patch(patch))
+        .route(
+            "/api/v1/dl/admin/settings",
+            get(admin_read).patch(admin_patch),
+        )
+}
+async fn admin_read(
+    State(s): State<AuthState>,
+    h: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = s.service()?;
+    let actor = authenticated_id(service, &h)?;
+    Ok(no_store(
+        service.identities.downloader_admin_settings(actor).await?,
+    ))
+}
+async fn admin_patch(
+    State(s): State<AuthState>,
+    h: HeaderMap,
+    body: Result<Json<yoink_domain::downloader_settings::DownloaderSettingsPatch>, JsonRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let service = s.service()?;
+    let actor = authenticated_id(service, &h)?;
+    let Json(body) = body.map_err(|_| invalid())?;
+    Ok(no_store(
+        service
+            .identities
+            .patch_downloader_admin_settings(actor, &body)
+            .await?,
+    ))
 }
 fn invalid() -> ApiError {
     ApiError(

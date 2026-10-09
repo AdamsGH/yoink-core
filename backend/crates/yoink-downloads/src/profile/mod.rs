@@ -2,12 +2,13 @@
 pub mod oauth;
 pub mod oauth_refresh;
 use std::fmt;
+use yoink_db::Transaction;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use url::Url;
 use yoink_access::{FeatureSpec, Role, effective_grant};
 use yoink_db::{Database, query};

@@ -3,6 +3,7 @@
 //! Modes/counters survive restart; scenarios reset them through fixtureSql.
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 
+use crate::fixture_refresh_gate::RefreshGate;
 use yoink_downloads::{
     DownloadError,
     cookie_oauth::{OAuthCredential, OAuthProvider, ProviderDevice, ProviderFuture, ProviderPoll},
@@ -20,8 +21,23 @@ VALUES ('fixture_cookie_provider_control',
 
 /// Called only after fixture_main sees the exact explicit opt-in value.
 /// Never resets scenario controls or call evidence on restart.
+#[cfg(test)]
 pub async fn install(
     store: Arc<Store>,
+) -> Result<
+    (
+        Arc<dyn OAuthProvider>,
+        Arc<dyn AccountProvider>,
+        Arc<dyn OAuthRefreshProvider>,
+    ),
+    DownloadError,
+> {
+    install_with_gate(store, Arc::new(RefreshGate::default())).await
+}
+
+pub async fn install_with_gate(
+    store: Arc<Store>,
+    refresh_gate: Arc<RefreshGate>,
 ) -> Result<
     (
         Arc<dyn OAuthProvider>,
@@ -38,12 +54,16 @@ pub async fn install(
         .execute_batch(CONTROL_SCHEMA)
         .await
         .map_err(|_| DownloadError::Executor)?;
-    let provider = Arc::new(FixtureCookieProviders { store });
+    let provider = Arc::new(FixtureCookieProviders {
+        store,
+        refresh_gate,
+    });
     Ok((provider.clone(), provider.clone(), provider))
 }
 
 struct FixtureCookieProviders {
     store: Arc<Store>,
+    refresh_gate: Arc<RefreshGate>,
 }
 
 impl FixtureCookieProviders {
@@ -206,9 +226,11 @@ impl OAuthRefreshProvider for FixtureCookieProviders {
         tokens: &'a OAuthCredential,
     ) -> Pin<Box<dyn Future<Output = Result<OAuthCredential, ProfileError>> + Send + 'a>> {
         Box::pin(async move {
-            OAuthProvider::refresh(self, tokens, 0)
+            let result = OAuthProvider::refresh(self, tokens, 0)
                 .await
-                .map_err(|_| ProfileError::Unavailable)
+                .map_err(|_| ProfileError::Unavailable);
+            self.refresh_gate.wait().await?;
+            result
         })
     }
 }
@@ -247,6 +269,66 @@ mod tests {
         value.validate().unwrap();
         assert_eq!(format!("{value:?}"), "YoutubeOAuth([REDACTED])");
         assert_eq!(credential(), value);
+    }
+
+    #[tokio::test]
+    async fn refresh_gate_waits_after_provider_work_without_database_guard() {
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .await
+                .unwrap();
+        }
+        let store = Arc::new(
+            Store::open(
+                &directory.path().join("refresh.db"),
+                true,
+                Duration::from_secs(2),
+            )
+            .await
+            .unwrap(),
+        );
+        store.migrate().await.unwrap();
+        let gate = Arc::new(RefreshGate::default());
+        let (_, _, refresh) = install_with_gate(store.clone(), gate.clone())
+            .await
+            .unwrap();
+        store.database().connection().await.unwrap().execute(
+            "UPDATE bot_settings SET value=json_set(value,'$.oauth_mode','ok') WHERE key='fixture_cookie_provider_control'", ()
+        ).await.unwrap();
+        gate.command("oauth_refresh_arm").unwrap();
+        let task = tokio::spawn(async move { refresh.exchange(&credential()).await });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while gate.command("oauth_refresh_state").unwrap()["entered"] != true {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let connection =
+            tokio::time::timeout(Duration::from_secs(1), store.database().connection())
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(!task.is_finished());
+        let mut rows = connection.query("SELECT json_extract(value,'$.oauth_refresh_calls') FROM bot_settings WHERE key='fixture_cookie_provider_control'", ()).await.unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            1
+        );
+        drop(rows);
+        gate.command("oauth_refresh_release").unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_ok()
+        );
+        drop(connection);
+        store.close().await.unwrap();
     }
 
     #[tokio::test]

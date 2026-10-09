@@ -1,7 +1,8 @@
 use std::time::Duration;
+use yoink_db::Transaction;
 
 use serde_json::{Value, json};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use uuid::Uuid;
 use yoink_db::query;
 use yoink_domain::{CachedMedia, CachedMediaKind, DownloadParams, DownloadRequest, MediaMode};

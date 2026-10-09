@@ -2,7 +2,8 @@
 use super::{NetworkContext, ProfileError, ProfileStore, cookie_version, normalize_domain, oauth};
 use chrono::{DateTime, Utc};
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::query;
 use yoink_worker_protocol::youtube_auth::{MAX_OAUTH_CONTENT_BYTES, YoutubeOAuth};
 

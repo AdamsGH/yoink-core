@@ -170,6 +170,92 @@ async fn downloader_frontend_settings_get_patch_credentials_null_pool_and_closed
 }
 
 #[tokio::test]
+async fn downloader_admin_limits_require_fresh_authority_and_patch_atomically() {
+    let (_dir, app) = fixture().await;
+    let owner = login(&app, 42).await;
+    let user = login(&app, 43).await;
+    let path = "/api/v1/dl/admin/settings";
+    assert_eq!(
+        request(&app, "GET", path, None, Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&app, "GET", path, Some(&user), Value::Null).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, initial) = request(&app, "GET", path, Some(&owner), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(initial["max_playlist_count"], 50);
+    let patch = json!({"download_retries":2,"download_timeout":120,"max_file_size_mb":512,"rate_limit_per_minute":2,"rate_limit_per_hour":20,"rate_limit_per_day":200,"max_playlist_count":10});
+    let (status, saved) = request(&app, "PATCH", path, Some(&owner), patch.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved, patch);
+    for bad in [
+        json!({"download_timeout":0,"max_file_size_mb":100}),
+        json!({"download_retries":-1}),
+        json!({"max_playlist_count":501}),
+        json!({"unexpected":true}),
+    ] {
+        assert_eq!(
+            request(&app, "PATCH", path, Some(&owner), bad).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            request(&app, "GET", path, Some(&owner), Value::Null)
+                .await
+                .1,
+            saved
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "PATCH",
+            "/api/v1/users/43",
+            Some(&owner),
+            json!({"role":"admin"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&app, "GET", path, Some(&user), Value::Null).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "PATCH",
+            "/api/v1/users/43",
+            Some(&owner),
+            json!({"role":"user"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "PATCH",
+            path,
+            Some(&user),
+            json!({"max_file_size_mb":256})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&app, "GET", path, Some(&owner), Value::Null)
+            .await
+            .1,
+        saved
+    );
+}
+
+#[tokio::test]
 async fn settings_http_etag_no_store_and_atomic_conflict() {
     let (_d, app) = fixture().await;
     let token = login(&app, 43).await;

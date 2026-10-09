@@ -2,8 +2,9 @@
 //! and imported permissions are never rewritten by this service.
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::TransactionBehavior;
 use yoink_access::Grant;
+use yoink_db::Transaction;
 use yoink_db::query;
 
 use crate::{IdentityError, IdentityStore, TrustedProfile};
@@ -328,11 +329,11 @@ async fn ensure_membership_user(
 /// Global feature grants are a union of contributions, never materialized into
 /// the imported unique permission table. A corrupt map produces no auto grants.
 pub(crate) async fn automatic_grants(
-    tx: &Transaction<'_>,
+    tx: &turso::Connection,
     user_id: i64,
 ) -> Result<Vec<Grant>, IdentityError> {
     let raw = query(include_str!("admin_tag_map_read.sql"))
-        .fetch_optional(&**tx)
+        .fetch_optional(tx)
         .await?
         .map(|r| db(r.try_get::<Option<String>, _>(0)))
         .transpose()?
@@ -345,7 +346,7 @@ pub(crate) async fn automatic_grants(
     };
     let rows = query(include_str!("sql/membership_active_tags.sql"))
         .bind(user_id)
-        .fetch_all(&**tx)
+        .fetch_all(tx)
         .await?;
     let tags: std::collections::BTreeSet<String> = rows
         .into_iter()
@@ -353,7 +354,7 @@ pub(crate) async fn automatic_grants(
         .collect::<Result<_, _>>()?;
     let suppressed = query(include_str!("sql/membership_feature_suppressions.sql"))
         .bind(user_id)
-        .fetch_all(&**tx)
+        .fetch_all(tx)
         .await?;
     let suppressed: std::collections::BTreeSet<(String, String)> = suppressed
         .into_iter()

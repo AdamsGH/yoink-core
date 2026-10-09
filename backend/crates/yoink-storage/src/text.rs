@@ -1,6 +1,8 @@
 //! Durable single-attempt text effects, independent of download claims.
 use crate::{Store, StoreError};
 use serde::{Deserialize, Serialize};
+use turso::transaction::TransactionBehavior;
+use yoink_db::Transaction;
 use yoink_db::{Executor, query};
 
 /// Immutable identity. `message` is the incoming message for sends and the
@@ -79,34 +81,60 @@ impl Store {
         if token.is_empty() || token.len() > 256 || !identity.valid() {
             return Err(StoreError::InvalidInput);
         }
-        let payload = serde_json::to_string(identity).map_err(|_| StoreError::InvalidInput)?;
-        let c = self
+        let mut c = self
             .database
             .connection()
             .await
             .map_err(|_| StoreError::Database)?;
-        c.batch("BEGIN IMMEDIATE")
+        // Declare after the shared guard so cancellation drops the transaction
+        // first. Turso schedules rollback before the next connection operation.
+        let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
             .await
             .map_err(|_| StoreError::Database)?;
-        let result = async {
-            let changed = query("INSERT INTO runtime_text_effects(token,identity,state) VALUES(?,?,'sending') ON CONFLICT(token) DO NOTHING")
-                .bind(token).bind(&payload).execute(&*c).await.map_err(|_| StoreError::Database)?.rows_affected() == 1;
-            let row = query("SELECT * FROM runtime_text_effects WHERE token=?").bind(token).fetch_one(&*c).await.map_err(|_| StoreError::Database)?;
-            let effect = decode(row)?;
-            if effect.outcome != TextOutcome::Sealed && effect.identity.as_ref() != Some(identity) { return Err(StoreError::Conflict); }
-            let admitted = query("UPDATE runtime_text_effects SET state='sending' WHERE token=? AND state='prepared' AND identity=?").bind(token).bind(&payload).execute(&*c).await.map_err(|_| StoreError::Database)?.rows_affected()==1;
-            Ok(changed || admitted)
-        }.await;
+        let result = Self::begin_text_on(&*tx, token, identity).await;
+        #[cfg(test)]
+        if let Ok(pause) = BEGIN_TEXT_PAUSE.try_with(Clone::clone) {
+            pause.entered.notify_one();
+            pause
+                .release
+                .acquire()
+                .await
+                .expect("test release")
+                .forget();
+        }
         match result {
             Ok(v) => {
-                c.batch("COMMIT").await.map_err(|_| StoreError::Database)?;
+                tx.commit().await.map_err(|_| StoreError::Database)?;
                 Ok(v)
             }
             Err(e) => {
-                let _ = c.batch("ROLLBACK").await;
+                let _ = tx.rollback().await;
                 Err(e)
             }
         }
+    }
+    /// Caller owns BEGIN IMMEDIATE and any fresh authority checks on this connection.
+    /// Commit before an external attempt. This helper never acquires or commits a guard.
+    pub async fn begin_text_on<E: Executor>(
+        c: &E,
+        token: &str,
+        identity: &TextIdentity,
+    ) -> Result<bool, StoreError> {
+        if token.is_empty() || token.len() > 256 || !identity.valid() {
+            return Err(StoreError::InvalidInput);
+        }
+        let payload = serde_json::to_string(identity).map_err(|_| StoreError::InvalidInput)?;
+        let changed = query("INSERT INTO runtime_text_effects(token,identity,state) VALUES(?,?,'sending') ON CONFLICT(token) DO NOTHING")
+            .bind(token).bind(&payload).execute(c).await.map_err(|_| StoreError::Database)?.rows_affected() == 1;
+        let effect = Self::text_effect_on(c, token)
+            .await?
+            .ok_or(StoreError::Database)?;
+        if effect.outcome != TextOutcome::Sealed && effect.identity.as_ref() != Some(identity) {
+            return Err(StoreError::Conflict);
+        }
+        let admitted = query("UPDATE runtime_text_effects SET state='sending' WHERE token=? AND state='prepared' AND identity=?")
+            .bind(token).bind(&payload).execute(c).await.map_err(|_| StoreError::Database)?.rows_affected() == 1;
+        Ok(changed || admitted)
     }
     /// Caller owns the transaction. This is durable intent only; begin_text is
     /// still required before the sole external attempt. Used to atomically
@@ -217,6 +245,16 @@ impl Store {
 }
 
 #[cfg(test)]
+struct BeginTextPause {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+#[cfg(test)]
+tokio::task_local! {
+    static BEGIN_TEXT_PAUSE: std::sync::Arc<BeginTextPause>;
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::{sync::Arc, time::Duration};
@@ -248,6 +286,155 @@ mod tests {
             text: "saved".into(),
         }
     }
+    #[tokio::test]
+    async fn begin_text_cancellation_rolls_back_real_admission_and_reuses_connection() {
+        for prepared in [false, true] {
+            for timeout in [false, true] {
+                let (_tmp, store) = fixture().await;
+                let i = identity();
+                if prepared {
+                    let mut c = store.database.connection().await.unwrap();
+                    let tx = Transaction::new(&mut c, TransactionBehavior::Immediate)
+                        .await
+                        .unwrap();
+                    Store::prepare_text_on(&*tx, "cancelled", &i).await.unwrap();
+                    tx.commit().await.unwrap();
+                }
+                let pause = Arc::new(BeginTextPause {
+                    entered: tokio::sync::Notify::new(),
+                    release: tokio::sync::Semaphore::new(0),
+                });
+                let worker_store = store.clone();
+                let worker_pause = pause.clone();
+                let task = tokio::spawn(async move {
+                    let admission = BEGIN_TEXT_PAUSE
+                        .scope(worker_pause, worker_store.begin_text("cancelled", &i));
+                    if timeout {
+                        assert!(
+                            tokio::time::timeout(Duration::from_secs(1), admission)
+                                .await
+                                .is_err()
+                        );
+                    } else {
+                        admission.await.unwrap();
+                    }
+                });
+                tokio::time::timeout(Duration::from_secs(5), pause.entered.notified())
+                    .await
+                    .unwrap();
+                // The task reached this barrier only after BEGIN and the insert/CAS.
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(10), store.database.connection())
+                        .await
+                        .is_err()
+                );
+                if timeout {
+                    tokio::time::timeout(Duration::from_secs(5), task)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                } else {
+                    task.abort();
+                    assert!(task.await.unwrap_err().is_cancelled());
+                }
+                let effect = store.text_effect("cancelled").await.unwrap();
+                if prepared {
+                    assert_eq!(effect.unwrap().outcome, TextOutcome::Prepared);
+                } else {
+                    assert!(effect.is_none());
+                }
+                assert!(store.begin_text("cancelled", &identity()).await.unwrap());
+                assert_eq!(
+                    store
+                        .text_effect("cancelled")
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .outcome,
+                    TextOutcome::Unknown
+                );
+                assert!(!store.begin_text("cancelled", &identity()).await.unwrap());
+            }
+        }
+    }
+    #[tokio::test]
+    async fn begin_text_operation_and_commit_failures_roll_back_and_reuse_connection() {
+        for commit_failure in [false, true] {
+            let (_tmp, store) = fixture().await;
+            {
+                let c = store.database.connection().await.unwrap();
+                if commit_failure {
+                    c.batch("PRAGMA foreign_keys=ON; CREATE TABLE tx_parent(id INTEGER PRIMARY KEY); CREATE TABLE tx_child(parent INTEGER REFERENCES tx_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER tx_failure AFTER INSERT ON runtime_text_effects BEGIN INSERT INTO tx_child VALUES(1); END;").await.unwrap();
+                } else {
+                    c.batch("CREATE TRIGGER tx_failure BEFORE INSERT ON runtime_text_effects BEGIN SELECT RAISE(ABORT,'test operation failure'); END;").await.unwrap();
+                }
+            }
+            assert!(matches!(
+                store.begin_text("failure", &identity()).await,
+                Err(StoreError::Database)
+            ));
+            assert!(store.text_effect("failure").await.unwrap().is_none());
+            {
+                let c = store.database.connection().await.unwrap();
+                if commit_failure {
+                    assert_eq!(
+                        query("SELECT COUNT(*) AS n FROM tx_child")
+                            .fetch_one(&*c)
+                            .await
+                            .unwrap()
+                            .try_get::<i64, _>("n")
+                            .unwrap(),
+                        0
+                    );
+                }
+                c.batch("DROP TRIGGER tx_failure").await.unwrap();
+            }
+            assert!(store.begin_text("failure", &identity()).await.unwrap());
+            assert_eq!(
+                store.text_effect("failure").await.unwrap().unwrap().outcome,
+                TextOutcome::Unknown
+            );
+        }
+    }
+    #[tokio::test]
+    async fn begin_text_on_shares_transaction_and_rollback_keeps_prepared_intent() {
+        let (_tmp, store) = fixture().await;
+        let i = identity();
+        let c = store.database.connection().await.unwrap();
+        c.batch("BEGIN IMMEDIATE").await.unwrap();
+        Store::prepare_text_on(&*c, "atomic", &i).await.unwrap();
+        c.batch("COMMIT").await.unwrap();
+        c.batch("BEGIN IMMEDIATE").await.unwrap();
+        assert!(Store::begin_text_on(&*c, "atomic", &i).await.unwrap());
+        assert!(!Store::begin_text_on(&*c, "atomic", &i).await.unwrap());
+        c.batch("ROLLBACK").await.unwrap();
+        assert_eq!(
+            Store::text_effect_on(&*c, "atomic")
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            TextOutcome::Prepared
+        );
+        c.batch("BEGIN IMMEDIATE").await.unwrap();
+        assert!(Store::begin_text_on(&*c, "atomic", &i).await.unwrap());
+        assert!(matches!(
+            Store::begin_text_on(
+                &*c,
+                "atomic",
+                &TextIdentity {
+                    text: "changed".into(),
+                    ..i.clone()
+                }
+            )
+            .await,
+            Err(StoreError::Conflict)
+        ));
+        c.batch("COMMIT").await.unwrap();
+        drop(c);
+        assert!(!store.begin_text("atomic", &i).await.unwrap());
+    }
+
     #[tokio::test]
     async fn competing_dispatchers_have_exactly_one_admission_and_payload_conflicts() {
         let (_tmp, store) = fixture().await;

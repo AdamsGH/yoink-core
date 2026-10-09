@@ -92,7 +92,10 @@ pub(super) fn parse_tables(catalog: &ValidatedCatalog) -> Result<Vec<Table>> {
             foreign_keys,
         });
     }
-    if tables.len() != 41 {
+    if !matches!(tables.len(), 41 | 42)
+        || (tables.len() != catalog.application_tables.len()
+            && !catalog.application_tables.is_empty())
+    {
         return Err(ImportError::Catalog);
     }
     for table in &tables {

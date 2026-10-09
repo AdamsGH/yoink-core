@@ -1,8 +1,10 @@
 mod error;
 mod files;
 pub mod publication;
+mod transaction;
 
 pub use error::Error;
+pub use transaction::Transaction;
 
 use std::fmt;
 use std::fs::{File, OpenOptions};

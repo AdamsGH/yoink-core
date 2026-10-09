@@ -58,7 +58,7 @@ FROM python:3.12-slim-bookworm AS worker-runtime
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir yt-dlp==2026.8.19 gallery-dl==1.32.13 readability-lxml==0.8.4.1 trafilatura==2.0.0 \
+    && pip install --no-cache-dir yt-dlp==2026.8.19 gallery-dl==1.32.13 readability-lxml==0.8.4.1 trafilatura==2.0.0 httpx==0.28.1 curl-cffi==0.16.3 ytmusicapi==1.12.3 transliterate==1.10.2 mutagen==1.48.1 \
     && groupadd --gid 10001 yoink \
     && useradd --uid 10001 --gid yoink --no-create-home yoink \
     && mkdir -p /tmp/yoink-work \

@@ -6,6 +6,6 @@ mod source;
 mod tokenizer;
 mod types;
 
-pub use service::{RefreshMode, RefreshReport, SearchError, SearchService};
+pub use service::{RefreshMode, RefreshReport, SearchError, SearchService, tracked_blocking};
 pub use tokenizer::tokenize;
 pub use types::{SearchPage, SearchRequest, StatsMessage};

@@ -2,11 +2,14 @@ mod auth_config;
 mod config;
 mod fixture_control;
 mod fixture_cookie_providers;
+mod fixture_refresh_gate;
 mod inbox_config;
 mod inbox_runtime;
 mod insight_config;
 mod insight_runtime;
 mod media_config;
+mod product_config;
+mod product_runtime;
 mod runtime;
 mod user_session_config;
 
@@ -136,9 +139,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let (config, store) = open_store().await?;
     // This opt-in belongs exclusively to the fixture entry point. Production
     // startup neither reads the switch nor imports the offline providers.
+    let refresh_gate = Arc::new(fixture_refresh_gate::RefreshGate::default());
     let cookie_providers = if std::env::var("YOINK_FIXTURE_COOKIE_PROVIDERS").as_deref() == Ok("1")
     {
-        match fixture_cookie_providers::install(store.clone()).await {
+        match fixture_cookie_providers::install_with_gate(store.clone(), refresh_gate.clone()).await
+        {
             Ok(providers) => Some(providers),
             Err(_) => {
                 let _ = store.close().await;
@@ -159,14 +164,16 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let task_store = store.clone();
     let confirmation: runtime::ConfirmationControl = Default::default();
     let task_confirmation = confirmation.clone();
+    let task_refresh_gate = cookie_providers.as_ref().map(|_| refresh_gate.clone());
     let mut controller = tokio::spawn(async move {
         let _stopped = NotifyOnDrop(stopped);
-        fixture_control::serve_with_confirmation(
+        fixture_control::serve_with_controls(
             listener,
             task_store,
             token,
             task_shutdown,
             task_confirmation,
+            task_refresh_gate,
         )
         .await
     });
@@ -181,6 +188,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             result = signal => {
                 let kind = result?;
+                refresh_gate.stop();
                 // Snapshot at the actual signal boundary, before runtime cancellation.
                 // This is fixture-only, not a public production diagnostics API.
                 let (children, workspaces) = cleanup_snapshot(signal_workspace.as_deref(), Path::new("/proc/self/task"))?;
@@ -188,7 +196,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                 signal_seen.store(true, Ordering::SeqCst);
                 Ok(())
             },
-            _ = controller_stopped.cancelled() => Ok(()),
+            _ = controller_stopped.cancelled() => { refresh_gate.stop(); Ok(()) },
         }
     };
     let cookies =
