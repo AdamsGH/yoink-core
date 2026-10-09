@@ -13,7 +13,10 @@ The shared private `.env` is still authoritative. Native settings use the
 names only when nonempty. See `backend/crates/yoink-server/PRODUCT_RUNTIME.md` and the typed server
 configuration. Preserve the configured downloader/Music proxies, Insight gateway,
 API signing key, owner and bot token. The Compose manifest explicitly enables all
-installed products and authentication. Workspaces are private, separate tmpfs
+installed products and authentication. Initial command-menu reconciliation is
+bounded by the configured 300s startup deadline; unavailable historic users do
+not keep the entire pass dirty. The 150s shutdown budget fits the 165s Docker grace.
+Workspaces are private, separate tmpfs
 mounts; the database, search index and Stats import directory live in
 `data/native`, owned by UID/GID 10001. No legacy application directory is mounted. The Bot API data directory is mounted
 read-only at /telegram-files with explicit remote/local roots; grant UID 10001

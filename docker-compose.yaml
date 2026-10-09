@@ -83,6 +83,7 @@ services:
       - /tmp/yoink-insight:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
       - /tmp/yoink-inbox:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
     environment:
+      YOINK_RUST_STARTUP_TIMEOUT_SECS: "300"
       YOINK_RUST_SHUTDOWN_TIMEOUT_SECS: "150"
       YOINK_RUST_HTTP_BIND: "0.0.0.0:8000"
       YOINK_RUST_DATABASE_PATH: /state/native.db

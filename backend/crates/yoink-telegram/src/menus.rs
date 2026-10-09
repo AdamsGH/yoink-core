@@ -192,8 +192,16 @@ pub(crate) enum Failure {
 fn classify(error: &RequestError, retry: Duration) -> Failure {
     match error {
         RequestError::Api(
-            ApiError::BotBlocked | ApiError::ChatNotFound | ApiError::UserDeactivated,
+            ApiError::BotBlocked
+            | ApiError::ChatNotFound
+            | ApiError::UserDeactivated
+            | ApiError::UserNotFound,
         ) => Failure::Unreachable,
+        RequestError::Api(ApiError::Unknown(description))
+            if description == "Bad Request: USER_ID_INVALID" =>
+        {
+            Failure::Unreachable
+        }
         RequestError::RetryAfter(seconds) => {
             Failure::RateLimited(Duration::from_secs(u64::from(seconds.seconds())).max(retry))
         }
@@ -684,5 +692,27 @@ impl<A: MenuApi> Menus<A> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_menu_user_does_not_retry_the_entire_pass() {
+        let retry = Duration::from_secs(1);
+        for description in [
+            "Bad Request: USER_ID_INVALID",
+            "Bad Request: user not found",
+        ] {
+            let error = serde_json::from_value::<ApiError>(serde_json::json!(description)).unwrap();
+            assert_eq!(
+                classify(&RequestError::Api(error), retry),
+                Failure::Unreachable
+            );
+        }
+        let error = RequestError::Api(ApiError::Unknown("Bad Request: BOT_COMMAND_INVALID".into()));
+        assert_eq!(classify(&error, retry), Failure::Retry(retry));
     }
 }
