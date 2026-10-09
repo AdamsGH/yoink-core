@@ -66,3 +66,24 @@ not change that pin. Verify the new image and update the pin before deployment.
 Native schemas migrate/verify on startup; the former Alembic dispatcher fails
 closed. Default lint/test/verify recipes check Rust; `verify-py` remains an explicit
 container-only legacy reference check.
+
+## Verified production cutover
+
+The 2026-10-09 cutover stopped the legacy app and ARQ writers before the final
+snapshot. The pinned importer verified 42 source tables and 13,583 rows, including
+typed digests, foreign keys and allocators. Independent native archive/restore
+comparison verified the schema and all typed rows across 103 tables. PostgreSQL,
+Redis and private configuration snapshots remain retained for recovery.
+
+The active native runtime is pinned to
+`sha256:614fd92b9500f831588db17d0ad5d4f628cfbda7b36121a0941728432088c0e2`.
+Actual Telegram polling, production HTTPS, imported ordinary-account access,
+fresh-role admin denial and readiness passed. The diagnostic proxy was removed;
+the runtime uses the direct Bot API with no legacy worker or fixture entrypoint.
+Actual native backup and inactive restore passed; maintenance normally stopped
+and resumed the same original container. Archives are private plaintext.
+
+The matching image pair passed menu, native-product and real-browser acceptance;
+1,142 Rust tests passed. YouTube OAuth and PoToken issuance remain synthetic
+acceptance evidence, not a claim of live account authorization. Native writes
+are now possible. Do not restart stale PostgreSQL writers as a rollback.
