@@ -70,6 +70,9 @@ pub trait MusicWorker: Send + Sync {
     ) -> MusicFuture<'_, Vec<ValidatedArtifact>>;
 }
 fn map_executor(e: ExecutorError) -> MusicError {
+    if let ExecutorError::Worker(class) = &e {
+        tracing::warn!(failure_class = ?class, "Music worker rejected operation");
+    }
     match e {
         ExecutorError::Cancelled => MusicError::Cancelled,
         ExecutorError::ResourceLimit
@@ -276,10 +279,16 @@ impl MusicService {
         provider: MusicProvider,
         cancel: CancellationToken,
     ) -> Result<MusicResult, MusicError> {
-        tokio::select! { _=cancel.cancelled()=>Err(MusicError::Cancelled), result=async {
+        let result = tokio::select! { _=cancel.cancelled()=>Err(MusicError::Cancelled), result=async {
             let _slot = self.slots.acquire().await.map_err(|_|MusicError::Cancelled)?;
             timeout(self.settings.lookup_timeout,self.worker.lookup(self.settings.request(task,provider),cancel.clone(),self.settings.lookup_timeout)).await.map_err(|_|MusicError::SourceUnavailable)?
-        } => result }
+        } => result };
+        if let Err(error) = &result
+            && !matches!(error, MusicError::Cancelled | MusicError::Denied)
+        {
+            tracing::warn!(provider = provider.key(), error = ?error, "Music lookup failed");
+        }
+        result
     }
     pub async fn resolve(
         &self,
@@ -480,6 +489,7 @@ impl MusicService {
             return Err(MusicError::InvalidInput);
         }
         let mut results = Vec::new();
+        let mut failure = MusicError::SourceUnavailable;
         for link in links {
             match self
                 .resolve(actor, link.url.as_url().as_str(), cancel.clone())
@@ -488,10 +498,15 @@ impl MusicService {
                 Ok(r) => results.push(r),
                 Err(MusicError::Denied) => return Err(MusicError::Denied),
                 Err(MusicError::Cancelled) => return Err(MusicError::Cancelled),
-                Err(_) => {}
+                Err(error) => failure = error,
             }
         }
-        Ok(results)
+        self.authorize(actor).await?;
+        if results.is_empty() {
+            Err(failure)
+        } else {
+            Ok(results)
+        }
     }
     pub async fn inline(
         &self,

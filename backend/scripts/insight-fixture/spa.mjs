@@ -34,10 +34,11 @@ export async function spa(c) {
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
     const origin=`http://127.0.0.1:${server.address().port}`;
     const browser=await launchBrowser({origin,executablePath:c.config.chromium??'/usr/bin/chromium'});defer(()=>browser.close());
+    await browser.request('Page.addScriptToEvaluateOnNewDocument',{source:`window.__fixtureErrors=[];addEventListener('error',e=>{if(window.__fixtureErrors.length<8)window.__fixtureErrors.push(String(e.message).slice(0,512));});`});
     await browser.navigate(origin+'/__fixture_session');await browser.evaluate(`localStorage.setItem('access_token',${JSON.stringify(token)});localStorage.setItem('yoink_lang','en');`);
     for(const [path,contracts] of [['/insight/settings',['settings/me','byok/me']],['/admin/insight-tldr',['config/tldr','config/byok']]]){
       const before=calls.length;await browser.navigate(origin+path);
-      try{await c.waitFor(()=>contracts.every(suffix=>calls.slice(before).some(x=>x.path===`/api/v1/insight/${suffix}` && x.status===200 && x.authenticated)),`built SPA ${path} authenticated requests`);}catch(error){throw new Error(`${path}: ${JSON.stringify(calls.slice(before))}\n${await browser.evaluate('document.body.innerText.slice(0,1500)')}`,{cause:error});}
+      try{await c.waitFor(()=>contracts.every(suffix=>calls.slice(before).some(x=>x.path===`/api/v1/insight/${suffix}` && x.status===200 && x.authenticated)),`built SPA ${path} authenticated requests`);}catch(error){throw new Error(`${path}: ${JSON.stringify(calls.slice(before))}\n${await browser.evaluate('document.body.innerText.slice(0,1500)')}\n${JSON.stringify(await browser.evaluate('window.__fixtureErrors')).replaceAll(token,'[fixture-token]')}`,{cause:error});}
       assert.equal(await browser.evaluate('location.pathname'),path);
     }
     // Current integrated CredentialInput IDs, real React input events and

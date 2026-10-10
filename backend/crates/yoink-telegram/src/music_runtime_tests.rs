@@ -1127,6 +1127,67 @@ async fn nonmusic_youtube_inline_keeps_downloader_fallback_unanswered() {
 }
 
 #[tokio::test]
+async fn passive_spotify_failure_is_reported_by_the_shared_dispatcher() {
+    let (listener, bot) = wire().await;
+    let f = fixture_with(bot.clone(), true, WorkerMode::NonMusic).await;
+    let deps = crate::MessageDependencies {
+        downloads: None,
+        upload: crate::CookieUploadDependency {
+            config: None,
+            base: bot.api_url(),
+            client: bot.client().clone(),
+        },
+        cookie_url: crate::CookieUrlDependency(None),
+        identities: Some(f.runtime.identities.clone()),
+        inbox: None,
+        insight: None,
+        music: Some((f.runtime.clone(), Duration::from_secs(30))),
+        stats: None,
+        lifecycle: crate::TelegramHandlerLifecycle::new(),
+    };
+    let system = yoink_application::SystemService::new("fixture");
+    system.set_ready(true);
+    let mut incoming = message(20, "https://open.spotify.com/track/abc");
+    incoming.date = chrono::Utc::now();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let (_, body) = request(&mut socket).await;
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["chat_id"], 42);
+        let text = body["text"].as_str().unwrap();
+        assert!(
+            ["en", "ru"]
+                .iter()
+                .any(|lang| text == error_message(MusicError::SourceUnavailable, lang))
+        );
+        let mut echo = receipt(90, 42, None);
+        echo["text"] = body["text"].clone();
+        response(&mut socket, echo).await;
+    });
+    crate::handle_message(
+        bot,
+        incoming,
+        crate::TelegramIdentity {
+            owner_id: 99,
+            bot_id: 123,
+            groups_enabled: true,
+            identity_enabled: true,
+        },
+        "fixture".into(),
+        system,
+        deps.clone(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .unwrap()
+        .unwrap();
+    deps.lifecycle.drain_handlers().await;
+    f.runtime.drain_handlers().await.unwrap();
+}
+
+#[tokio::test]
 async fn passive_links_and_via_bot_cards_keep_provenance_and_replay_fences() {
     for (via, foreign) in [(false, false), (false, true), (true, false)] {
         let (listener, bot) = wire().await;

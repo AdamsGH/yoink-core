@@ -322,6 +322,7 @@ const download = await mixed('PRDownload');
   } catch (error) {
     // Fixed synthetic IDs/stages only; never include request cookies, credentials or headers.
     console.error('Provider fixture trace:', JSON.stringify(providerSource.trace));
+    console.error('Provider fixture request paths:', JSON.stringify([...gallerySource.paths].map(value => new URL(value, 'https://fixture.invalid').pathname)));
     throw error;
   } finally {
     providerSource.releaseAll();

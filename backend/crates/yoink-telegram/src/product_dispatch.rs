@@ -319,6 +319,10 @@ pub(crate) async fn message(
     } else if let Some((music, max_age)) = &deps.music {
         let explicit =
             command(text, username, "music").is_some() || command(text, username, "song").is_some();
+        let passive_music =
+            yoink_music::extract_links(text, &crate::music_runtime::hidden_links(message), 10)
+                .iter()
+                .any(|link| link.provider != yoink_worker_protocol::MusicProvider::Youtube);
         let result = if explicit {
             music.handle_command(message, actor as i64, username).await
         } else {
@@ -340,6 +344,26 @@ pub(crate) async fn message(
                 )
                 .to_owned(),
             ),
+            Err(error)
+                if passive_music
+                    && !matches!(
+                        error,
+                        yoink_music::MusicError::Denied | yoink_music::MusicError::Cancelled
+                    )
+                    && music_allowed(deps, actor as i64, group).await =>
+            {
+                Some(
+                    yoink_music::error_message(
+                        error,
+                        if language == yoink_i18n::Language::Russian {
+                            "ru"
+                        } else {
+                            "en"
+                        },
+                    )
+                    .to_owned(),
+                )
+            }
             Err(_) => return false,
         }
     } else {

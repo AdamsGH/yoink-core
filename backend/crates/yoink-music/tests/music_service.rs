@@ -458,6 +458,17 @@ async fn operational_failure_cancel_and_settings_bounds() {
             .unwrap_err(),
         MusicError::Cancelled
     );
+    assert_eq!(
+        s.command(
+            actor(),
+            PROVIDER_FIXTURES[0].0,
+            &[],
+            CancellationToken::new()
+        )
+        .await
+        .unwrap_err(),
+        MusicError::SourceUnavailable
+    );
     let mut config = settings();
     config.worker_concurrency = 0;
     assert_eq!(config.validate(), Err(MusicError::InvalidInput));

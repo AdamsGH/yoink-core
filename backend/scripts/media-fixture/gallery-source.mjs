@@ -60,8 +60,11 @@ export async function startGallerySource({ tempRoot, capture, helperContainer, i
   const trust = path.join(directory, 'trust.pem');
   await writeFile(trust, certificate, { mode: 0o644 });
   // Resolve the installed dependency rather than guessing its Python-version-specific path.
-  const trustPath = (await helperContainer(['--network', 'none', '--entrypoint', 'python', image, '-I', '-c', 'import certifi; print(certifi.where())'], 15000)).trim();
-  assert.match(trustPath, /^\/usr\/local\/lib\/python3\.\d+\/site-packages\/certifi\/cacert\.pem$/);
+  const trustPaths = JSON.parse((await helperContainer(['--network', 'none', '--entrypoint', 'python', image, '-I', '-c',
+    'import certifi,json; from curl_cffi import Curl,CurlInfo; c=Curl(); print(json.dumps([certifi.where(),c.getinfo(CurlInfo.CAINFO).decode()])); c.close()'], 15000)).trim());
+  assert.equal(trustPaths.length, 2, 'fixture needs Python and impersonated HTTP trust stores');
+  assert.match(trustPaths[0], /^\/usr\/local\/lib\/python3\.\d+\/site-packages\/certifi\/cacert\.pem$/);
+  assert.match(trustPaths[1], /^\/etc\/ssl\/(?:[a-zA-Z0-9._-]+\/)*[a-zA-Z0-9._-]+\.crt$/);
   let requests = 0;
   const paths = new Set();
   let error;
@@ -83,6 +86,7 @@ export async function startGallerySource({ tempRoot, capture, helperContainer, i
     } else res.end(response.body);
     } catch (cause) { error = cause; res.destroy(); }
   });
+  server.on('tlsClientError', cause => console.error('Gallery fixture TLS handshake failed:', cause.code));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   return {
     get error() { return error; },
@@ -90,7 +94,7 @@ export async function startGallerySource({ tempRoot, capture, helperContainer, i
     paths,
     untrustedDockerArgs: ['--add-host', 'instagram.com:192.0.2.1', '--add-host', 'www.instagram.com:192.0.2.1', '--add-host', 'boards.4chan.org:192.0.2.1', '--add-host', 'a.4cdn.org:192.0.2.1', '--add-host', 'i.4cdn.org:192.0.2.1', '--add-host', 'imgbox.com:192.0.2.1'],
     port: server.address().port,
-    dockerArgs: [...extraHosts.flatMap(host => ['--add-host', host + ':192.0.2.1']), '--add-host', 'instagram.com:192.0.2.1', '--add-host', 'www.instagram.com:192.0.2.1', '--add-host', 'boards.4chan.org:192.0.2.1', '--add-host', 'a.4cdn.org:192.0.2.1', '--add-host', 'i.4cdn.org:192.0.2.1', '--add-host', 'imgbox.com:192.0.2.1', '--mount', `type=bind,source=${trust},target=${trustPath},readonly`],
+    dockerArgs: [...extraHosts.flatMap(host => ['--add-host', host + ':192.0.2.1']), '--add-host', 'instagram.com:192.0.2.1', '--add-host', 'www.instagram.com:192.0.2.1', '--add-host', 'boards.4chan.org:192.0.2.1', '--add-host', 'a.4cdn.org:192.0.2.1', '--add-host', 'i.4cdn.org:192.0.2.1', '--add-host', 'imgbox.com:192.0.2.1', ...trustPaths.flatMap(trustPath => ['--mount', `type=bind,source=${trust},target=${trustPath},readonly`])],
     async close() { server.closeAllConnections(); await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); },
   };
 }

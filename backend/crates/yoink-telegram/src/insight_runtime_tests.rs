@@ -402,7 +402,7 @@ async fn fresh_revoke_during_real_provider_prevents_completion() {
 }
 #[tokio::test]
 async fn cancel_is_actor_chat_topic_bound_and_shutdown_drains_without_final() {
-    for teardown in [false, true] {
+    for mode in [0, 1, 2] {
         let (api, bot) = wire().await;
         let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let f = fixture(bot, format!("http://{}", gateway.local_addr().unwrap())).await;
@@ -445,12 +445,13 @@ async fn cancel_is_actor_chat_topic_bound_and_shutdown_drains_without_final() {
                 .handle(&message(&cmd, 42, None, 11), 43, "fixture")
                 .await
         );
-        if teardown {
+        if mode == 2 {
             f.runtime.cancel_all();
         } else {
+            let cmd = if mode == 1 { "/cancel" } else { &cmd };
             assert!(
                 f.runtime
-                    .handle(&message(&cmd, 42, None, 11), 42, "fixture")
+                    .handle(&message(cmd, 42, None, 11), 42, "fixture")
                     .await
             );
         }
@@ -470,6 +471,47 @@ async fn cancel_is_actor_chat_topic_bound_and_shutdown_drains_without_final() {
         let _ = upstream.await;
     }
 }
+
+#[tokio::test]
+async fn provider_failure_is_terminal_without_stale_cancel_command() {
+    let (api, bot) = wire().await;
+    let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let f = fixture(bot, format!("http://{}", gateway.local_addr().unwrap())).await;
+    let upstream = tokio::spawn(async move {
+        let (mut socket, _) = gateway.accept().await.unwrap();
+        request(&mut socket).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            )
+            .await
+            .unwrap();
+    });
+    let telegram = tokio::spawn(async move {
+        let (mut socket, _) = api.accept().await.unwrap();
+        let (_, body) = request(&mut socket).await;
+        let text = body["text"].as_str().unwrap();
+        assert!(text.starts_with("Failed"));
+        assert!(!text.contains("/cancel"));
+        assert!(text.contains("rejected authorization"));
+        reply(&mut socket, &body, 90).await;
+    });
+    assert!(
+        f.runtime
+            .handle(
+                &message("/tldr https://example.com", 42, None, 10),
+                42,
+                "fixture"
+            )
+            .await
+    );
+    upstream.await.unwrap();
+    telegram.await.unwrap();
+    assert!(f.runtime.active.lock().unwrap().is_empty());
+    f.runtime.cancel_all();
+    f.runtime.drain_handlers().await;
+    f.ledger.close().await.unwrap();
+}
 #[tokio::test]
 async fn unknown_outbound_receipt_blocks_replay_and_provider() {
     let (api, bot) = wire().await;
@@ -477,7 +519,8 @@ async fn unknown_outbound_receipt_blocks_replay_and_provider() {
     let server = tokio::spawn(async move {
         let (mut s, _) = api.accept().await.unwrap();
         let (_, b) = request(&mut s).await;
-        assert!(b["text"].as_str().unwrap().starts_with("Incomplete"));
+        assert!(b["text"].as_str().unwrap().starts_with("Failed"));
+        assert!(!b["text"].as_str().unwrap().contains("/cancel"));
         drop(s);
         api
     });
@@ -499,6 +542,57 @@ async fn unknown_outbound_receipt_blocks_replay_and_provider() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn terminal_failure_retires_every_sent_page_without_replaying_partial_content() {
+    let (api, bot) = wire().await;
+    let f = fixture(bot, "http://127.0.0.1:1".into()).await;
+    let draft = Draft {
+        runtime: &f.runtime,
+        identity: TextIdentity {
+            bot: 123,
+            actor: 42,
+            chat: 42,
+            topic: None,
+            message: 10,
+            item: None,
+            edit: false,
+            payload: json!({}),
+            text: "pending".into(),
+        },
+        command: "tldr",
+        cancel: CancellationToken::new(),
+        base: "failed-pages".into(),
+        id: Uuid::new_v4(),
+        russian: false,
+        state: tokio::sync::Mutex::new(State {
+            text: "Request could not be completed.".into(),
+            sent: vec![
+                (90, "protected partial /cancel".into()),
+                (91, "protected partial /cancel".into()),
+            ],
+            byok_final: true,
+            revision: 0,
+            last: Instant::now(),
+        }),
+    };
+    let telegram = tokio::spawn(async move {
+        for id in [90, 91] {
+            let (mut socket, _) = api.accept().await.unwrap();
+            let (_, body) = request(&mut socket).await;
+            assert_eq!(body["message_id"], id);
+            assert_eq!(
+                body["text"],
+                "Failed · tldr\n\nRequest could not be completed."
+            );
+            reply(&mut socket, &body, id).await;
+        }
+    });
+    draft.flush_status(false, true).await.unwrap();
+    telegram.await.unwrap();
+    f.runtime.drain_handlers().await;
+    f.ledger.close().await.unwrap();
 }
 #[tokio::test]
 async fn incremental_chunks_edit_only_confirmed_bot_receipts_and_refresh_group_policy() {
@@ -584,7 +678,8 @@ async fn about_summary_parse_and_localized_errors_use_trusted_direct_and_group_r
             assert_eq!(b["chat_id"], chat);
             assert_eq!(b["reply_parameters"]["message_id"], 10);
             assert!(b["text"].as_str().unwrap().contains("Insight недоступен"));
-            assert!(b["text"].as_str().unwrap().starts_with("Незавершённый"));
+            assert!(b["text"].as_str().unwrap().starts_with("Ошибка"));
+            assert!(!b["text"].as_str().unwrap().contains("/cancel"));
             assert!(b["parse_mode"].is_null());
             reply(&mut s, &b, 90).await;
         });

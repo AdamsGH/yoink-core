@@ -44,7 +44,7 @@ export function finalSends(calls, message) {
 }
 export function finalText(text, result) {
   assert.equal(typeof result,'string');assert(result.length>0,'nonempty genuine cached result');
-  const header=/^Complete \u00b7 tldr\n\/cancel [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n\n/.exec(text);
+  const header=/^Complete \u00b7 tldr\n\n/.exec(text);
   assert(header,'native completed Telegram header, not an incremental draft');
   assert.equal(text.slice(header[0].length),result,'unchanged same-user cached HTTP body');
 }

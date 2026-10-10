@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
 import { inflateSync } from 'node:zlib';
 import net from 'node:net';
 import { once } from 'node:events';
-import { galleryImage, galleryResponse } from './gallery-source.mjs';
+import { galleryImage, galleryResponse, startGallerySource } from './gallery-source.mjs';
 import { AuthenticatedProxyFixture } from './source-http.mjs';
 
 test('gallery fixture supplies ordered distinct small PNGs and explicit broken sources', () => {
@@ -55,4 +60,27 @@ test('proxy gallery mapping requires exact authority, opt-in and fixture authent
   assert.equal(proxy.authHits, 1);
   proxy.galleryPort = undefined;
   assert.match(await connect('192.0.2.1:443'), /403/);
+});
+
+test('fixture trusts both Python and impersonated HTTP CA stores without trusting negative controls', async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), 'gallery-trust-'));
+  const paths = ['/usr/local/lib/python3.12/site-packages/certifi/cacert.pem', '/etc/ssl/certs/ca-certificates.crt'];
+  const capture = promisify(execFile);
+  let source;
+  try {
+    source = await startGallerySource({ tempRoot, image: 'fixture',
+      capture: (command, args) => capture(command, args, { timeout: 10000 }),
+      helperContainer: async (args) => {
+        assert(args.at(-1).includes('CurlInfo.CAINFO'));
+        return JSON.stringify(paths);
+      },
+    });
+    const mounts = source.dockerArgs.filter(arg => arg.startsWith('type=bind,'));
+    assert.equal(mounts.length, 2);
+    paths.forEach((target, index) => assert(mounts[index].endsWith(`target=${target},readonly`)));
+    assert.equal(source.untrustedDockerArgs.includes('--mount'), false);
+  } finally {
+    await source?.close();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });

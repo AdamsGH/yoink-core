@@ -230,6 +230,18 @@ impl InsightRuntime {
         };
         let topic = message.thread_id.map(|t| t.0.0);
         if command == "cancel" {
+            if text.split_whitespace().count() == 1 {
+                let active = self.active.lock().expect("work registry");
+                let mut found = false;
+                for work in active.values() {
+                    if work.actor == actor && work.chat == message.chat.id.0 && work.topic == topic
+                    {
+                        work.cancel.cancel();
+                        found = true;
+                    }
+                }
+                return found;
+            }
             if text.split_whitespace().count() != 2 {
                 return false;
             }
@@ -363,11 +375,10 @@ impl InsightRuntime {
                 let _ = sink.flush(true).await;
             }
             Err(error) => {
-                // Partial drafts are always visibly incomplete. Only mark an error
-                // while current authority remains; revocation/cancel emits nothing.
+                tracing::warn!(command, error = %error, "Insight request failed");
                 if self.require(&sink.identity, command, &cancel).await.is_ok() {
                     sink.state.lock().await.text = error_text(&error, russian).into();
-                    let _ = sink.flush(false).await;
+                    let _ = sink.flush_status(false, true).await;
                 }
             }
         }
@@ -417,16 +428,29 @@ struct Draft<'a> {
 }
 impl Draft<'_> {
     async fn flush(&self, complete: bool) -> Result<(), Error> {
+        self.flush_status(complete, false).await
+    }
+    async fn flush_status(&self, complete: bool, failed: bool) -> Result<(), Error> {
         let mut s = self.state.lock().await;
-        let label = match (self.russian, complete) {
-            (true, true) => "Готово",
-            (true, false) => "Незавершённый ответ",
-            (false, true) => "Complete",
-            (false, false) => "Incomplete answer",
+        let label = match (self.russian, complete, failed) {
+            (true, _, true) => "Ошибка",
+            (false, _, true) => "Failed",
+            (true, true, false) => "Готово",
+            (true, false, false) => "Незавершённый ответ",
+            (false, true, false) => "Complete",
+            (false, false, false) => "Incomplete answer",
         };
         // Reserve header space inside the same UTF-16 bound used by product messages.
-        let header = format!("{label} · {}\n/cancel {}\n\n", self.command, self.id);
-        let chunks = chunks_with_header(&header, &s.text);
+        let header = if complete || failed {
+            format!("{label} · {}\n\n", self.command)
+        } else {
+            format!("{label} · {}\n/cancel {}\n\n", self.command, self.id)
+        };
+        let mut chunks = chunks_with_header(&header, &s.text);
+        if failed {
+            // Retire cancellation instructions on every previously sent page.
+            chunks.resize(s.sent.len().max(chunks.len()), chunks[0].clone());
+        }
         for (index, text) in chunks.into_iter().enumerate() {
             if s.sent.get(index).is_some_and(|(_, old)| old == &text) {
                 continue;
@@ -516,6 +540,16 @@ fn chunks_with_header(header: &str, body: &str) -> Vec<String> {
 }
 fn error_text(error: &Error, russian: bool) -> &'static str {
     match (error, russian) {
+        (Error::Code("content_network_denied"), false) => {
+            "Source address was rejected by network protection."
+        }
+        (Error::Code("content_network_denied"), true) => {
+            "Адрес источника отклонен сетевой защитой."
+        }
+        (Error::Code("auth_failed"), false) => "The LLM provider rejected authorization.",
+        (Error::Code("auth_failed"), true) => "LLM-провайдер отклонил авторизацию.",
+        (Error::Code("model_not_found"), false) => "The configured LLM model was not found.",
+        (Error::Code("model_not_found"), true) => "Настроенная LLM-модель не найдена у провайдера.",
         (Error::Code("invalid_request"), false) => {
             "Usage: /about or /summary <YouTube URL>; /tldr <URL> [alias] [focus]."
         }

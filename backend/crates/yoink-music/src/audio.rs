@@ -335,7 +335,15 @@ impl MusicService {
             let result = tokio::select! {_=cancel.cancelled()=>return Err(MusicError::Cancelled),r=async {let _slot=self.slots.acquire().await.map_err(|_|MusicError::Cancelled)?;self.worker.audio(self.settings.request(task,provider),cancel.clone(),self.settings.audio_timeout,self.settings.audio_max_bytes).await}=>r};
             match result {
                 Ok(a) if a.len() == 1 && a[0].media_type == "audio/mpeg" => return Ok(a),
-                Err(e @ (MusicError::ResourceLimit | MusicError::Cancelled)) => return Err(e),
+                Err(e @ (MusicError::ResourceLimit | MusicError::Cancelled)) => {
+                    if !matches!(e, MusicError::Cancelled) {
+                        tracing::warn!(provider = provider.key(), error = ?e, "Music audio attempt failed");
+                    }
+                    return Err(e);
+                }
+                Err(e) => {
+                    tracing::warn!(provider = provider.key(), error = ?e, "Music audio attempt failed")
+                }
                 _ => {}
             }
         }

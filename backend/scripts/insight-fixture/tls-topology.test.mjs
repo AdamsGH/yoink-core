@@ -1,8 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { chooseSubnets, overlaps, occupiedSubnets, createTlsTopology, TLS_HOSTS } from './tls-topology.mjs';
+import { chooseSubnets, overlaps, occupiedSubnets, createTlsTopology, TLS_HOSTS, dockerIpv4Subnets } from './tls-topology.mjs';
 import { endpointConfig, VIDEO_ID, TRANSCRIPT } from './youtube-responses.mjs';
+test('Docker inventory requests only IPAM within the bounded process output',async()=>{
+ const docker=async args=>{
+  if(args[1]==='ls')return 'first\nsecond\nthird\nfourth\n';
+  const metadata=JSON.stringify({Containers:'x'.repeat(30000),IPAM:{Config:[{Subnet:'10.0.0.0/8'}]}});
+  if(!args.includes('--format'))return metadata.slice(-24*1024);
+  assert.deepEqual(args,['network','inspect','--format','{{json .IPAM.Config}}','first','second','third','fourth']);
+  return '[{"Subnet":"10.0.0.0/8"},{"Subnet":"fd00::/64"}]\n[]\n[{"Subnet":"172.20.0.0/16"}]\nnull\n';
+ };
+ assert.deepEqual(await dockerIpv4Subnets(docker),['10.0.0.0/8','172.20.0.0/16']);
+ assert.deepEqual(await dockerIpv4Subnets(async()=>''),[]);
+});
 test('route overlap includes supernets, default route does not reserve all addresses',()=>{
  assert(overlaps('93.184.1.0/24','93.184.0.0/16'));assert(!overlaps('93.184.1.0/24','93.184.2.0/24'));
  const plan=chooseSubnets(['0.0.0.0/0','172.17.0.0/16','10.0.0.0/8']);assert(!overlaps(plan.control,'172.17.0.0/16'));

@@ -179,6 +179,16 @@ impl MusicConfig {
         settings
             .validate()
             .map_err(|_| invalid("MUSIC_ENABLED", "invalid bounded Music worker settings"))?;
+        let mut allowed_proxy_origins = origins(read, "MUSIC_WORKER_ALLOWED_PROXY_ORIGINS")?;
+        for proxy in settings.proxies.values() {
+            let origin = url::Url::parse(proxy)
+                .map_err(|_| invalid("MUSIC_PROXY_URL", "invalid operator HTTP(S) proxy"))?
+                .origin()
+                .ascii_serialization();
+            if !allowed_proxy_origins.contains(&origin) {
+                allowed_proxy_origins.push(origin);
+            }
+        }
         let workspace_root = directory(read, "MUSIC_WORKSPACE", "/tmp/yoink-music")?;
         let timeout = settings.lookup_timeout.max(settings.audio_timeout);
         let executor = yoink_executor::ExecutorConfig {
@@ -204,7 +214,7 @@ impl MusicConfig {
                 4 * 1024 * 1024,
             )? as usize,
             max_artifacts: 1,
-            allowed_proxy_origins: origins(read, "MUSIC_WORKER_ALLOWED_PROXY_ORIGINS")?,
+            allowed_proxy_origins,
             allowed_private_origins: origins(read, "MUSIC_WORKER_ALLOWED_PRIVATE_ORIGINS")?,
         };
         Ok(Some(Self {
@@ -325,6 +335,33 @@ mod tests {
                 StatsConfig::from_lookup(&mut read(&[("STATS_ENABLED", "true")]), db, tg).is_err()
             );
         }
+    }
+    #[test]
+    fn configured_music_proxy_is_trusted_without_authorizing_private_sources() {
+        let config = MusicConfig::from_lookup(
+            &mut read(&[
+                ("MUSIC_ENABLED", "true"),
+                (
+                    "MUSIC_PROXY_URL",
+                    "http://user:fixture-secret@proxy.internal:8080",
+                ),
+                ("MUSIC_PROXY_PLATFORMS", "spotify,ytmusic,youtube"),
+                (
+                    "MUSIC_WORKER_ALLOWED_PROXY_ORIGINS",
+                    "[\"https://other-proxy.example\"]",
+                ),
+            ]),
+            true,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            config.executor.allowed_proxy_origins,
+            ["https://other-proxy.example", "http://proxy.internal:8080"]
+        );
+        assert!(config.executor.allowed_private_origins.is_empty());
+        assert!(!format!("{config:?}").contains("fixture-secret"));
     }
     #[test]
     fn legacy_active_defaults_and_credentials_are_preserved_and_redacted() {

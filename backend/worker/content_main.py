@@ -44,7 +44,7 @@ def validate(request):
 def run(request, *, allowed_proxy_origins=(), validate_destination=None):
     url, options, config = validate(request)
     # No source or private proxy allowlist is accepted from untrusted requests.
-    with guard.guard_context((), allowed_proxy_origins):
+    with guard.guard_context((), allowed_proxy_origins, dns_timeout=config['timeout_secs']):
         guard.validate_source_url(url, ())
         if validate_destination:
             validate_destination(url)

@@ -3,6 +3,13 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { endpointConfig } from './youtube-responses.mjs';
 export const TLS_HOSTS=['byok-success.fixture.invalid','www.youtube.com','generativelanguage.googleapis.com'];
+export async function dockerIpv4Subnets(docker){
+ const networks=(await docker(['network','ls','-q'])).split('\n').filter(Boolean);
+ if(!networks.length)return [];
+ // Full network metadata can exceed the process runner's bounded output.
+ const configs=await docker(['network','inspect','--format','{{json .IPAM.Config}}',...networks]);
+ return configs.split('\n').filter(Boolean).flatMap(line=>JSON.parse(line)??[]).map(config=>config.Subnet).filter(subnet=>subnet&&!subnet.includes(':'));
+}
 function range(cidr){const [ip,prefix]=cidr.split('/');assert.match(ip,/^\d+\.\d+\.\d+\.\d+$/);const octets=ip.split('.').map(Number);assert(octets.every(n=>n<=255));const bits=Number(prefix);assert(Number.isInteger(bits)&&bits>=0&&bits<=32);const n=octets.reduce((a,b)=>a*256+b,0),size=2**(32-bits);return [Math.floor(n/size)*size,Math.floor(n/size)*size+size-1];}
 export function overlaps(a,b){const [lo,hi]=range(a),[l,h]=range(b);return lo<=h&&l<=hi;}
 export function occupiedSubnets(hostRoutes,dockerSubnets){

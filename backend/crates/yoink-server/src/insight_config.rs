@@ -178,7 +178,7 @@ impl InsightConfig {
             ));
         }
         let response_bytes =
-            number(read, "INSIGHT_RESPONSE_MAX_BYTES", 1048576, 1024, 8388608)? as usize;
+            number(read, "INSIGHT_RESPONSE_MAX_BYTES", 1048576, 1024, 4194304)? as usize;
         let content_proxy = read("INSIGHT_CONTENT_PROXY")?;
         let openrouter_proxy = read("INSIGHT_OPENROUTER_PROXY")?;
         let mut allowed_proxy_origins = vec![];
@@ -288,7 +288,7 @@ mod tests {
             ("INSIGHT_TEXT_TIMEOUT_SECS", "61"),
             ("INSIGHT_DEFAULT_LANG", "it"),
             ("INSIGHT_MODE", "bad"),
-            ("INSIGHT_RESPONSE_MAX_BYTES", "8388609"),
+            ("INSIGHT_RESPONSE_MAX_BYTES", "4194305"),
             ("INSIGHT_WORKSPACE", "/"),
             ("INSIGHT_OAUTH_USER_URL", "http://example.com/user"),
         ] {
@@ -307,5 +307,29 @@ mod tests {
                 .is_ok()
             );
         }
+        let maximum = load(
+            &[
+                ("INSIGHT_ENABLED", "true"),
+                ("INSIGHT_RESPONSE_MAX_BYTES", "4194304"),
+            ],
+            150,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            yoink_insight::provider::HttpCompletion::new(
+                maximum.service.request_timeout,
+                maximum.response_bytes
+            )
+            .is_ok()
+        );
+        assert!(
+            yoink_insight::research::ResponsesResearch::new(
+                maximum.research_timeout,
+                maximum.response_bytes
+            )
+            .is_ok()
+        );
     }
 }

@@ -381,6 +381,11 @@ def download_media(request: dict[str, Any], settings: Any,
     except (KeyError, TypeError, ValueError) as exc:
         raise MediaFailure("invalid_media") from exc
     clips = options.get("clips", [])
+    from urllib.parse import urlsplit
+    ranged = bool(clips) and urlsplit(request["source_url"]).hostname in (
+        "youtube.com", "www.youtube.com", "music.youtube.com", "youtu.be",
+    ) and indices is None
+    ranged_sources = None
     if len(clips) > 20:
         raise MediaFailure("invalid_media")
     network = request.get("network") or {}
@@ -453,7 +458,7 @@ def download_media(request: dict[str, Any], settings: Any,
                 if not incomplete:
                     metadata.add(info)
                 known_size = info.get("filesize") or info.get("filesize_approx")
-                if known_size is not None and int(known_size) > max_bytes:
+                if not ranged and known_size is not None and int(known_size) > max_bytes:
                     raise MediaFailure("resource_limit")
                 return None
             index_selection = None
@@ -490,7 +495,25 @@ def download_media(request: dict[str, Any], settings: Any,
                 guard_baseline = guard_failure_count()
                 try:
                     with _preserve_retry_cause():
-                        return_code = downloader.download([request["source_url"]])
+                        if ranged:
+                            from clip_hls import download
+                            info = downloader.extract_info(request["source_url"], download=False)
+                            tracks = info.get("requested_formats") or [info]
+                            sizes = [t.get("filesize") or t.get("filesize_approx") for t in tracks]
+                            if all(size is not None for size in sizes) and sum(sizes) <= max_bytes:
+                                return_code = downloader.download([request["source_url"]])
+                            else:
+                                import re
+                                range_options = {**opts, "format": re.sub(r"(bestvideo|bestaudio|best)(?![a-z])", r"\1[protocol=m3u8_native]", opts["format"])}
+                                with (youtube_dl_factory or yt_dlp.YoutubeDL)(range_options) as range_downloader:
+                                    info = range_downloader.extract_info(request["source_url"], download=False)
+                                    metadata.add(info)
+                                    ranged_sources = download(info, clips, workspace, range_downloader, options, mode,
+                                                              max_bytes, max_total, ffmpeg, _ffmpeg_args, _bounded_output, timeout)
+                                clips = []
+                                return_code = 0
+                        else:
+                            return_code = downloader.download([request["source_url"]])
                 except MediaFailure:
                     # Metadata/quota/progress callbacks are local enforcement, not providers.
                     raise
@@ -501,6 +524,8 @@ def download_media(request: dict[str, Any], settings: Any,
                     raise MediaFailure("source_unavailable")
         emit_progress(75.0)
         sources = sorted((p for p in workspace.iterdir() if p.is_file() and p.name.startswith("source-")), key=lambda p: p.name)
+        if ranged_sources is not None:
+            sources = ranged_sources
         # Finalized provider outputs in extraction order, including video of any supported type.
         if gallery:
             sources = gallery_sources

@@ -40,10 +40,10 @@ test('duplicate count is scoped to actual final send and exact source message',(
   assert.equal(finalSends([call,call],39501).length,2);
 });
 const body='Native caf\u00e9 summary.';
-const complete=`Complete \u00b7 tldr\n/cancel 12345678-1234-4123-8123-123456789abc\n\n${body}`;
+const complete=`Complete \u00b7 tldr\n\n${body}`;
 test('cached final proof validates native header and exact body, rejecting drafts',()=>{
   finalText(complete,body);
-  for(const text of [body,complete.replace('Complete','Incomplete answer'),complete+'extra',complete.replace('12345678','not-a-uuid')])assert.throws(()=>finalText(text,body));
+  for(const text of [body,complete.replace('Complete','Incomplete answer'),complete+'extra',complete.replace('\n\n','\n/cancel 12345678-1234-4123-8123-123456789abc\n\n')])assert.throws(()=>finalText(text,body));
   assert.throws(()=>finalText(complete,''));
 });
 

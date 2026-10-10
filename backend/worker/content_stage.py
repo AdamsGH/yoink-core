@@ -50,7 +50,7 @@ def validate_destination(url):
 
 def run(r, settings):
     t = r['task']
-    with guard.guard_context((), settings.allowed_proxy_origins):
+    with guard.guard_context((), settings.allowed_proxy_origins, dns_timeout=settings.socket_timeout_secs):
         guard.configure_proxy(r['proxy_url'])
         if t['kind'] == 'content_get':
             validate_destination(t['url'])

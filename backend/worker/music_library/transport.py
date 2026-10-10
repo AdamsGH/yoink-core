@@ -1,5 +1,6 @@
 """Bounded provider bodies and every-hop DNS checks, including browser TLS."""
 from urllib.parse import urljoin, urlsplit
+import asyncio
 import threading
 from contextlib import contextmanager
 import httpx as _httpx
@@ -34,7 +35,7 @@ class BoundedTransport(_httpx.AsyncBaseTransport):
     def __init__(self, proxy=None):
         self.inner = _httpx.AsyncHTTPTransport(proxy=proxy, retries=0)
     async def handle_async_request(self, request):
-        _budget.admit(request.url)
+        await asyncio.to_thread(_budget.admit, request.url)
         request.extensions["timeout"] = {"connect": _budget.timeout, "read": _budget.timeout, "write": _budget.timeout, "pool": _budget.timeout}
         response = await self.inner.handle_async_request(request)
         data = bytearray()
@@ -70,11 +71,11 @@ class AsyncSession:
     async def get(self, url, **kwargs):
         from curl_cffi import CurlOpt
         for _ in range(6):
-            _budget.admit(url)
+            await asyncio.to_thread(_budget.admit, url)
             host, port = guard._host_port(urlsplit(url))
             proxy = self.proxies.get("https") or self.proxies.get("http")
             if not proxy:
-                address, _ = _resolve_pinned(host, port)
+                address, _ = await asyncio.to_thread(_resolve_pinned, host, port)
                 if ":" in address:
                     address = "[" + address + "]"
                 self.session.curl_options = {CurlOpt.RESOLVE: [f"{host}:{port}:{address}"]}

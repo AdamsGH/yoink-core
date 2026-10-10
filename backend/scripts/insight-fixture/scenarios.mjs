@@ -82,7 +82,7 @@ export async function telegram(c){
   await configure(c);const start=c.bot.calls.length,providers=c.trusted.calls.length;
   // Focus deliberately bypasses cache, including the earlier forced-receipt prime.
   c.bot.enqueue(44,44,`/tldr ${ARTICLE} native-tg-stream`,31001,'en');
-  const final=await c.waitFor(()=>c.bot.calls.slice(start).find(x=>['sendmessage','editmessagetext'].includes(x.method) && Number(x.data.chat_id)===44 && /^Complete · tldr\n\/cancel [0-9a-f-]+\n\nNative café summary\.$/.test(String(x.data.text))),'native Telegram completed summary');
+  const final=await c.waitFor(()=>c.bot.calls.slice(start).find(x=>['sendmessage','editmessagetext'].includes(x.method) && Number(x.data.chat_id)===44 && /^Complete · tldr\n\nNative café summary\.$/.test(String(x.data.text))),'native Telegram completed summary');
   assert.notEqual(Number(final.data.message_id??final.messageId),31001,'bot response is not the user source message');
   await c.waitFor(async()=>await c.db.query(`SELECT count(*) FROM runtime_text_effects WHERE token LIKE 'insight:123456:44:0:31001:0:%' AND state='confirmed' AND receipt=${Number(final.data.message_id??final.messageId)} AND json_extract(identity,'$.text')=${literal(final.data.text)}`)==='1','completed text has its exact durable confirmed receipt');
   assert(c.trusted.calls.slice(providers).some(x=>x.kind==='content'),'native TG uses actual full-content worker');

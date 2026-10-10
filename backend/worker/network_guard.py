@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import ipaddress
+import http.client
 import socket
 import threading
 import unicodedata
@@ -21,6 +22,7 @@ _REQUESTS_SESSION = None
 _ORIGINAL_REQUESTS_SEND = None
 _SOURCE_WIRE_ADMISSION = None
 _INHERIT_WIRE_ADMISSION = object()
+_BENCHMARK_DNS = None
 
 
 _GUARD_FAILURE_COUNT = 0
@@ -55,8 +57,17 @@ class NetworkValidationError(ValueError):
 
 def resolve_addresses(*args, **kwargs):
     try:
-        return _ORIGINAL_GETADDRINFO(*args, **kwargs)
-    except OSError as exc:
+        answers = _ORIGINAL_GETADDRINFO(*args, **kwargs)
+        if _BENCHMARK_DNS is not None and answers:
+            from benchmark_dns import BENCHMARK
+            addresses = [ipaddress.ip_address(a[4][0].split('%', 1)[0]) for a in answers]
+            host = args[0]
+            if not _is_ip_address(host) and all(a in BENCHMARK for a in addresses):
+                real = _BENCHMARK_DNS.addresses(host)
+                return [answer for address in real
+                        for answer in _ORIGINAL_GETADDRINFO(address, *args[1:], **kwargs)]
+        return answers
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as exc:
         raise NetworkPolicyError("network destination resolution failed") from exc
 
 
@@ -253,6 +264,7 @@ def restore_guard() -> None:
     global _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _ACTIVE_RELAY_ORIGIN
     global _REQUESTS_SESSION, _ORIGINAL_REQUESTS_SEND
     global _SOURCE_WIRE_ADMISSION
+    global _BENCHMARK_DNS
     socket.getaddrinfo = _ORIGINAL_GETADDRINFO
     OpenerDirector.open = _ORIGINAL_OPENER_OPEN
     ProxyHandler.proxy_open = _ORIGINAL_PROXY_OPEN
@@ -265,13 +277,14 @@ def restore_guard() -> None:
     _CONFIGURED_PROXY = None
     _ACTIVE_RELAY_ORIGIN = None
     _SOURCE_WIRE_ADMISSION = None
+    _BENCHMARK_DNS = None
 
 
 @contextmanager
 def guard_context(
     allowed_origins: tuple[str, ...],
     allowed_proxy_origins: tuple[str, ...] = (),
-    *, source_wire_admission=_INHERIT_WIRE_ADMISSION,
+    *, source_wire_admission=_INHERIT_WIRE_ADMISSION, dns_timeout=None,
 ):
     """Restore enclosing policy on exit. Optional wire admission precedes source DNS.
 
@@ -279,10 +292,14 @@ def guard_context(
     """
     global _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY
     global _SOURCE_WIRE_ADMISSION
-    previous = (_ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _SOURCE_WIRE_ADMISSION)
+    global _BENCHMARK_DNS
+    previous = (_ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _SOURCE_WIRE_ADMISSION, _BENCHMARK_DNS)
     previous_send = _REQUESTS_SESSION.send if _REQUESTS_SESSION is not None else None
     was_installed = socket.getaddrinfo is guarded_getaddrinfo
     install_guard(allowed_origins, allowed_proxy_origins)
+    if dns_timeout is not None:
+        from benchmark_dns import Resolver
+        _BENCHMARK_DNS = Resolver(dns_timeout)
     # Process-wide like the guard itself, including downloader fragment threads.
     if source_wire_admission is not _INHERIT_WIRE_ADMISSION:
         _SOURCE_WIRE_ADMISSION = source_wire_admission
@@ -292,7 +309,7 @@ def guard_context(
         yield
     finally:
         if was_installed:
-            _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _SOURCE_WIRE_ADMISSION = previous
+            _ALLOWED_ORIGINS, _ALLOWED_PROXY_ORIGINS, _CONFIGURED_PROXY, _SOURCE_WIRE_ADMISSION, _BENCHMARK_DNS = previous
             _ensure_guarded()
             if _SOURCE_WIRE_ADMISSION is not None and getattr(previous_send, "_source_wire_guard", None) is _guarded_requests_send:
                 _REQUESTS_SESSION.send = previous_send

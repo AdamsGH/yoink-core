@@ -8,7 +8,7 @@ import { createNativeDbClient } from '../media-fixture/native-db.mjs';
 import { BotApiFixture } from '../media-fixture/bot-api.mjs';
 import { owned, api, freePort, initData, waitFor, report } from './helpers.mjs';
 import { Services } from './services.mjs';
-import { createTlsTopology, occupiedSubnets } from './tls-topology.mjs';
+import { createTlsTopology, occupiedSubnets, dockerIpv4Subnets } from './tls-topology.mjs';
 export async function withRuntime(config, execute) {
   const secrets = [];
   try { return await owned(async defer => {
@@ -83,9 +83,7 @@ export async function withRuntime(config, execute) {
     if(config.selected?.some(name=>name.startsWith('positive'))) {
       const routes=async()=>{
         const host=JSON.parse((await capture('ip',['-j','-4','route','show','table','all'])).output);
-        const networks=(await docker(['network','ls','-q'])).split('\n').filter(Boolean);
-        const inspected=networks.length?JSON.parse(await docker(['network','inspect',...networks])):[];
-        return occupiedSubnets(host,inspected.flatMap(network=>network.IPAM.Config??[]).map(entry=>entry.Subnet).filter(subnet=>subnet && !subnet.includes(':')));
+        return occupiedSubnets(host,await dockerIpv4Subnets(docker));
       };
       tls=await createTlsTopology({docker,helperContainer,startContainer,defer,routes,image:config['fixture-image'],waitFor});
       await docker(['network','connect',network,tls.networkContainer]);

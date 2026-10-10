@@ -254,7 +254,7 @@ def _validate_search_request(request, frame_bytes):
 def _search(request, settings):
     from search_engine import search
     try:
-        with guard_context(settings.allowed_private_origins, settings.allowed_proxy_origins):
+        with guard_context(settings.allowed_private_origins, settings.allowed_proxy_origins, dns_timeout=settings.socket_timeout_secs):
             network = request.get("network") or {}
             configure_proxy(network.get("proxy_url"))
             with proxy_route(network.get("proxy_url"), settings.socket_timeout_secs) as proxy:
@@ -281,7 +281,7 @@ def _download(request: dict[str, Any], settings: Settings) -> None:
     try:
         if request["task"]["kind"] != "download":
             raise MediaFailure("unsupported_source")
-        with guard_context(settings.allowed_private_origins, settings.allowed_proxy_origins):
+        with guard_context(settings.allowed_private_origins, settings.allowed_proxy_origins, dns_timeout=settings.socket_timeout_secs):
             network = request.get("network") or {}
             configure_proxy(network.get("proxy_url"))
             validate_source_url(request["source_url"], settings.allowed_private_origins)

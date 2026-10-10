@@ -125,7 +125,7 @@ def execute(request, settings, emit, prefix):
     try:
         # Music never inherits the content fixture's private-source allowances.
         transport.configure(min(request["request_timeout_ms"] / 1000, settings.socket_timeout_secs), request["response_max_bytes"], request["max_requests"])
-        with guard.guard_context((), settings.allowed_proxy_origins, source_wire_admission=transport._budget.reserve), transport.requests_budget():
+        with guard.guard_context((), settings.allowed_proxy_origins, source_wire_admission=transport._budget.reserve, dns_timeout=transport._budget.timeout), transport.requests_budget():
             guard.configure_proxy(request["proxy_url"])
             with proxy_route(request["proxy_url"], settings.socket_timeout_secs) as proxy:
                 transport._budget.proxy = proxy

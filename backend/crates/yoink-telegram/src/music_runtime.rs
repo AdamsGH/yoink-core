@@ -762,13 +762,19 @@ impl MusicRuntime {
             return Err(MusicError::Denied);
         }
         self.require(actor).await?;
-        let answer = self
+        let answer = match self
             .service
             .inline(actor.user_id, &query.query, self.stop.child_token())
-            .await?;
-        if answer.results.is_empty() && links.iter().all(|l| l.provider == MusicProvider::Youtube) {
-            return Ok(MusicInlineOutcome::Unsupported);
-        }
+            .await
+        {
+            Ok(answer) => answer,
+            Err(MusicError::SourceUnavailable)
+                if links.iter().all(|l| l.provider == MusicProvider::Youtube) =>
+            {
+                return Ok(MusicInlineOutcome::Unsupported);
+            }
+            Err(error) => return Err(error),
+        };
         let preference = self
             .admission(async {
                 self.identities
@@ -810,7 +816,7 @@ impl MusicRuntime {
         Ok(MusicInlineOutcome::Answered)
     }
 }
-fn hidden_links(message: &Message) -> Vec<String> {
+pub(crate) fn hidden_links(message: &Message) -> Vec<String> {
     message
         .entities()
         .into_iter()

@@ -482,6 +482,7 @@ impl TelegramAdapter {
             () = menus => unreachable!("menu loop runs until dropped"),
             () = progress => unreachable!("progress loop runs until dropped"),
             _ = shutdown.cancelled() => {
+                _products_stop.cancel();
                 lifecycle.cancel_all();
                 insight_stop.cancel();
                 stop.stop();
@@ -1038,11 +1039,8 @@ async fn handle_message(
     let Some(_handler) = dependencies.lifecycle.handlers.admit() else {
         return Ok(());
     };
-    let stop = dependencies.lifecycle.stop.clone();
-    tokio::select! {
-        _ = stop.cancelled() => Ok(()),
-        result = handle_message_admitted(bot, message, identity, bot_username, system, dependencies) => result,
-    }
+    // Cancel product work, not admitted handlers that may be committing a validated receipt.
+    handle_message_admitted(bot, message, identity, bot_username, system, dependencies).await
 }
 
 async fn handle_message_admitted(
@@ -1665,10 +1663,7 @@ async fn handle_callback(
     let Some(_handler) = dependencies.lifecycle.handlers.admit() else {
         return Ok(());
     };
-    tokio::select! {
-        _ = dependencies.lifecycle.stop.cancelled() => Ok(()),
-        result = handle_callback_admitted(bot, query, identity, downloads) => result,
-    }
+    handle_callback_admitted(bot, query, identity, downloads).await
 }
 
 async fn handle_callback_admitted(

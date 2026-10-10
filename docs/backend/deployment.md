@@ -28,6 +28,27 @@ sets socket-directory ownership before startup. The production image contains no
 fixture server or refresh controls. Synthetic acceptance does not establish live
 account authorization or real PoToken issuance.
 
+## Source DNS
+
+Worker source admission rejects private and benchmark addresses. When Mihomo DNS
+returns only fake-IP addresses in `198.18.0.0/15` for a hostname, workers recover
+real IPv4 addresses through Cloudflare DNS-over-HTTPS at `https://1.1.1.1/dns-query`.
+TLS verification, bounded responses and the existing worker socket timeout apply.
+Every recovered address must be public; IP-literal sources and mixed private DNS
+answers remain rejected. Recovered answers are pinned for that worker operation.
+Downloader/Music/Insight traffic still uses its configured proxy.
+
+`YOINK_RUST_INSIGHT_RESPONSE_MAX_BYTES` limits source downloads and provider
+responses. Its default is 1 MiB; the shared client maximum is 4 MiB. Use
+`4194304` for YouTube pages that exceed the default. Larger values fail
+configuration validation before startup.
+
+Music derives trusted proxy origins from `YOINK_RUST_MUSIC_PROXY_URL` for the
+configured proxy platforms. This does not authorize private source addresses.
+`YOINK_RUST_MUSIC_WORKER_RESPONSE_BYTES` separately bounds upstream metadata
+and extractor bodies (default 1 MiB, maximum 8 MiB). YouTube audio extraction
+can require `4194304`; the MP3 artifact limit remains separate.
+
 ## Cutover and rollback
 
 1. Finish the matching-image acceptance and configuration checks, and commit the
