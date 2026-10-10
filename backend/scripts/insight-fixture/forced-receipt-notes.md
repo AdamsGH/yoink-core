@@ -5,10 +5,10 @@ The owned module exports `forcedReceipt(c)`. It fails closed in preflight until 
 ## Existing source evidence
 
 - `yoink-telegram/src/text.rs`: confirmation hold enters after the real Bot API response passes sender/chat/text proof, outside the five-second request timeout, immediately before durable `confirm_text`.
-- `insight_runtime.rs`: initial token is `insight:123456:44:0:39501:0:0`. Any existing effect fences replay before product execution. Handler ownership survives Telegram adapter abort and is joined by `drain_handlers`.
+- `insight_runtime.rs`: this cached reply sends directly, with final receipt token `insight:123456:44:0:39501:0:0`. Uncached private previews seal revision 0 and send the final at revision 1. Any initial effect fences replay before product execution. Handler ownership survives Telegram adapter abort and is joined by `drain_handlers`.
 - `lib.rs::insight_distribution`: Insight concurrent commands return `None`, while `/start` uses chat distribution. Thus a later `/start` response is a live-handler witness but **not** an ordering barrier for a concurrent `/tldr` replay. getUpdates acknowledgement, queue-empty, unchanged ledger, and stopped-handler drain do not prove that this exact replay handler reached its fence.
 - `runtime.rs`: exact adapter task ID is logged on spawn and cancellation join. Handler drain, concrete Insight shutdown and database shutdown are separately logged.
-- `Draft::flush(true)` adds `Complete`, the command and a generated cancellation UUID before the body. The gate validates that completed header and the unchanged cached body, rather than incorrectly comparing the entire Telegram message to the raw HTTP result. Cached stream execution emits no deltas.
+- `Draft::flush(true)` sends the source-linked bold `Summary` header and rendered body without a cancellation command. The gate validates that final header and unchanged plain cached body. Cached execution emits no fake deltas. Private previews have no receipt; only the final send enters the confirmation hold.
 
 ## Required coordinator context API
 

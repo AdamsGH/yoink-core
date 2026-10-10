@@ -29,6 +29,6 @@ assert.equal(result.status, 0, `sandboxed worker failed: ${result.stderr}`);
 assert.equal(result.stderr, '', 'sandboxed worker must not print raw diagnostics');
 assert.deepEqual(JSON.parse(result.stdout), {
   version: request.version, operation_id: request.operation_id, attempt: request.attempt,
-  event: { type: 'failure', class: 'source_unavailable' },
+  event: { type: 'failure', class: 'network_denied' },
 });
 console.log('Default launcher: hardened container, isolated Python imports and full v2 request/settings passed.');

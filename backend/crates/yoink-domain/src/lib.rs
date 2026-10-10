@@ -1302,7 +1302,7 @@ pub fn automatic_provider_v1(url: &Url, mode: MediaMode) -> Engine {
     {
         return Engine::AutoGalleryV1;
     }
-    if matches("instagram.com") {
+    if matches("instagram.com") || matches("tiktok.com") {
         Engine::AutoFallbackV1
     } else {
         Engine::AutoYtDlpV1
@@ -1353,6 +1353,21 @@ mod provider_routing_tests {
             ("https://vk.com/path/wall-123", Engine::AutoYtDlpV1),
             ("https://instagram.com/p/id", Engine::AutoFallbackV1),
             ("https://www.instagram.com/p/id", Engine::AutoFallbackV1),
+            ("https://vt.tiktok.com/ZSbnUfybf/", Engine::AutoFallbackV1),
+            ("https://vm.tiktok.com/short/", Engine::AutoFallbackV1),
+            (
+                "https://www.tiktok.com/@user/photo/123",
+                Engine::AutoFallbackV1,
+            ),
+            (
+                "https://www.tiktok.com/@user/video/123",
+                Engine::AutoFallbackV1,
+            ),
+            (
+                "https://tiktok.com.evil.test/@user/photo/123",
+                Engine::AutoYtDlpV1,
+            ),
+            ("https://nottiktok.com/@user/photo/123", Engine::AutoYtDlpV1),
             ("https://notinstagram.com/p/id", Engine::AutoYtDlpV1),
             (
                 "https://youtube.com/watch?url=vk.com/wall-123",

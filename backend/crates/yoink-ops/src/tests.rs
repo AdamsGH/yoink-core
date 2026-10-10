@@ -169,6 +169,15 @@ async fn snapshot_schema_survives_rebuild_migrations() {
         );
     }
     snapshot.verify_schema().await.unwrap();
+    let public_failure: String = query(include_str!("../../yoink-storage/sql/get_operation.sql"))
+        .bind(7_i64)
+        .bind("content-failed")
+        .fetch_one(snapshot.database())
+        .await
+        .unwrap()
+        .try_get("failure_code")
+        .unwrap();
+    assert_eq!(public_failure, "geo_blocked");
     assert_eq!(runtime_rows(&snapshot).await, before_rows);
     assert_eq!(failures(&snapshot).await, before_failures);
     snapshot.close().await.unwrap();

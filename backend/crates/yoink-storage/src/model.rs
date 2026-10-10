@@ -128,6 +128,7 @@ pub struct LeaseHeartbeat {
 #[derive(Clone, Debug)]
 pub struct OperationRecord {
     pub content_failure: Option<String>,
+    pub failure_code: Option<String>,
     pub operation_id: Uuid,
     pub actor_id: u64,
     pub target: Option<yoink_domain::DeliveryTarget>,

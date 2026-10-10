@@ -44,7 +44,7 @@ export function finalSends(calls, message) {
 }
 export function finalText(text, result) {
   assert.equal(typeof result,'string');assert(result.length>0,'nonempty genuine cached result');
-  const header=/^Complete \u00b7 tldr\n\n/.exec(text);
+  const header=/^🔗 Summary\n\n/.exec(text);
   assert(header,'native completed Telegram header, not an incremental draft');
   assert.equal(text.slice(header[0].length),result,'unchanged same-user cached HTTP body');
 }
@@ -54,7 +54,7 @@ export function finalText(text, result) {
 export async function forcedReceipt(c) {
   requireContext(c);
   await configure(c);
-  const user=await session(c,44), message=39501, token=`insight:123456:44:0:${message}:0:0`;
+  const user=await session(c,44), message=39501, token=`insight:123456:44:0:${message}:0:0`, replayToken=token;
   const body={command:'tldr',url:ARTICLE};
   assert.equal(await c.db.query(`SELECT count(*) FROM runtime_text_effects WHERE token='${token}'`),'0');
   const first=await user('/summarize',{method:'POST',body});
@@ -66,7 +66,14 @@ export async function forcedReceipt(c) {
   let released=false, primary;
   try {
     c.bot.enqueue(44,44,`/tldr ${ARTICLE}`,message,'en');
-    await c.waitFor(async()=>{const s=await c.confirmation('confirmation_status');return s.ok && s.hold?.token===token && s.hold.state==='entered';},'native validated final receipt enters exact confirmation hold',10000);
+    try {
+      await c.waitFor(async()=>{const s=await c.confirmation('confirmation_status');return s.ok && s.hold?.token===token && s.hold.state==='entered';},'native validated final receipt enters exact confirmation hold',10000);
+    } catch(error) {
+      let effects;
+      try { effects=await c.db.query(`SELECT group_concat(token || ':' || state) FROM runtime_text_effects WHERE token LIKE 'insight:123456:44:0:${message}:%'`); } catch { effects='unavailable'; }
+      error.message+=`; effects=${effects}; BotAPI=${JSON.stringify(c.bot.calls.slice(before).filter(x=>['sendmessage','sendmessagedraft'].includes(x.method)))}`;
+      throw error;
+    }
     const entered=performance.now();
     assert.equal(await c.db.query(`SELECT state='sending' AND receipt IS NULL FROM runtime_text_effects WHERE token='${token}'`),'1');
     const sends=finalSends(c.bot.calls.slice(before),message);assert.equal(sends.length,1);finalText(sends[0].data.text,cached.result);
@@ -87,13 +94,13 @@ export async function forcedReceipt(c) {
     assert.equal(await c.db.query(`SELECT state='confirmed' AND receipt IS NOT NULL FROM runtime_text_effects WHERE token='${token}'`),'1','released owned handler confirmed validated receipt before DB close');
     assert.equal(finalSends(c.bot.calls.slice(before),message).length,1);
     await c.launch();await c.ready();
-    const initial=await c.replayStatus(token);assert.equal(initial.token,token);assert.equal(initial.fenced,0,'observation must be reset in restarted process');
+    const initial=await c.replayStatus(replayToken);assert.equal(initial.token,replayToken);assert.equal(initial.fenced,0,'observation must be reset in restarted process');
     const replayStart=c.bot.calls.length;
     c.bot.enqueue(44,44,`/tldr ${ARTICLE}`,message,'en');
     c.bot.enqueue(45,45,'/start',message+1,'en');
     await c.waitFor(()=>c.bot.calls.slice(replayStart).some(x=>x.method==='sendmessage' && Number(x.data.chat_id)===45),'separate live /start handler response',LIMITS.replayObservation);
-    await c.waitFor(async()=>{const s=await c.replayStatus(token);return s.token===token && s.fenced===1;},'exact concurrent replay handler observed at existing-ledger fence',LIMITS.replayObservation);
-    replayProof(await c.replayStatus(token),token);
+    await c.waitFor(async()=>{const s=await c.replayStatus(replayToken);return s.token===replayToken && s.fenced===1;},'exact concurrent replay handler observed at existing-ledger fence',LIMITS.replayObservation);
+    replayProof(await c.replayStatus(replayToken),replayToken);
     await c.stop(); // drain all replay handlers before negative assertions
     assert.equal(await c.db.query(sql),stopped,'replay cannot mutate stopped receipt');
     assert.equal(finalSends(c.bot.calls.slice(before),message).length,1,'no unsafe duplicate final send');

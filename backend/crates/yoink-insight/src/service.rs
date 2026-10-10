@@ -3,7 +3,7 @@ use crate::{
     content::{ContentSource, normalize, video_id},
     invalid,
     prompts::{self, Alias, AliasInput},
-    provider::{Completion, Route, Shape},
+    provider::{Completion, DeltaSink, Route, Shape},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -770,13 +770,30 @@ impl Insight {
             "gateway"
         };
         let alias_key = alias.as_ref().map(|a| a.0.as_str());
+        let mut guarded = sink.map(|sink| AuthorizedSink {
+            service: self,
+            sink,
+            uid,
+            feature,
+            routes: &routes,
+            command: &r.command,
+            search,
+            research_route: None,
+        });
         if r.focus.is_none() {
             let c = self.db.connection().await?;
             self.authorize(&*c, uid, Some(feature), false).await?;
             if let Some(row) = query("SELECT result FROM insight_native_cache WHERE cache_key=? AND user_id=? AND expires_at>?").bind(&key).bind(uid).bind(Utc::now()).fetch_optional(&*c).await? {
                 self.log(&*c, uid, r, &lang, "cached", None, video.as_deref(), None, None, alias_key, via).await?;
-                return Ok(Summary { result: row.try_get("result")?, cached: true, route: via.into(), alias: alias.map(|a| a.0) });
+                let result = row.try_get("result")?;
+                drop(c);
+                if let Some(sink) = &guarded { sink.phase(crate::streaming::Phase::Cached, url.as_str(), alias_key).await?; }
+                return Ok(Summary { result, cached: true, route: via.into(), alias: alias.map(|a| a.0) });
             }
+        }
+        if let Some(sink) = &guarded {
+            sink.phase(crate::streaming::Phase::Fetching, url.as_str(), alias_key)
+                .await?;
         }
         let content = self
             .content
@@ -820,7 +837,18 @@ impl Insight {
         } else {
             None
         };
+        if let Some(sink) = &mut guarded {
+            sink.research_route = research_route.as_ref();
+        }
         let research = if search {
+            if let Some(sink) = &guarded {
+                sink.phase(
+                    crate::streaming::Phase::Researching,
+                    url.as_str(),
+                    alias_key,
+                )
+                .await?;
+            }
             let query = format!(
                 "{}\n{}\n{}",
                 url,
@@ -872,19 +900,13 @@ impl Insight {
         if !reserved {
             self.reserve_quota(uid, feature, cleanup).await?;
         }
-        let outcome = if let Some(sink) = sink {
-            let guarded = AuthorizedSink {
-                service: self,
-                sink,
-                uid,
-                feature,
-                routes: &routes,
-                command: &r.command,
-                search,
-                research_route: research_route.as_ref(),
-            };
+        if let Some(sink) = &guarded {
+            sink.phase(crate::streaming::Phase::Generating, url.as_str(), alias_key)
+                .await?;
+        }
+        let outcome = if let Some(guarded) = &guarded {
             self.completion
-                .stream(&routes, &prompt, &guarded, cancel)
+                .stream(&routes, &prompt, guarded, cancel)
                 .await
         } else {
             self.completion.complete(&routes, &prompt, cancel).await
@@ -1008,31 +1030,48 @@ struct AuthorizedSink<'a> {
     search: bool,
     research_route: Option<&'a Route>,
 }
+impl AuthorizedSink<'_> {
+    async fn require(&self) -> Result<(), Error> {
+        let c = self.service.db.connection().await?;
+        self.service
+            .authorize(&*c, self.uid, Some(self.feature), false)
+            .await?;
+        if self.search {
+            self.service
+                .authorize(&*c, self.uid, Some("search"), false)
+                .await?
+        }
+        if self.service.routes(&*c, self.uid, self.command).await? != self.routes {
+            return Err(Error::Code("route_changed"));
+        }
+        if let Some(route) = self.research_route {
+            let mut current = self.service.gateway_route(&*c).await?;
+            current.model = route.model.clone();
+            if current != *route {
+                return Err(Error::Code("route_changed"));
+            }
+        }
+        Ok(())
+    }
+}
 impl crate::provider::DeltaSink for AuthorizedSink<'_> {
     fn delta<'a>(&'a self, text: &'a str) -> crate::FutureResult<'a, ()> {
         Box::pin(async move {
-            {
-                let c = self.service.db.connection().await?;
-                self.service
-                    .authorize(&*c, self.uid, Some(self.feature), false)
-                    .await?;
-                if self.search {
-                    self.service
-                        .authorize(&*c, self.uid, Some("search"), false)
-                        .await?
-                }
-                if self.service.routes(&*c, self.uid, self.command).await? != self.routes {
-                    return Err(Error::Code("route_changed"));
-                }
-                if let Some(route) = self.research_route {
-                    let mut current = self.service.gateway_route(&*c).await?;
-                    current.model = route.model.clone();
-                    if current != *route {
-                        return Err(Error::Code("route_changed"));
-                    }
-                }
-            }
+            self.require().await?;
             self.sink.delta(text).await
+        })
+    }
+    fn phase<'a>(
+        &'a self,
+        phase: crate::streaming::Phase,
+        source: &'a str,
+        alias: Option<&'a str>,
+    ) -> crate::FutureResult<'a, ()> {
+        Box::pin(async move {
+            self.require().await?;
+            self.sink.phase(phase, source, alias).await?;
+            // Status delivery can suspend before the next external operation.
+            self.require().await
         })
     }
 }

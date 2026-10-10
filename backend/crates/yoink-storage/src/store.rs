@@ -635,13 +635,47 @@ impl Store {
     }
 
     pub async fn fail(&self, claim: &Claim, retryable: bool) -> Result<(), StoreError> {
+        self.fail_with_code(claim, retryable, None).await
+    }
+
+    /// Persist only a bounded public classification, never extractor diagnostics or URLs.
+    pub async fn fail_with_code(
+        &self,
+        claim: &Claim,
+        retryable: bool,
+        code: Option<&str>,
+    ) -> Result<(), StoreError> {
         validate_claim(claim)?;
+        if code.is_some_and(|code| {
+            !matches!(
+                code,
+                "unsupported_source"
+                    | "source_unavailable"
+                    | "rate_limited"
+                    | "invalid_media"
+                    | "processing_failed"
+                    | "resource_limit"
+                    | "cookie_required"
+                    | "geo_blocked"
+                    | "age_restricted"
+                    | "private_content"
+                    | "live_stream"
+                    | "no_media"
+                    | "media_timeout"
+                    | "network_denied"
+                    | "content_unavailable"
+                    | "source_blocked"
+            )
+        }) {
+            return Err(StoreError::InvalidInput);
+        }
         let row = query(include_str!("../sql/fail.sql"))
             .bind(claim.operation_id)
             .bind(claim.attempt as i32)
             .bind(claim.lease_token)
             .bind(&claim.worker_id)
             .bind(retryable)
+            .bind(code)
             .execute(&self.database)
             .await
             .map_err(|_| StoreError::Database)?;
@@ -757,6 +791,9 @@ impl Store {
                     .transpose()?,
                 content_failure: row
                     .try_get("content_failure")
+                    .map_err(|_| StoreError::InvalidStoredData)?,
+                failure_code: row
+                    .try_get("failure_code")
                     .map_err(|_| StoreError::InvalidStoredData)?,
                 progress_stage: row
                     .try_get::<Option<String>, _>("progress_stage")

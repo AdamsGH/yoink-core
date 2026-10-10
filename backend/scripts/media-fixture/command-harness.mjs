@@ -87,5 +87,10 @@ export function commandHarness({
     assert.equal(botApi.uploadCalls, uploads);
     assert.equal(botApi.sendCalls, sends);
   }
-  return { submit, succeeded, cancel, inspectUpload, execute, request, reject, replay };
+  async function progressEdits(operationId) {
+    const [chat, message] = (await fixtureSql(`SELECT chat_id || '|' || message_id FROM runtime_progress_notices WHERE operation_id='${operationId}'`)).split('|');
+    return botApi.calls.filter(call => call.method === 'editmessagetext'
+      && Number(call.data.chat_id) === Number(chat) && Number(call.data.message_id) === Number(message));
+  }
+  return { submit, succeeded, cancel, inspectUpload, execute, request, reject, replay, progressEdits };
 }

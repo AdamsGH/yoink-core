@@ -279,7 +279,26 @@ async fn queue_persistence_contract() {
         .unwrap();
     assert_eq!(first_attempt.operation_id, retry.operation_id);
     assert_eq!(first_attempt.attempt, 1);
-    store.fail(&first_attempt, true).await.unwrap();
+    assert_eq!(
+        store
+            .fail_with_code(&first_attempt, true, Some("raw secret URL"))
+            .await,
+        Err(StoreError::InvalidInput)
+    );
+    store
+        .fail_with_code(&first_attempt, true, Some("media_timeout"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get(10004, retry.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .failure_code
+            .as_deref(),
+        Some("media_timeout")
+    );
     let second_attempt = store
         .claim("retry-worker", Duration::from_secs(30))
         .await
@@ -287,7 +306,29 @@ async fn queue_persistence_contract() {
         .unwrap();
     assert_eq!(second_attempt.operation_id, retry.operation_id);
     assert_eq!(second_attempt.attempt, 2);
-    store.fail(&second_attempt, true).await.unwrap();
+    assert!(
+        store
+            .get(10004, retry.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .failure_code
+            .is_none()
+    );
+    store
+        .fail_with_code(&second_attempt, true, Some("geo_blocked"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get(10004, retry.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .failure_code
+            .as_deref(),
+        Some("geo_blocked")
+    );
     assert_eq!(
         store
             .get(10004, retry.operation_id)
@@ -598,6 +639,16 @@ async fn queue_persistence_contract() {
         .unwrap();
     replacement.migrate().await.unwrap();
     replacement.verify_schema().await.unwrap();
+    assert_eq!(
+        replacement
+            .get(10004, retry.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .failure_code
+            .as_deref(),
+        Some("geo_blocked")
+    );
     let restarted_record = replacement
         .get(10013, persisted.operation_id)
         .await

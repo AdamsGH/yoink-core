@@ -194,16 +194,18 @@ export async function abortedQuota(c) {
 }
 export async function receiptShutdown(c) {
   await configure(c);const message=39001,base=`insight:123456:44:0:${message}:0:0`,before=c.bot.calls.length;
+  const finalToken=`insight:123456:44:0:${message}:0:1`;
   c.trusted.holdReceipt=true;c.bot.enqueue(44,44,`/tldr ${ARTICLE} receipt-shutdown`,message,'en');
   try {
     await c.waitFor(()=>c.trusted.receipts.size===1,'actual Bot API receipt stalled');
-    assert.equal(await c.db.query(`SELECT state='sending' AND receipt IS NULL FROM runtime_text_effects WHERE token='${base}'`),'1','durable ledger admission precedes stalled receipt');
+    assert.equal(await c.db.query(`SELECT state='sending' AND receipt IS NULL FROM runtime_text_effects WHERE token='${finalToken}'`),'1','durable final admission precedes stalled receipt');
+    assert.equal(await c.db.query(`SELECT state FROM runtime_text_effects WHERE token='${base}'`),'sealed','preview has no durable receipt');
     await c.stop();
     assert.equal(c.trusted.receipts.size,0,'original-process shutdown closes stalled receipt socket');
-    const stopped=await c.db.query(`SELECT state,receipt,bound FROM runtime_text_effects WHERE token='${base}'`);
-    assert.equal(await c.db.query(`SELECT state IN ('sending','unknown','sealed') AND receipt IS NULL FROM runtime_text_effects WHERE token='${base}'`),'1','receipt never confirms after cancellation');
+    const stopped=await c.db.query(`SELECT state,receipt,bound FROM runtime_text_effects WHERE token='${finalToken}'`);
+    assert.equal(await c.db.query(`SELECT state IN ('sending','unknown') AND receipt IS NULL FROM runtime_text_effects WHERE token='${finalToken}'`),'1','receipt never confirms after cancellation');
     const count=c.bot.calls.length;c.trusted.releaseReceipts();
-    assert.equal(await c.db.query(`SELECT state,receipt,bound FROM runtime_text_effects WHERE token='${base}'`),stopped,'late receipt cannot mutate closed-store effect');
+    assert.equal(await c.db.query(`SELECT state,receipt,bound FROM runtime_text_effects WHERE token='${finalToken}'`),stopped,'late receipt cannot mutate closed-store effect');
     assert.equal(c.bot.calls.length,count,'no handler work after original process exit');
     c.trusted.holdReceipt=false;await c.launch();await c.ready();
     assert.equal((await c.replayStatus(base)).fenced,0);

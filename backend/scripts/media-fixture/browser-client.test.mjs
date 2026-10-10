@@ -45,7 +45,7 @@ test('CDP errors omit response bodies, params and credentials', async () => {
   const { pipe, input } = transport();
   const pending = pipe.request('Invalid.operation', { password: 'secret' });
   input.write(`${JSON.stringify({ id: 1, error: { code: -1, message: 'credential secret', data: 'response body' } })}\0`);
-  await assert.rejects(pending, { message: 'CDP command failed: Invalid.operation' });
+  await assert.rejects(pending, { message: 'CDP command failed: Invalid.operation (-1)' });
   pipe.fail();
 });
 
@@ -68,6 +68,27 @@ test('transport failure rejects all requests and all subsequent requests', async
   await Promise.all([a, b]);
   await assert.rejects(pipe.request('Page.enable'), /CDP pipe ended/);
   assert.equal(pipe.pending.size, 0);
+});
+
+test('only expired Fetch interceptions permit cancellation recovery without disclosing payloads', async () => {
+  const { pipe, input, frames } = transport();
+  for (const [method, code, message, expired] of [
+    ['Fetch.continueRequest', -32602, 'Invalid InterceptionId.', true],
+    ['Fetch.continueRequest', -32602, 'Invalid InterceptionId', true],
+    ['Fetch.failRequest', -32602, 'Invalid InterceptionId.', true],
+    ['Fetch.continueRequest', -32602, 'invalid secret params', false],
+    ['Fetch.continueRequest', -32000, 'Invalid InterceptionId.', false],
+    ['Page.navigate', -32602, 'Invalid InterceptionId.', false],
+  ]) {
+    const rejected = assert.rejects(pipe.request(method), error => {
+      assert.equal(error.interceptionExpired, expired);
+      assert.equal(error.message, `CDP command failed: ${method} (${code})`);
+      return true;
+    });
+    input.write(JSON.stringify({ id: frames.at(-1).id, error: { code, message } }) + '\0');
+    await rejected;
+    assert.equal(pipe.failure, null);
+  }
 });
 
 test('malformed frames and write failures have sanitized terminal errors', async () => {

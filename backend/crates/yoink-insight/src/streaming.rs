@@ -8,6 +8,21 @@ use tokio_util::sync::CancellationToken;
 /// output, NOT Telegram HTML. Sink failures abort and prohibit provider fallback.
 pub trait DeltaSink: Send + Sync {
     fn delta<'a>(&'a self, text: &'a str) -> FutureResult<'a, ()>;
+    fn phase<'a>(
+        &'a self,
+        _phase: Phase,
+        _source: &'a str,
+        _alias: Option<&'a str>,
+    ) -> FutureResult<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Fetching,
+    Researching,
+    Generating,
+    Cached,
 }
 /// Wire contract for an actual streaming request, not buffered generation.
 pub fn stream_contract(

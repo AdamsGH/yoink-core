@@ -457,6 +457,8 @@ def download_media(request: dict[str, Any], settings: Any,
                     raise MediaFailure("unsupported_source")
                 if not incomplete:
                     metadata.add(info)
+                    if info.get("is_live") or info.get("live_status") in ("is_live", "post_live"):
+                        raise MediaFailure("live_stream")
                 known_size = info.get("filesize") or info.get("filesize_approx")
                 if not ranged and known_size is not None and int(known_size) > max_bytes:
                     raise MediaFailure("resource_limit")
@@ -709,7 +711,8 @@ def _classified_provider_failure(exc, guard_baseline):
 
 def provider_fallback_allowed(exc, *, original=None):
     if getattr(exc, "fallback_forbidden", True) or exc.failure_class not in {
-            "unsupported_source", "source_unavailable", "rate_limited", "invalid_media"}:
+            "unsupported_source", "source_unavailable", "rate_limited", "invalid_media",
+            "source_blocked", "content_unavailable"}:
         return False
     from urllib.error import HTTPError as UrllibHTTPError
     for current in exception_chain(original or exc):

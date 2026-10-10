@@ -254,11 +254,30 @@ export class BotApiFixture {
       res.end(JSON.stringify({ ok: true, result: method === 'getmycommands' ? this.commandMenus.get(data) : true }));
     } else if (method === 'sendmessage') {
       const data = JSON.parse(body.toString('utf8'));
+      assert(typeof data.text === 'string' && data.text.length <= 4096, 'bounded Telegram UTF-16 text');
       const message = this.#message(123456, Number(data.chat_id), data.text, ++this.#nextMessageId, undefined, data.message_thread_id);
+      if (data.entities) message.entities = structuredClone(data.entities);
       if (data.reply_markup) message.reply_markup = data.reply_markup;
       this.#messages.set(`${message.chat.id}:${message.message_id}`, message);
       this.#calls.push({ method, data, messageId: message.message_id });
       res.end(JSON.stringify({ ok: true, result: message }));
+    } else if (method === 'sendmessagedraft' || method === 'sendchataction') {
+      const data = JSON.parse(body.toString('utf8'));
+      if (method === 'sendmessagedraft') {
+        assert(Number.isSafeInteger(data.chat_id) && data.chat_id > 0);
+        assert(Number.isSafeInteger(data.draft_id) && data.draft_id !== 0);
+        assert(typeof data.text === 'string' && data.text.length <= 4096);
+        assert(Array.isArray(data.entities));
+      } else {
+        assert.equal(data.action, 'typing');
+      }
+      this.#calls.push({ method, data, receivedAt: performance.now() });
+      res.end(JSON.stringify({ ok: true, result: true }));
+    } else if (method === 'deletemessage') {
+      const data = JSON.parse(body.toString('utf8'));
+      this.#messages.delete(`${data.chat_id}:${data.message_id}`);
+      this.#calls.push({ method, data });
+      res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'answerinlinequery') {
       const data = JSON.parse(body.toString('utf8'));
       assert.equal(typeof data.inline_query_id, 'string');
@@ -282,7 +301,7 @@ export class BotApiFixture {
       res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'editmessagetext') {
       const data = JSON.parse(body.toString('utf8'));
-      assert(typeof data.text === 'string' && Buffer.byteLength(data.text) <= 4096, 'bounded progress text');
+      assert(typeof data.text === 'string' && data.text.length <= 4096, 'bounded Telegram UTF-16 text');
       const message = this.#messages.get(`${data.chat_id}:${data.message_id}`);
       const mode = this.#editFilter && !data.text.includes(this.#editFilter) ? 'success' : this.#editMode;
       if (mode.endsWith('-once')) this.#editMode = 'success';
@@ -291,8 +310,9 @@ export class BotApiFixture {
       if (mode === 'rate-limit-once') { fail(429, 'Too Many Requests: retry after 2', { retry_after: 2 }); return; }
       if (mode === 'api-ambiguous-once') { fail(500, 'Internal Server Error'); return; }
       if (!message || mode === 'deleted') { fail(400, 'Bad Request: message to edit not found'); return; }
-      if (message.text === data.text && JSON.stringify(message.reply_markup) === JSON.stringify(data.reply_markup)) { fail(400, 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message'); return; }
+      if (message.text === data.text && JSON.stringify(message.entities) === JSON.stringify(data.entities) && JSON.stringify(message.reply_markup) === JSON.stringify(data.reply_markup)) { fail(400, 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message'); return; }
       message.text = data.text;
+      message.entities = data.entities ? structuredClone(data.entities) : undefined;
       message.reply_markup = data.reply_markup;
       if (mode === 'socket-drop-once') { res.destroy(); return; }
       res.end(JSON.stringify({ ok: true, result: message }));

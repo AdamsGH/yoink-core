@@ -28,15 +28,15 @@ use tokio::{
 };
 use yoink_db::query;
 use yoink_insight::{
-    Config,
+    Config, FutureResult,
     content::{Citation, Content, ContentSource, FetchOptions},
-    provider::HttpCompletion,
+    provider::{DeltaSink, HttpCompletion},
 };
-use yoink_storage::Store;
+use yoink_storage::{Store, TextOutcome};
 
 // Deterministic material input only; provider and Telegram use their actual HTTP
 // clients against private loopback fixtures. No dummy provider/executor installed.
-struct Material;
+struct Material(Option<yoink_db::Database>);
 impl ContentSource for Material {
     fn fetch<'a>(
         &'a self,
@@ -44,7 +44,12 @@ impl ContentSource for Material {
         _: FetchOptions<'a>,
         _: CancellationToken,
     ) -> FutureResult<'a, Content> {
-        Box::pin(async {
+        Box::pin(async move {
+            if let Some(db) = &self.0 {
+                let connection = db.connection().await?;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                drop(connection);
+            }
             Ok(Content {
                 text: "Fixture source material.".into(),
                 title: None,
@@ -90,7 +95,7 @@ async fn fixture(api: Bot, gateway: String) -> Fixture {
             request_timeout: Duration::from_secs(5),
             ..Config::default()
         },
-        Arc::new(Material),
+        Arc::new(Material(None)),
         Arc::new(HttpCompletion::new(Duration::from_secs(5), 128 * 1024).unwrap()),
     )
     .unwrap();
@@ -142,6 +147,12 @@ async fn request(s: &mut TcpStream) -> (String, Value) {
     )
 }
 async fn reply(s: &mut TcpStream, body: &Value, id: i32) {
+    if body.get("draft_id").is_some() || body.get("action").is_some() || body.get("text").is_none()
+    {
+        let response = r#"{"ok":true,"result":true}"#;
+        s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).as_bytes()).await.unwrap();
+        return;
+    }
     let group = body["chat_id"].as_i64().unwrap() < 0;
     let mut result = json!({"message_id":id,"date":0,"chat":{"id":body["chat_id"],"type":if group {"supergroup"} else {"private"},"title":"fixture"},"from":{"id":123,"is_bot":true,"first_name":"fixture"},"text":body["text"]});
     if let Some(topic) = body.get("message_thread_id") {
@@ -149,8 +160,21 @@ async fn reply(s: &mut TcpStream, body: &Value, id: i32) {
     } else if group {
         result["message_thread_id"] = 8.into();
     }
+    if let Some(entities) = body.get("entities") {
+        result["entities"] = entities.clone();
+    }
     let response = json!({"ok":true,"result":result}).to_string();
     s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).as_bytes()).await.unwrap();
+}
+async fn first_preview(api: TcpListener) -> TcpListener {
+    loop {
+        let (mut s, _) = api.accept().await.unwrap();
+        let (_, b) = request(&mut s).await;
+        reply(&mut s, &b, 90).await;
+        if b.get("draft_id").is_some() && b["text"].as_str().unwrap().contains("streamed") {
+            return api;
+        }
+    }
 }
 fn message(text: &str, chat: i64, topic: Option<i32>, id: i32) -> Message {
     let mut v = json!({"message_id":id,"date":0,"chat":{"id":chat,"type":if chat<0 {"supergroup"} else {"private"},"title":"fixture"},"from":{"id":42,"is_bot":false,"first_name":"fixture"},"text":text});
@@ -179,7 +203,7 @@ async fn provider(l: TcpListener, started: oneshot::Sender<()>, resume: oneshot:
     let _ = resume.await;
     let _ = s
         .write_all(
-            b"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n",
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"**answer**\"}}]}\n\ndata: [DONE]\n\n",
         )
         .await;
 }
@@ -193,30 +217,92 @@ async fn direct_and_group_dispatch_real_stream_final_and_receipt_binding() {
         let (started, seen) = oneshot::channel();
         let (resume, wait) = oneshot::channel();
         let upstream = tokio::spawn(provider(gateway, started, wait));
-        let telegram = tokio::spawn(async move {
-            let (mut s, _) = api.accept().await.unwrap();
-            let (h, b) = request(&mut s).await;
-            assert!(h.contains("sendMessage"));
-            assert_eq!(b["reply_parameters"]["message_id"], 10);
-            assert_eq!(b["chat_id"], chat);
-            assert!(b["parse_mode"].is_null());
-            reply(&mut s, &b, 90).await;
-            let (mut s, _) = api.accept().await.unwrap();
-            let (h, b) = request(&mut s).await;
-            assert!(h.contains("editMessageText"));
-            assert_eq!(b["message_id"], 90);
-            assert!(b["text"].as_str().unwrap().starts_with("Complete"));
-            assert!(b["text"].as_str().unwrap().ends_with("streamed answer"));
-            reply(&mut s, &b, 90).await;
-            let (mut s, _) = api.accept().await.unwrap();
-            let (h, b) = request(&mut s).await;
-            assert!(h.contains("sendMessage"));
-            assert_eq!(b["reply_parameters"]["message_id"], 20);
-            assert!(b["text"].as_str().unwrap().starts_with("Complete"));
-            assert!(b["text"].as_str().unwrap().ends_with("streamed answer"));
-            reply(&mut s, &b, 91).await;
-            api
-        });
+        let (preview_ready, previewed) = oneshot::channel();
+        let (typing_ready, typed) = oneshot::channel();
+        let telegram =
+            tokio::spawn(async move {
+                let mut preview_ready = Some(preview_ready);
+                let mut typing_ready = Some(typing_ready);
+                let mut durable = 0;
+                let mut final_revision = 0;
+                let mut reading = false;
+                let mut generating = false;
+                let mut completed = false;
+                loop {
+                    let (mut s, _) = api.accept().await.unwrap();
+                    let (h, b) = request(&mut s).await;
+                    assert_eq!(b["chat_id"], chat);
+                    if b["action"] == "typing" {
+                        assert!(h.contains("sendChatAction"));
+                        assert_eq!(b["message_thread_id"], json!(topic));
+                        reply(&mut s, &b, 90).await;
+                        if let Some(ready) = typing_ready.take() {
+                            ready.send(()).unwrap();
+                        }
+                        continue;
+                    }
+                    let text = b["text"].as_str().unwrap();
+                    assert!(b["parse_mode"].is_null());
+                    assert!(!text.contains("**"));
+                    assert!(
+                        b["entities"].as_array().unwrap().iter().any(
+                            |e| e["type"] == "text_link" && e["url"] == "https://example.com/a"
+                        ),
+                        "request: {h}, body: {b}"
+                    );
+                    reading |= text.contains("Reading the source.");
+                    generating |= text.contains("Generating the response.");
+                    let final_body =
+                        text.ends_with("streamed answer") && !text.starts_with("Partial response");
+                    if b.get("draft_id").is_some() {
+                        assert!(h.contains("sendMessageDraft"));
+                        assert_eq!(chat, 42);
+                        assert_eq!(b["draft_id"], 10);
+                        assert!(!completed);
+                        assert!(b["reply_parameters"].is_null());
+                    } else if completed {
+                        assert!(h.contains("sendMessage"));
+                        assert_eq!(b["reply_parameters"]["message_id"], 20);
+                        assert!(final_body);
+                        assert!(text.starts_with("🔗 Summary"));
+                        reply(&mut s, &b, 91).await;
+                        assert!(reading && generating);
+                        return (api, final_revision);
+                    } else {
+                        if chat > 0 {
+                            assert!(final_body);
+                            assert!(h.contains("sendMessage"));
+                            assert_eq!(b["reply_parameters"]["message_id"], 10);
+                        } else if durable == 0 {
+                            assert!(h.contains("sendMessage"));
+                            assert_eq!(b["reply_parameters"]["message_id"], 10);
+                        } else {
+                            assert!(h.contains("editMessageText"));
+                            assert_eq!(b["message_id"], 90);
+                        }
+                        final_revision = if chat > 0 { 1 } else { durable };
+                        durable += 1;
+                        if final_body {
+                            assert!(text.starts_with("🔗 Summary"));
+                            assert!(
+                                b["entities"]
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|e| e["type"] == "bold" && e["length"] == 6)
+                            );
+                            completed = true;
+                        }
+                    }
+                    reply(&mut s, &b, 90).await;
+                    if text.contains("streamed")
+                        && !final_body
+                        && let Some(ready) = preview_ready.take()
+                    {
+                        ready.send(()).unwrap();
+                    }
+                }
+            });
         let runtime = f.runtime.clone();
         let work = tokio::spawn(async move {
             runtime
@@ -228,6 +314,14 @@ async fn direct_and_group_dispatch_real_stream_final_and_receipt_binding() {
                 .await
         });
         tokio::time::timeout(Duration::from_secs(5), seen)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), previewed)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), typed)
             .await
             .unwrap()
             .unwrap();
@@ -271,7 +365,7 @@ async fn direct_and_group_dispatch_real_stream_final_and_receipt_binding() {
             // Actual validated final cached Bot API receipt, not a generation delta.
             let effect = f.ledger.text_effect(&token).await.unwrap().unwrap();
             assert_ne!(effect.outcome, TextOutcome::Confirmed(91));
-            assert!(effect.identity.unwrap().text.starts_with("Complete"));
+            assert!(effect.identity.unwrap().text.starts_with("🔗 Summary"));
             let drain = f.runtime.drain_handlers();
             tokio::pin!(drain);
             assert!(futures::poll!(&mut drain).is_pending());
@@ -288,7 +382,7 @@ async fn direct_and_group_dispatch_real_stream_final_and_receipt_binding() {
             );
             assert!(f.runtime.active.lock().unwrap().is_empty());
         }
-        let api = tokio::time::timeout(Duration::from_secs(5), telegram)
+        let (api, final_revision) = tokio::time::timeout(Duration::from_secs(5), telegram)
             .await
             .unwrap()
             .unwrap();
@@ -300,12 +394,26 @@ async fn direct_and_group_dispatch_real_stream_final_and_receipt_binding() {
         assert!(f.runtime.active.lock().unwrap().is_empty());
         let final_effect = f
             .ledger
-            .text_effect(&format!("insight:123:{chat}:{}:10:0:1", topic.unwrap_or(0)))
+            .text_effect(&format!(
+                "insight:123:{chat}:{}:10:0:{final_revision}",
+                topic.unwrap_or(0)
+            ))
             .await
             .unwrap()
             .unwrap();
         assert_eq!(final_effect.outcome, TextOutcome::Confirmed(90));
-        assert!(final_effect.identity.unwrap().edit);
+        assert_eq!(final_effect.identity.unwrap().edit, chat < 0);
+        if chat > 0 {
+            assert_eq!(
+                f.ledger
+                    .text_effect("insight:123:42:0:10:0:0")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .outcome,
+                TextOutcome::Sealed
+            );
+        }
     }
 }
 #[tokio::test]
@@ -353,12 +461,7 @@ async fn fresh_revoke_during_real_provider_prevents_completion() {
     let (api, bot) = wire().await;
     let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let f = fixture(bot, format!("http://{}", gateway.local_addr().unwrap())).await;
-    let telegram = tokio::spawn(async move {
-        let (mut s, _) = api.accept().await.unwrap();
-        let (_, b) = request(&mut s).await;
-        reply(&mut s, &b, 90).await;
-        api
-    });
+    let telegram = tokio::spawn(first_preview(api));
     let (started, seen) = oneshot::channel();
     let (resume, wait) = oneshot::channel();
     let upstream = tokio::spawn(provider(gateway, started, wait));
@@ -406,12 +509,7 @@ async fn cancel_is_actor_chat_topic_bound_and_shutdown_drains_without_final() {
         let (api, bot) = wire().await;
         let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let f = fixture(bot, format!("http://{}", gateway.local_addr().unwrap())).await;
-        let telegram = tokio::spawn(async move {
-            let (mut s, _) = api.accept().await.unwrap();
-            let (_, b) = request(&mut s).await;
-            reply(&mut s, &b, 90).await;
-            api
-        });
+        let telegram = tokio::spawn(first_preview(api));
         let (started, seen) = oneshot::channel();
         let (_resume, wait) = oneshot::channel();
         let upstream = tokio::spawn(provider(gateway, started, wait));
@@ -445,6 +543,18 @@ async fn cancel_is_actor_chat_topic_bound_and_shutdown_drains_without_final() {
                 .handle(&message(&cmd, 42, None, 11), 43, "fixture")
                 .await
         );
+        let retirement = tokio::spawn(async move {
+            if mode != 2 {
+                let (mut socket, _) = api.accept().await.unwrap();
+                let (header, body) = request(&mut socket).await;
+                assert!(header.contains("sendMessage"));
+                assert!(body["text"].as_str().unwrap().ends_with("Cancelled."));
+                assert!(!body["text"].as_str().unwrap().contains("streamed"));
+                assert_eq!(body["reply_parameters"]["message_id"], 10);
+                reply(&mut socket, &body, 91).await;
+            }
+            api
+        });
         if mode == 2 {
             f.runtime.cancel_all();
         } else {
@@ -462,6 +572,10 @@ async fn cancel_is_actor_chat_topic_bound_and_shutdown_drains_without_final() {
                 .unwrap()
         );
         assert!(f.runtime.active.lock().unwrap().is_empty());
+        let api = tokio::time::timeout(Duration::from_secs(2), retirement)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(
             tokio::time::timeout(Duration::from_millis(30), api.accept())
                 .await
@@ -488,13 +602,20 @@ async fn provider_failure_is_terminal_without_stale_cancel_command() {
             .unwrap();
     });
     let telegram = tokio::spawn(async move {
-        let (mut socket, _) = api.accept().await.unwrap();
-        let (_, body) = request(&mut socket).await;
-        let text = body["text"].as_str().unwrap();
-        assert!(text.starts_with("Failed"));
-        assert!(!text.contains("/cancel"));
-        assert!(text.contains("rejected authorization"));
-        reply(&mut socket, &body, 90).await;
+        loop {
+            let (mut socket, _) = api.accept().await.unwrap();
+            let (_, body) = request(&mut socket).await;
+            let terminal = body.get("draft_id").is_none() && body.get("action").is_none();
+            if terminal {
+                let text = body["text"].as_str().unwrap();
+                assert!(!text.contains("/cancel"));
+                assert!(text.contains("rejected authorization"));
+            }
+            reply(&mut socket, &body, 90).await;
+            if terminal {
+                break;
+            }
+        }
     });
     assert!(
         f.runtime
@@ -519,7 +640,7 @@ async fn unknown_outbound_receipt_blocks_replay_and_provider() {
     let server = tokio::spawn(async move {
         let (mut s, _) = api.accept().await.unwrap();
         let (_, b) = request(&mut s).await;
-        assert!(b["text"].as_str().unwrap().starts_with("Failed"));
+        assert!(!b["text"].as_str().unwrap().is_empty());
         assert!(!b["text"].as_str().unwrap().contains("/cancel"));
         drop(s);
         api
@@ -566,15 +687,15 @@ async fn terminal_failure_retires_every_sent_page_without_replaying_partial_cont
         base: "failed-pages".into(),
         id: Uuid::new_v4(),
         russian: false,
-        state: tokio::sync::Mutex::new(State {
-            text: "Request could not be completed.".into(),
-            sent: vec![
+        state: tokio::sync::Mutex::new({
+            let mut state = State::new(false);
+            state.text = "Request could not be completed.".into();
+            state.sent = vec![
                 (90, "protected partial /cancel".into()),
                 (91, "protected partial /cancel".into()),
-            ],
-            byok_final: true,
-            revision: 0,
-            last: Instant::now(),
+            ];
+            state.byok_final = true;
+            state
         }),
     };
     let telegram = tokio::spawn(async move {
@@ -582,10 +703,7 @@ async fn terminal_failure_retires_every_sent_page_without_replaying_partial_cont
             let (mut socket, _) = api.accept().await.unwrap();
             let (_, body) = request(&mut socket).await;
             assert_eq!(body["message_id"], id);
-            assert_eq!(
-                body["text"],
-                "Failed · tldr\n\nRequest could not be completed."
-            );
+            assert_eq!(body["text"], "Request could not be completed.");
             reply(&mut socket, &body, id).await;
         }
     });
@@ -594,6 +712,181 @@ async fn terminal_failure_retires_every_sent_page_without_replaying_partial_cont
     f.runtime.drain_handlers().await;
     f.ledger.close().await.unwrap();
 }
+#[tokio::test]
+async fn heartbeat_keeps_execution_polling_while_waiting_for_its_database_lease() {
+    let (api, bot) = wire().await;
+    let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut f = fixture(bot, format!("http://{}", gateway.local_addr().unwrap())).await;
+    f.runtime.service.content = Some(Arc::new(Material(Some(f.ledger.database().clone()))));
+    let upstream = tokio::spawn(async move {
+        let (mut s, _) = gateway.accept().await.unwrap();
+        let (_, body) = request(&mut s).await;
+        assert_eq!(body["stream"], true);
+        s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"**answer**\"}}]}\n\ndata: [DONE]\n\n").await.unwrap();
+    });
+    let telegram = tokio::spawn(async move {
+        loop {
+            let (mut s, _) = api.accept().await.unwrap();
+            let (header, body) = request(&mut s).await;
+            let final_send = header.contains("sendMessage") && !header.contains("sendMessageDraft");
+            if final_send {
+                assert_eq!(body["text"], "🔗 Summary\n\nanswer");
+            }
+            reply(&mut s, &body, 91).await;
+            if final_send {
+                return api;
+            }
+        }
+    });
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(4500),
+            f.runtime.handle(
+                &message("/tldr https://example.com/a focus", 42, None, 10),
+                42,
+                "fixture"
+            )
+        )
+        .await
+        .unwrap()
+    );
+    upstream.await.unwrap();
+    let api = telegram.await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), api.accept())
+            .await
+            .is_err()
+    );
+    f.runtime.drain_handlers().await;
+    f.ledger.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_drafts_use_confirmed_edits_while_unavailable_previews_stay_ephemeral() {
+    for status in [404, 503] {
+        let (api, bot) = wire().await;
+        let f = fixture(bot, "http://127.0.0.1:1".into()).await;
+        let draft = Draft {
+            runtime: &f.runtime,
+            identity: TextIdentity {
+                bot: 123,
+                actor: 42,
+                chat: 42,
+                topic: None,
+                message: 10,
+                item: None,
+                edit: false,
+                payload: json!({}),
+                text: "pending".into(),
+            },
+            command: "tldr",
+            cancel: CancellationToken::new(),
+            base: "preview-fallback".into(),
+            id: Uuid::nil(),
+            russian: false,
+            state: tokio::sync::Mutex::new(State::new(true)),
+        };
+        let server = tokio::spawn(async move {
+            let (mut s, _) = api.accept().await.unwrap();
+            let (header, body) = request(&mut s).await;
+            assert!(header.contains("sendMessageDraft"));
+            assert_eq!(body["draft_id"], 10);
+            assert!(
+                body["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Reading the source.")
+            );
+            let data=json!({"ok":false,"error_code":status,"description":if status==404 {"Not Found"} else {"Temporarily unavailable"}}).to_string();
+            s.write_all(format!("HTTP/1.1 {status} Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{data}",data.len()).as_bytes()).await.unwrap();
+            drop(s);
+            if status == 404 {
+                for (method, text) in [
+                    ("sendMessage", "Reading the source."),
+                    ("editMessageText", "value"),
+                ] {
+                    let (mut s, _) = api.accept().await.unwrap();
+                    let (header, body) = request(&mut s).await;
+                    assert!(header.contains(method));
+                    assert!(body["text"].as_str().unwrap().contains(text));
+                    if method == "editMessageText" {
+                        assert_eq!(body["message_id"], 90);
+                    }
+                    reply(&mut s, &body, 90).await;
+                }
+            } else {
+                let (mut s, _) = api.accept().await.unwrap();
+                let (header, body) = request(&mut s).await;
+                assert!(header.contains("sendMessageDraft"));
+                assert_eq!(body["draft_id"], 10);
+                assert!(body["text"].as_str().unwrap().contains("value"));
+                reply(&mut s, &body, 0).await;
+            }
+            let (mut s, _) = api.accept().await.unwrap();
+            let (header, body) = request(&mut s).await;
+            assert!(header.contains("sendMessage") && !header.contains("sendMessageDraft"));
+            assert_eq!(body["text"], "🔗 No BS\n\nvalue");
+            assert!(
+                body["entities"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e["type"] == "bold" && e["offset"] == 10)
+            );
+            reply(&mut s, &body, 91).await;
+            if status == 404 {
+                let (mut s, _) = api.accept().await.unwrap();
+                let (header, body) = request(&mut s).await;
+                assert!(header.contains("deleteMessage"));
+                assert_eq!(body["message_id"], 90);
+                reply(&mut s, &body, 0).await;
+            }
+            api
+        });
+        draft
+            .phase(
+                yoink_insight::provider::Phase::Fetching,
+                "https://example.com",
+                "nobullshit".into(),
+            )
+            .await
+            .unwrap();
+        draft.delta("**value**").await.unwrap();
+        draft.flush(true).await.unwrap();
+        let state = draft.state.lock().await;
+        assert_eq!(state.sent.len(), 1);
+        assert_eq!(state.sent[0].0, 91);
+        let revision = if status == 404 { 3 } else { 1 };
+        assert!(matches!(
+            f.ledger
+                .text_effect("preview-fallback:0:0")
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            TextOutcome::Sealed
+        ));
+        assert!(matches!(
+            f.ledger
+                .text_effect(&format!("preview-fallback:0:{revision}"))
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            TextOutcome::Confirmed(91)
+        ));
+        drop(state);
+        let api = server.await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), api.accept())
+                .await
+                .is_err()
+        );
+        f.runtime.drain_handlers().await;
+        f.ledger.close().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn incremental_chunks_edit_only_confirmed_bot_receipts_and_refresh_group_policy() {
     let (api, bot) = wire().await;
@@ -618,30 +911,30 @@ async fn incremental_chunks_edit_only_confirmed_bot_receipts_and_refresh_group_p
         base: "draft-test".into(),
         id: Uuid::nil(),
         russian: false,
-        state: tokio::sync::Mutex::new(State {
-            text: String::new(),
-            sent: vec![],
-            byok_final: false,
-            revision: 0,
-            last: Instant::now() - Duration::from_secs(3),
-        }),
+        state: tokio::sync::Mutex::new(State::new(false)),
     };
     let body = format!("{}😀{}", "a".repeat(3900), "😀".repeat(200));
-    let chunks = chunks_with_header("Incomplete answer\n", &body);
-    assert!(chunks.iter().all(|c| c.encode_utf16().count() <= 4000));
-    assert_eq!(
+    let writer = draft.state.lock().await;
+    tokio::time::timeout(Duration::from_millis(50), draft.heartbeat())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(writer);
+    let chunks = crate::markdown::FormattedText::markdown(None, &body)
+        .unwrap()
+        .pages(4000);
+    assert!(
         chunks
             .iter()
-            .map(|c| c.strip_prefix("Incomplete answer\n").unwrap())
-            .collect::<String>(),
-        body
+            .all(|c| c.text().encode_utf16().count() <= 4000)
     );
+    assert_eq!(chunks.iter().map(|c| c.text()).collect::<String>(), body);
     let server = tokio::spawn(async move {
         for n in 0..2 {
             let (mut s, _) = api.accept().await.unwrap();
             let (_, b) = request(&mut s).await;
             assert!(b["text"].as_str().unwrap().encode_utf16().count() <= 4000);
-            assert!(b["text"].as_str().unwrap().starts_with("Incomplete"));
+            assert!(b["text"].as_str().unwrap().starts_with("Partial response"));
             reply(&mut s, &b, 90 + n).await;
         }
         api
@@ -678,7 +971,7 @@ async fn about_summary_parse_and_localized_errors_use_trusted_direct_and_group_r
             assert_eq!(b["chat_id"], chat);
             assert_eq!(b["reply_parameters"]["message_id"], 10);
             assert!(b["text"].as_str().unwrap().contains("Insight недоступен"));
-            assert!(b["text"].as_str().unwrap().starts_with("Ошибка"));
+            assert!(!b["text"].as_str().unwrap().contains("·"));
             assert!(!b["text"].as_str().unwrap().contains("/cancel"));
             assert!(b["parse_mode"].is_null());
             reply(&mut s, &b, 90).await;
@@ -737,13 +1030,7 @@ async fn outbound_byok_grant_observes_toggle_readiness_and_ban_without_duplicate
         base: "byok-test".into(),
         id: Uuid::nil(),
         russian: false,
-        state: tokio::sync::Mutex::new(State {
-            text: String::new(),
-            sent: vec![],
-            byok_final: false,
-            revision: 0,
-            last: Instant::now() - Duration::from_secs(3),
-        }),
+        state: tokio::sync::Mutex::new(State::new(false)),
     };
     let server = tokio::spawn(async move {
         let (mut s, _) = api.accept().await.unwrap();
@@ -1017,12 +1304,11 @@ async fn final_byok_result_cannot_escape_disabled_toggle_even_with_explicit_gran
         base: "byok-final".into(),
         id: Uuid::new_v4(),
         russian: false,
-        state: tokio::sync::Mutex::new(State {
-            text: "answer".into(),
-            sent: vec![],
-            byok_final: true,
-            revision: 0,
-            last: Instant::now(),
+        state: tokio::sync::Mutex::new({
+            let mut state = State::new(false);
+            state.text = "answer".into();
+            state.byok_final = true;
+            state
         }),
     };
     // Explicit grant still authorizes another current route, but not this BYOK answer.

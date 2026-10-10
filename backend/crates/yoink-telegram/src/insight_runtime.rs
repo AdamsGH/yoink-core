@@ -3,15 +3,18 @@ use crate::text::TextDelivery;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use teloxide::types::Message;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use yoink_access::{AccessPolicy, AccessScope, Role};
 use yoink_identity::IdentityStore;
-use yoink_insight::{Error, FutureResult, Insight, provider::DeltaSink};
-use yoink_storage::{TextIdentity, TextOutcome};
+use yoink_insight::{Error, Insight};
+use yoink_storage::TextIdentity;
+#[path = "insight_output.rs"]
+mod output;
+use output::{Draft, State};
 
 #[derive(Clone)]
 pub struct InsightRuntime {
@@ -327,19 +330,13 @@ impl InsightRuntime {
         let _registration = Registration(self.active.clone(), id);
         let sink = Draft {
             runtime: self,
-            identity: i,
+            identity: i.clone(),
             command,
             cancel: cancel.clone(),
             base,
             id,
             russian,
-            state: tokio::sync::Mutex::new(State {
-                text: String::new(),
-                sent: vec![],
-                byok_final: false,
-                revision: 0,
-                last: Instant::now() - Duration::from_millis(1500),
-            }),
+            state: tokio::sync::Mutex::new(State::new(i.chat > 0)),
         };
         let execution = yoink_insight::telegram::execute_stream(
             &self.service,
@@ -349,16 +346,18 @@ impl InsightRuntime {
             cancel.clone(),
         );
         tokio::pin!(execution);
-        let thinking = tokio::time::sleep(Duration::from_secs(8));
-        tokio::pin!(thinking);
-        let mut thinking_shown = false;
+        let mut heartbeat = tokio::time::interval(Duration::from_millis(1500));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
         let result = loop {
             tokio::select! {
                 result = &mut execution => break result,
-                _ = &mut thinking, if !thinking_shown => {
-                    thinking_shown = true;
-                    let empty = sink.state.try_lock().is_ok_and(|s| s.sent.is_empty());
-                    if empty && sink.flush(false).await.is_err() { cancel.cancel(); }
+                _ = heartbeat.tick() => {
+                    // Execution must keep polling while a heartbeat waits for its DB lease.
+                    tokio::select! {
+                        result = &mut execution => break result,
+                        result = sink.heartbeat() => if result.is_err() { cancel.cancel(); }
+                    }
                 }
             }
         };
@@ -376,6 +375,10 @@ impl InsightRuntime {
             }
             Err(error) => {
                 tracing::warn!(command, error = %error, "Insight request failed");
+                if matches!(error, Error::Code("cancelled")) && !self.stop.is_cancelled() {
+                    let _ = sink.cancelled().await;
+                    return true;
+                }
                 if self.require(&sink.identity, command, &cancel).await.is_ok() {
                     sink.state.lock().await.text = error_text(&error, russian).into();
                     let _ = sink.flush_status(false, true).await;
@@ -409,135 +412,6 @@ impl Drop for Registration {
         self.0.lock().expect("work registry").remove(&self.1);
     }
 }
-struct State {
-    text: String,
-    sent: Vec<(i32, String)>,
-    byok_final: bool,
-    revision: usize,
-    last: Instant,
-}
-struct Draft<'a> {
-    runtime: &'a InsightRuntime,
-    identity: TextIdentity,
-    command: &'a str,
-    cancel: CancellationToken,
-    base: String,
-    id: Uuid,
-    russian: bool,
-    state: tokio::sync::Mutex<State>,
-}
-impl Draft<'_> {
-    async fn flush(&self, complete: bool) -> Result<(), Error> {
-        self.flush_status(complete, false).await
-    }
-    async fn flush_status(&self, complete: bool, failed: bool) -> Result<(), Error> {
-        let mut s = self.state.lock().await;
-        let label = match (self.russian, complete, failed) {
-            (true, _, true) => "Ошибка",
-            (false, _, true) => "Failed",
-            (true, true, false) => "Готово",
-            (true, false, false) => "Незавершённый ответ",
-            (false, true, false) => "Complete",
-            (false, false, false) => "Incomplete answer",
-        };
-        // Reserve header space inside the same UTF-16 bound used by product messages.
-        let header = if complete || failed {
-            format!("{label} · {}\n\n", self.command)
-        } else {
-            format!("{label} · {}\n/cancel {}\n\n", self.command, self.id)
-        };
-        let mut chunks = chunks_with_header(&header, &s.text);
-        if failed {
-            // Retire cancellation instructions on every previously sent page.
-            chunks.resize(s.sent.len().max(chunks.len()), chunks[0].clone());
-        }
-        for (index, text) in chunks.into_iter().enumerate() {
-            if s.sent.get(index).is_some_and(|(_, old)| old == &text) {
-                continue;
-            }
-            self.runtime
-                .require(&self.identity, self.command, &self.cancel)
-                .await?;
-            if complete && s.byok_final {
-                let byok = self.runtime.service.byok_view(self.identity.actor).await?;
-                if byok["enabled"] != true
-                    || byok["api_key_set"] != true
-                    || byok["tested_at"].is_null()
-                    || !byok["test_error"].is_null()
-                {
-                    return Err(Error::Code("access_denied"));
-                }
-            }
-            let mut i = self.identity.clone();
-            i.text = text.clone();
-            if let Some((receipt, _)) = s.sent.get(index) {
-                i.message = *receipt;
-                i.edit = true;
-            }
-            let token = format!("{}:{index}:{}", self.base, s.revision);
-            let outcome = self
-                .runtime
-                .delivery
-                .dispatch(&token, &i)
-                .await
-                .map_err(|_| Error::Database)?;
-            s.revision += 1;
-            match outcome {
-                TextOutcome::Confirmed(receipt) => {
-                    if index < s.sent.len() {
-                        s.sent[index] = (receipt, text);
-                    } else {
-                        s.sent.push((receipt, text));
-                    }
-                }
-                _ => {
-                    self.cancel.cancel();
-                    return Err(Error::Code("outbound_unknown"));
-                }
-            }
-        }
-        s.last = Instant::now();
-        Ok(())
-    }
-}
-impl DeltaSink for Draft<'_> {
-    fn delta<'a>(&'a self, text: &'a str) -> FutureResult<'a, ()> {
-        Box::pin(async move {
-            self.runtime
-                .require(&self.identity, self.command, &self.cancel)
-                .await?;
-            let mut s = self.state.lock().await;
-            if s.text.len().saturating_add(text.len()) > 1024 * 1024 {
-                return Err(Error::Code("response_too_large"));
-            }
-            s.text.push_str(text);
-            let flush = s.last.elapsed() >= Duration::from_millis(1500);
-            drop(s);
-            if flush {
-                self.flush(false).await?;
-            }
-            Ok(())
-        })
-    }
-}
-
-fn chunks_with_header(header: &str, body: &str) -> Vec<String> {
-    let budget = 3800.min(4000 - header.encode_utf16().count());
-    let mut chunks = Vec::new();
-    let mut chunk = header.to_owned();
-    let mut used = 0;
-    for c in body.chars() {
-        if used + c.len_utf16() > budget {
-            chunks.push(chunk);
-            chunk = header.to_owned();
-            used = 0;
-        }
-        chunk.push(c);
-        used += c.len_utf16();
-    }
-    chunks.push(chunk);
-    chunks
-}
 fn error_text(error: &Error, russian: bool) -> &'static str {
     match (error, russian) {
         (Error::Code("content_network_denied"), false) => {
@@ -566,6 +440,10 @@ fn error_text(error: &Error, russian: bool) -> &'static str {
             Error::Code("content_unavailable" | "gemini_not_configured" | "streaming_unavailable"),
             true,
         ) => "Insight недоступен. Обратитесь к администратору.",
+        (Error::Code("response_too_large"), false) => {
+            "The response is too large. Narrow the request."
+        }
+        (Error::Code("response_too_large"), true) => "Ответ слишком большой. Уточните запрос.",
         (_, false) => "Request could not be completed.",
         (_, true) => "Не удалось завершить запрос.",
     }

@@ -80,14 +80,29 @@ export async function summary(c){
 }
 export async function telegram(c){
   await configure(c);const start=c.bot.calls.length,providers=c.trusted.calls.length;
+  c.trusted.markdown=true;
+  try {
   // Focus deliberately bypasses cache, including the earlier forced-receipt prime.
-  c.bot.enqueue(44,44,`/tldr ${ARTICLE} native-tg-stream`,31001,'en');
-  const final=await c.waitFor(()=>c.bot.calls.slice(start).find(x=>['sendmessage','editmessagetext'].includes(x.method) && Number(x.data.chat_id)===44 && /^Complete · tldr\n\nNative café summary\.$/.test(String(x.data.text))),'native Telegram completed summary');
+  c.bot.enqueue(44,44,`/tldr ${ARTICLE} nobullshit native-tg-stream`,31001,'en');
+  const final=await c.waitFor(()=>c.bot.calls.slice(start).find(x=>x.method==='sendmessage' && Number(x.data.chat_id)===44 && String(x.data.text).startsWith('🔗 No BS\n\nFixture\n\nNative café summary.')),'native Telegram formatted final summary');
   assert.notEqual(Number(final.data.message_id??final.messageId),31001,'bot response is not the user source message');
+  assert(!final.data.text.includes('**')&&!final.data.text.includes('```'));
+  for(const type of ['bold','blockquote','code','pre','text_link'])assert(final.data.entities.some(e=>e.type===type),`native ${type} entity`);
+  assert(final.data.entities.some(e=>e.type==='text_link'&&e.url===ARTICLE&&e.offset===0));
+  for(const e of final.data.entities)assert(e.offset+e.length<=final.data.text.length,'UTF-16 entity bound');
   await c.waitFor(async()=>await c.db.query(`SELECT count(*) FROM runtime_text_effects WHERE token LIKE 'insight:123456:44:0:31001:0:%' AND state='confirmed' AND receipt=${Number(final.data.message_id??final.messageId)} AND json_extract(identity,'$.text')=${literal(final.data.text)}`)==='1','completed text has its exact durable confirmed receipt');
+  const calls=c.bot.calls.slice(start).filter(x=>Number(x.data.chat_id)===44);
+  const drafts=calls.filter(x=>x.method==='sendmessagedraft');
+  assert(drafts.length>=3,'actual source, generation and streamed previews');
+  assert(drafts.every(x=>Number(x.data.draft_id)===31001),'stable animated draft ID');
+  assert(drafts.some(x=>x.data.text.includes('Reading the source.')));
+  assert(drafts.some(x=>x.data.text.includes('Generating the response.')));
+  assert.equal(calls.filter(x=>x.method==='sendmessage').length,1,'only final content is persistent');
+  assert.equal(await c.db.query("SELECT state FROM runtime_text_effects WHERE token='insight:123456:44:0:31001:0:0'"),'sealed','ephemeral activity has an absence fence, not a fabricated receipt');
   assert(c.trusted.calls.slice(providers).some(x=>x.kind==='content'),'native TG uses actual full-content worker');
   assert(c.trusted.calls.slice(providers).some(x=>x.kind==='completion' && x.stream),'native Telegram adapter consumes fragmented SSE/UTF-8');
   assert.equal(c.bot.error,undefined);
+  } finally { c.trusted.markdown=false; }
 }
 export async function revocation(c){
   await configure(c);const request=await session(c,43);

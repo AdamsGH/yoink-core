@@ -207,11 +207,11 @@ export async function runLanguageScenarios(context) {
     sourceFixture.releaseProgressResponses();
     await h.succeeded(admitted.operationId);
     await waitFor(async () => (await checkpoint(admitted.operationId)).startsWith('1|'), 'language admission terminal progress');
-    assert.match(await checkpoint(admitted.operationId), /^1\|Операция .*завершено.*Доставлено файлов: 1\/1\./);
+    assert.match(await checkpoint(admitted.operationId), /^1\|Готово\. Доставлено файлов: 1\/1\./);
     const english = await h.submit(`/video http://127.0.0.1:${sourcePort}/media?case=language-new-english`, { language: 'ru' });
     await h.succeeded(english.operationId);
     await waitFor(async () => (await checkpoint(english.operationId)).startsWith('1|'), 'new English admission terminal progress');
-    assert.match(await checkpoint(english.operationId), /^1\|Operation .*succeeded.*Delivered files: 1\/1\./);
+    assert.match(await checkpoint(english.operationId), /^1\|Done\. Delivered files: 1\/1\./);
   } finally {
     sourceFixture.releaseProgressResponses();
     if (admitted) await waitFor(async () => (await context.queryJob(admitted.operationId)).startsWith('succeeded|') || (await context.queryJob(admitted.operationId)).startsWith('failed|'), 'language admission worker cleanup');

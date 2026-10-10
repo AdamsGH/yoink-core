@@ -71,7 +71,13 @@ export class CdpPipe extends EventEmitter {
         if (!pending) continue; // A late response to a timed-out command is harmless.
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
-        if (message.error) pending.reject(failure(`CDP command failed: ${pending.method}`));
+        if (message.error) {
+          const code = Number.isSafeInteger(message.error.code) ? ` (${message.error.code})` : '';
+          const error = failure(`CDP command failed: ${pending.method}${code}`);
+          error.interceptionExpired = ['Fetch.continueRequest', 'Fetch.failRequest'].includes(pending.method)
+            && message.error.code === -32602 && ['Invalid InterceptionId.', 'Invalid InterceptionId'].includes(message.error.message);
+          pending.reject(error);
+        }
         else pending.resolve(message.result ?? {});
       } else if (typeof message.method === 'string') {
         this.emit('event', message);
@@ -243,7 +249,10 @@ export async function launchBrowser({
         const allowed = isAllowedRequest(request.url, origin);
         void pipe.request(allowed ? 'Fetch.continueRequest' : 'Fetch.failRequest',
           { requestId, ...(allowed ? {} : { errorReason: 'BlockedByClient' }) }, event.sessionId)
-          .catch(() => pipe.fail(failure('Browser request restriction failed')));
+          .catch(error => {
+            // Navigation can cancel a paused request before its interception reply arrives.
+            if (!error.interceptionExpired) pipe.fail(failure(`Browser request restriction failed: ${error.message}`));
+          });
       }
     });
     const initialize = async () => {

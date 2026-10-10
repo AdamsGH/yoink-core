@@ -1,4 +1,4 @@
-pub use crate::streaming::{DeltaSink, stream_contract};
+pub use crate::streaming::{DeltaSink, Phase, stream_contract};
 use crate::{Error, FutureResult, invalid};
 use serde_json::{Value, json};
 use std::{fmt, time::Duration};

@@ -5,7 +5,7 @@ use yoink_downloads::{DownloadError, DownloadService};
 use yoink_i18n::{Key, Language};
 use yoink_storage::{OperationRecord, OperationStatus, ProgressNotice, ProgressStage};
 
-use crate::{TelegramError, operation_response, translate};
+use crate::{TelegramError, translate};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ProgressConfig {
@@ -38,40 +38,34 @@ impl ProgressConfig {
 }
 
 pub(super) fn render(record: &OperationRecord, language: Language) -> String {
-    let mut text = operation_response(
-        record.operation_id,
-        record.status,
-        record.attempt,
-        record.delivered_message_id,
-        language,
-    );
-    if let Some(failure) = record.content_failure.as_deref() {
+    let key = match record.status {
+        OperationStatus::Failed => match record.content_failure.as_deref() {
+            Some("nsfw_blocked") => Key::NsfwBlocked,
+            Some("nsfw_policy_unavailable") => Key::NsfwPolicyUnavailable,
+            _ => failure_key(record.failure_code.as_deref()),
+        },
+        OperationStatus::Queued if record.failure_code.is_some() => Key::ProgressRetry,
+        OperationStatus::Queued => Key::ProgressQueued,
+        OperationStatus::Running => match record.progress_stage {
+            Some(ProgressStage::Processing) => Key::ProgressProcessing,
+            Some(ProgressStage::WritingArtifact) => Key::ProgressWriting,
+            _ => Key::ProgressFetching,
+        },
+        OperationStatus::Delivering => Key::ProgressUploading,
+        OperationStatus::Succeeded => Key::ProgressComplete,
+        OperationStatus::Cancelled => Key::ProgressCancelled,
+        OperationStatus::DeliveryUnknown => Key::DeliveryUnconfirmed,
+        OperationStatus::DeliveryPartial => Key::DeliveryPartialHint,
+    };
+    let mut text = translate(language, key, &[]).trim().to_owned();
+    if record.status == OperationStatus::Running
+        && let Some(percent) = record.progress_percent
+    {
         text.push_str(&translate(
             language,
-            if failure == "nsfw_blocked" {
-                Key::NsfwBlocked
-            } else {
-                Key::NsfwPolicyUnavailable
-            },
-            &[],
+            Key::ProgressPercent,
+            &[("percent", &percent.to_string())],
         ));
-    }
-    if record.status == OperationStatus::Running {
-        if let Some(stage) = record.progress_stage {
-            let key = match stage {
-                ProgressStage::Fetching => Key::ProgressFetching,
-                ProgressStage::Processing => Key::ProgressProcessing,
-                ProgressStage::WritingArtifact => Key::ProgressWriting,
-            };
-            text.push_str(&translate(language, key, &[]));
-        }
-        if let Some(percent) = record.progress_percent {
-            text.push_str(&translate(
-                language,
-                Key::ProgressPercent,
-                &[("percent", &percent.to_string())],
-            ));
-        }
     }
     if let Some(total) = record.planned_artifact_count {
         text.push_str(&translate(
@@ -83,10 +77,29 @@ pub(super) fn render(record: &OperationRecord, language: Language) -> String {
             ],
         ));
     }
-    if record.status == OperationStatus::DeliveryPartial {
-        text.push_str(&translate(language, Key::DeliveryPartialHint, &[]));
-    }
     text
+}
+
+fn failure_key(code: Option<&str>) -> Key {
+    match code {
+        Some("unsupported_source") => Key::DownloadUnsupported,
+        Some("source_unavailable") => Key::DownloadUnavailable,
+        Some("rate_limited") => Key::DownloadRateLimited,
+        Some("invalid_media") => Key::DownloadInvalid,
+        Some("processing_failed") => Key::DownloadProcessing,
+        Some("resource_limit") => Key::DownloadLimit,
+        Some("cookie_required") => Key::DownloadCookie,
+        Some("geo_blocked") => Key::DownloadGeo,
+        Some("age_restricted") => Key::DownloadAge,
+        Some("private_content") => Key::DownloadPrivate,
+        Some("live_stream") => Key::DownloadLive,
+        Some("no_media") => Key::DownloadNoMedia,
+        Some("media_timeout") => Key::DownloadTimeout,
+        Some("network_denied") => Key::DownloadNetworkDenied,
+        Some("content_unavailable") => Key::DownloadRemoved,
+        Some("source_blocked") => Key::DownloadBlocked,
+        _ => Key::ErrorOperation,
+    }
 }
 
 fn terminal(status: OperationStatus) -> bool {
@@ -206,6 +219,44 @@ pub(super) async fn run(bot: Bot, service: Option<DownloadService>, config: Prog
 #[cfg(test)]
 mod tests {
     #[test]
+    fn public_failure_notices_are_actionable_without_internal_operation_status() {
+        for code in [
+            "unsupported_source",
+            "source_unavailable",
+            "rate_limited",
+            "invalid_media",
+            "processing_failed",
+            "resource_limit",
+            "cookie_required",
+            "geo_blocked",
+            "age_restricted",
+            "private_content",
+            "live_stream",
+            "no_media",
+            "media_timeout",
+            "network_denied",
+            "content_unavailable",
+            "source_blocked",
+            "future_private_code",
+        ] {
+            let mut record = record(OperationStatus::Failed);
+            record.failure_code = Some(code.into());
+            record.planned_artifact_count = None;
+            for lang in [Language::English, Language::Russian] {
+                let text = render(&record, lang);
+                assert!(!text.contains("Operation"));
+                assert!(!text.contains("попытка"));
+                assert!(!text.contains(code));
+                assert!(text.len() > 30);
+            }
+        }
+        let mut record = record(OperationStatus::Failed);
+        record.failure_code = Some("cookie_required".into());
+        assert!(render(&record, Language::Russian).contains("/cookie"));
+        assert!(render(&record, Language::English).contains("/cookie"));
+    }
+
+    #[test]
     fn nsfw_failures_are_durable_classified_and_localized() {
         for (failure, en, ru) in [
             (
@@ -230,6 +281,7 @@ mod tests {
     fn record(status: OperationStatus) -> OperationRecord {
         OperationRecord {
             content_failure: None,
+            failure_code: None,
             operation_id: uuid::Uuid::nil(),
             actor_id: 42,
             target: None,

@@ -559,6 +559,39 @@ pub enum FailureClass {
     InvalidMedia,
     ProcessingFailed,
     ResourceLimit,
+    CookieRequired,
+    GeoBlocked,
+    AgeRestricted,
+    PrivateContent,
+    LiveStream,
+    NoMedia,
+    MediaTimeout,
+    NetworkDenied,
+    ContentUnavailable,
+    SourceBlocked,
+}
+
+impl FailureClass {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::UnsupportedSource => "unsupported_source",
+            Self::SourceUnavailable => "source_unavailable",
+            Self::RateLimited => "rate_limited",
+            Self::InvalidMedia => "invalid_media",
+            Self::ProcessingFailed => "processing_failed",
+            Self::ResourceLimit => "resource_limit",
+            Self::CookieRequired => "cookie_required",
+            Self::GeoBlocked => "geo_blocked",
+            Self::AgeRestricted => "age_restricted",
+            Self::PrivateContent => "private_content",
+            Self::LiveStream => "live_stream",
+            Self::NoMedia => "no_media",
+            Self::MediaTimeout => "media_timeout",
+            Self::NetworkDenied => "network_denied",
+            Self::ContentUnavailable => "content_unavailable",
+            Self::SourceBlocked => "source_blocked",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

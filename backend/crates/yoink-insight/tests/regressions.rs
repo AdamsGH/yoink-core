@@ -1,7 +1,7 @@
 use serde_json::json;
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -187,6 +187,26 @@ fn aliases_focus_and_language() {
     assert!(p.contains("Reply in ru"));
     assert!(p.contains("Not supplied. Do not claim external verification"));
     assert!(p.contains("focus on benchmarks"));
+    assert!(p.contains(&format!(
+        "Current UTC date: {}",
+        chrono::Utc::now().format("%Y-%m-%d")
+    )));
+    assert!(p.contains("training memory is not independent verification"));
+    for command in ["tldr", "summary", "about"] {
+        let p = prompts::build(
+            command,
+            "ru",
+            "The author reports GPT-5.6 and Astra in 2026.",
+            Some("CUSTOM TASK AND STYLE"),
+            None,
+            None,
+            &[],
+        );
+        assert!(p.contains("CUSTOM TASK AND STYLE"));
+        assert!(p.contains("GPT-5.6 and Astra in 2026"));
+        assert!(p.contains("cannot establish that a recent product or model does not exist"));
+        assert!(p.ends_with("Follow the selected task and style without changing their intent."));
+    }
 }
 #[test]
 fn domain_globs() {
@@ -611,7 +631,8 @@ async fn frontend_explicit_null_resets_model_but_omission_keeps_it() {
     assert!(s.update_settings(1, reset).await.unwrap()["tldr_model"].is_null());
 }
 
-struct StreamingLlm;
+#[derive(Default)]
+struct StreamingLlm(AtomicUsize);
 impl Completion for StreamingLlm {
     fn complete<'a>(
         &'a self,
@@ -629,6 +650,7 @@ impl Completion for StreamingLlm {
         _: CancellationToken,
     ) -> FutureResult<'a, String> {
         Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
             sink.delta("first").await?;
             sink.delta(" second").await?;
             Ok("first second".into())
@@ -639,8 +661,31 @@ struct DbSink {
     db: Database,
     revoke: bool,
     calls: AtomicUsize,
+    phases: Mutex<Vec<provider::Phase>>,
+    revoke_phase: Option<provider::Phase>,
 }
 impl provider::DeltaSink for DbSink {
+    fn phase<'a>(
+        &'a self,
+        phase: provider::Phase,
+        source: &'a str,
+        _: Option<&'a str>,
+    ) -> FutureResult<'a, ()> {
+        Box::pin(async move {
+            assert_eq!(source, "https://example.test/stream");
+            // A sink can refresh authority on the same database, including cache hits.
+            query("SELECT role FROM users WHERE id=1")
+                .fetch_one(&self.db)
+                .await?;
+            self.phases.lock().unwrap().push(phase);
+            if self.revoke_phase == Some(phase) {
+                query("UPDATE users SET role='banned' WHERE id=1")
+                    .execute(&self.db)
+                    .await?;
+            }
+            Ok(())
+        })
+    }
     fn delta<'a>(&'a self, _: &'a str) -> FutureResult<'a, ()> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -657,12 +702,14 @@ impl provider::DeltaSink for DbSink {
 async fn telegram_stream_commits_once_and_cache_emits_no_fake_deltas() {
     let (_dir, mut s, _) = fixture().await;
     // TLDR admission precedes cache lookup: leave room for the repeat.
-    s.config.tldr_limit = 2;
-    s.completion = Arc::new(StreamingLlm);
+    s.config.tldr_limit = 3;
+    s.completion = Arc::new(StreamingLlm::default());
     let sink = DbSink {
         db: s.db.clone(),
         revoke: false,
         calls: AtomicUsize::new(0),
+        phases: Mutex::new(vec![]),
+        revoke_phase: None,
     };
     let first = telegram::execute_stream(
         &s,
@@ -694,15 +741,41 @@ async fn telegram_stream_commits_once_and_cache_emits_no_fake_deltas() {
         .try_get(0)
         .unwrap();
     assert_eq!(n, 1);
+    use provider::Phase;
+    assert_eq!(
+        *sink.phases.lock().unwrap(),
+        vec![Phase::Fetching, Phase::Generating, Phase::Cached]
+    );
+    s.update_settings(
+        1,
+        serde_json::from_value(json!({"lang":"en","use_search":true})).unwrap(),
+    )
+    .await
+    .unwrap();
+    telegram::execute_stream(
+        &s,
+        1,
+        "/tldr https://example.test/stream",
+        &sink,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        &sink.phases.lock().unwrap()[3..],
+        &[Phase::Fetching, Phase::Researching, Phase::Generating]
+    );
 }
 #[tokio::test]
 async fn revocation_between_deltas_denies_remaining_delivery_and_commit() {
     let (_dir, mut s, _) = fixture().await;
-    s.completion = Arc::new(StreamingLlm);
+    s.completion = Arc::new(StreamingLlm::default());
     let sink = DbSink {
         db: s.db.clone(),
         revoke: true,
         calls: AtomicUsize::new(0),
+        phases: Mutex::new(vec![]),
+        revoke_phase: None,
     };
     assert!(
         telegram::execute_stream(
@@ -730,6 +803,41 @@ async fn revocation_between_deltas_denies_remaining_delivery_and_commit() {
         .try_get(0)
         .unwrap();
     assert_eq!(n, 0);
+}
+#[tokio::test]
+async fn revocation_during_status_delivery_prevents_the_provider_request() {
+    let (_dir, mut s, _) = fixture().await;
+    let llm = Arc::new(StreamingLlm::default());
+    s.completion = llm.clone();
+    let sink = DbSink {
+        db: s.db.clone(),
+        revoke: false,
+        calls: AtomicUsize::new(0),
+        phases: Mutex::new(vec![]),
+        revoke_phase: Some(provider::Phase::Generating),
+    };
+    assert!(matches!(
+        telegram::execute_stream(
+            &s,
+            1,
+            "/tldr https://example.test/stream",
+            &sink,
+            CancellationToken::new()
+        )
+        .await,
+        Err(Error::Code("access_denied"))
+    ));
+    assert_eq!(llm.0.load(Ordering::SeqCst), 0);
+    assert_eq!(sink.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        query("SELECT count(*) FROM insight_native_reservations")
+            .fetch_one(&s.db)
+            .await
+            .unwrap()
+            .try_get::<i64, _>(0)
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

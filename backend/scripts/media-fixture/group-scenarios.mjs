@@ -9,7 +9,7 @@ export async function runGroupScenarios(context) {
   const origin = `http://127.0.0.1:${sourcePort}`;
   const route = { actor: user, chat: group, thread: 18 };
   const sends = () => botApi.calls.filter(call => call.method === 'sendmessage');
-  const edits = id => botApi.calls.filter(call => call.method === 'editmessagetext' && call.data.text.includes(id));
+  const edits = h.progressEdits;
   const finished = id => waitFor(async () => await fixtureSql(`SELECT finished FROM runtime_progress_notices WHERE operation_id='${id}'`) === '1', `finished group progress ${id}`);
   const terminal = (id, state) => waitFor(async () => (await queryJob(id)).startsWith(`${state}|`), `group ${state}`, 30000);
   let nextId = 2400;
@@ -69,7 +69,7 @@ export async function runGroupScenarios(context) {
     assert.equal(request.target.thread_id, 18);
     const notice = sends().find(call => call.data.text.includes(first.operationId));
     assert.equal(notice.data.message_thread_id, 18);
-    assert(edits(first.operationId).every(call => Number(call.data.chat_id) === group && call.data.message_id === notice.messageId));
+    assert((await edits(first.operationId)).every(call => Number(call.data.chat_id) === group && call.data.message_id === notice.messageId));
     const mediaCount = botApi.sendCalls;
     const replay = await h.submit(command, { ...route, messageId: first.messageId });
     assert.equal(replay.operationId, first.operationId);
@@ -105,15 +105,15 @@ export async function runGroupScenarios(context) {
 
     sourceFixture.closeProgressGate();
     const revoked = await h.submit(`/video ${origin}/progress.mp4?case=group-revocation`, route);
-    await waitFor(() => edits(revoked.operationId).some(call => /Downloading\. \d+%/.test(call.data.text)), 'group progress before topic revocation');
+    await waitFor(async () => (await edits(revoked.operationId)).some(call => /Downloading\. \d+%/.test(call.data.text)), 'group progress before topic revocation');
     const sendsBeforeRevocation = botApi.sendCalls;
     await fixtureSql(`UPDATE thread_policies SET enabled=0 WHERE group_id=${group} AND thread_id=18`);
     await finished(revoked.operationId);
-    const editsAfterRevocation = edits(revoked.operationId).length;
+    const editsAfterRevocation = (await edits(revoked.operationId)).length;
     sourceFixture.releaseProgressResponses();
     await terminal(revoked.operationId, 'failed');
     assert.equal(botApi.sendCalls, sendsBeforeRevocation, 'revoked topic cannot receive media');
-    assert.equal(edits(revoked.operationId).length, editsAfterRevocation, 'revoked topic stops progress edits');
+    assert.equal((await edits(revoked.operationId)).length, editsAfterRevocation, 'revoked topic stops progress edits');
     await fixtureSql(`UPDATE thread_policies SET enabled=1 WHERE group_id=${group} AND thread_id=18`);
 
     botApi.setSendMode('wrong-thread');

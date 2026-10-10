@@ -57,7 +57,9 @@ pub use product_dispatch::TelegramHandlerLifecycle;
 #[cfg(feature = "test-fixtures")]
 pub mod confirmation_hold;
 mod insight_lifecycle;
+mod markdown;
 mod plain_url;
+mod preview;
 mod progress;
 mod proxy;
 mod quality;
@@ -1588,7 +1590,17 @@ async fn handle_message_admitted(
                 return Ok(());
             };
             match service.status_in_chat(actor_id, id, target).await {
-                Ok(Some(record)) => progress::render(&record, language),
+                Ok(Some(record)) => format!(
+                    "{}\n{}",
+                    progress::render(&record, language),
+                    operation_response(
+                        record.operation_id,
+                        record.status,
+                        record.attempt,
+                        record.delivered_message_id,
+                        language
+                    ),
+                ),
                 Ok(None) => unknown_operation(language),
                 Err(error) => download_error_response(error, language).to_owned(),
             }

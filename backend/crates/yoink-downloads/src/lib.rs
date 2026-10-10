@@ -1420,7 +1420,21 @@ impl DownloadService {
             retryable,
             "media attempt failed"
         );
-        match self.store.fail(claim, retryable).await {
+        let code = match error {
+            ExecutorError::Worker(class) => class.code(),
+            ExecutorError::Timeout => "media_timeout",
+            ExecutorError::ResourceLimit => "resource_limit",
+            ExecutorError::ContentDenied => "network_denied",
+            ExecutorError::Spawn | ExecutorError::Io | ExecutorError::Exited(_) => {
+                "source_unavailable"
+            }
+            _ => "processing_failed",
+        };
+        match self
+            .store
+            .fail_with_code(claim, retryable, Some(code))
+            .await
+        {
             Ok(()) => Ok(()),
             Err(error) if is_stale(&error) => Ok(()),
             Err(error) => Err(map_store(error)),
@@ -1603,6 +1617,7 @@ fn retryable_executor_error(error: ExecutorError) -> bool {
             yoink_worker_protocol::FailureClass::SourceUnavailable
                 | yoink_worker_protocol::FailureClass::RateLimited
                 | yoink_worker_protocol::FailureClass::ProcessingFailed
+                | yoink_worker_protocol::FailureClass::MediaTimeout
         ),
         ExecutorError::InvalidConfig
         | ExecutorError::Protocol
@@ -1913,6 +1928,7 @@ mod tests {
             FailureClass::SourceUnavailable,
             FailureClass::RateLimited,
             FailureClass::ProcessingFailed,
+            FailureClass::MediaTimeout,
         ] {
             assert!(retryable_executor_error(ExecutorError::Worker(class)));
         }
@@ -1925,6 +1941,19 @@ mod tests {
             ExecutorError::Worker(FailureClass::InvalidMedia),
         ] {
             assert!(!retryable_executor_error(error));
+        }
+        for class in [
+            FailureClass::CookieRequired,
+            FailureClass::GeoBlocked,
+            FailureClass::AgeRestricted,
+            FailureClass::PrivateContent,
+            FailureClass::LiveStream,
+            FailureClass::NoMedia,
+            FailureClass::NetworkDenied,
+            FailureClass::ContentUnavailable,
+            FailureClass::SourceBlocked,
+        ] {
+            assert!(!retryable_executor_error(ExecutorError::Worker(class)));
         }
     }
 

@@ -49,6 +49,9 @@ impl TextDelivery {
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
+    pub(crate) fn preview_transport(&self) -> crate::preview::PreviewTransport {
+        crate::preview::PreviewTransport::new(self.bot.clone(), self.timeout)
+    }
     /// Caller must refresh grants and destination authority immediately before
     /// invoking this method. It never retries an already admitted identity.
     pub async fn dispatch(
@@ -58,6 +61,24 @@ impl TextDelivery {
     ) -> Result<TextOutcome, StoreError> {
         reject_delivery_metadata(identity)?;
         self.dispatch_entities(token, identity, None, false).await
+    }
+    /// Only the adapter renderer can supply entities. Bind the exact transport
+    /// projection to the ledger so formatting changes cannot reuse an old receipt.
+    pub(crate) async fn dispatch_formatted(
+        &self,
+        token: &str,
+        identity: &TextIdentity,
+        formatted: &crate::markdown::FormattedText,
+    ) -> Result<TextOutcome, StoreError> {
+        reject_delivery_metadata(identity)?;
+        if identity.text != formatted.text() || !identity.valid() {
+            return Err(StoreError::InvalidInput);
+        }
+        let entities = formatted.entities();
+        let mut bound = identity.clone();
+        bound.payload = serde_json::json!({"_yoink_text_delivery":{"format":"telegram-entities-v1","plain":identity.text,"entities":entities},"application":identity.payload});
+        self.dispatch_entities(token, &bound, Some(entities), false)
+            .await
     }
     /// Accept only the b/pre markup and named escapes emitted by native Stats.
     /// Convert to Telegram entities so receipt echo is exact plain text, not markup.
@@ -126,8 +147,8 @@ impl TextDelivery {
             endpoint.set_query(None);
             endpoint.set_fragment(None);
             let mut payload = serde_json::json!({"chat_id":identity.chat,"text":identity.text,"link_preview_options":{"is_disabled":true}});
-            if let Some(entities) = entities {
-                payload["entities"] = entities;
+            if let Some(entities) = &entities {
+                payload["entities"] = entities.clone();
             }
             if identity.edit {
                 payload["message_id"] = identity.message.into();
@@ -185,6 +206,7 @@ impl TextDelivery {
                 .as_ref()
                 .is_some_and(|u| u.is_bot && u.id.0 == self.bot_id as u64)
             && message.text() == Some(identity.text.as_str())
+            && echoed_entities(&message) == normalized_entities(entities.as_ref())
             && (!identity.edit || message.id.0 == identity.message);
         if !trusted {
             self.ledger.unknown_text(token).await?;
@@ -195,6 +217,54 @@ impl TextDelivery {
         self.ledger.confirm_text(token, message.id.0).await?;
         Ok(TextOutcome::Confirmed(message.id.0))
     }
+}
+
+fn normalized_entities(value: Option<&serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut entities: Vec<_> = value
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|e| {
+            matches!(
+                e["type"].as_str(),
+                Some(
+                    "bold"
+                        | "italic"
+                        | "underline"
+                        | "strikethrough"
+                        | "spoiler"
+                        | "blockquote"
+                        | "expandable_blockquote"
+                        | "text_link"
+                        | "text_mention"
+                        | "code"
+                        | "pre"
+                        | "custom_emoji"
+                )
+            )
+        })
+        .cloned()
+        .collect();
+    for entity in &mut entities {
+        if entity["language"] == "" {
+            entity.as_object_mut().unwrap().remove("language");
+        }
+    }
+    entities.sort_by_key(|e| {
+        (
+            e["offset"].as_u64(),
+            e["length"].as_u64(),
+            e["type"].as_str().unwrap().to_owned(),
+        )
+    });
+    entities
+}
+fn echoed_entities(message: &Message) -> Vec<serde_json::Value> {
+    normalized_entities(
+        serde_json::to_value(message.entities().unwrap_or_default())
+            .ok()
+            .as_ref(),
+    )
 }
 
 fn reject_delivery_metadata(identity: &TextIdentity) -> Result<(), StoreError> {

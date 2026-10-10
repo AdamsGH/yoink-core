@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { options, owned, report, GATES } from './helpers.mjs';
 import { Services, ARTICLE, CONTENT } from './services.mjs';
+const prompt = `${CONTENT}\nCurrent UTC date: ${new Date().toISOString().slice(0,10)}\nYour training memory is not independent verification. If evidence is missing, say the claim is unverified, not false.`;
 const image='sha256:'+'a'.repeat(64);
 const args=['--server-image',image,'--fixture-image',image,'--worker-image',image];
 test('only declared inputs, immutable images and unique known gates',{timeout:1000},()=>{
@@ -42,9 +43,10 @@ test('provider validates key/model/content; fragmented stream and held work clea
     const call=body=>fetch(service.origin+'/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer fixture-gateway'},body:JSON.stringify(body),signal:AbortSignal.timeout(1000)});
     assert.equal((await call({model:'unknown',messages:[]})).status,400);
     assert.equal((await call({model:'fixture-model',messages:[]})).status,400);
-    const response=await call({model:'fixture-model',messages:[{content:CONTENT}],stream:true});assert.equal(response.status,200);const wire=await response.text();assert(wire.includes('Native café summary.'));assert(wire.endsWith('data: [DONE]\n\n'));
+    assert.equal((await call({model:'fixture-model',messages:[{content:CONTENT}]})).status,400);
+    const response=await call({model:'fixture-model',messages:[{content:prompt}],stream:true});assert.equal(response.status,200);const wire=await response.text();assert(wire.includes('Native café summary.'));assert(wire.endsWith('data: [DONE]\n\n'));
     service.holdProvider=true;
-    const pending=call({model:'fixture-model',messages:[{content:CONTENT}]}).then(r=>r.json());
+    const pending=call({model:'fixture-model',messages:[{content:prompt}]}).then(r=>r.json());
     const providerDeadline=Date.now()+500;while(service.providers.size===0 && Date.now()<providerDeadline)await new Promise(r=>setTimeout(r,10));assert.equal(service.providers.size,1);
     service.releaseProviders();assert.equal((await pending).choices[0].message.content,'Native café summary.');service.holdProvider=false;
     service.holdContent=true;
@@ -111,7 +113,7 @@ test('held OAuth polling supports release and socket teardown without live provi
 test('deterministic content/provider failures remain non-successes',{timeout:3000},async()=>{
   await owned(async defer=>{
     const service=new Services();defer(()=>service.close());await service.start();service.providerFailure=true;
-    const response=await fetch(service.origin+'/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer fixture-gateway'},body:JSON.stringify({model:'fixture-model',messages:[{content:CONTENT}]}),signal:AbortSignal.timeout(1000)});
+    const response=await fetch(service.origin+'/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer fixture-gateway'},body:JSON.stringify({model:'fixture-model',messages:[{content:prompt}]}),signal:AbortSignal.timeout(1000)});
     assert.equal(response.status,503);assert.equal(service.calls.at(-1).kind,'completion');
     service.contentFailure=true;
     const http=await import('node:http');const status=await new Promise((resolve,reject)=>{const req=http.request(service.origin,{path:ARTICLE},r=>{r.resume();resolve(r.statusCode);});req.on('error',reject);req.end();});assert.equal(status,503);

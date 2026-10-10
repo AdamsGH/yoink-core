@@ -4,7 +4,7 @@ export const ARTICLE = 'http://93.184.216.34/article';
 export const CONTENT = 'Confined fixture article: native full-content extraction must pass this sentence to the provider.';
 export class Services {
   calls = []; sockets = new Set(); held = new Set(); holdContent = false; holdProvider = false; holdStream = false; providers = new Map();
-  contentFailure = false; providerFailure = false; oauthPlans = []; flows = new Map(); polls = new Map(); starts = new Map(); receipts = new Map(); holdReceipt = false; oauthSequence = 0;
+  contentFailure = false; providerFailure = false; markdown = false; oauthPlans = []; flows = new Map(); polls = new Map(); starts = new Map(); receipts = new Map(); holdReceipt = false; oauthSequence = 0;
   releasePolls() { for(const release of [...this.polls.values()])release(); }
   releaseStarts() { for(const release of [...this.starts.values()])release(); }
   releaseReceipts() { for(const release of [...this.receipts.values()])release(); }
@@ -57,7 +57,7 @@ export class Services {
   }
   async handle(req,res) {
     // Sole forwarding exception is the local public BotApiFixture helper.
-    if (this.botOrigin && req.url.startsWith('/bot123456:fixture_insight_token/') && /^\/bot123456:fixture_insight_token\/(getMe|getUpdates|setMyCommands|deleteMyCommands|getMyCommands|sendMessage|editMessageText|deleteMessage|answerCallbackQuery)$/i.test(req.url) && ['GET','POST'].includes(req.method)) {
+    if (this.botOrigin && req.url.startsWith('/bot123456:fixture_insight_token/') && /^\/bot123456:fixture_insight_token\/(getMe|getUpdates|setMyCommands|deleteMyCommands|getMyCommands|sendMessage|sendMessageDraft|sendChatAction|editMessageText|deleteMessage|answerCallbackQuery)$/i.test(req.url) && ['GET','POST'].includes(req.method)) {
       const stall=this.holdReceipt && /\/(sendMessage|editMessageText)$/i.test(req.url);
       const upstream=http.request(this.botOrigin+req.url,{method:req.method,headers:req.headers},reply=>{
         if(!stall){res.writeHead(reply.statusCode,reply.headers);reply.pipe(res);return;}
@@ -80,19 +80,24 @@ export class Services {
     let raw = ''; for await (const chunk of req) { raw += chunk; assert(Buffer.byteLength(raw)<=128*1024); }
     const body = JSON.parse(raw); assert.equal(body.model,'fixture-model');
     assert(JSON.stringify(body.messages).includes(CONTENT), 'actual worker content must reach actual completion adapter');
+    const prompt = JSON.stringify(body.messages);
+    assert(prompt.includes(`Current UTC date: ${new Date().toISOString().slice(0,10)}`));
+    assert(prompt.includes('Your training memory is not independent verification'));
+    assert(prompt.includes('say the claim is unverified, not false'));
     this.calls.push({kind:'completion',stream:body.stream===true,credential:req.headers.authorization.endsWith('-two')?'two':'one'});
     if(this.providerFailure){this.json(res,{error:{message:'fixture provider unavailable'}},503);return;}
     if(this.holdProvider)await this.hold(this.providers,res);
     if(res.destroyed)return;
+    const generated = this.markdown ? '# Fixture\n\nNative **café** summary.\n\n> Quoted evidence.\n\nUse `token`.\n\n```rust\nlet x = 1;\n```' : 'Native café summary.';
     if (body.stream) {
       res.setHeader('content-type','text/event-stream');
       if(this.holdStream) {res.write('data: '+JSON.stringify({choices:[{delta:{content:'Draft only.'}}]})+'\n\n');await this.hold(this.providers,res);if(res.destroyed)return;}
       // Deliberately cut UTF-8 and SSE JSON across writes. The summary assertion
       // proves decoding only when the native adapter actually requested streaming.
-      const bytes=Buffer.from('data: '+JSON.stringify({choices:[{delta:{content:'Native café summary.'}}]})+'\n\ndata: [DONE]\n\n');
+      const bytes=Buffer.from('data: '+JSON.stringify({choices:[{delta:{content:generated}}]})+'\n\ndata: [DONE]\n\n');
       const cuts=[...new Set([...Array.from({length:Math.ceil(bytes.length/3)},(_,i)=>Math.min((i+1)*3,bytes.length)),bytes.indexOf(Buffer.from('é'))+1])].sort((a,b)=>a-b);
       let start=0;for (const end of cuts) { if (res.destroyed) return;res.write(bytes.subarray(start,end));start=end;await new Promise(r=>setTimeout(r,1)); }res.end();
-    } else {res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{message:{content:'Native café summary.'}}]}));}
+    } else {res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{message:{content:generated}}]}));}
   }
   async close() {
     const closed=[...this.sockets].map(socket=>new Promise(resolve=>{socket.once('close',resolve);socket.destroy();}));

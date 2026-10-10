@@ -57,6 +57,9 @@ fn receipt(body: &Value, sender: i64) -> Value {
     if let Some(topic) = body.get("message_thread_id") {
         result["message_thread_id"] = topic.clone();
     }
+    if let Some(entities) = body.get("entities") {
+        result["entities"] = entities.clone();
+    }
     json!({"ok":true,"result":result})
 }
 fn budget() -> LookupBudget {
@@ -265,6 +268,116 @@ async fn html_entities_replay_conflict_topic_and_sender_proof() {
         ));
         assert!(f.store.text_effect("invalid").await.unwrap().is_none());
     }
+    f.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn renderer_format_is_bound_and_receipts_cannot_drop_or_change_entities() {
+    use crate::markdown::FormattedText;
+    let (listener, bot) = wire().await;
+    let f = fixture(bot).await;
+    let formatted = FormattedText::markdown(
+        Some(("🔗 Summary", "https://example.org/source")),
+        "😀 **value** https://plain.example\n\n```\ncode\n```",
+    )
+    .unwrap();
+    let i = identity(formatted.text());
+    let server = tokio::spawn(async move {
+        for mode in 0..3 {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let (_, body) = request(&mut s).await;
+            let mut message = receipt(&body, 123);
+            match mode {
+                0 => {
+                    let entities = message["result"]["entities"].as_array_mut().unwrap();
+                    for entity in entities.iter_mut().filter(|e| e["type"] == "pre") {
+                        entity["language"] = "".into();
+                    }
+                    let text = body["text"].as_str().unwrap();
+                    let start = text.find("https://plain.example").unwrap();
+                    entities.push(json!({"type":"url","offset":text[..start].encode_utf16().count(),"length":"https://plain.example".len()}));
+                }
+                1 => {
+                    message["result"]["entities"] = json!([]);
+                }
+                _ => {
+                    let link = message["result"]["entities"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|e| e["type"] == "text_link")
+                        .unwrap();
+                    link["url"] = "https://wrong.example/source".into();
+                }
+            }
+            reply(&mut s, message).await;
+        }
+        listener
+    });
+    assert_eq!(
+        f.runtime
+            .delivery
+            .dispatch_formatted("rendered", &i, &formatted)
+            .await
+            .unwrap(),
+        TextOutcome::Confirmed(99)
+    );
+    assert_eq!(
+        f.runtime
+            .delivery
+            .dispatch_formatted("rendered", &i, &formatted)
+            .await
+            .unwrap(),
+        TextOutcome::Confirmed(99)
+    );
+    let plain = FormattedText::markdown(None, formatted.text()).unwrap();
+    assert!(matches!(
+        f.runtime
+            .delivery
+            .dispatch_formatted("rendered", &i, &plain)
+            .await,
+        Err(StoreError::Conflict)
+    ));
+    for token in ["missing-format", "wrong-link"] {
+        assert_eq!(
+            f.runtime
+                .delivery
+                .dispatch_formatted(token, &i, &formatted)
+                .await
+                .unwrap(),
+            TextOutcome::Unknown
+        );
+        assert_eq!(
+            f.runtime
+                .delivery
+                .dispatch_formatted(token, &i, &formatted)
+                .await
+                .unwrap(),
+            TextOutcome::Unknown
+        );
+    }
+    let mut forged = i.clone();
+    forged.payload = json!({"_yoink_text_delivery":{"format":"telegram-entities-v1"}});
+    assert!(matches!(
+        f.runtime
+            .delivery
+            .dispatch_formatted("forged-renderer", &forged, &formatted)
+            .await,
+        Err(StoreError::Conflict)
+    ));
+    assert!(
+        f.store
+            .text_effect("forged-renderer")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let listener = server.await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), listener.accept())
+            .await
+            .is_err()
+    );
     f.runtime.shutdown().await.unwrap();
 }
 

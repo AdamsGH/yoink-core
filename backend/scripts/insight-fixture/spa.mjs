@@ -51,7 +51,8 @@ export async function spa(c) {
       await browser.evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Save');if(!b||b.disabled)throw Error('missing enabled admin Save');b.click();})()`);
       const call=await c.waitFor(()=>calls.slice(before).find(x=>x.path==='/api/v1/insight/config/tldr' && x.method==='PATCH'),'actual SPA config PATCH');
       assert.equal(call.status,200);assert.deepEqual(call.credentialEdits,expected);
-      await c.waitFor(()=>browser.evaluate(`![...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Save')`),'SPA save reset');
+      // The button changes to Saving before the HTTP response resets credential edits.
+      await c.waitFor(()=>browser.evaluate(`![...document.querySelectorAll('button')].some(b=>/^(Save|Saving)/.test(b.textContent.trim()))`),'SPA save reset');
     };
     const omitted={gateway_api_key:'omitted',openrouter_api_key:'omitted'};
     await save(omitted);

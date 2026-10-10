@@ -11,7 +11,7 @@ struct Migration {
     expected_tables: usize,
 }
 
-const MIGRATIONS: [Migration; 26] = [
+const MIGRATIONS: [Migration; 27] = [
     Migration {
         version: 1,
         sql: include_str!("../migrations-turso/0001_runtime.sql"),
@@ -144,6 +144,11 @@ const MIGRATIONS: [Migration; 26] = [
     Migration {
         version: 26,
         sql: include_str!("../../yoink-stats/sql/native.sql"),
+        expected_tables: 76,
+    },
+    Migration {
+        version: 27,
+        sql: include_str!("../migrations-turso/0027_operation_failure.sql"),
         expected_tables: 76,
     },
 ];

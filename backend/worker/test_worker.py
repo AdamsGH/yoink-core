@@ -72,13 +72,28 @@ class ProtocolAndSettingsTests(unittest.TestCase):
                 self.assertEqual(main._classify_error(DownloadError(f"ERROR: HTTP Error {status}: unavailable")), "source_unavailable")
         self.assertEqual(main._classify_error(DownloadError("ERROR: HTTP Error 429: Too Many Requests")), "rate_limited")
         for message in (
-            "HTTP Error 400: Bad Request", "HTTP Error 401: Unauthorized",
-            "HTTP Error 403: Forbidden", "HTTP Error 404: Not Found",
+            "HTTP Error 400: Bad Request",
             "media has 503 frames", "codec has 408 frames",
         ):
             with self.subTest(message=message):
                 self.assertEqual(main._classify_error(DownloadError(message)), "invalid_media")
         self.assertEqual(main._classify_error(DownloadError("Connection reset by peer")), "source_unavailable")
+        for message, expected in (
+            ("HTTP Error 401: Unauthorized", "cookie_required"),
+            ("HTTP Error 403: Forbidden", "source_blocked"),
+            ("HTTP Error 404: Not Found", "content_unavailable"),
+            ("Sign in to confirm your age", "age_restricted"),
+            ("This video is private", "private_content"),
+            ("This content is not available in your country", "geo_blocked"),
+            ("Sign in to confirm you're not a bot", "cookie_required"),
+            ("No video formats found", "no_media"),
+            ("This is a live stream", "live_stream"),
+            ("ffmpeg exited with code 146", "media_timeout"),
+            ("Read timed out", "media_timeout"),
+            ("network destination is not permitted", "network_denied"),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(main._classify_error(DownloadError(message)), expected)
 
     def test_ffprobe_output_limit_and_timeout_kill_and_reap_child(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -291,7 +306,7 @@ class IntegrationTests(unittest.TestCase):
         result, _ = self.invoke(False)
         self.assertEqual(result.returncode, 0)
         events = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(events[-1]["event"], {"type": "failure", "class": "source_unavailable"})
+        self.assertEqual(events[-1]["event"], {"type": "failure", "class": "network_denied"})
         self.assertNotIn(self.origin, result.stdout.decode())
 
     def test_oversized_media_is_resource_limit(self):

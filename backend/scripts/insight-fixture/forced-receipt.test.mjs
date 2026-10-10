@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
 import {held,signalTiming,telegramTask,abortProof,shutdownProof,replayProof,finalSends,finalText,forcedReceipt,requireContext,REPLAY_BLOCKER,LIMITS} from './forced-receipt.mjs';
 const token='insight:123456:44:0:39501:0:0';
+const replayToken=token;
 const abort='fixture adapter aborted and joined: task_id=17';
 test('entry and arm budgets independently preserve native hold slack',()=>{
   signalTiming({armed:0,entered:10000,signalled:15000});
@@ -40,10 +41,10 @@ test('duplicate count is scoped to actual final send and exact source message',(
   assert.equal(finalSends([call,call],39501).length,2);
 });
 const body='Native caf\u00e9 summary.';
-const complete=`Complete \u00b7 tldr\n\n${body}`;
+const complete=`🔗 Summary\n\n${body}`;
 test('cached final proof validates native header and exact body, rejecting drafts',()=>{
   finalText(complete,body);
-  for(const text of [body,complete.replace('Complete','Incomplete answer'),complete+'extra',complete.replace('\n\n','\n/cancel 12345678-1234-4123-8123-123456789abc\n\n')])assert.throws(()=>finalText(text,body));
+  for(const text of [body,`Partial response\n\n${complete}`,complete+'extra',complete.replace('\n\n','\n/cancel 12345678-1234-4123-8123-123456789abc\n\n')])assert.throws(()=>finalText(text,body));
   assert.throws(()=>finalText(complete,''));
 });
 
@@ -59,7 +60,7 @@ function model(t, fault) {
       if(text==='/start') {if(fault!=='no-witness')this.calls.push({method:'sendmessage',data:{chat_id:45,text:'live'}});return;}
       assert.equal(text,'/tldr http://93.184.216.34/article');
       if(restarted) {fenced=fault==='no-fence'?0:fault==='two-fences'?2:1;return;}
-      state='entered';this.calls.push(send(message,fault==='draft'?complete.replace('Complete','Incomplete answer'):complete));
+      state='entered';this.calls.push(send(message,fault==='draft'?`Partial response\n\n${complete}`:complete));
       if(fault==='provider-work')c.trusted.calls.push({kind:'completion'});
     }},
     ready:async()=>{},login:async()=> 'fixture-session',
@@ -103,7 +104,7 @@ function model(t, fault) {
       logs+=(fault==='shutdown-order'?markers.toReversed():markers).join('\n');
     },
     launch:async()=>{events.push('launch');restarted=true;fenced=fault==='dirty-counter'?1:0;},
-    replayStatus:async(exact)=>{assert.equal(exact,token);events.push('replay-status');return {token:fault==='wrong-token'&&fenced?'other':token,fenced};},
+    replayStatus:async(exact)=>{assert.equal(exact,replayToken);events.push('replay-status');return {token:fault==='wrong-token'&&fenced?'other':replayToken,fenced};},
     stop:async()=>{
       events.push('stop');
       if(fault==='duplicate')c.bot.calls.push(send(39501));
