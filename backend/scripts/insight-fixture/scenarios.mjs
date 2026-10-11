@@ -87,7 +87,19 @@ export async function telegram(c){
   const final=await c.waitFor(()=>c.bot.calls.slice(start).find(x=>x.method==='sendmessage' && Number(x.data.chat_id)===44 && String(x.data.text).startsWith('🔗 No BS\n\nFixture\n\nNative café summary.')),'native Telegram formatted final summary');
   assert.notEqual(Number(final.data.message_id??final.messageId),31001,'bot response is not the user source message');
   assert(!final.data.text.includes('**')&&!final.data.text.includes('```'));
-  for(const type of ['bold','blockquote','code','pre','text_link'])assert(final.data.entities.some(e=>e.type===type),`native ${type} entity`);
+  for(const type of ['bold','italic','strikethrough','blockquote','code','pre','text_link'])assert(final.data.entities.some(e=>e.type===type),`native ${type} entity`);
+  assert(final.data.text.includes('• First token.\n\n• Second\n  • nested\n\n• Third'));
+  assert(final.data.text.includes('A 6" screen - assessment. The \'90s - context.'));
+  assert(final.data.text.includes('"quoted — ending" prose - assessment'));
+  const entityText=e=>final.data.text.slice(e.offset,e.offset+e.length);
+  for(const [type,text] of [['bold','decision - verified'],['italic','context'],['strikethrough','discarded'],['code','token—literal'],['blockquote','Quoted evidence — literal.']]){
+    assert(final.data.entities.some(e=>e.type===type&&entityText(e)===text),`exact ${type} body span`);
+  }
+  assert(final.data.entities.some(e=>e.type==='pre'&&entityText(e).includes('range | 1–2')));
+  assert(final.data.entities.some(e=>e.type==='pre'&&entityText(e).includes('let x = "—";')));
+  for(const pre of final.data.entities.filter(e=>e.type==='pre')){
+    assert(final.data.entities.every(e=>e.type==='pre'||e.offset>=pre.offset+pre.length||e.offset+e.length<=pre.offset),'no incompatible table/pre overlaps');
+  }
   assert(final.data.entities.some(e=>e.type==='text_link'&&e.url===ARTICLE&&e.offset===0));
   for(const e of final.data.entities)assert(e.offset+e.length<=final.data.text.length,'UTF-16 entity bound');
   await c.waitFor(async()=>await c.db.query(`SELECT count(*) FROM runtime_text_effects WHERE token LIKE 'insight:123456:44:0:31001:0:%' AND state='confirmed' AND receipt=${Number(final.data.message_id??final.messageId)} AND json_extract(identity,'$.text')=${literal(final.data.text)}`)==='1','completed text has its exact durable confirmed receipt');
@@ -102,6 +114,17 @@ export async function telegram(c){
   assert(c.trusted.calls.slice(providers).some(x=>x.kind==='content'),'native TG uses actual full-content worker');
   assert(c.trusted.calls.slice(providers).some(x=>x.kind==='completion' && x.stream),'native Telegram adapter consumes fragmented SSE/UTF-8');
   assert.equal(c.bot.error,undefined);
+  await c.db.batch('DELETE FROM insight_native_cache WHERE user_id=44');
+  const cachedUrl=ARTICLE,beforePrime=c.bot.calls.length;
+  c.bot.enqueue(44,44,`/tldr ${cachedUrl} nobullshit`,31002,'en');
+  const primed=await c.waitFor(()=>c.bot.calls.slice(beforePrime).find(x=>x.method==='sendmessage'&&Number(x.data.chat_id)===44&&String(x.data.text).startsWith('🔗 No BS\n\nFixture\n\nNative café summary.')),'rich cache prime');
+  const beforeReplay=c.bot.calls.length,providerCount=c.trusted.calls.length;
+  c.bot.enqueue(44,44,`/tldr ${cachedUrl} nobullshit`,31003,'en');
+  const replay=await c.waitFor(()=>c.bot.calls.slice(beforeReplay).find(x=>x.method==='sendmessage'&&Number(x.data.chat_id)===44&&String(x.data.text).startsWith('🔗 No BS\n\nFixture\n\nNative café summary.')),'rich cached final');
+  assert.equal(replay.data.text,primed.data.text);
+  assert.deepEqual(replay.data.entities,primed.data.entities);
+  assert.equal(c.trusted.calls.length,providerCount,'rich cache replay performs no provider/content fetch');
+  await c.waitFor(async()=>await c.db.query(`SELECT count(*) FROM runtime_text_effects WHERE token LIKE 'insight:123456:44:0:31003:0:%' AND state='confirmed' AND receipt=${Number(replay.data.message_id??replay.messageId)} AND json_extract(identity,'$.text')=${literal(replay.data.text)}`)==='1','cached body has its exact confirmed receipt');
   } finally { c.trusted.markdown=false; }
 }
 export async function revocation(c){

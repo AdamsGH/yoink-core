@@ -43,7 +43,9 @@ impl FormattedText {
                 Event::Code(text) => {
                     let start = out.offset;
                     out.push(&text);
-                    out.entity("code", start, out.offset, None);
+                    if !out.frames.iter().any(|frame| frame.kind == Some("pre")) {
+                        out.entity("code", start, out.offset, None);
+                    }
                 }
                 Event::SoftBreak | Event::HardBreak => out.push("\n"),
                 Event::Rule => out.separate(2),
@@ -61,7 +63,7 @@ impl FormattedText {
         let length = out.text.encode_utf16().count();
         let entities = normalize(out.entities, length);
         Ok(Self {
-            text: out.text,
+            text: clean_prose(&out.text, &entities, &out.literal_spans),
             entities,
         })
     }
@@ -156,6 +158,7 @@ struct Renderer {
     frames: Vec<Frame>,
     entities: Vec<Value>,
     lists: Vec<Option<u64>>,
+    literal_spans: Vec<(usize, usize)>,
 }
 impl Renderer {
     fn push(&mut self, text: &str) {
@@ -218,6 +221,10 @@ impl Renderer {
                 }
                 Some("pre")
             }
+            Tag::Table(_) => {
+                self.separate(2);
+                Some("pre")
+            }
             Tag::List(number) => {
                 self.separate(1);
                 self.lists.push(number);
@@ -231,7 +238,7 @@ impl Renderer {
                     *number = number.saturating_add(1);
                     self.push(&prefix);
                 } else {
-                    self.push("- ");
+                    self.push("• ");
                 }
                 None
             }
@@ -245,27 +252,131 @@ impl Renderer {
         });
     }
     fn end(&mut self, end: TagEnd) {
-        if let Some(Frame {
-            kind: Some(kind),
-            start,
-            extra,
-            ..
-        }) = self.frames.pop()
-        {
-            self.entity(kind, start, self.offset, extra);
+        if let Some(frame) = self.frames.pop() {
+            if let Some(kind) = frame.kind {
+                let end = if kind == "blockquote" {
+                    self.offset
+                        .saturating_sub(self.text.chars().rev().take_while(|c| *c == '\n').count())
+                        .max(frame.start)
+                } else {
+                    self.offset
+                };
+                self.entity(kind, frame.start, end, frame.extra);
+            }
+            if frame.end == TagEnd::Image {
+                self.literal_spans.push((frame.start, self.offset));
+            }
         }
         match end {
             TagEnd::Paragraph => self.separate(if self.lists.is_empty() { 2 } else { 1 }),
-            TagEnd::Heading(_) | TagEnd::CodeBlock | TagEnd::BlockQuote(_) => self.separate(2),
+            TagEnd::Heading(_) | TagEnd::CodeBlock | TagEnd::BlockQuote(_) | TagEnd::Table => {
+                self.separate(2);
+            }
             TagEnd::List(_) => {
                 self.lists.pop();
                 self.separate(2);
             }
-            TagEnd::Item | TagEnd::TableRow | TagEnd::TableHead => self.separate(1),
+            TagEnd::Item => self.separate(if self.lists.len() <= 1 { 2 } else { 1 }),
+            TagEnd::TableRow | TagEnd::TableHead => self.separate(1),
             TagEnd::TableCell => self.push(" | "),
             _ => {}
         }
     }
+}
+fn clean_prose(text: &str, entities: &[Value], literal_spans: &[(usize, usize)]) -> String {
+    let mut literal = protected_spans(entities, true);
+    let mut verbatim = protected_spans(entities, false);
+    let mut opaque = literal_spans.to_vec();
+    let mut word_start = 0;
+    for word in text.split_inclusive(char::is_whitespace) {
+        let word_end = word_start + word.encode_utf16().count();
+        if word.contains("https://") || word.contains("http://") {
+            opaque.push((word_start, word_end));
+        }
+        word_start = word_end;
+    }
+    let quotations: Vec<_> = entities
+        .iter()
+        .filter(|e| e["type"] == "blockquote")
+        .map(|e| {
+            let start = e["offset"].as_u64().unwrap() as usize;
+            (start, start + e["length"].as_u64().unwrap() as usize)
+        })
+        .collect();
+    verbatim.extend_from_slice(&quotations);
+    verbatim.sort_unstable();
+    opaque.sort_unstable();
+    literal.extend_from_slice(&quotations);
+    literal.extend_from_slice(&opaque);
+    literal.extend(quoted_spans(text, &verbatim, &opaque));
+    literal.sort_unstable();
+    let mut span = 0;
+    let mut offset = 0;
+    let mut cleaned = String::with_capacity(text.len());
+    for c in text.chars() {
+        let protected = in_spans(&literal, &mut span, offset);
+        cleaned.push(if !protected && matches!(c, '—' | '–') {
+            '-'
+        } else {
+            c
+        });
+        offset += c.len_utf16();
+    }
+    cleaned
+}
+fn in_spans(spans: &[(usize, usize)], index: &mut usize, offset: usize) -> bool {
+    while *index < spans.len() && spans[*index].1 <= offset {
+        *index += 1;
+    }
+    spans.get(*index).is_some_and(|&(start, _)| start <= offset)
+}
+fn quoted_spans(
+    text: &str,
+    verbatim: &[(usize, usize)],
+    opaque: &[(usize, usize)],
+) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut quotes: Vec<(char, usize, usize)> = Vec::new();
+    let (mut offset, mut verbatim_index, mut opaque_index) = (0, 0, 0);
+    let mut previous: Option<char> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\n' && previous == Some('\n') {
+            quotes.clear();
+        }
+        let apostrophe = matches!(c, '\'' | '’')
+            && previous.is_some_and(char::is_alphanumeric)
+            && chars.peek().is_some_and(|next| next.is_alphanumeric());
+        let literal = in_spans(verbatim, &mut verbatim_index, offset);
+        let opaque = in_spans(opaque, &mut opaque_index, offset);
+        if !literal && !apostrophe {
+            if let Some(index) = quotes.iter().position(|&(end, _, _)| end == c) {
+                quotes[index].2 -= 1;
+                if quotes[index].2 == 0 {
+                    let (_, start, _) = quotes.remove(index);
+                    spans.push((start, offset + c.len_utf16()));
+                }
+            } else if !opaque {
+                let end = match c {
+                    '"' | '\'' if previous.is_none_or(|c| !c.is_alphanumeric()) => Some(c),
+                    '“' => Some('”'),
+                    '‘' => Some('’'),
+                    '«' => Some('»'),
+                    _ => None,
+                };
+                if let Some(end) = end {
+                    if let Some(quote) = quotes.iter_mut().find(|quote| quote.0 == end) {
+                        quote.2 += 1;
+                    } else {
+                        quotes.push((end, offset, 1));
+                    }
+                }
+            }
+        }
+        offset += c.len_utf16();
+        previous = Some(c);
+    }
+    spans
 }
 fn safe_link(raw: &str) -> Option<String> {
     if raw.len() > 4096 {
@@ -393,6 +504,165 @@ mod tests {
                 let d = c + e["length"].as_u64().unwrap();
                 assert!(b <= c || d <= a);
             }
+        }
+    }
+    #[test]
+    fn legacy_list_spacing_preserves_body_entities() {
+        let rendered = FormattedText::markdown(
+            Some(("No BS", "https://example.com/source")),
+            "**Verdict.**\n\n- **First** `token`.\n- Second\n  - nested\n- Third",
+        )
+        .unwrap();
+        assert_eq!(
+            rendered.text(),
+            "No BS\n\nVerdict.\n\n• First token.\n\n• Second\n  • nested\n\n• Third"
+        );
+        for (kind, expected) in [("bold", "Verdict."), ("bold", "First"), ("code", "token")] {
+            assert!(rendered.entities.iter().any(|entity| {
+                entity["type"] == kind
+                    && rendered
+                        .text
+                        .encode_utf16()
+                        .skip(entity["offset"].as_u64().unwrap() as usize)
+                        .take(entity["length"].as_u64().unwrap() as usize)
+                        .eq(expected.encode_utf16())
+            }));
+        }
+    }
+    #[test]
+    fn prose_dashes_are_cleaned_without_changing_literals_or_entity_offsets() {
+        let rendered = FormattedText::markdown(
+            None,
+            "😀 **claim — assessment** and range 1–2.\n\n\"quoted—text\" «source–text» “other—quote” 'don't—change' ‘don’t–change’.\n\nDon't — rewrite.\n\n`code—token` [link–label](https://example.com/a–b)\n\nhttps://example.com/raw—path http://example.com/range–path\n\n> source — quotation\n\n```text\ncommand —option\n```",
+        )
+        .unwrap();
+        assert!(
+            rendered
+                .text()
+                .starts_with("😀 claim - assessment and range 1-2.")
+        );
+        for literal in [
+            "\"quoted—text\"",
+            "«source–text»",
+            "“other—quote”",
+            "'don't—change'",
+            "‘don’t–change’",
+            "Don't - rewrite.",
+            "code—token",
+            "link–label",
+            "https://example.com/raw—path",
+            "http://example.com/range–path",
+            "source — quotation",
+            "command —option",
+        ] {
+            assert!(rendered.text().contains(literal), "{literal}");
+        }
+        let bold = rendered
+            .entities
+            .iter()
+            .find(|e| e["type"] == "bold")
+            .unwrap();
+        assert_eq!(bold["offset"], 3);
+        assert!(
+            rendered
+                .text
+                .encode_utf16()
+                .skip(bold["offset"].as_u64().unwrap() as usize)
+                .take(bold["length"].as_u64().unwrap() as usize)
+                .eq("claim - assessment".encode_utf16())
+        );
+        assert!(rendered.entities.iter().any(|e| {
+            e["type"] == "text_link" && e["url"] == "https://example.com/a%E2%80%93b"
+        }));
+        let quote = rendered
+            .entities
+            .iter()
+            .find(|e| e["type"] == "blockquote")
+            .unwrap();
+        assert!(
+            rendered
+                .text
+                .encode_utf16()
+                .skip(quote["offset"].as_u64().unwrap() as usize)
+                .take(quote["length"].as_u64().unwrap() as usize)
+                .eq("source — quotation".encode_utf16())
+        );
+    }
+    #[test]
+    fn cleanup_crosses_inline_markup_without_rewriting_quotes_and_tables() {
+        let rendered = FormattedText::markdown(
+            None,
+            "**Don**'t — rewrite.\n\n'**don**'t—change' and 'don'**t**—change'.\n\n| Field | Value |\n| --- | --- |\n| **range** | `1–2` [literal—label](https://example.com) |",
+        )
+        .unwrap();
+        assert!(rendered.text().starts_with("Don't - rewrite."));
+        assert!(
+            rendered
+                .text()
+                .contains("'don't—change' and 'don't—change'.")
+        );
+        let table = rendered
+            .entities
+            .iter()
+            .find(|e| e["type"] == "pre")
+            .unwrap();
+        let start = table["offset"].as_u64().unwrap() as usize;
+        let end = start + table["length"].as_u64().unwrap() as usize;
+        assert!(rendered.text().contains("range | 1–2"));
+        assert!(rendered.entities.iter().all(|e| {
+            e["type"] == "pre"
+                || e["offset"].as_u64().unwrap() as usize >= end
+                || e["offset"].as_u64().unwrap() as usize + e["length"].as_u64().unwrap() as usize
+                    <= start
+        }));
+        for page in rendered.pages(16) {
+            for pre in page.entities.iter().filter(|e| e["type"] == "pre") {
+                let start = pre["offset"].as_u64().unwrap();
+                let end = start + pre["length"].as_u64().unwrap();
+                assert!(page.entities.iter().all(|e| {
+                    e["type"] == "pre"
+                        || e["offset"].as_u64().unwrap() >= end
+                        || e["offset"].as_u64().unwrap() + e["length"].as_u64().unwrap() <= start
+                }));
+            }
+        }
+    }
+    #[test]
+    fn only_closed_paragraph_quotes_protect_prose_dashes() {
+        for (input, expected) in [
+            (
+                "A 6\" screen — assessment.\n\nNext — claim",
+                "A 6\" screen - assessment.\n\nNext - claim",
+            ),
+            (
+                "The '90s — context.\n\nNext — claim",
+                "The '90s - context.\n\nNext - claim",
+            ),
+            (
+                "\"unclosed — claim.\n\nNext — claim",
+                "\"unclosed - claim.\n\nNext - claim",
+            ),
+            (
+                "\"quoted — [ending\"](https://example.com) prose — assessment",
+                "\"quoted — ending\" prose - assessment",
+            ),
+            (
+                "[\"quoted —](https://example.com) text—literal\" and — prose",
+                "\"quoted — text—literal\" and - prose",
+            ),
+            (
+                "'unclosed — claim **\"proper — literal\"** next — item",
+                "'unclosed - claim \"proper — literal\" next - item",
+            ),
+            (
+                "“outer — “inner —” and — outer” — prose",
+                "“outer — “inner —” and — outer” - prose",
+            ),
+        ] {
+            assert_eq!(
+                FormattedText::markdown(None, input).unwrap().text(),
+                expected
+            );
         }
     }
     #[test]

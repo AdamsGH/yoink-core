@@ -112,8 +112,11 @@ export async function withRuntime(config, execute) {
     async function confirmation(mode, token='') {
       assert(app,'live native controller required');
       const input=JSON.stringify({token:fixtureToken,sql:token,mode})+'\n';
-      const result=await capture('docker',['exec','--interactive',app,'/usr/local/bin/python','-I','-B','-c',socketClient,String(fixturePort)],{timeout:10000,input});
-      const response=JSON.parse(result.output.trim());
+      // Releasing the hold can let PID1 exit before a docker exec client exits.
+      const output=mode==='confirmation_release'
+        ? await helperContainer(['--network',`container:${app}`,'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--user','10001:10001','--pids-limit','32','--memory','64m','--entrypoint','/usr/local/bin/python',config['fixture-image'],'-I','-B','-c',socketClient,String(fixturePort)],10000,input)
+        : (await capture('docker',['exec','--interactive',app,'/usr/local/bin/python','-I','-B','-c',socketClient,String(fixturePort)],{timeout:10000,input})).output;
+      const response=JSON.parse(output.trim());
       assert.equal(response.ok,true,`native fixture control failed: ${response.error}`);
       return response;
     }

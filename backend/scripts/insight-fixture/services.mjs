@@ -88,7 +88,16 @@ export class Services {
     if(this.providerFailure){this.json(res,{error:{message:'fixture provider unavailable'}},503);return;}
     if(this.holdProvider)await this.hold(this.providers,res);
     if(res.destroyed)return;
-    const generated = this.markdown ? '# Fixture\n\nNative **café** summary.\n\n> Quoted evidence.\n\nUse `token`.\n\n```rust\nlet x = 1;\n```' : 'Native café summary.';
+    const generated = this.markdown ? [
+      '# Fixture', '', 'Native **café** summary.', '',
+      '😀 **decision — verified**. *context* and ~~discarded~~.', '',
+      'A 6" screen — assessment. The \'90s — context.', '',
+      '"quoted — [ending"](https://example.com) prose — assessment', '',
+      '- **First** `token`.', '- Second', '  - nested', '- Third', '',
+      '| Field | Value |', '| --- | --- |', '| **range** | `1–2` [literal—label](https://example.com/table) |', '',
+      '> Quoted evidence — literal.', '', 'Use `token—literal`.', '',
+      '```rust', 'let x = "—";', '```',
+    ].join('\n') : 'Native café summary.';
     if (body.stream) {
       res.setHeader('content-type','text/event-stream');
       if(this.holdStream) {res.write('data: '+JSON.stringify({choices:[{delta:{content:'Draft only.'}}]})+'\n\n');await this.hold(this.providers,res);if(res.destroyed)return;}

@@ -91,6 +91,7 @@ fn check_mode_applies_confinement_and_rejects_non_private_cwd() {
 
     let bad = parent.path().join("bad");
     fs::create_dir(&bad).unwrap();
+    fs::set_permissions(&bad, fs::Permissions::from_mode(0o755)).unwrap();
     let output = Command::new(launcher())
         .arg("--check")
         .current_dir(&bad)
