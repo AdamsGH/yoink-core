@@ -70,14 +70,14 @@ impl MediaConfig {
             "DOWNLOAD_MAX_BYTES",
             20 * 1024 * 1024,
             1,
-            50 * 1024 * 1024,
+            2_000_000_000,
         )?;
         let max_workspace_bytes = number(
             read,
             "DOWNLOAD_WORKSPACE_MAX_BYTES",
             100 * 1024 * 1024,
             max_artifact_bytes,
-            200 * 1024 * 1024,
+            8_000_000_000,
         )?;
         let workspace_root =
             PathBuf::from(read("DOWNLOAD_WORKSPACE")?.unwrap_or_else(|| "/tmp/yoink-work".into()));
@@ -535,7 +535,7 @@ mod tests {
             vec![("DOWNLOAD_QUOTA_MINUTE", "secret")],
             vec![("DOWNLOAD_MAX_ACTIVE_PER_USER", "0")],
             vec![("DOWNLOAD_MAX_ACTIVE_PER_USER", "101")],
-            vec![("DOWNLOAD_MAX_BYTES", "52428801")],
+            vec![("DOWNLOAD_MAX_BYTES", "2000000001")],
             vec![("DOWNLOAD_WORKSPACE", "/")],
             vec![("DOWNLOAD_WORKSPACE", "relative")],
             vec![("DOWNLOAD_LEASE_SECS", "10")],

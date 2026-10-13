@@ -87,6 +87,19 @@ export async function failures(c) {
     } finally {c.trusted[flag]=false;}
     assert.equal((await user('/summarize',{method:'POST',body:{command:'tldr',url:ARTICLE,focus:`recovered-${kind}`}})).cached,false,'failure leaves capacity for next real request');
   }
+  assert((await c.tunnelEvents()).length>0,'successful requests used the owned tunnel');
+  const before=c.trusted.calls.filter(call=>['models','completion'].includes(call.kind)).length;
+  await c.stopTunnel();
+  const owner=await session(c);
+  try {
+    const probe=await owner('/config/test');
+    assert.equal(probe.ok,false);assert.equal(probe.error,'provider_probe_failed');
+    const failure=await user('/summarize',{method:'POST',body:{command:'tldr',url:ARTICLE,focus:'failed-tunnel'},expected:502});
+    assert.equal(failure.detail,'provider_unavailable');
+    assert.equal(c.trusted.calls.filter(call=>['models','completion'].includes(call.kind)).length,before,'failed tunnel never falls back to direct provider traffic');
+    assert.equal(await c.db.query('SELECT count(*) FROM insight_native_reservations WHERE user_id=43'),'0','failed tunnel releases admission');
+  } finally {await c.startTunnel();}
+  assert.equal((await owner('/config/test')).ok,true,'same application recovers through the restarted tunnel');
 }
 export async function cancellation(c) {
   await configure(c);const token=await c.login(43),controller=new AbortController();c.trusted.holdProvider=true;

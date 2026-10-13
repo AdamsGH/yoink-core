@@ -84,7 +84,7 @@ pub fn byok(
     };
     let url = url::Url::parse(&base).map_err(|_| invalid())?;
     // Custom BYOK must not become an SSRF proxy. DNS/IP confinement must also be
-    // enforced by deployment egress; redirects and proxy inheritance are disabled.
+    // enforced by deployment egress; redirects and ambient proxy inheritance are disabled.
     if url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
@@ -212,7 +212,7 @@ pub struct HttpCompletion {
     pub(crate) client: reqwest::Client,
     pub(crate) timeout: Duration,
     pub(crate) max_bytes: usize,
-    operator_openrouter_proxy: Option<(String, reqwest::Client)>,
+    tunnel: Option<reqwest::Proxy>,
     #[cfg(feature = "test-fixtures")]
     additional_roots: Vec<reqwest::Certificate>,
 }
@@ -225,7 +225,7 @@ impl HttpCompletion {
             return Err(invalid());
         }
         Ok(Self {
-            operator_openrouter_proxy: None,
+            tunnel: None,
             #[cfg(feature = "test-fixtures")]
             additional_roots: Vec::new(),
             client: reqwest::Client::builder()
@@ -283,7 +283,7 @@ impl HttpCompletion {
                 .map_err(FixtureTrustError::Client)?,
             timeout,
             max_bytes,
-            operator_openrouter_proxy: None,
+            tunnel: None,
             additional_roots: roots,
         };
         completion.client = completion
@@ -298,6 +298,10 @@ impl HttpCompletion {
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(self.timeout);
+        let builder = match &self.tunnel {
+            Some(proxy) => builder.proxy(proxy.clone()),
+            None => builder,
+        };
         #[cfg(feature = "test-fixtures")]
         let builder = self.additional_roots.iter().fold(builder, |builder, root| {
             builder.add_root_certificate(root.clone())
@@ -305,34 +309,21 @@ impl HttpCompletion {
         builder
     }
 
-    /// Explicit operator-only proxy for an exact configured OpenRouter base.
-    /// BYOK always uses pinned public DNS, no proxy and no redirects.
-    pub fn with_operator_openrouter_proxy(
-        mut self,
-        base: &str,
-        proxy: &str,
-    ) -> Result<Self, Error> {
-        let base_url = url::Url::parse(base).map_err(|_| invalid())?;
+    /// Every AI request uses this tunnel. Local SOCKS5 DNS preserves BYOK IP pins;
+    /// HTTP CONNECT and socks5h would delegate destination DNS to the proxy.
+    pub fn with_tunnel(mut self, proxy: &str) -> Result<Self, Error> {
         let proxy_url = url::Url::parse(proxy).map_err(|_| invalid())?;
-        if base_url.scheme() != "https"
-            || base_url.host_str().is_none()
-            || !base_url.username().is_empty()
-            || base_url.password().is_some()
-            || base_url.query().is_some()
-            || base_url.fragment().is_some()
-            || base.len() > 2048
-            || !matches!(proxy_url.scheme(), "http" | "https" | "socks5" | "socks5h")
+        if proxy_url.scheme() != "socks5"
             || proxy_url.host_str().is_none()
+            || proxy_url.path() != "" && proxy_url.path() != "/"
+            || proxy_url.query().is_some()
+            || proxy_url.fragment().is_some()
             || proxy.len() > 2048
         {
             return Err(invalid());
         }
-        let client = self
-            .client_builder()
-            .proxy(reqwest::Proxy::all(proxy).map_err(|_| invalid())?)
-            .build()
-            .map_err(|_| invalid())?;
-        self.operator_openrouter_proxy = Some((base.trim_end_matches('/').into(), client));
+        self.tunnel = Some(reqwest::Proxy::all(proxy).map_err(|_| invalid())?);
+        self.client = self.client_builder().build().map_err(|_| invalid())?;
         Ok(self)
     }
     async fn attempt(&self, r: &Route, prompt: &str) -> Result<String, Error> {
@@ -462,12 +453,10 @@ pub fn public_ip(ip: std::net::IpAddr) -> bool {
 }
 impl HttpCompletion {
     pub(crate) async fn route_client(&self, r: &Route) -> Result<reqwest::Client, Error> {
+        if self.tunnel.is_none() {
+            return Err(Error::Code("ai_tunnel_required"));
+        }
         if !r.is_byok() {
-            if let Some((base, client)) = &self.operator_openrouter_proxy
-                && r.base.trim_end_matches('/') == base
-            {
-                return Ok(client.clone());
-            }
             return Ok(self.client.clone());
         }
         let url = url::Url::parse(&r.base).map_err(|_| invalid())?;

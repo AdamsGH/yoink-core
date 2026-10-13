@@ -815,6 +815,7 @@ mod insight_tests {
                 "YOINK_RUST_DATABASE_PATH" => Some("/tmp/disposable.db".into()),
                 "YOINK_RUST_SHUTDOWN_TIMEOUT_SECS" => Some("150".into()),
                 "YOINK_RUST_INSIGHT_MODEL" => Some("shared-model".into()),
+                "YOINK_RUST_INSIGHT_AI_PROXY" => Some("socks5://127.0.0.1:9".into()),
                 "YOINK_RUST_INSIGHT_GATEWAY_KEY" => Some("credential-marker".into()),
                 _ => None,
             })
@@ -833,6 +834,7 @@ mod insight_tests {
                 "YOINK_RUST_INSIGHT_ENABLED" => Some("true".into()),
                 "YOINK_RUST_DATABASE_PATH" => Some("/tmp/disposable.db".into()),
                 "YOINK_RUST_SHUTDOWN_TIMEOUT_SECS" => Some("140".into()),
+                "YOINK_RUST_INSIGHT_AI_PROXY" => Some("socks5://127.0.0.1:9".into()),
                 _ => None,
             })
         })

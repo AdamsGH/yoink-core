@@ -29,6 +29,8 @@ class FixtureTransport:
         return result
     def json(self, url, token=None):
         return json.loads(self.get(url, token))
+    def request(self, url, method='GET', data=None, headers=None):
+        raise ContentError('content_http_error')
 
 class ExtractionTests(unittest.TestCase):
     def test_actual_article(self):
@@ -165,7 +167,7 @@ class TransportTests(unittest.TestCase):
         class Connection:
             def __init__(self, host, *a, **kw):
                 self.host = host
-            def request(self, method, path, headers):
+            def request(self, method, path, body=None, headers=None):
                 calls.append((self.host, headers))
             def getresponse(self):
                 return Response()

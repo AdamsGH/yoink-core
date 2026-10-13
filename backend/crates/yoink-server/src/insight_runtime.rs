@@ -59,15 +59,20 @@ impl InsightRuntime {
             config.content_proxy,
         )
         .map_err(|_| ServerError::InsightStartup)?;
-        if let Some(proxy) = config.openrouter_proxy {
-            completion = completion
-                .with_operator_openrouter_proxy(&config.service.openrouter_base, &proxy)
-                .map_err(|_| ServerError::InsightStartup)?;
-        }
+        let proxy = config
+            .service
+            .ai_proxy
+            .as_deref()
+            .ok_or(ServerError::InsightStartup)?;
+        completion = completion
+            .with_tunnel(proxy)
+            .map_err(|_| ServerError::InsightStartup)?;
         let research = yoink_insight::research::ResponsesResearch::new(
             config.research_timeout,
             config.response_bytes,
         )
+        .map_err(|_| ServerError::InsightStartup)?
+        .with_tunnel(proxy)
         .map_err(|_| ServerError::InsightStartup)?;
         let service = yoink_insight::Insight::new(
             storage.database().clone(),
@@ -150,6 +155,7 @@ mod tests {
             &mut |key| {
                 Ok(match key {
                     "INSIGHT_ENABLED" => Some("true".into()),
+                    "INSIGHT_AI_PROXY" => Some("socks5://127.0.0.1:9".into()),
                     "INSIGHT_WORKSPACE" => Some(workspace.into()),
                     _ => None,
                 })

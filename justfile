@@ -25,7 +25,7 @@ build target="all" no_cache="":
 # Create host-side data directories required by volume mounts
 data-dirs:
     mkdir -p data/cookies data/kasm/profile/chromium data/tg-bot-api
-    sudo -n install -d -m 0700 -o 10001 -g 10001 data/native data/native-backups data/native-restore
+    sudo -n install -d -m 0700 -o 10001 -g 10001 data/native data/native/work data/native/work/downloads data/native-backups data/native-restore
     sudo -n setfacl -m u:10001:rx,d:u:10001:rx data/tg-bot-api
 
 # Start all services (or a single one). Does NOT rebuild; use `rebuild`.

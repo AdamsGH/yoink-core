@@ -1,3 +1,4 @@
+mod support;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -6,7 +7,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use yoink_insight::{
     Error, FutureResult,
-    provider::{Completion, DeltaSink, HttpCompletion, Route, Shape},
+    provider::{Completion, DeltaSink, Route, Shape},
 };
 
 #[derive(Default)]
@@ -119,7 +120,7 @@ async fn deltas_arrive_before_terminal_for_all_shapes() {
     ] {
         let sink = Arc::new(Sink::default());
         let (r, task) = server(shape, first, last, sink.clone()).await;
-        let client = HttpCompletion::new(Duration::from_secs(3), 4096).unwrap();
+        let client = support::completion(Duration::from_secs(3), 4096).await;
         assert_eq!(
             client
                 .stream(&[r], "hello", &*sink, CancellationToken::new())
@@ -150,7 +151,7 @@ async fn partial_stream_failure_never_falls_back() {
         )
         .await;
         let fallback = route("http://127.0.0.1:1".into(), Shape::OpenAi);
-        let client = HttpCompletion::new(Duration::from_secs(3), 4096).unwrap();
+        let client = support::completion(Duration::from_secs(3), 4096).await;
         assert!(
             matches!(client.stream(&[r, fallback], "hello", &*sink, CancellationToken::new()).await, Err(Error::Code(c)) if c == code)
         );
@@ -170,7 +171,7 @@ async fn delivery_failure_and_cancellation_abort_generation() {
         sink.clone(),
     )
     .await;
-    let client = HttpCompletion::new(Duration::from_secs(3), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(3), 4096).await;
     assert!(matches!(
         client
             .stream(&[r], "hello", &*sink, CancellationToken::new())
@@ -217,7 +218,7 @@ async fn fallback_before_emission_but_not_for_byok() {
         sink.clone(),
     )
     .await;
-    let client = HttpCompletion::new(Duration::from_secs(3), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(3), 4096).await;
     assert_eq!(
         client
             .stream(
@@ -289,7 +290,7 @@ async fn cancellation_during_awaited_delivery_interrupts_stream() {
         first.notified().await;
         child.cancel();
     });
-    let client = HttpCompletion::new(Duration::from_secs(3), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(3), 4096).await;
     assert!(matches!(
         client.stream(&[r], "hello", &sink, cancel).await,
         Err(Error::Code("cancelled"))

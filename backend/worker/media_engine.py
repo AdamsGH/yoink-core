@@ -105,7 +105,7 @@ def playlist_indices(playlist: dict[str, int | None] | None) -> list[int] | None
 
 
 def _format_expression(mode: str, options: dict[str, Any]) -> str:
-    height = f"[height<={options['max_height']}]" if options.get("max_height") else ""
+    height = f"[height<=?{options['max_height']}]" if options.get("max_height") else ""
     container = options.get("container", "mp4")
     video = options.get("video_codec", "h264")
     audio = options.get("audio_codec", "best")
@@ -117,7 +117,7 @@ def _format_expression(mode: str, options: dict[str, Any]) -> str:
     if mode == "image":
         return "best"
     codec_filter = {"h264": "[vcodec^=avc1]", "h265": "[vcodec^=hev]", "av1": "[vcodec^=av01]", "vp9": "[vcodec^=vp9]", "any": ""}[video]
-    return f"bestvideo{height}{codec_filter}+bestaudio/best{height}/best"
+    return f"bestvideo{height}{codec_filter}+bestaudio/best{height}/best{height}"
 
 
 def _ffmpeg_args(ffmpeg: str, source: Path, destination: Path, options: dict[str, Any],
@@ -502,7 +502,9 @@ def download_media(request: dict[str, Any], settings: Any,
                             info = downloader.extract_info(request["source_url"], download=False)
                             tracks = info.get("requested_formats") or [info]
                             sizes = [t.get("filesize") or t.get("filesize_approx") for t in tracks]
-                            if all(size is not None for size in sizes) and sum(sizes) <= max_bytes:
+                            # Raising the final-file cap must not turn short clips into full-video downloads.
+                            whole_source_limit = min(max_bytes, 20 * 1024 * 1024)
+                            if all(size is not None for size in sizes) and sum(sizes) <= whole_source_limit:
                                 return_code = downloader.download([request["source_url"]])
                             else:
                                 import re

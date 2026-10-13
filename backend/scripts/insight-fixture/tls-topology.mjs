@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomInt } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { endpointConfig } from './youtube-responses.mjs';
-export const TLS_HOSTS=['byok-success.fixture.invalid','www.youtube.com','generativelanguage.googleapis.com'];
+export const TLS_HOSTS=['byok-success.fixture.invalid','www.youtube.com','openrouter.ai'];
 export async function dockerIpv4Subnets(docker){
  const networks=(await docker(['network','ls','-q'])).split('\n').filter(Boolean);
  if(!networks.length)return [];
@@ -54,6 +54,6 @@ export async function createTlsTopology({docker,helperContainer,startContainer,d
  };
  return {dataNetwork,controlNetwork,networkContainer:server,dnsAddress:dnsIP,dataAddress:dataIP,state,close,verifyTlsRejections,trustVolume,bundlePath,logs:()=>docker(['logs',tlsName]),
   bundleMount: ['--mount',`type=volume,source=${trustVolume},target=/fixture-trust,readonly`,'--mount',`type=volume,source=${trustVolume},volume-subpath=bundle.pem,target=${bundlePath},readonly`],
-  env:{YOINK_RUST_INSIGHT_GEMINI_KEY:'fixture-gemini-key',YOINK_RUST_INSIGHT_GEMINI_MODEL:'fixture-gemini'},nativeTrustFile:'/fixture-trust/fixture-ca.der',pythonBundleFile:'/fixture-trust/bundle.pem'};
+  env:{YOINK_RUST_INSIGHT_MODE:'openrouter',YOINK_RUST_INSIGHT_OPENROUTER_BASE:'https://openrouter.ai/api/v1',YOINK_RUST_INSIGHT_OPENROUTER_KEY:'fixture-openrouter-key'},nativeTrustFile:'/fixture-trust/fixture-ca.der',pythonBundleFile:'/fixture-trust/bundle.pem'};
  }catch(error){const logs=[];for(const name of containers)try{logs.push(`${name}: ${await docker(['logs',name])}`);}catch{}const failure=new Error(`TLS topology failed\n${logs.join('\n')}`,{cause:error});try{await close();}catch(cleanup){throw new AggregateError([failure,cleanup],'TLS allocation/cleanup');}throw failure;}
 }

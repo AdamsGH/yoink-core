@@ -8,7 +8,7 @@ import time
 
 address, control, config_json = sys.argv[1:]
 config = json.loads(config_json)
-hosts = ('byok-success.fixture.invalid', 'www.youtube.com', 'generativelanguage.googleapis.com')
+hosts = ('byok-success.fixture.invalid', 'www.youtube.com', 'openrouter.ai')
 events = []
 lock = threading.Lock()
 
@@ -72,10 +72,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 record('byok-completion')
                 self.reply(200, {'choices': [{'message': {'content': config['result']}}]})
                 return
-        if host == hosts[2] and self.command == 'POST' and self.path == '/v1beta/models/' + config['geminiModel'] + ':generateContent' and self.headers.get('x-goog-api-key') == config['geminiKey'] and isinstance(body.get('contents'), list) and config['marker'] in json.dumps(body['contents'], ensure_ascii=False):
-            record('gemini-completion')
-            self.reply(200, {'candidates': [{'content': {'parts': [{'text': config['result']}]}}]})
-            return
+        if host == hosts[2] and self.headers.get('Authorization') == 'Bearer ' + config['openrouterKey']:
+            if self.command == 'GET' and self.path == '/api/v1/models':
+                record('operator-models')
+                self.reply(200, {'data': [{'id': config['model']}]})
+                return
+            if self.command == 'GET' and self.path == '/api/v1/key':
+                self.reply(200, {'data': {'limit_remaining': 10}})
+                return
+            if self.command == 'POST' and self.path == '/api/v1/chat/completions' and body.get('model') == config['model'] and body.get('stream') is False and isinstance(body.get('messages'), list) and any(marker in json.dumps(body['messages'], ensure_ascii=False) for marker in (config['marker'], config['articleMarker'])):
+                record('operator-completion')
+                self.reply(200, {'choices': [{'message': {'content': config['result']}}]})
+                return
         record('denied', reason='endpoint-contract')
         self.reply(403, {})
 

@@ -513,6 +513,7 @@ test-full-content-worker image='yoink/rust-content-worker:experimental':
     just test-content-worker {{quote(image)}} 'test_full_content.py'
     just test-content-worker {{quote(image)}} 'content_test_fetch.py'
     just test-content-worker {{quote(image)}} 'test_content_stage.py'
+    just test-content-worker {{quote(image)}} 'test_youtube_captions.py'
 
 check-full-content: check-build-space
     cargo clippy --locked --offline --message-format short --all-targets -p yoink-worker-protocol -p yoink-executor -p yoink-insight -- -D warnings

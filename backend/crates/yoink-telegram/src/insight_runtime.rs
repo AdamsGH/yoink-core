@@ -433,11 +433,23 @@ fn error_text(error: &Error, russian: bool) -> &'static str {
         (Error::Code("quota_exceeded"), false) => "Daily request limit reached.",
         (Error::Code("quota_exceeded"), true) => "Достигнут дневной лимит запросов.",
         (
-            Error::Code("content_unavailable" | "gemini_not_configured" | "streaming_unavailable"),
+            Error::Code(
+                "content_unavailable"
+                | "gemini_not_configured"
+                | "streaming_unavailable"
+                | "no_route"
+                | "ai_tunnel_required",
+            ),
             false,
         ) => "Insight is not available. Contact the administrator.",
         (
-            Error::Code("content_unavailable" | "gemini_not_configured" | "streaming_unavailable"),
+            Error::Code(
+                "content_unavailable"
+                | "gemini_not_configured"
+                | "streaming_unavailable"
+                | "no_route"
+                | "ai_tunnel_required",
+            ),
             true,
         ) => "Insight недоступен. Обратитесь к администратору.",
         (Error::Code("response_too_large"), false) => {

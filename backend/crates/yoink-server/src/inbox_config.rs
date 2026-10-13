@@ -178,7 +178,8 @@ mod tests {
                 Ok(entries
                     .iter()
                     .find(|(k, _)| *k == key)
-                    .map(|(_, v)| v.to_string()))
+                    .map(|(_, v)| v.to_string())
+                    .or_else(|| (key == "INSIGHT_AI_PROXY").then(|| "socks5://127.0.0.1:9".into())))
             },
             Duration::from_secs(shutdown),
             db,

@@ -39,6 +39,7 @@ pub struct Config {
     pub search_model: String,
     pub default_lang: String,
     pub request_timeout: Duration,
+    pub ai_proxy: Option<String>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -59,6 +60,7 @@ impl Default for Config {
             search_model: String::new(),
             default_lang: "en".into(),
             request_timeout: Duration::from_secs(120),
+            ai_proxy: None,
         }
     }
 }
@@ -443,20 +445,8 @@ impl Insight {
         &self,
         e: &E,
         uid: i64,
-        command: &str,
+        _command: &str,
     ) -> Result<Vec<Route>, Error> {
-        if command != "tldr" {
-            if self.config.gemini_key.is_empty() {
-                return Err(Error::Code("gemini_not_configured"));
-            }
-            return Ok(vec![Route {
-                shape: Shape::Gemini,
-                base: "https://generativelanguage.googleapis.com/v1beta".into(),
-                key: self.config.gemini_key.clone(),
-                model: self.config.gemini_model.clone(),
-                via: "gateway",
-            }]);
-        }
         if self.byok_enabled(e).await?
             && !self.legacy_gateway_precedence(e, uid).await?
             && let Some(r)=query("SELECT * FROM insight_user_byok WHERE user_id=? AND tested_at IS NOT NULL AND test_error IS NULL AND api_key<>''").bind(uid).fetch_optional(e).await? {return Ok(vec![crate::provider::byok(&r.try_get::<String,_>("provider")?,r.try_get::<Option<String>,_>("base_url")?.as_deref(),r.try_get("api_key")?,r.try_get("model")?)?])
@@ -753,7 +743,7 @@ impl Insight {
         let key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "replay-v1:{uid}\n{}\n{}\n{routes:?}\n{}\n{lang}\n{custom:?}\n{alias:?}\n{token:?}\n{search}\n{instruction}\n{}",
+                "replay-v2:{uid}\n{}\n{}\n{routes:?}\n{}\n{lang}\n{custom:?}\n{alias:?}\n{token:?}\n{search}\n{instruction}\n{}",
                 url,
                 r.command,
                 routes
@@ -829,7 +819,7 @@ impl Insight {
         let research_route = if search && self.research.is_some() {
             let c = self.db.connection().await?;
             self.authorize(&*c, uid, Some("search"), false).await?;
-            let mut route = self.gateway_route(&*c).await?;
+            let mut route = self.operator_route(&*c).await?;
             if !self.config.search_model.is_empty() {
                 route.model = self.config.search_model.clone()
             }
@@ -918,7 +908,7 @@ impl Insight {
             self.authorize(&*c, uid, Some("search"), false).await?
         }
         if let Some(route) = &research_route {
-            let mut current = self.gateway_route(&*c).await?;
+            let mut current = self.operator_route(&*c).await?;
             current.model = route.model.clone();
             if current != *route {
                 return Err(Error::Code("route_changed"));
@@ -1045,7 +1035,7 @@ impl AuthorizedSink<'_> {
             return Err(Error::Code("route_changed"));
         }
         if let Some(route) = self.research_route {
-            let mut current = self.service.gateway_route(&*c).await?;
+            let mut current = self.service.operator_route(&*c).await?;
             current.model = route.model.clone();
             if current != *route {
                 return Err(Error::Code("route_changed"));

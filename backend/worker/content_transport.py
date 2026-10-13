@@ -1,5 +1,6 @@
-"""Bounded GET-only content transport. Every hop is validated and DNS pinned."""
+"""Bounded content transport. Every hop is validated and DNS pinned."""
 import http.client
+from email.message import Message
 import json
 import socket
 import ssl
@@ -25,9 +26,17 @@ class Transport:
         self.deadline = time.monotonic() + timeout
 
     def get(self, url, token=None, headers=None):
+        return self._request(url, token, headers)
+
+    def request(self, url, method='GET', data=None, headers=None):
+        if method not in ('GET', 'POST') or (data is not None and (not isinstance(data, bytes) or len(data) > self.max_bytes)):
+            raise ContentError('content_invalid_response')
+        return self._request(url, None, headers, method=method, data=data, raw=True)
+
+    def _request(self, url, token, headers, **kwargs):
         before = guard.guard_failure_count()
         try:
-            return self._get(url, token, headers)
+            return self._get(url, token, headers, **kwargs)
         except (TimeoutError, socket.timeout):
             raise ContentError('content_timeout') from None
         except Exception as exc:
@@ -41,8 +50,10 @@ class Transport:
             if guard.guard_failure_count() != before:
                 raise guard.NetworkPolicyError('network destination is not permitted')
 
-    def _get(self, url, token=None, extra_headers=None):
+    def _get(self, url, token=None, extra_headers=None, *, method='GET', data=None, raw=False):
         authenticated_origin = urlsplit(url).netloc == 'api.github.com' and urlsplit(url).scheme == 'https'
+        original_origin = (urlsplit(url).scheme, urlsplit(url).netloc)
+        retain_private_headers = True
         for hop in range(6):
             guard._validate_source_request(url)
             if self.validate_destination:
@@ -54,6 +65,9 @@ class Transport:
             headers = {'User-Agent': 'yoink-content/1', 'Accept-Encoding': 'identity'}
             if extra_headers:
                 headers.update(extra_headers)
+            retain_private_headers = retain_private_headers and (p.scheme, p.netloc) == original_origin
+            if not retain_private_headers:
+                headers = {name: value for name, value in headers.items() if name.lower() not in ('cookie', 'authorization')}
             # Once a redirect leaves the exact API origin, authentication is lost forever.
             authenticated_origin = authenticated_origin and p.scheme == 'https' and p.netloc == 'api.github.com'
             if authenticated_origin and token:
@@ -64,8 +78,11 @@ class Transport:
                 session = requests.Session()
                 session.trust_env = False
                 try:
-                    with session.get(url, headers=headers, proxies={'http': self.proxy, 'https': self.proxy}, timeout=remaining, stream=True, allow_redirects=False) as r:
+                    send = session.get if method == 'GET' else session.post
+                    arguments = {} if method == 'GET' else {'data': data}
+                    with send(url, headers=headers, proxies={'http': self.proxy, 'https': self.proxy}, timeout=remaining, stream=True, allow_redirects=False, **arguments) as r:
                         status, location = r.status_code, r.headers.get('Location')
+                        response_headers = r.raw.headers.items() if raw else ()
                         if r.headers.get('Content-Encoding', 'identity').lower() != 'identity':
                             raise ContentError('content_invalid_response')
                         expected = self._length(r.headers.get('Content-Length'))
@@ -86,9 +103,10 @@ class Transport:
                     if p.scheme == 'https':
                         conn.sock = ssl.create_default_context().wrap_socket(conn.sock, server_hostname=host)
                     path = (p.path or '/') + ('?' + p.query if p.query else '')
-                    conn.request('GET', path, headers=headers)
+                    conn.request(method, path, body=data, headers=headers)
                     r = conn.getresponse()
                     status, location = r.status, r.getheader('Location')
+                    response_headers = r.getheaders() if raw else ()
                     if (r.getheader('Content-Encoding') or 'identity').lower() != 'identity':
                         raise ContentError('content_invalid_response')
                     expected = self._length(r.getheader('Content-Length'))
@@ -105,9 +123,18 @@ class Transport:
                     conn.close()
             if status in (301, 302, 303, 307, 308) and location:
                 url = urljoin(url, location)
+                if status == 303 or (method == 'POST' and status in (301, 302)):
+                    method, data = 'GET', None
+                    if extra_headers:
+                        extra_headers = {name: value for name, value in extra_headers.items() if name.lower() not in ('content-length', 'content-type')}
                 continue
             if status >= 400:
                 raise ContentError('content_http_error')
+            if raw:
+                message = Message()
+                for name, value in response_headers:
+                    message[name] = value
+                return bytes(body), url, message, status
             return bytes(body).decode('utf-8', 'replace')
         raise ContentError('content_redirect_limit')
 

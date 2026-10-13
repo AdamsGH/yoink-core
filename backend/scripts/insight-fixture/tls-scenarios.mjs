@@ -38,16 +38,17 @@ export async function positiveCacheIsolation(c){
  }finally{await user('/byok/me',{method:'DELETE',expected:204});await owner('/config/byok',{method:'PATCH',body:{enabled:false}});}
 }
 export async function positiveYoutube(c){
- const owner=await session(c);await owner('/access/45',{method:'POST',body:{lang:'en'},expected:201});const user=await session(c,45);
+ const {request:owner,body:baseline}=await configure(c);await owner('/config/tldr',{method:'PATCH',body:{...baseline,ai_route_mode:'openrouter'}});await owner('/access/45',{method:'POST',body:{lang:'en'},expected:201});const user=await session(c,45);
  try{for(const command of ['summary','about']){
-  const body={command,url:VIDEO_URL},before=await count(c,'gemini-completion'),sources=await count(c,'source');
+  const body={command,url:VIDEO_URL},before=await count(c,'operator-completion'),sources=await count(c,'source');
   const first=await user('/summarize',{method:'POST',body});assert.equal(first.cached,false);assert.equal(first.result,TLS_RESULT);
-  assert.equal(await count(c,'gemini-completion'),before+1);assert((await count(c,'source'))>=sources+2,'actual watch + transcript extraction');
+  assert.equal(await count(c,'operator-completion'),before+1);assert((await count(c,'source'))>=sources+2,'actual watch + transcript extraction');
+  assert((await c.tunnelEvents()).some(event=>event.ip===c.tls.dataAddress && event.port===443),'provider request traversed the owned SOCKS tunnel');
   await c.db.batch(`INSERT INTO insight_native_reservations(id,user_id,command,created_at,expires_at) VALUES ${Array.from({length:50},(_,i)=>`('tls-quota-${i}',45,'summary',unixepoch()*1000000,(unixepoch()+600)*1000000)`).join(',')};`);
-  try{const extractionBefore=await count(c,'source');const replay=await user('/summarize',{method:'POST',body});assert.equal(replay.cached,true);assert.equal(replay.result,first.result);assert.equal(await count(c,'gemini-completion'),before+1);assert.equal(await count(c,'source'),extractionBefore,'authorized replay returns before extraction');
+  try{const extractionBefore=await count(c,'source');const replay=await user('/summarize',{method:'POST',body});assert.equal(replay.cached,true);assert.equal(replay.result,first.result);assert.equal(await count(c,'operator-completion'),before+1);assert.equal(await count(c,'source'),extractionBefore,'authorized replay returns before extraction');
    const denied=await user('/summarize',{method:'POST',body:{...body,focus:`fresh-quota-${command}`},expected:429});assert.equal(denied.detail,'quota_exceeded');
   }finally{await c.db.batch("DELETE FROM insight_native_reservations WHERE id LIKE 'tls-quota-%'");}
- }}finally{await owner('/access/45',{method:'DELETE',expected:204});}
+ }}finally{await owner('/access/45',{method:'DELETE',expected:204});await owner('/config/tldr',{method:'PATCH',body:baseline});}
 }
 export async function positiveConfinement(c){
  const {request}=await configure(c);const before=await count(c,'byok-completion');

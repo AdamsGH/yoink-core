@@ -552,9 +552,53 @@ async fn user_revocation_after_provider_io_denies_result() {
     ));
 }
 #[tokio::test]
+async fn summary_uses_the_selected_openai_model_without_gemini_credentials() {
+    struct ExactModel;
+    impl Completion for ExactModel {
+        fn complete<'a>(
+            &'a self,
+            routes: &'a [Route],
+            _: &'a str,
+            _: CancellationToken,
+        ) -> FutureResult<'a, String> {
+            Box::pin(async move {
+                assert_eq!(routes.len(), 1);
+                assert_eq!(routes[0].shape, Shape::OpenAi);
+                assert_eq!(routes[0].via, "openrouter");
+                assert_eq!(routes[0].model, "openai/gpt-6-luna");
+                Ok("Configured provider summary".into())
+            })
+        }
+        fn models<'a>(
+            &'a self,
+            _: &'a Route,
+            _: CancellationToken,
+        ) -> FutureResult<'a, Vec<provider::Model>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+    }
+    let (_dir, mut service, _) = fixture().await;
+    service.config.gemini_key.clear();
+    service.config.mode = "openrouter".into();
+    service.config.openrouter_key = "fixture-key".into();
+    service.config.model = "openai/gpt-6-luna".into();
+    service.completion = Arc::new(ExactModel);
+    let result = service
+        .summarize(
+            1,
+            request("summary", "https://youtu.be/abcdefghijk"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.result, "Configured provider summary");
+}
+
+#[tokio::test]
 async fn unverifiable_imported_cache_cannot_bypass_missing_provider_credentials() {
     let (_dir, mut s, llm) = fixture().await;
-    s.config.gemini_key.clear();
+    s.config.mode = "openrouter".into();
+    s.config.openrouter_key.clear();
     query("INSERT INTO insight_summary_cache(content_key,lang,command,result,created_at,expires_at) VALUES('abcdefghijk','en','about','Imported',0,?)").bind(chrono::Utc::now()+chrono::Duration::hours(1)).execute(&s.db).await.unwrap();
     assert!(
         s.summarize(

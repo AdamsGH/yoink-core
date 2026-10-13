@@ -1,3 +1,4 @@
+mod support;
 use serde_json::{Value, json};
 use std::{
     sync::{
@@ -129,6 +130,42 @@ fn options() -> ModelProbeOptions {
 }
 fn code<T>(result: Result<T, Error>, expected: &'static str) {
     assert!(matches!(result,Err(Error::Code(c)) if c == expected));
+}
+
+#[tokio::test]
+async fn operator_probes_preserve_origins_and_do_not_forward_stored_keys_to_unsaved_urls() {
+    let (_dir, mut service, spy) = fixture().await;
+    service.config.mode = "openrouter".into();
+    service.config.openrouter_key = "operator-fixture-key".into();
+    service
+        .test_gateway(1, CancellationToken::new())
+        .await
+        .unwrap();
+    for body in [
+        json!({"api_key":"unsaved-operator-key"}),
+        json!({"url":"https://custom.example"}),
+        json!({"url":"https://custom.example", "api_key":"custom-fixture-key"}),
+    ] {
+        service
+            .test_gateway_with_options(
+                1,
+                serde_json::from_value(body).unwrap(),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+    }
+    let routes = spy.calls.lock().await;
+    assert_eq!(routes.len(), 4);
+    assert_eq!(routes[0].via, "openrouter");
+    assert_eq!(routes[0].base, "https://openrouter.ai/api/v1");
+    assert_eq!(routes[0].key, "operator-fixture-key");
+    assert_eq!(routes[1].base, routes[0].base);
+    assert_eq!(routes[1].key, "operator-fixture-key");
+    assert_eq!(routes[2].via, "gateway");
+    assert_eq!(routes[2].base, "https://custom.example/v1");
+    assert!(routes[2].key.is_empty());
+    assert_eq!(routes[3].key, "custom-fixture-key");
 }
 
 #[tokio::test]
@@ -512,7 +549,7 @@ async fn real_http_query_contract_sends_only_selected_credentials_and_normalizes
     });
     let (_dir, mut s, _) = fixture().await;
     s.config.gateway_base = base.clone();
-    s.completion = Arc::new(provider::HttpCompletion::new(Duration::from_secs(2), 4096).unwrap());
+    s.completion = Arc::new(support::completion(Duration::from_secs(2), 4096).await);
     let app = router(s);
     let encoded = url::form_urlencoded::Serializer::new(String::new())
         .append_pair("url", &format!("{base}/v1/"))

@@ -13,7 +13,16 @@ import tool_guard
 
 class MediaEngineTests(unittest.TestCase):
     def test_format_selection_honors_height_and_audio_codec(self):
-        self.assertIn("[height<=720]", media_engine._format_expression(
+        from yt_dlp import YoutubeDL
+        formats = [{'format_id': 'high', 'height': 1080, 'vcodec': 'vp9', 'acodec': 'opus', 'url': 'https://fixture.invalid/high'}]
+        with YoutubeDL({'quiet': True}) as downloader:
+            selector = downloader.build_format_selector(media_engine._format_expression(
+                'video', {'max_height': 720, 'video_codec': 'h264'}
+            ))
+            self.assertEqual(list(selector({'formats': formats, 'has_merged_format': False, 'incomplete_formats': False})), [])
+            formats[0]['height'] = None
+            self.assertTrue(list(selector({'formats': formats, 'has_merged_format': False, 'incomplete_formats': False})))
+        self.assertIn("[height<=?720]", media_engine._format_expression(
             "video", {"max_height": 720, "video_codec": "h264", "container": "mp4", "audio_codec": "best"}
         ))
         self.assertIn("[vcodec^=av01]", media_engine._format_expression(

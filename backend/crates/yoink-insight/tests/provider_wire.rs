@@ -1,3 +1,4 @@
+mod support;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use serde_json::{Value, json};
 use std::{
@@ -36,7 +37,7 @@ async fn real_openai_request() {
         Json(json!({"choices":[{"message":{"content":"fixture completion"}}]}))
     }
     let (base, handle) = fixture(Router::new().route("/chat/completions", post(answer))).await;
-    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(2), 4096).await;
     assert_eq!(
         client
             .complete(
@@ -69,7 +70,7 @@ async fn real_anthropic_and_gemini() {
             .route("/models/test:generateContent", post(gemini)),
     )
     .await;
-    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(2), 4096).await;
     for (shape, text) in [(Shape::Anthropic, "A"), (Shape::Gemini, "G")] {
         assert_eq!(
             client
@@ -97,7 +98,7 @@ async fn fallback_only_on_eligible_errors() {
             .with_state(count.clone()),
     )
     .await;
-    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(2), 4096).await;
     for (code, retries) in [
         (503, true),
         (404, true),
@@ -135,7 +136,7 @@ async fn bounded_response_and_cancellation() {
         Json(json!({}))
     }
     let (base, h) = fixture(Router::new().route("/chat/completions", post(huge))).await;
-    let client = HttpCompletion::new(Duration::from_secs(1), 1024).unwrap();
+    let client = support::completion(Duration::from_secs(1), 1024).await;
     assert!(matches!(
         client
             .complete(
@@ -180,7 +181,7 @@ fn ssrf_addresses() {
 }
 #[tokio::test]
 async fn independent_responses_research_requires_citations() {
-    use yoink_insight::research::{Research, ResponsesResearch};
+    use yoink_insight::research::Research;
     async fn answer(Json(body): Json<Value>) -> Json<Value> {
         assert_eq!(body["tools"][0]["type"], "web_search_preview");
         assert_eq!(body["stream"], false);
@@ -189,7 +190,7 @@ async fn independent_responses_research_requires_citations() {
         )
     }
     let (base, h) = fixture(Router::new().route("/responses", post(answer))).await;
-    let research = ResponsesResearch::new(Duration::from_secs(1), 4096).unwrap();
+    let research = support::research(Duration::from_secs(1), 4096).await;
     let citations = research
         .search(
             &route(&base, Shape::OpenAi),
@@ -226,7 +227,7 @@ async fn catalogue_consumes_bounded_pages_without_inventing_gemini_search() {
         }
     }
     let (base, h) = fixture(Router::new().route("/models", get(page))).await;
-    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(2), 4096).await;
     let models = client
         .models(&route(&base, Shape::Gemini), CancellationToken::new())
         .await
@@ -259,7 +260,7 @@ async fn catalogue_consumes_bounded_pages_without_inventing_gemini_search() {
 #[tokio::test]
 async fn catalogue_repeated_cursor_and_byte_budget_fail_closed() {
     use axum::routing::get;
-    let client = HttpCompletion::new(Duration::from_secs(2), 1024).unwrap();
+    let client = support::completion(Duration::from_secs(2), 1024).await;
     let (base, h) = fixture(Router::new().route(
         "/models",
         get(|| async { Json(json!({"models":[],"nextPageToken":"same"})) }),
@@ -307,7 +308,7 @@ async fn credential_redirect_is_not_followed_and_custom_loopback_is_denied() {
         }),
     ))
     .await;
-    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(2), 4096).await;
     assert!(matches!(
         client
             .complete(
@@ -345,7 +346,7 @@ async fn public_openrouter_catalogue_cannot_validate_invalid_keys() {
             .route("/models", axum::routing::get(public_models)),
     )
     .await;
-    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(2), 4096).await;
     let mut selected = route(&base, Shape::OpenAi);
     selected.via = "openrouter"; // trusted loopback operator fixture, not BYOK
     assert!(matches!(
@@ -363,7 +364,7 @@ async fn perplexity_authenticates_with_tiny_sonar_chat_without_catalogue() {
         Json(json!({"choices":[{"message":{"content":"pong"}}]}))
     }
     let (base, server) = fixture(Router::new().route("/chat/completions", post(ping))).await;
-    let client = HttpCompletion::new(Duration::from_secs(2), 4096).unwrap();
+    let client = support::completion(Duration::from_secs(2), 4096).await;
     let mut selected = route(&base, Shape::OpenAi);
     selected.via = "perplexity";
     let models = client
@@ -421,4 +422,69 @@ fn all_seven_byok_provider_urls_are_executable_and_confined() {
         assert!(selected.is_byok());
         assert_eq!(contract(&selected, "prompt").unwrap().0, endpoint);
     }
+}
+
+#[tokio::test]
+async fn missing_or_failed_tunnel_never_contacts_a_provider() {
+    use yoink_insight::{
+        FutureResult,
+        provider::DeltaSink,
+        research::{Research, ResponsesResearch},
+    };
+    struct Sink;
+    impl DeltaSink for Sink {
+        fn delta<'a>(&'a self, _: &'a str) -> FutureResult<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    let app = Router::new().fallback(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        async { Json(json!({"choices":[{"message":{"content":"direct leak"}}]})) }
+    });
+    let (base, server) = fixture(app).await;
+    let route = Route {
+        shape: Shape::OpenAi,
+        base,
+        key: "fixture-key".into(),
+        model: "fixture-model".into(),
+        via: "gateway",
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_proxy = format!("socks5://{}", listener.local_addr().unwrap());
+    drop(listener);
+    for proxy in [None, Some(dead_proxy.as_str())] {
+        let mut completion = HttpCompletion::new(Duration::from_secs(1), 4096).unwrap();
+        let mut research = ResponsesResearch::new(Duration::from_secs(1), 4096).unwrap();
+        if let Some(proxy) = proxy {
+            completion = completion.with_tunnel(proxy).unwrap();
+            research = research.with_tunnel(proxy).unwrap();
+        }
+        let code = if proxy.is_some() {
+            "provider_unavailable"
+        } else {
+            "ai_tunnel_required"
+        };
+        let routes = [route.clone(), route.clone()];
+        assert!(
+            matches!(completion.complete(&routes, "prompt", CancellationToken::new()).await, Err(Error::Code(c)) if c == code)
+        );
+        assert!(
+            matches!(completion.models(&route, CancellationToken::new()).await, Err(Error::Code(c)) if c == code)
+        );
+        assert!(
+            matches!(completion.stream(&routes, "prompt", &Sink, CancellationToken::new()).await, Err(Error::Code(c)) if c == code)
+        );
+        let research_code = if proxy.is_some() {
+            "research_unavailable"
+        } else {
+            "ai_tunnel_required"
+        };
+        assert!(
+            matches!(research.search(&route, "query", CancellationToken::new()).await, Err(Error::Code(c)) if c == research_code)
+        );
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    server.abort();
 }

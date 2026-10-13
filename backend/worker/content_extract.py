@@ -6,9 +6,11 @@ import json
 import re
 from urllib.parse import quote, urlencode, urlsplit, parse_qs
 import xml.etree.ElementTree as ET
+from yt_dlp.utils import DownloadError
 
 from content_transport import ContentError
 import network_guard
+from youtube_captions import caption_tracks
 
 
 class HTMLText(HTMLParser):
@@ -166,17 +168,10 @@ def player_response(html):
     raise ContentError('content_invalid_response')
 
 
-def youtube_fetch(transport, vid, languages, transcript_only):
-    player = player_response(transport.get('https://www.youtube.com/watch?v=' + vid))
-    details = player.get('videoDetails', {})
-    title = details.get('title')
-    try:
-        seconds = int(details.get('lengthSeconds', 0)) or None
-        if seconds is not None and not 0 <= seconds <= 2147483647:
-            seconds = None
-    except (ValueError, TypeError):
-        seconds = None
-    tracks = player.get('captions', {}).get('playerCaptionsTracklistRenderer', {}).get('captionTracks', [])
+def youtube_transcript(transport, tracks, languages):
+    if not isinstance(tracks, list):
+        return None
+    tracks = [track for track in tracks if isinstance(track, dict)]
     # Ordered language preference, manual before ASR within each language; then any.
     tracks = sorted(enumerate(tracks), key=lambda it: (languages.index(it[1].get('languageCode')) if it[1].get('languageCode') in languages else len(languages), it[1].get('kind') == 'asr', it[0]))
     for _, track in tracks:
@@ -192,10 +187,38 @@ def youtube_fetch(transport, vid, languages, transcript_only):
             else:
                 root = ET.fromstring(raw)
                 text = '\n'.join(unescape(''.join(e.itertext())) for e in root.iter() if e.tag in ('text', 'p')).strip()
-        except (ValueError, ET.ParseError):
+        except (ValueError, TypeError, AttributeError, ET.ParseError):
             continue
         if text:
-            return text, title, seconds, 'youtube-transcript:' + track.get('languageCode', 'unknown')
+            return text, track.get('languageCode', 'unknown')
+    return None
+
+
+def youtube_fetch(transport, vid, languages, transcript_only):
+    player = player_response(transport.get('https://www.youtube.com/watch?v=' + vid))
+    details = player.get('videoDetails', {})
+    title = details.get('title')
+    try:
+        seconds = int(details.get('lengthSeconds', 0)) or None
+        if seconds is not None and not 0 <= seconds <= 2147483647:
+            seconds = None
+    except (ValueError, TypeError):
+        seconds = None
+    tracks = player.get('captions', {}).get('playerCaptionsTracklistRenderer', {}).get('captionTracks', [])
+    transcript = youtube_transcript(transport, tracks, languages)
+    if not transcript and tracks:
+        # Empty watch-page captions can require a different player client, not URL edits.
+        try:
+            alternate = caption_tracks(transport, vid)
+        except DownloadError:
+            alternate = []
+        except ContentError as error:
+            if error.code not in ('content_http_error', 'content_invalid_response'):
+                raise
+            alternate = []
+        transcript = youtube_transcript(transport, alternate, languages)
+    if transcript:
+        return transcript[0], title, seconds, 'youtube-transcript:' + transcript[1]
     if transcript_only:
         raise ContentError('no_transcript')
     description = details.get('shortDescription', '')

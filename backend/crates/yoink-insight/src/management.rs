@@ -616,9 +616,10 @@ impl Insight {
         e: &E,
         options: &ModelProbeOptions,
     ) -> Result<provider::Route, Error> {
-        let mut route = self.gateway_route(e).await?;
+        let mut route = self.operator_route(e).await?;
         if let Some(base) = options.url.as_deref().filter(|s| !s.is_empty()) {
             route.base = base.trim_end_matches('/').into();
+            route.via = "gateway";
             // URL override with omitted key means anonymous, not the stored key.
             route.key = options.api_key.clone().unwrap_or_default();
         }
@@ -640,19 +641,39 @@ impl Insight {
         }
         Ok(route)
     }
-    pub(crate) async fn gateway_route<E: Executor>(&self, e: &E) -> Result<provider::Route, Error> {
+    pub(crate) async fn operator_route<E: Executor>(
+        &self,
+        e: &E,
+    ) -> Result<provider::Route, Error> {
+        let mode = self
+            .setting(e, "insight_tldr_route_mode", &self.config.mode)
+            .await?;
+        let gateway = self
+            .setting(e, "insight_tldr_gateway_url", &self.config.gateway_base)
+            .await?;
+        let openrouter = mode == "openrouter" || mode == "auto" && gateway.is_empty();
         Ok(provider::Route {
             shape: provider::Shape::OpenAi,
-            base: self
-                .setting(e, "insight_tldr_gateway_url", &self.config.gateway_base)
-                .await?,
-            key: self
-                .setting(e, "insight_tldr_gateway_key", &self.config.gateway_key)
-                .await?,
+            base: if openrouter {
+                self.config.openrouter_base.clone()
+            } else {
+                gateway
+            },
+            key: if openrouter {
+                self.setting(
+                    e,
+                    "insight_tldr_openrouter_key",
+                    &self.config.openrouter_key,
+                )
+                .await?
+            } else {
+                self.setting(e, "insight_tldr_gateway_key", &self.config.gateway_key)
+                    .await?
+            },
             model: self
                 .setting(e, "insight_tldr_default_model", &self.config.model)
                 .await?,
-            via: "gateway",
+            via: if openrouter { "openrouter" } else { "gateway" },
         })
     }
     pub async fn test_gateway(
@@ -678,7 +699,7 @@ impl Insight {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim_end_matches('/').to_owned())
                 .unwrap_or(
-                    self.gateway_route(&*c)
+                    self.operator_route(&*c)
                         .await?
                         .base
                         .trim_end_matches('/')

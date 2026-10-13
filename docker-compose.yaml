@@ -78,7 +78,6 @@ services:
     stop_grace_period: 165s
     tmpfs:
       - /tmp/yoink-work:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
-      - /tmp/yoink-downloads:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
       - /tmp/yoink-music:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
       - /tmp/yoink-insight:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
       - /tmp/yoink-inbox:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700
@@ -97,13 +96,16 @@ services:
       YOINK_RUST_AUTH_ENABLED: "true"
       YOINK_RUST_API_SECRET_KEY: "${api_secret_key}"
       YOINK_RUST_DOWNLOADS_ENABLED: "true"
+      YOINK_RUST_DOWNLOAD_MAX_BYTES: "${YOINK_RUST_DOWNLOAD_MAX_BYTES:-2000000000}"
+      YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES: "${YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES:-8000000000}"
       YOINK_RUST_MUSIC_ENABLED: "true"
       YOINK_RUST_STATS_ENABLED: "true"
       YOINK_RUST_INSIGHT_ENABLED: "true"
+      YOINK_RUST_INSIGHT_AI_PROXY: "${YOINK_RUST_INSIGHT_AI_PROXY:-${proxy_upstream_url:-socks5://host.docker.internal:1080}}"
       YOINK_RUST_INBOX_ENABLED: "true"
       YOINK_RUST_YOUTUBE_AUTH_ADAPTER_ENABLED: "true"
       YOINK_RUST_COOKIE_WEB_ORIGIN: "https://${yoink_domain}/"
-      YOINK_RUST_DOWNLOAD_WORKSPACE: /tmp/yoink-downloads
+      YOINK_RUST_DOWNLOAD_WORKSPACE: /state/work/downloads
       YOINK_RUST_MUSIC_WORKSPACE: /tmp/yoink-music
       YOINK_RUST_INSIGHT_WORKSPACE: /tmp/yoink-insight
       YOINK_RUST_INBOX_WORKSPACE: /tmp/yoink-inbox

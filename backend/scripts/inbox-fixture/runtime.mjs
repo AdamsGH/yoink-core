@@ -20,7 +20,7 @@ export async function withRuntime(config, execute) {
   // Registered before any allocation; helpers are tracked even on nonzero exits.
   actions.push(async () => { for (const child of children) child.kill('SIGKILL'); });
   actions.push(async () => { const failures = []; for (const container of containers) { try { await docker(['rm', '--force', container]); } catch { failures.push(container); } } assert.equal(failures.length, 0, 'all owned containers removed'); });
-  let appContainerId, activeDns, interrupted = false, rejectedNumber = 0;
+  let appContainerId, aiTunnelContainerId, activeDns, interrupted = false, rejectedNumber = 0;
   async function expectNativeFailure(args, reason, input) {
     const name = `yoink-inbox-rejection-${id}-${rejectedNumber++}`;
     const container = await docker(['create', '--pull', 'never', '--name', name, ...(input === undefined ? [] : ['--interactive']), ...args]);
@@ -59,10 +59,15 @@ export async function withRuntime(config, execute) {
       assert(snapshot && Number(snapshot[1]) > 0, 'original SIGTERM snapshot must observe a live child before cancellation/reaping');
     }
     await docker(['rm', original]); containers.delete(original); appContainerId = undefined;
+    if (aiTunnelContainerId) {
+      await docker(['rm', '--force', aiTunnelContainerId]); containers.delete(aiTunnelContainerId); aiTunnelContainerId = undefined;
+    }
   }
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, interrupt);
   try {
     const trusted = await new TrustedServices().start(); actions.push(() => trusted.close());
+    const tunnelPort = await freePort();
+    const tunnelSource = await readFile(new URL('../insight-fixture/ai-tunnel.py', import.meta.url), 'utf8');
     const bot = new BotApiFixture({ mediaBytes: Buffer.alloc(0) });
     const botPort = await bot.start(); actions.push(() => bot.close());
     const proxy = await receiptProxy(`http://127.0.0.1:${botPort}`); actions.push(() => proxy.close());
@@ -91,6 +96,7 @@ export async function withRuntime(config, execute) {
         YOINK_RUST_DOWNLOADS_ENABLED: 'false', YOINK_RUST_SHUTDOWN_TIMEOUT_SECS: '90',
         YOINK_RUST_INBOX_WORKSPACE: '/state/inbox', YOINK_RUST_INBOX_GITHUB_ENDPOINT: trusted.origin + '/',
         YOINK_RUST_INSIGHT_GATEWAY_BASE: trusted.origin + '/v1', YOINK_RUST_INSIGHT_GATEWAY_KEY: 'fixture-gateway', YOINK_RUST_INSIGHT_MODEL: 'fixture-model',
+        YOINK_RUST_INSIGHT_AI_PROXY: `socks5://127.0.0.1:${tunnelPort}`,
         YOINK_RUST_INBOX_INTERVAL_MS: '100', YOINK_RUST_INBOX_MAX_ATTEMPTS: '2',
         ...(deadlines ? { YOINK_RUST_INBOX_JOB_TIMEOUT_SECS: '6', YOINK_RUST_INBOX_GITHUB_TIMEOUT_SECS: '4', YOINK_RUST_INBOX_EXECUTOR_TIMEOUT_SECS: '3', YOINK_RUST_INBOX_SOCKET_TIMEOUT_SECS: '2', YOINK_RUST_INBOX_COMPLETION_TIMEOUT_SECS: '3', YOINK_RUST_INBOX_DRAIN_TIMEOUT_SECS: '1' } : {}),
         ...(dns ? { YOINK_RUST_INBOX_EXECUTOR_TIMEOUT_SECS: '60' } : {}),
@@ -98,6 +104,11 @@ export async function withRuntime(config, execute) {
       };
       appContainerId = await startContainer(['--name', `yoink-inbox-app-${id}`, '--network', 'host', '--workdir', '/state/inbox', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '128', '--memory', '512m', '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777', ...mount, ...(dns ? resolverArgs(dns) : []),
         ...Object.entries(env).flatMap(([key, value]) => ['--env', `${key}=${value}`]), '--entrypoint', 'yoink-fixture-server', config['fixture-image']]);
+      if (inbox) {
+        const target = new URL(trusted.origin);
+        aiTunnelContainerId = await startContainer(['--network', 'host', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '32', '--memory', '64m', '--entrypoint', '/usr/local/bin/python', config['fixture-image'], '-I', '-B', '-c', tunnelSource, String(tunnelPort), JSON.stringify({ [target.hostname]: [Number(target.port)] })]);
+        await waitFor(async () => { try { return (await docker(['exec', appContainerId, '/usr/local/bin/python', '-I', '-B', '-c', 'import socket,sys; s=socket.create_connection(("127.0.0.1",int(sys.argv[1])),1); s.close(); print("ready")', String(tunnelPort)])) === 'ready'; } catch { return false; } }, 'owned Inbox AI tunnel');
+      }
     }
     async function ready() { await waitFor(async () => { checkInterrupted(); try { return (await fetch(`http://127.0.0.1:${httpPort}/health/ready`, { signal: AbortSignal.timeout(1000) })).status === 200; } catch { return false; } }, 'actual native readiness'); }
     async function workspaceClean() { assert.equal(await helperContainer(['--network', 'none', ...mount, '--entrypoint', 'sh', config['server-image'], '-c', 'test -z "$(ls -A /state/inbox)" && echo clean']), 'clean'); }

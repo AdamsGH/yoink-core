@@ -1,4 +1,5 @@
 //! Macro compiled against the actual native Inbox crate.
+mod support;
 use yoink_inbox::{Error, contracts};
 yoink_insight::impl_inbox_adapter!(pub ActualInboxInsight);
 use std::{sync::Arc, time::Duration};
@@ -328,9 +329,7 @@ async fn completion_rechecks_revoked_grant_after_io() {
 async fn real_http_completion_errors_and_inflight_cancellation() {
     use axum::{Router, http::StatusCode, routing::post};
     let (_dir, mut s, _, shutdown) = fixture().await;
-    s.completion = Arc::new(
-        yoink_insight::provider::HttpCompletion::new(Duration::from_secs(2), 4096).unwrap(),
-    );
+    s.completion = Arc::new(support::completion(Duration::from_secs(2), 4096).await);
     for code in [401, 402, 404, 429, 500] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         s.config.gateway_base = format!("http://{}", listener.local_addr().unwrap());

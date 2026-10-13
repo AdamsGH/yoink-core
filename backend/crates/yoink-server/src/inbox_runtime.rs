@@ -85,6 +85,14 @@ impl InboxRuntime {
                 config.insight.request_timeout,
                 1024 * 1024,
             )
+            .map_err(|_| ServerError::InboxStartup)?
+            .with_tunnel(
+                config
+                    .insight
+                    .ai_proxy
+                    .as_deref()
+                    .ok_or(ServerError::InboxStartup)?,
+            )
             .map_err(|_| ServerError::InboxStartup)?;
             let insight = yoink_insight::Insight::completion_only(
                 storage.database().clone(),
@@ -292,6 +300,7 @@ mod tests {
             &mut |key| {
                 Ok(match key {
                     "INBOX_ENABLED" => Some("true".into()),
+                    "INSIGHT_AI_PROXY" => Some("socks5://127.0.0.1:9".into()),
                     "INBOX_WORKSPACE" => Some(workspace.into()),
                     _ => None,
                 })

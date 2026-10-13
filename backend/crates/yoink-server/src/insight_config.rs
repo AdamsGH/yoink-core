@@ -10,7 +10,6 @@ pub struct InsightConfig {
     pub research_timeout: Duration,
     pub response_bytes: usize,
     pub content_proxy: Option<String>,
-    pub openrouter_proxy: Option<String>,
     pub read_client: String,
     pub write_client: Option<String>,
     pub oauth: yoink_insight::oauth::OAuthOptions,
@@ -63,6 +62,29 @@ pub fn completion_config(
     if !matches!(service.mode.as_str(), "auto" | "a2a" | "openrouter") {
         return Err(invalid("INSIGHT_MODE", "expected auto, a2a or openrouter"));
     }
+    let proxy = read("INSIGHT_AI_PROXY")?
+        .or(read("INSIGHT_OPENROUTER_PROXY")?)
+        .ok_or_else(|| {
+            invalid(
+                "INSIGHT_AI_PROXY",
+                "requires an explicit SOCKS5 tunnel; direct AI egress is disabled",
+            )
+        })?;
+    let parsed = url::Url::parse(&proxy)
+        .map_err(|_| invalid("INSIGHT_AI_PROXY", "expected a SOCKS5 URL with local DNS"))?;
+    if proxy.len() > 2048
+        || parsed.scheme() != "socks5"
+        || parsed.host_str().is_none()
+        || !matches!(parsed.path(), "" | "/")
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(invalid(
+            "INSIGHT_AI_PROXY",
+            "expected a SOCKS5 URL with local DNS; HTTP CONNECT and socks5h cannot preserve BYOK DNS pins",
+        ));
+    }
+    service.ai_proxy = Some(proxy);
     if !matches!(
         service.default_lang.as_str(),
         "en" | "ru" | "uk" | "de" | "fr" | "es" | "zh" | "ja"
@@ -76,6 +98,9 @@ pub fn completion_config(
         if !base.is_empty() {
             endpoint(key, base, false)?;
         }
+    }
+    if service.openrouter_base.trim_end_matches('/') == "https://openrouter.ai" {
+        service.openrouter_base = "https://openrouter.ai/api/v1".into();
     }
     service.summary_limit = number(read, "INSIGHT_SUMMARY_DAILY_LIMIT", 50, 0, 1000000)? as i64;
     service.tldr_limit = number(read, "INSIGHT_TLDR_DAILY_LIMIT", 20, 0, 1000000)? as i64;
@@ -180,12 +205,8 @@ impl InsightConfig {
         let response_bytes =
             number(read, "INSIGHT_RESPONSE_MAX_BYTES", 1048576, 1024, 4194304)? as usize;
         let content_proxy = read("INSIGHT_CONTENT_PROXY")?;
-        let openrouter_proxy = read("INSIGHT_OPENROUTER_PROXY")?;
         let mut allowed_proxy_origins = vec![];
-        for (key, proxy) in [
-            ("INSIGHT_CONTENT_PROXY", &content_proxy),
-            ("INSIGHT_OPENROUTER_PROXY", &openrouter_proxy),
-        ] {
+        for (key, proxy) in [("INSIGHT_CONTENT_PROXY", &content_proxy)] {
             if let Some(p) = proxy {
                 let u = url::Url::parse(p)
                     .map_err(|_| invalid(key, "invalid operator HTTP(S) proxy"))?;
@@ -241,7 +262,6 @@ impl InsightConfig {
             research_timeout,
             response_bytes,
             content_proxy,
-            openrouter_proxy,
             read_client,
             write_client,
             oauth: yoink_insight::oauth::OAuthOptions {
@@ -266,12 +286,84 @@ mod tests {
                 Ok(entries
                     .iter()
                     .find(|(key, _)| *key == k)
-                    .map(|(_, v)| v.to_string()))
+                    .map(|(_, v)| v.to_string())
+                    .or_else(|| (k == "INSIGHT_AI_PROXY").then(|| "socks5://127.0.0.1:9".into())))
             },
             Duration::from_secs(shutdown),
             db,
         )
     }
+    #[test]
+    fn official_openrouter_origin_uses_its_api_prefix() {
+        let config = load(
+            &[
+                ("INSIGHT_ENABLED", "true"),
+                ("INSIGHT_OPENROUTER_BASE", "https://openrouter.ai/"),
+            ],
+            150,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            config.service.openrouter_base,
+            "https://openrouter.ai/api/v1"
+        );
+        let custom = load(
+            &[
+                ("INSIGHT_ENABLED", "true"),
+                ("INSIGHT_OPENROUTER_BASE", "https://custom.example/v1"),
+            ],
+            150,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(custom.service.openrouter_base, "https://custom.example/v1");
+    }
+
+    #[test]
+    fn enabled_ai_requires_a_locally_resolving_tunnel() {
+        let missing = InsightConfig::from_lookup(
+            &mut |key| Ok((key == "INSIGHT_ENABLED").then(|| "true".into())),
+            Duration::from_secs(150),
+            true,
+        )
+        .unwrap_err();
+        assert!(missing.to_string().contains("YOINK_RUST_INSIGHT_AI_PROXY"));
+        for proxy in [
+            "http://127.0.0.1:8080",
+            "socks5h://127.0.0.1:1080",
+            "socks5://127.0.0.1:1080/path",
+        ] {
+            assert!(
+                load(
+                    &[("INSIGHT_ENABLED", "true"), ("INSIGHT_AI_PROXY", proxy)],
+                    150,
+                    true
+                )
+                .is_err()
+            );
+        }
+        let legacy = InsightConfig::from_lookup(
+            &mut |key| {
+                Ok(match key {
+                    "INSIGHT_ENABLED" => Some("true".into()),
+                    "INSIGHT_OPENROUTER_PROXY" => Some("socks5://127.0.0.1:1080".into()),
+                    _ => None,
+                })
+            },
+            Duration::from_secs(150),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            legacy.service.ai_proxy.as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
+    }
+
     #[test]
     fn independent_and_bounded() {
         assert!(load(&[], 10, false).unwrap().is_none());

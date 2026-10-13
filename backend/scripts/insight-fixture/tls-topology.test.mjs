@@ -41,7 +41,7 @@ test('canned watch URL and captions encode actual extractor protocol and fixed m
  const player=JSON.parse(watch.match(/ytInitialPlayerResponse = (.*);<\/script>/)[1]);
  assert.equal(VIDEO_ID.length,11);const caption=player.captions.playerCaptionsTracklistRenderer.captionTracks[0];
  const url=new URL(caption.baseUrl);assert.equal(url.hostname,'www.youtube.com');assert(config.youtube[url.pathname+url.search].body.includes(TRANSCRIPT));assert(!player.videoDetails.shortDescription.includes(TRANSCRIPT));
- assert.equal(config.geminiModel,'fixture-gemini');assert.equal(new Set(TLS_HOSTS).size,3);
+ assert.equal(config.openrouterKey,'fixture-openrouter-key');assert.equal(new Set(TLS_HOSTS).size,3);
 });
 test('cleanup registered before allocation and all removal failures aggregated',async()=>{
  const calls=[],actions=[];let allocated=false;

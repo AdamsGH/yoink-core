@@ -66,7 +66,7 @@ pub fn citations(body: &Value) -> Result<Vec<Citation>, Error> {
     }
 }
 pub struct ResponsesResearch {
-    client: reqwest::Client,
+    transport: crate::provider::HttpCompletion,
     timeout: Duration,
     max_bytes: usize,
 }
@@ -79,15 +79,14 @@ impl ResponsesResearch {
             return Err(invalid());
         }
         Ok(Self {
-            client: reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(timeout)
-                .build()
-                .map_err(|_| invalid())?,
+            transport: crate::provider::HttpCompletion::new(timeout, max_bytes)?,
             timeout,
             max_bytes,
         })
+    }
+    pub fn with_tunnel(mut self, proxy: &str) -> Result<Self, Error> {
+        self.transport = self.transport.with_tunnel(proxy)?;
+        Ok(self)
     }
 }
 impl Research for ResponsesResearch {
@@ -103,8 +102,8 @@ impl Research for ResponsesResearch {
             }
             let operation = async {
                 let body = json!({"model":route.model,"input":format!("Research the material factual claims independently. Use primary sources where possible, explicitly distinguish verified, contradicted and unresolved claims, cite every external assertion. Do not count the source under review as corroboration.\n{query}"),"tools":[{"type":"web_search_preview"}],"stream":false});
-                let mut response = self
-                    .client
+                let client = self.transport.route_client(route).await?;
+                let mut response = client
                     .post(format!("{}/responses", route.base.trim_end_matches('/')))
                     .header("content-type", "application/json")
                     .header("authorization", format!("Bearer {}", route.key))

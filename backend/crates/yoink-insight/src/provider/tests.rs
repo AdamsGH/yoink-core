@@ -185,7 +185,7 @@ async fn roots_survive_every_pinned_rebuild_and_hostname_checks_remain_enabled()
 
 #[tokio::test]
 async fn real_byok_rejects_private_dns_even_with_fixture_trust() {
-    let completion = trusted();
+    let completion = trusted().with_tunnel("socks5://127.0.0.1:9").unwrap();
     let route = Route {
         shape: Shape::OpenAi,
         base: "https://localhost/v1".into(),

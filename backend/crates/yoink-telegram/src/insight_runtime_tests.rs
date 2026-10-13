@@ -1,4 +1,6 @@
 use super::*;
+#[path = "../../yoink-insight/tests/support/mod.rs"]
+mod support;
 #[test]
 fn dispatch_names_and_suffixes() {
     for c in ["about", "summary", "tldr", "cancel"] {
@@ -30,7 +32,7 @@ use yoink_db::query;
 use yoink_insight::{
     Config, FutureResult,
     content::{Citation, Content, ContentSource, FetchOptions},
-    provider::{DeltaSink, HttpCompletion},
+    provider::DeltaSink,
 };
 use yoink_storage::{Store, TextOutcome};
 
@@ -96,7 +98,7 @@ async fn fixture(api: Bot, gateway: String) -> Fixture {
             ..Config::default()
         },
         Arc::new(Material(None)),
-        Arc::new(HttpCompletion::new(Duration::from_secs(5), 128 * 1024).unwrap()),
+        Arc::new(support::completion(Duration::from_secs(5), 128 * 1024).await),
     )
     .unwrap();
     let ids = Arc::new(IdentityStore::new(ledger.database().clone(), None, true));
@@ -959,7 +961,8 @@ async fn incremental_chunks_edit_only_confirmed_bot_receipts_and_refresh_group_p
 async fn about_summary_parse_and_localized_errors_use_trusted_direct_and_group_routes() {
     for (command, chat, topic) in [("about", 42, None), ("summary", -100, Some(8))] {
         let (api, bot) = wire().await;
-        let f = fixture(bot, "http://127.0.0.1:1".into()).await;
+        let mut f = fixture(bot, "http://127.0.0.1:1".into()).await;
+        f.runtime.service.config.mode = "openrouter".into();
         groups(&f).await;
         query("INSERT INTO insight_user_settings(user_id,lang) VALUES(42,'ru')")
             .execute(f.ledger.database())
@@ -1084,7 +1087,8 @@ async fn actual_shared_handler_keeps_incoming_admission_and_optional_injection()
         (-100, Some(8), false),
     ] {
         let (api, bot) = wire().await;
-        let f = fixture(bot.clone(), "http://127.0.0.1:1".into()).await;
+        let mut f = fixture(bot.clone(), "http://127.0.0.1:1".into()).await;
+        f.runtime.service.config.mode = "openrouter".into();
         groups(&f).await;
         let system = yoink_application::SystemService::new("fixture");
         system.set_ready(true);
