@@ -41,6 +41,50 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(title, 'Fixture article & title')
         self.assertIn(via, ('html-main', 'readability'))
 
+    def test_inline_newline_keeps_word_boundary(self):
+        text, _, via = html_extract('<main><p><span>Inline</span>\n<span>spacing</span></p></main>', 'https://example.com/')
+        self.assertEqual(via, 'html-main')
+        self.assertEqual(text, 'Inline spacing')
+
+    def test_landing_page_keeps_product_prose_and_inline_code(self):
+        html = '''<html><head><title>Deno</title></head><body>
+        <header>Global navigation</header><main><header><h1>Better, faster JavaScript</h1>
+        <p>Deno is a <strong>Node-compatible</strong> runtime.</p></header>
+        <p>Run TypeScript scripts with built-in testing and permissions.</p>
+        <pre><span>import</span> { BinarySearchTree } from "@std/data-structures";
+const tree = new BinarySearchTree&lt;number&gt;();</pre>
+        <section><h2>Deploy services</h2><p>Use the runtime for automation.</p></section>
+        </main><footer>Footer noise</footer></body></html>'''
+        with patch('readability.Document') as readability:
+            readability.return_value.summary.return_value = '<pre>' + 'BinarySearchTree ' * 30 + '</pre>'
+            text, title, via = html_extract(html, 'https://deno.com/')
+        self.assertEqual(via, 'html-main')
+        self.assertEqual(title, 'Deno')
+        self.assertIn('Deno is a Node-compatible runtime.', text)
+        self.assertIn('Better, faster JavaScript', text)
+        self.assertIn('Run TypeScript scripts', text)
+        self.assertIn('Deploy services', text)
+        self.assertIn('import { BinarySearchTree } from "@std/data-structures";', text)
+        self.assertIn('new BinarySearchTree<number>()', text)
+        self.assertNotIn('Global navigation', text)
+        self.assertNotIn('Footer noise', text)
+
+    def test_empty_main_does_not_hide_real_body(self):
+        text, _, _ = html_extract('<body><main></main><p>Actual body</p></body>', 'https://example.com')
+        self.assertEqual(text, 'Actual body')
+
+    def test_llms_matching_path_on_another_origin_does_not_replace_source(self):
+        source = 'https://example.com/'
+        t = FixtureTransport({
+            'https://example.com/llms.txt': '[Unrelated](https://other.example/index.md)',
+            source: '<main><h1>Actual product</h1><p>Real capabilities.</p></main>',
+            'https://other.example/index.md': 'Unrelated code sample',
+        })
+        text, _, via = web_fetch(t, source, None)
+        self.assertIn('Actual product', text)
+        self.assertEqual(via, 'html-main')
+        self.assertNotIn(('https://other.example/index.md', None), t.calls)
+
     def test_llms_and_provider_and_raw_fallback(self):
         source = 'https://example.com/doc'
         t = FixtureTransport({'https://example.com/llms.txt': '[Doc](https://example.com/doc.md)', 'https://example.com/doc.md': '# Real markdown\nBody'})

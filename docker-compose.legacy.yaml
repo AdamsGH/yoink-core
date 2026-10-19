@@ -1,5 +1,15 @@
 # Stop native first. After native writes, require verified reverse migration or an explicit data-loss decision.
 services:
+  yoink-postgres:
+    profiles: !reset []
+  yoink-redis:
+    profiles: !reset []
+  yoink-youtubei:
+    profiles: !reset []
+  bgutil:
+    profiles: !reset []
+  native-youtube-auth-gateway:
+    profiles: [native]
   yoink:
     image: "${yoink_legacy_image:-yoink/yoink:latest}"
     container_name: yoink

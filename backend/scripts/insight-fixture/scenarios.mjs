@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { ARTICLE } from './services.mjs';
 import { initData, literal } from './helpers.mjs';
+import { parseEvents, summarize } from '../insight-diagnostics/report.mjs';
 const root='/api/v1/insight';
 export async function session(c,uid=42){await c.ready();const token=await c.login(uid);return (path,options={})=>c.request(root+path,{token,...options});}
 export async function routing(c){
@@ -114,6 +115,17 @@ export async function telegram(c){
   assert(c.trusted.calls.slice(providers).some(x=>x.kind==='content'),'native TG uses actual full-content worker');
   assert(c.trusted.calls.slice(providers).some(x=>x.kind==='completion' && x.stream),'native Telegram adapter consumes fragmented SSE/UTF-8');
   assert.equal(c.bot.error,undefined);
+  const diagnostics=await c.waitFor(async()=>{
+    const events=parseEvents(await c.processLogs()).filter(e=>e.input_message_id===31001);
+    return events.some(e=>e.stage==='completed') && events;
+  },'correlated streamed completion and final-delivery diagnostics');
+  const provider=diagnostics.find(e=>e.stage==='provider');
+  assert.equal(provider.details.outcome,'ok');assert.equal(provider.details.end_reason,'done');
+  assert(provider.details.text_bytes>0 && provider.details.wire_bytes>0 && provider.details.deltas>0);
+  assert(Number.isSafeInteger(provider.details.first_delta_ms));
+  assert(diagnostics.some(e=>e.stage==='preview' && e.details.http_status===200 && e.details.outcome==='Sent'));
+  assert(diagnostics.some(e=>e.stage==='delivered' && e.details.final===true));
+  assert.equal(new Set(diagnostics.map(e=>e.request_id)).size,1);
   await c.db.batch('DELETE FROM insight_native_cache WHERE user_id=44');
   const cachedUrl=ARTICLE,beforePrime=c.bot.calls.length;
   c.bot.enqueue(44,44,`/tldr ${cachedUrl} nobullshit`,31002,'en');
@@ -125,6 +137,19 @@ export async function telegram(c){
   assert.deepEqual(replay.data.entities,primed.data.entities);
   assert.equal(c.trusted.calls.length,providerCount,'rich cache replay performs no provider/content fetch');
   await c.waitFor(async()=>await c.db.query(`SELECT count(*) FROM runtime_text_effects WHERE token LIKE 'insight:123456:44:0:31003:0:%' AND state='confirmed' AND receipt=${Number(replay.data.message_id??replay.messageId)} AND json_extract(identity,'$.text')=${literal(replay.data.text)}`)==='1','cached body has its exact confirmed receipt');
+  c.bot.setTextMode('socket-drop-once');
+  const beforeFailure=c.bot.calls.length;
+  c.bot.enqueue(44,44,`/tldr ${ARTICLE} nobullshit diagnostic-final-loss`,31004,'en');
+  const failed=await c.waitFor(async()=>{
+    const events=parseEvents(await c.processLogs()).filter(e=>e.input_message_id===31004);
+    return events.some(e=>e.stage==='final_failed') && events;
+  },'lost final receipt is visible, not silently swallowed');
+  assert(failed.some(e=>e.stage==='provider' && e.details.outcome==='ok'));
+  assert(failed.some(e=>e.stage==='delivery_unconfirmed'));
+  assert.equal(summarize(failed)[0].classification,'final_delivery_unconfirmed');
+  assert.equal(c.bot.calls.slice(beforeFailure).filter(call=>call.method==='sendmessage'&&Number(call.data.chat_id)===44).length,1,'ambiguous final send is not retried');
+  assert.equal(await c.db.query("SELECT count(*) FROM runtime_text_effects WHERE token LIKE 'insight:123456:44:0:31004:0:%' AND state='unknown'"),'1');
+  c.bot.setTextMode('success');
   } finally { c.trusted.markdown=false; }
 }
 export async function revocation(c){

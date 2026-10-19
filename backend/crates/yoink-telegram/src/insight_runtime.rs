@@ -12,6 +12,8 @@ use yoink_access::{AccessPolicy, AccessScope, Role};
 use yoink_identity::IdentityStore;
 use yoink_insight::{Error, Insight};
 use yoink_storage::TextIdentity;
+#[path = "insight_diagnostics.rs"]
+mod diagnostics;
 #[path = "insight_output.rs"]
 mod output;
 use output::{Draft, State};
@@ -172,9 +174,9 @@ impl InsightRuntime {
             return String::new();
         }
         lines.push(if russian {
-            "/cancel <id> — отменить запрос Insight"
+            "/cancel - отменить свои запросы Insight в этом чате"
         } else {
-            "/cancel <id> — cancel an Insight request"
+            "/cancel - cancel your Insight requests in this chat"
         });
         format!("Insight\n{}", lines.join("\n"))
     }
@@ -306,7 +308,19 @@ impl InsightRuntime {
             Err(_) => return true,
         };
         let russian = settings["lang"] == "ru";
+        let started = std::time::Instant::now();
         let id = Uuid::new_v4();
+        diagnostics::record(
+            id,
+            i.chat,
+            i.message,
+            "received",
+            serde_json::json!({
+                "command":command,"input_characters":text.chars().count(),
+                "brief_requested":text.contains("двух словах") || text.contains("two words"),
+                "reviewer_requested":text.split_whitespace().any(|word| matches!(word,"nobullshit"|"noshit")),
+            }),
+        );
         {
             let mut active = self.active.lock().expect("work registry");
             if active.len() >= 32
@@ -371,17 +385,42 @@ impl InsightRuntime {
                     state.text = summary.result;
                     state.byok_final = summary.route == "byok";
                 }
-                let _ = sink.flush(true).await;
+                sink.record("generated", serde_json::json!({"text_bytes":sink.state.lock().await.text.len(),"cached":summary.cached}));
+                if let Err(error) = sink.flush(true).await {
+                    sink.record(
+                        "final_failed",
+                        serde_json::json!({"error":error.to_string()}),
+                    );
+                } else {
+                    sink.record(
+                        "completed",
+                        serde_json::json!({"elapsed_ms":started.elapsed().as_millis() as u64}),
+                    );
+                }
             }
             Err(error) => {
+                sink.record(
+                    "generation_failed",
+                    serde_json::json!({"error":error.to_string()}),
+                );
                 tracing::warn!(command, error = %error, "Insight request failed");
                 if matches!(error, Error::Code("cancelled")) && !self.stop.is_cancelled() {
-                    let _ = sink.cancelled().await;
+                    if let Err(error) = sink.cancelled().await {
+                        sink.record(
+                            "final_failed",
+                            serde_json::json!({"error":error.to_string()}),
+                        );
+                    }
                     return true;
                 }
                 if self.require(&sink.identity, command, &cancel).await.is_ok() {
                     sink.state.lock().await.text = error_text(&error, russian).into();
-                    let _ = sink.flush_status(false, true).await;
+                    if let Err(error) = sink.flush_status(false, true).await {
+                        sink.record(
+                            "final_failed",
+                            serde_json::json!({"error":error.to_string()}),
+                        );
+                    }
                 }
             }
         }
@@ -414,6 +453,12 @@ impl Drop for Registration {
 }
 fn error_text(error: &Error, russian: bool) -> &'static str {
     match (error, russian) {
+        (Error::Code("response_truncated"), true) => {
+            "Провайдер остановил ответ по лимиту генерации. Ответ неполный."
+        }
+        (Error::Code("response_truncated"), false) => {
+            "The provider stopped at its generation limit. The response is incomplete."
+        }
         (Error::Code("content_network_denied"), false) => {
             "Source address was rejected by network protection."
         }

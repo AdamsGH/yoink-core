@@ -2,6 +2,7 @@ name: yoink
 
 services:
   yoink-postgres:
+    profiles: [legacy, backup]
     image: postgres:16-alpine
     container_name: yoink-postgres
     restart: unless-stopped
@@ -20,6 +21,7 @@ services:
       retries: 10
 
   yoink-redis:
+    profiles: [legacy]
     image: redis:7-alpine
     container_name: yoink-redis
     restart: unless-stopped
@@ -66,11 +68,7 @@ services:
     logging:
       driver: local
       options: {max-size: "500M", max-file: "3"}
-    image: "${yoink_rust_image:-yoink/rust-backend:latest}"
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      target: runtime
+    image: "${yoink_rust_image:?Set yoink_rust_image to a SemVer release with backend/justfile release-init}"
     user: "10001:10001"
     read_only: true
     cap_drop: [ALL]
@@ -121,7 +119,7 @@ services:
       tg-bot-api: {condition: service_healthy}
       yoink-proxy: {condition: service_started}
       native-youtube-auth-gateway:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       interval: 30s
       timeout: 5s
@@ -246,6 +244,7 @@ services:
         max-file: "3"
 
   yoink-youtubei:
+    profiles: [legacy]
     image: yoink/youtubei:latest
     container_name: yoink-youtubei
     build:
@@ -290,6 +289,7 @@ services:
         max-file: "3"
 
   bgutil:
+    profiles: [legacy]
     image: brainicism/bgutil-ytdlp-pot-provider:latest
     container_name: bgutil
     restart: unless-stopped
@@ -374,45 +374,28 @@ services:
         max-size: "50M"
         max-file: "3"
 
-  native-youtube-auth-init:
-    image: yoink/youtube-auth-gateway:native
-    build:
-      context: .
-      dockerfile: backend/Dockerfile.youtube-auth-gateway
-    user: "0:0"
-    network_mode: none
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER]
-    security_opt: [no-new-privileges:true]
-    mem_limit: 64m
-    cpus: 0.25
-    pids_limit: 16
-    command: [sh, -ec, 'chown 10001:10001 /socket; chmod 0700 /socket']
-    volumes: [native-youtube-auth:/socket]
   native-youtube-auth-gateway:
-    image: yoink/youtube-auth-gateway:native
-    build:
-      context: .
-      dockerfile: backend/Dockerfile.youtube-auth-gateway
+    image: "${yoink_youtube_image:-yoink/youtube-services:0.1.0}"
     user: "10001:10001"
+    init: true
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     stop_grace_period: 165s
-    mem_limit: 128m
-    cpus: 0.5
-    pids_limit: 32
+    mem_limit: 1536m
+    cpus: 2
+    pids_limit: 192
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
     environment:
       YOINK_YOUTUBE_AUTH_SOCKET: /run/yoink-youtube-auth/adapter.sock
-      YOINK_TRUSTED_YOUTUBEI_URL: http://yoink-youtubei:9173
-      YOINK_TRUSTED_BGUTIL_URL: http://bgutil:4416
+      PROXY: "${proxy_url:-http://yoink-proxy:8080}"
+      HTTP_PROXY: "${proxy_url:-http://yoink-proxy:8080}"
+      HTTPS_PROXY: "${proxy_url:-http://yoink-proxy:8080}"
+      NO_PROXY: localhost,127.0.0.1,::1
     depends_on:
-      yoink-youtubei: {condition: service_healthy}
-      bgutil: {condition: service_healthy}
-      native-youtube-auth-init:
-        condition: service_completed_successfully
+      yoink-proxy: {condition: service_started}
     volumes: [native-youtube-auth:/run/yoink-youtube-auth]
     networks: [yoink]
 networks:

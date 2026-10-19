@@ -1,7 +1,7 @@
 # Experimental images only. They do not replace the Python deployment.
 FROM rust:1.88-bookworm AS rust-source
 WORKDIR /build
-ENV CARGO_BUILD_JOBS=4
+ENV CARGO_BUILD_JOBS=1
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 
@@ -15,43 +15,56 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM rust-source AS rust-build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+    --mount=type=cache,target=/build/target,sharing=locked \
     cargo build --locked --release -p yoink-server -p yoink-worker-launcher \
     && cp target/release/yoink-server target/release/yoink-worker-launcher /
+
+FROM rust-source AS server-config-tests
+COPY docs/inline-search.env.example ./docs/inline-search.env.example
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    cargo test --locked --release -p yoink-server --bin yoink-server config::tests
+
+FROM rust-source AS download-proxy-tests
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    cargo test --locked --release -p yoink-downloads --test proxy_settings
 
 # Fixture controls are built separately and never copied into the default runtime.
 FROM rust-build AS fixture-build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+    --mount=type=cache,target=/build/target,sharing=locked \
     cargo build --locked --release -p yoink-server --features test-fixtures --bin yoink-fixture-server \
     && cp target/release/yoink-fixture-server /
 
 # Operator-only PostgreSQL import utility, not a dependency of yoink-server.
-FROM rust-build AS importer-build
+FROM rust-source AS importer-build
 COPY schema/ ./schema/
 COPY scripts/sql/legacy-catalog.sql ./scripts/sql/legacy-catalog.sql
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+    --mount=type=cache,target=/build/target,sharing=locked \
     cargo build --locked --release -p yoink-import \
     && cp target/release/yoink-import /
 
 # Backup/restore is a separate operator binary. Test its safety contracts on Rust 1.88.
-FROM rust-build AS operations-build
+FROM rust-source AS operations-build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+    --mount=type=cache,target=/build/target,sharing=locked \
     cargo test --locked -p yoink-ops \
     && cargo build --locked --release -p yoink-ops \
     && cp target/release/yoink-ops /
 
 # Test the separate search component with the pinned compiler and synthetic data.
-FROM rust-build AS stats-search-tests
+FROM rust-source AS stats-search-tests
 COPY scripts/stats-search-fixture/ ./scripts/stats-search-fixture/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+    --mount=type=cache,target=/build/target,sharing=locked \
     cargo test --locked -p yoink-stats-search
 
 FROM python:3.12-slim-bookworm AS worker-runtime
@@ -75,7 +88,7 @@ ENTRYPOINT ["/usr/local/bin/yoink-worker-launcher"]
 
 FROM worker-runtime AS runtime-base
 COPY --from=rust-build /yoink-server /usr/local/bin/
-COPY --from=launcher-build /yoink-worker-launcher /usr/local/bin/
+COPY --from=rust-build /yoink-worker-launcher /usr/local/bin/
 EXPOSE 8088
 ENTRYPOINT ["/usr/local/bin/yoink-server"]
 
@@ -107,3 +120,5 @@ COPY --from=operations-build /yoink-ops /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/yoink-ops"]
 
 FROM runtime-base AS runtime
+ARG YOINK_RELEASE_VERSION=0.0.0-dev
+ENV YOINK_RUST_RELEASE_VERSION=${YOINK_RELEASE_VERSION}

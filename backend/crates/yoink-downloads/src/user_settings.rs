@@ -89,8 +89,8 @@ pub struct UserSettings {
 /// Database-only module service: the frontend does not need a downloader process or bot.
 #[derive(Clone)]
 pub struct UserSettingsService {
-    database: Database,
-    identities: Arc<IdentityStore>,
+    pub(super) database: Database,
+    pub(super) identities: Arc<IdentityStore>,
     profile: crate::profile::ProfileStore,
 }
 impl UserSettingsService {
@@ -101,7 +101,7 @@ impl UserSettingsService {
             identities,
         }
     }
-    async fn authorize(&self, actor: u64) -> Result<IdentitySnapshot, DownloadError> {
+    pub(super) async fn authorize(&self, actor: u64) -> Result<IdentitySnapshot, DownloadError> {
         if actor == 0 || actor > i64::MAX as u64 {
             return Err(DownloadError::Denied);
         }

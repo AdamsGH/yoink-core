@@ -1,9 +1,22 @@
-# Context: repository root. No npm dependencies; source is the reviewed Unix adapter.
-FROM node:22.16.0-bookworm-slim@sha256:048ed02c5fd52e86fda6fbd2f6a76cf0d4492fd6c6fee9e2c463ed5108da0e34
-RUN groupadd -g 10001 yoink && useradd -u 10001 -g yoink --no-create-home yoink
+# Keep bgutil's Node ABI and native canvas libraries together.
+FROM brainicism/bgutil-ytdlp-pot-provider:2.0.0@sha256:ed86b6fdd5e430ddd7c8ce1adb55e1ab54db7c7dbc1bcbf3a82454a85b971164
+USER root
+RUN apt-get update && apt-get install --no-install-recommends -y ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 10001 yoink && useradd -u 10001 -g yoink --no-create-home yoink \
+    && install -d -m 0700 -o 10001 -g 10001 /run/yoink-youtube-auth
+WORKDIR /opt/youtubei
+COPY docker/youtubei-service/package.json docker/youtubei-service/package-lock.json ./
+RUN --mount=type=cache,id=yoink-youtube-npm,target=/root/.npm,sharing=locked npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY docker/youtubei-service/index.js docker/youtubei-service/lifecycle.mjs ./
 COPY backend/worker/youtube_auth_adapter.mjs /opt/adapter.mjs
 COPY backend/scripts/youtube-auth-gateway-limits.mjs /opt/limits.mjs
+COPY docker/youtube-bundle/supervisor.mjs docker/youtube-bundle/health.mjs /opt/youtube-bundle/
 USER 10001:10001
-ENV YOINK_YOUTUBE_AUTH_SOCKET=/run/yoink-youtube-auth/adapter.sock
-# Directory is dedicated to this topology/tenant; never share it between backends.
-CMD ["sh", "-ec", "rm -f /run/yoink-youtube-auth/adapter.sock; exec node --import /opt/limits.mjs /opt/adapter.mjs"]
+ENV YOINK_YOUTUBE_AUTH_SOCKET=/run/yoink-youtube-auth/adapter.sock \
+    YOINK_TRUSTED_YOUTUBEI_URL=http://127.0.0.1:9173 \
+    YOINK_TRUSTED_BGUTIL_URL=http://127.0.0.1:4416 \
+    HOME=/tmp NODE_USE_ENV_PROXY=1 HOST=127.0.0.1 PORT=9173 DOWNLOAD_DIR=/tmp/youtubei
+ENTRYPOINT ["node", "/opt/youtube-bundle/supervisor.mjs"]
+CMD []
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node", "/opt/youtube-bundle/health.mjs"]

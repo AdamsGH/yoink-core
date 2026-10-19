@@ -29,6 +29,43 @@ async fn admitted(store: &Store, key: &str) -> ProgressMessage {
 }
 
 #[tokio::test]
+async fn reply_lookup_matches_input_and_progress_only_for_the_original_owner_and_route() {
+    let store = common::store().await;
+    let message = admitted(&store, "reply-lookup").await;
+    store.register_progress_message(&message).await.unwrap();
+    for message_id in [17, 1001] {
+        assert_eq!(
+            store
+                .operation_by_reply(42, 123456, 42, message_id)
+                .await
+                .unwrap(),
+            Some(message.operation_id)
+        );
+        for (actor, bot, chat) in [(43, 123456, 42), (42, 654321, 42), (42, 123456, 43)] {
+            assert_eq!(
+                store
+                    .operation_by_reply(actor, bot, chat, message_id)
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+    }
+    assert_eq!(
+        store
+            .operation_by_reply(42, 123456, 42, 1002)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(matches!(
+        store.operation_by_reply(42, 123456, 42, 0).await,
+        Err(StoreError::InvalidInput)
+    ));
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn progress_keeps_first_confirmed_destination_and_recovers_after_reopen() {
     let store = common::store().await;
     let message = admitted(&store, "progress-first").await;

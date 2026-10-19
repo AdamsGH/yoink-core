@@ -15,10 +15,8 @@ default:
 # Build / deploy
 # ----------------------------------------------------------------------
 
-# Build one image, or all of them. CACHE_BUST is wired into the Dockerfile
-# so HEAD-changing commits invalidate COPY src/ layers automatically; pass
-# no_cache=1 only when BuildKit's heuristics fail (rare, mostly NFS).
-# Usage: just build [yoink|frontend|nginx|tg|backup|all] [no_cache=1]
+# Runtime and YouTube builds use immutable SemVer tags. Other targets retain no_cache.
+# Usage: just build [yoink|gateway|frontend|nginx|tg|backup|all] [no_cache=1]
 build target="all" no_cache="":
     @scripts/build.sh "{{target}}" "{{no_cache}}"
 
@@ -52,14 +50,15 @@ down:
 restart service:
     {{compose}} up -d --force-recreate --no-deps {{service}}
 
-# Build + recreate in one step. The standard 'after editing code' command.
-# Usage: just rebuild [yoink|yoink-frontend|fe|yoink-nginx|nginx|tg-bot-api|tg|yoink-backup|backup|all] [no_cache=1]
+# Build and deploy. Changed runtime inputs require a backend/VERSION bump; YouTube inputs require a new yoink_youtube_image tag.
+# Usage: just rebuild [yoink|gateway|yoink-frontend|fe|yoink-nginx|nginx|tg-bot-api|tg|yoink-backup|backup|all] [no_cache=1]
 rebuild service="" no_cache="":
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{service}}" in
-      ""|all)              just build all      {{no_cache}} && {{compose}} up -d --force-recreate ;;
-      yoink)               just build yoink    {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink ;;
+      ""|all)              just build all      {{no_cache}} && {{compose}} up -d --no-build --wait --wait-timeout 120 native-youtube-auth-gateway && just --justfile backend/justfile release-deploy && {{compose}} up -d --no-deps yoink-frontend yoink-nginx ;;
+      yoink)               just build yoink    {{no_cache}} && just --justfile backend/justfile release-deploy ;;
+      gateway)             just build gateway  {{no_cache}} && {{compose}} up -d --no-deps --wait --wait-timeout 120 native-youtube-auth-gateway ;;
       yoink-frontend|fe)   just build frontend {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink-frontend ;;
       yoink-nginx|nginx)   just build nginx    {{no_cache}} && {{compose}} up -d --force-recreate --no-deps yoink-nginx ;;
       tg-bot-api|tg)       just build tg       {{no_cache}} && {{compose}} up -d --force-recreate --no-deps tg-bot-api ;;

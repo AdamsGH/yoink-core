@@ -33,6 +33,7 @@ pub struct NetworkContext<'a> {
     pub domain: &'a str,
     pub no_cookie_domains: &'a [String],
     pub identity: &'a IdentitySnapshot,
+    pub system_proxy_domains: &'a [String],
     pub system_proxy: Option<&'a str>,
 }
 
@@ -297,6 +298,7 @@ impl ProfileStore {
             no_cookie_domains,
             identity,
             system_proxy,
+            system_proxy_domains,
         } = context;
         let actor = valid_actor(actor_id)?;
         validate_identity(identity, actor)?;
@@ -321,8 +323,15 @@ impl ProfileStore {
             None => (false, None, true, "cookies".to_owned()),
         };
         validate_auth_mode(&youtube_auth_mode)?;
-        let proxy_ref = if proxy_enabled {
-            let (source, value) = choose_proxy(actor_id, personal_proxy.as_deref(), system_proxy)?;
+        let automatic_proxy =
+            system_proxy.is_some() && matches_no_cookie_domain(&target, system_proxy_domains)?;
+        let proxy_ref = if proxy_enabled || automatic_proxy {
+            let personal = if proxy_enabled {
+                personal_proxy.as_deref()
+            } else {
+                None
+            };
+            let (source, value) = choose_proxy(actor_id, personal, system_proxy)?;
             validate_proxy(&value)?;
             Some(
                 ProxyReference::new(source, version(value.as_bytes()))
@@ -444,6 +453,7 @@ impl ProfileStore {
             no_cookie_domains,
             identity,
             system_proxy,
+            system_proxy_domains,
         } = context;
         let actor = valid_actor(actor_id)?;
         validate_identity(identity, actor)?;
@@ -467,7 +477,9 @@ impl ProfileStore {
             .transpose()
             .map_err(|_| ProfileError::Database)?
             .unwrap_or(false);
-        if proxy_enabled != selection.proxy().is_some() {
+        let automatic_proxy =
+            system_proxy.is_some() && matches_no_cookie_domain(&target, system_proxy_domains)?;
+        if (proxy_enabled || automatic_proxy) != selection.proxy().is_some() {
             // A frozen direct route cannot bypass a newly enabled proxy policy.
             return Err(ProfileError::StaleReference);
         }
@@ -561,20 +573,16 @@ impl ProfileStore {
                     )
                 }
                 ProxySource::System => {
-                    let r = query(include_str!("network_settings.sql"))
-                        .bind(actor)
-                        .fetch_optional(&*tx)
-                        .await?
-                        .ok_or(ProfileError::StaleReference)?;
-                    if !r
-                        .try_get::<bool, _>("proxy_enabled")
-                        .map_err(|_| ProfileError::Database)?
-                    {
+                    if !proxy_enabled && !automatic_proxy {
                         return Err(ProfileError::StaleReference);
                     }
-                    let personal: Option<String> =
-                        r.try_get("proxy_url").map_err(|_| ProfileError::Database)?;
-                    if personal.filter(|x| !x.is_empty()).is_some() {
+                    let personal = settings
+                        .as_ref()
+                        .map(|r| r.try_get::<Option<String>, _>("proxy_url"))
+                        .transpose()
+                        .map_err(|_| ProfileError::Database)?
+                        .flatten();
+                    if proxy_enabled && personal.filter(|x| !x.is_empty()).is_some() {
                         return Err(ProfileError::StaleReference);
                     }
                     (

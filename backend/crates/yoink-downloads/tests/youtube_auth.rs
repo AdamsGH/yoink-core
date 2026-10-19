@@ -73,6 +73,7 @@ fn context(identity: &IdentitySnapshot) -> NetworkContext<'_> {
         domain: "youtube.com",
         identity,
         no_cookie_domains: &[],
+        system_proxy_domains: &[],
         system_proxy: None,
     }
 }

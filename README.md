@@ -20,7 +20,7 @@ For legacy split-deploy scenarios run `yoink` + `yoink-api` in separate containe
 ```bash
 cp .env.example .env        # fill in required vars
 just data-dirs              # create private data directories (sudo required)
-just build all              # build yoink + frontend images
+just build all              # build native runtime, YouTube service and web images
 just up                     # start services
 just build backup           # build the native archive operator
 # Native schemas migrate and verify automatically at startup.
@@ -31,17 +31,23 @@ just build backup           # build the native archive operator
 | Service | Description | Port |
 |---|---|---|
 | `yoink` | Native Rust bot + API | 8003 |
-| `yoink-postgres` | Retained legacy PostgreSQL 16 | - |
 | `yoink-frontend` | React SPA (nginx) | 3010 |
+| `yoink-nginx` | HTTP edge | 8081 |
 | `tg-bot-api` | Custom tdlight Bot API server | 8082 |
-| `yoink-backup` | pg_dump + S3 (legacy profile `legacy-backup`) | - |
+| `yoink-proxy` | HTTP facade over the shared host proxy on 1080 | internal 8080 |
+| `native-youtube-auth-gateway` | Combined youtubei, bgutil and Unix adapter | Unix socket only |
+
+PostgreSQL, Redis, ARQ and the old standalone YouTube helpers are excluded from default startup. Use the legacy override only for an explicit rollback. Their data volumes are preserved.
+
+| Optional service | Description | Port |
+|---|---|---|
+| `yoink-backup` | Legacy pg_dump + S3 (profile `backup`) | - |
 | `yoink-browser` | Kasmweb Chromium (profile `cookies`) | 6902 |
-| `yoink-youtubei` | Node.js youtubei.js sidecar for OAuth YouTube downloads | 9173 |
 
 ## Just recipes
 
 ```
-just build [yoink|frontend|tg|backup|all]
+just build [yoink|gateway|frontend|tg|backup|all]
 just up [service]
 just down
 just restart <service>
@@ -79,7 +85,7 @@ Core variables (all lowercase):
 | `api_id` / `api_hash` | yes | - | Telegram API credentials (for tg-bot-api) |
 | `api_secret_key` | yes | - | JWT signing secret |
 | `yoink_plugins` | no | - | Comma-separated plugin names (default: empty) |
-| `database_url` | no | - | PostgreSQL URL (default provided) |
+| `database_url` | no | - | Legacy PostgreSQL URL; unused by the native runtime |
 | `telegram_base_url` | no | - | Bot API base URL (default: official Telegram) |
 | `data_dir` | no | - | Host path for cookies, sessions, browser profile |
 | `json_logs` | no | - | Enable JSON log format |
@@ -404,9 +410,9 @@ Token stored in `data/tg-bot-api/user.token`.
 
 ## YouTube TV OAuth
 
-An optional sidecar service (`yoink-youtubei`) handles YouTube downloads for users who have authorized via the Google TV device flow. It uses [youtubei.js](https://github.com/LuanRT/YouTube.js) with a TV client and OAuth tokens, bypassing cookie requirements for age-restricted content.
+The native YouTube container combines [youtubei.js](https://github.com/LuanRT/YouTube.js), bgutil and the Unix authentication adapter. The youtubei provider handles requests from users authorized through the Google TV device flow. Build the container with `just build gateway`; `yoink_youtube_image` pins its immutable SemVer image. See [native deployment](docs/backend/deployment.md) for lifecycle and isolation details.
 
-The sidecar is only used when a user has completed OAuth authorization **and** switched their YouTube auth method to "YouTube TV OAuth" in Settings. All other users continue to use yt-dlp with Netscape cookies by default. See `plugins/yoink-dl/README.md` for the full setup and flow description.
+The youtubei provider is only used when a user has completed OAuth authorization **and** switched their YouTube auth method to "YouTube TV OAuth" in Settings. All other users continue to use yt-dlp with Netscape cookies by default. See `plugins/yoink-dl/README.md` for the full setup and flow description.
 
 ## Cookie extraction
 

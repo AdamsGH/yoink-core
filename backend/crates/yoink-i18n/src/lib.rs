@@ -123,7 +123,7 @@ define_keys! {
     CutBack => "telegram.cut_back";
     CutConfirming => "telegram.cut_confirming";
     CutQualityTitle => "telegram.cut_quality_title";
-    CutSubmitted => "telegram.cut_submitted", ["id"];
+    CutSubmitted => "telegram.cut_submitted";
     CutCancelled => "telegram.cut_cancelled";
     CutTimeHint => "telegram.cut_time_hint";
     CutInvalidTime => "telegram.cut_invalid_time";
@@ -140,7 +140,7 @@ define_keys! {
     QualityHeight => "telegram.quality_height", ["height"];
     QualityCancel => "telegram.quality_cancel";
     QualityConfirming => "telegram.quality_confirming", ["choice"];
-    QualitySubmitted => "telegram.quality_submitted", ["id"];
+    QualitySubmitted => "telegram.quality_submitted";
     QualityCancelled => "telegram.quality_cancelled";
     QualityStale => "telegram.quality_stale";
     QualityRetry => "telegram.quality_retry";
@@ -245,7 +245,7 @@ define_keys! {
     StatusSucceeded => "telegram.status_succeeded";
     StatusFailed => "telegram.status_failed";
     StatusCancelled => "telegram.status_cancelled";
-    Operation => "telegram.operation", ["id", "status", "attempt"];
+    Operation => "telegram.operation", ["status", "attempt"];
     DeliveryUnconfirmed => "telegram.delivery_unconfirmed";
     ProgressFetching => "telegram.progress_fetching";
     ProgressProcessing => "telegram.progress_processing";
@@ -253,10 +253,10 @@ define_keys! {
     ProgressPercent => "telegram.progress_percent", ["percent"];
     ProgressDelivered => "telegram.progress_delivered", ["delivered", "total"];
     DeliveryPartialHint => "telegram.delivery_partial_hint";
-    DeliveredMessage => "telegram.delivered_message", ["id"];
-    ExistingOperation => "telegram.existing_operation", ["id"];
-    OperationCreated => "telegram.operation_created", ["id"];
-    CancellationRequested => "telegram.cancellation_requested", ["id"];
+    DeliveredMessage => "telegram.delivered_message";
+    ExistingOperation => "telegram.existing_operation";
+    OperationCreated => "telegram.operation_created";
+    CancellationRequested => "telegram.cancellation_requested";
     OperationNotFound => "telegram.operation_not_found";
 }
 
@@ -652,23 +652,23 @@ mod tests {
             .render(
                 Language::English,
                 Key::Operation,
-                &[("id", "{attempt} 世界"), ("status", "x"), ("attempt", "3")],
+                &[("status", "{attempt} 世界"), ("attempt", "3")],
             )
             .unwrap();
-        assert!(text.contains("{attempt} 世界: x"));
+        assert!(text.contains("{attempt} 世界 (attempt 3)"));
     }
 
     #[test]
     fn validates_parameter_sets_and_does_not_report_values() {
         let catalog = Catalog::embedded().unwrap();
         assert!(
-            matches!(catalog.render(Language::English, Key::Operation, &[("id", "secret")]), Err(CatalogError::MissingParameter { parameter, .. }) if parameter == "status")
+            matches!(catalog.render(Language::English, Key::Operation, &[("attempt", "secret")]), Err(CatalogError::MissingParameter { parameter, .. }) if parameter == "status")
         );
         assert!(
-            matches!(catalog.render(Language::English, Key::Operation, &[("id", "x"), ("id", "secret"), ("status", "x"), ("attempt", "x")]), Err(CatalogError::DuplicateParameter { parameter, .. }) if parameter == "id")
+            matches!(catalog.render(Language::English, Key::Operation, &[("status", "x"), ("status", "secret"), ("attempt", "x")]), Err(CatalogError::DuplicateParameter { parameter, .. }) if parameter == "status")
         );
         assert!(
-            matches!(catalog.render(Language::English, Key::Operation, &[("id", "x"), ("status", "x"), ("attempt", "x"), ("secret-name", "SECRET VALUE")]), Err(CatalogError::ExtraParameter { parameter, .. }) if parameter == "secret-name")
+            matches!(catalog.render(Language::English, Key::Operation, &[("status", "x"), ("attempt", "x"), ("secret-name", "SECRET VALUE")]), Err(CatalogError::ExtraParameter { parameter, .. }) if parameter == "secret-name")
         );
     }
 
@@ -692,12 +692,12 @@ mod tests {
             parse(&text, "en"),
             Err(CatalogError::InvalidShape { .. })
         ));
-        let text = source("en").replace("Operation {id}:", "Operation {{id}:");
+        let text = source("en").replace("Download: {status}", "Download: {{status}");
         assert!(matches!(
             parse(&text, "en"),
             Err(CatalogError::MalformedTemplate { .. })
         ));
-        let text = source("en").replace("Operation {id}:", "Operation {other}:");
+        let text = source("en").replace("Download: {status}", "Download: {other}");
         assert!(matches!(
             parse(&text, "en"),
             Err(CatalogError::PlaceholderMismatch { .. })

@@ -116,6 +116,18 @@ async fn fixture() -> (tempfile::TempDir, Arc<Store>, Router, String, String) {
     let owner = jwt(OWNER as i64);
     let foreign = jwt(FOREIGN as i64);
     let state = AuthState::new(false);
+    assert!(
+        state
+            .install_downloader_settings(yoink_downloads::UserSettingsService::new(
+                store.database().clone(),
+                Arc::new(IdentityStore::new(
+                    store.database().clone(),
+                    Some(OWNER as i64),
+                    false
+                ))
+            ))
+            .is_ok()
+    );
     assert!(state.install_cookies(svc).is_ok());
     assert!(
         state
@@ -167,6 +179,35 @@ async fn request(
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
+}
+#[tokio::test]
+async fn history_retry_enqueues_owned_url_to_current_actors_private_chat() {
+    let (_dir, store, app, owner, foreign) = fixture().await;
+    yoink_db::raw_sql(include_str!("sql/history_seed.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    let path = "/api/v1/dl/downloads/00000000-0000-4000-8000-000000000001/retry";
+    assert_eq!(
+        request(&app, "POST", path, Some(&foreign), Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, body) = request(&app, "POST", path, Some(&owner), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "queued");
+    let row = yoink_db::query("SELECT request,status FROM runtime_operations WHERE id=?1")
+        .bind(body["operation_id"].as_str().unwrap())
+        .fetch_one(store.database())
+        .await
+        .unwrap();
+    let admitted: Value =
+        serde_json::from_str(&row.try_get::<String, _>("request").unwrap()).unwrap();
+    assert_eq!(admitted["actor_id"], OWNER);
+    assert_eq!(admitted["target"]["chat_id"], OWNER);
+    assert_eq!(admitted["source_url"], "https://x.com/example/status/123");
+    assert_eq!(row.try_get::<String, _>("status").unwrap(), "queued");
 }
 #[tokio::test]
 async fn cookie_web_http_frontend_token_extension_upload_ownership_and_admin() {

@@ -33,6 +33,7 @@ fn context<'a>(
         no_cookie_domains,
         identity,
         system_proxy,
+        system_proxy_domains: &[],
     }
 }
 async fn insert_cookie(

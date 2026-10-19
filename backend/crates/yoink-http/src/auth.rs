@@ -101,6 +101,7 @@ pub(crate) fn router(state: AuthState, system: yoink_application::SystemService)
         .merge(crate::groups::router())
         .merge(crate::nsfw::router())
         .merge(crate::downloader_settings::router())
+        .merge(crate::download_history::router())
         .merge(crate::cookie_web::router())
         .route_layer(middleware::from_fn(move |request: Request, next: Next| {
             let ready = system.snapshot().ready;

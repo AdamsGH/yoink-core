@@ -58,6 +58,12 @@ class FullContentTests(unittest.TestCase):
         from content_stage import validate as anonymous_validate
         with self.assertRaises(ValueError): anonymous_validate(r)
 
+    def test_dns_outage_is_http_failure_but_private_sources_remain_denied(self):
+        with patch.object(guard, '_ORIGINAL_GETADDRINFO', side_effect=socket.gaierror('not found')), \
+                patch('benchmark_dns.http.client.HTTPSConnection', side_effect=TimeoutError('DNS unavailable')):
+            self.assertEqual(run(request())['error'], 'content_http_error')
+            self.assertEqual(run(request('http://127.0.0.1/secret'))['error'], 'content_network_denied')
+
     def test_real_main_dispatch_and_private_source_independent_of_media(self):
         for url in ['http://127.0.0.1/secret', 'https://r.jina.ai/http://127.0.0.1/secret']:
             r = request(url)

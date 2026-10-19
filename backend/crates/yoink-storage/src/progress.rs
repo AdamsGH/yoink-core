@@ -37,6 +37,33 @@ impl ProgressMessage {
 }
 
 impl Store {
+    pub async fn operation_by_reply(
+        &self,
+        actor_id: u64,
+        bot_id: i64,
+        chat_id: i64,
+        message_id: i32,
+    ) -> Result<Option<Uuid>, StoreError> {
+        if actor_id == 0
+            || actor_id > i64::MAX as u64
+            || bot_id <= 0
+            || chat_id == 0
+            || message_id <= 0
+        {
+            return Err(StoreError::InvalidInput);
+        }
+        query(include_str!("../sql/operation_by_reply.sql"))
+            .bind(actor_id as i64)
+            .bind(bot_id)
+            .bind(chat_id)
+            .bind(message_id)
+            .fetch_optional(self.database())
+            .await
+            .map_err(|_| StoreError::Database)?
+            .map(|row| row.try_get("id").map_err(|_| StoreError::InvalidStoredData))
+            .transpose()
+    }
+
     /// First confirmed message wins, including concurrent same-operation replays.
     pub async fn register_progress_message(
         &self,

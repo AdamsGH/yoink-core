@@ -2,7 +2,32 @@
 
 Native Rust bot/API with shared Turso 0.7.2 storage and integrated Download, Music, Stats, Insight and Inbox products. Media/content execution uses the container-only confined Python worker. Shared authorization, durable delivery journals, bounded imports, search ownership and cancellation-aware startup/shutdown are verified by library and actual-process acceptance. Production Compose selects this runtime; standalone defaults remain offline. See [deployment](../docs/backend/deployment.md) for source migration, exclusive polling, configuration, backups and rollback.
 
-## Start here
+## Releases
+
+`VERSION` is the SemVer version of the deployable bundle, including Rust and Python workers. Cargo package versions are independent. Image tags are immutable. Version changes affect image metadata, not Rust compilation inputs. The image supplies `YOINK_RUST_RELEASE_VERSION` to the typed runtime configuration, so `/api/v1/system` reports the release version without recompilation. Standalone Cargo runs fall back to the package version.
+
+```sh
+cd backend
+just release-status
+just release-confirm # Only after Adams confirms the current release works.
+just release-version patch # Or minor / major.
+just release-build
+just release-deploy
+# Check real behavior. Docker health does not confirm the release.
+just release-confirm
+```
+
+`release-deploy` atomically updates only `yoink_rust_image` in `.env`, recreates only `yoink`, and checks readiness. Failed deployment attempts restore the previous version. `release-rollback` restores the retained previous version without rebuilding. Confirmation deletes the previous image; the next build is blocked until confirmation. Before deployment, `release-discard` can remove an unwanted candidate. A current release and candidate, or an unconfirmed current release and previous release, are the only retained production versions. Internal image IDs remain in the ignored `.release/state.json` for tag integrity checks, not in `.env`.
+
+Discarded versions cannot be reused. Release state retains the highest built version even after rollback. Builds use a verified source snapshot, so later working-tree edits cannot change an in-flight release. Image rollback does not restore database contents or downgrade schemas. Check schema compatibility before deployment. Incompatible schema changes require an explicit migration and recovery decision.
+
+The dedicated `yoink-core-release` builder uses 1 CPU, 3 GiB RAM, serialized build steps, and automatic garbage collection with an 8 GiB cache budget and 20 GiB free-space target. These are garbage-collection targets, not a hard filesystem quota during an active build. The release wrapper trims the cache after successful or failed builds, then stops the builder to release RAM. `release-trim` does the same on demand. This persistent cache is intentional. Do not delete it after each release. Host-side Cargo checks still use the separate build-resource rules.
+
+`just test-release` checks release transitions and failure recovery. `just test-release-config` checks native runtime configuration in the bounded builder without exporting a compiler image. `just test-release-build` performs real builds to check unchanged/version-only/worker-only cache reuse, a launcher-only Rust rebuild, container worker tests, and the real HTTP release version. Its temporary context and image are removed on failure or success. The reusable builder cache and small logs under `target/media-reports/release-build` remain.
+
+For an existing unversioned installation, `just release-init CURRENT_IMAGE PREVIOUS_IMAGE PREVIOUS_VERSION` adopts images without rebuilding or restarting production. The one-time `0.1.0-legacy.1` predecessor denotes an unversioned rollback snapshot, not a claimed historical release. `release-clean-images` removes obsolete Yoink runtime/fixture aliases while retaining the current test fixture and the `experimental` compatibility alias pointing at the current runtime. It refuses to remove an image still needed by another container. `release-clean-legacy-cache` removes only identified old Yoink cache records from the default builder, not shared parents, mutable cache mounts or other projects.
+
+## Development
 
 Read the [backend documentation](../docs/backend/index.md) for architecture, configuration, persistence, access control, and development workflows. The [native storage decision](../docs/decisions/0003-native-turso-runtime.md) explains single-process file ownership, migration checks and the changed security boundary.
 
@@ -30,7 +55,11 @@ The standalone [Turso evaluation](experiments/turso/README.md) and [decision 000
 
 Never start another poller with the production token. Stop the legacy poller before activating native; competing `getUpdates` consumers can consume updates or interrupt service.
 
+For native AI generation and Telegram delivery investigation, see [Insight diagnostics](../docs/backend/insight-diagnostics.md). `just insight-diagnostics` produces a bounded metadata-only report; inactive restores can establish historical delivery state without querying the active database.
+
 ### Personal credential controls
+
+When a system proxy is configured, native downloads automatically proxy YouTube (including `youtu.be`), TikTok, e621, X and Twitter. This routing is independent of the personal proxy toggle. `YOINK_RUST_DOWNLOAD_PROXY_DOMAINS_JSON` replaces that list when set. Keep YouTube in the deployed list on networks where direct TLS connections fail. `just test-download-proxy` checks ordinary admission with the personal toggle disabled. `just test-live-youtube` uses the effective production proxy settings with an isolated native database, a fixture Bot API and a real confined media download. It never uses the production Telegram token or uploads to a real chat.
 
 Approved, unbanned users can manage only their own non-pool cookies and toggle
 only their selected proxy in their own positive private, non-threaded chat.

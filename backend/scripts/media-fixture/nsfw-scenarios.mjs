@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from "node:fs/promises";
 import { withRussianPreference } from "./language-fixture.mjs";
 import { createHmac } from 'node:crypto';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 
 async function verifyNsfwAdmin({ appHttpPort, telegramToken, fixtureSql, restartGroups }) {
   const base = `http://127.0.0.1:${appHttpPort}/api/v1`;
@@ -128,10 +128,10 @@ export async function runNsfwScenarios(context) {
     botApi.enqueue(actor, route.chat, command, messageId, 'en', { thread: route.thread });
     await waitFor(() => botApi.calls.slice(start).some(call =>
       ['sendmessage', 'editmessagetext'].includes(call.method) && Number(call.data.chat_id) === route.chat && /NSFW/i.test(call.data.text)), 'localized NSFW policy refusal', 30000);
-    const ids = botApi.calls.slice(start).flatMap(call => (call.data?.text ?? '').match(/[0-9a-f]{8}-[0-9a-f-]{27}/ig) ?? []);
-    if (ids.length) await waitFor(async () => (await queryJob(ids[0])).startsWith('failed|'), 'NSFW operation terminal failure');
+    const { operationId } = await admissionNotice(context, start, route);
+    await waitFor(async () => (await queryJob(operationId)).startsWith('failed|'), 'NSFW operation terminal failure');
     assert.equal(botApi.sendCalls, sends, 'blocked content cannot issue any Telegram media send');
-    return { messageId, operationId: ids[0] };
+    return { messageId, operationId };
   }
   await restartGroups(true);
   try {

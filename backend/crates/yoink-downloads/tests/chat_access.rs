@@ -275,6 +275,35 @@ async fn chat_queries_cannot_cross_actor_chat_topic_or_bot_boundaries() {
         .await
         .unwrap()
         .operation_id;
+    service
+        .register_progress_message(USER, id, 1001, "en")
+        .await
+        .unwrap();
+    for message_id in [10, 1001] {
+        assert_eq!(
+            service
+                .operation_by_reply(USER, destination, message_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .operation_id,
+            id
+        );
+        assert!(
+            service
+                .operation_by_reply(USER, target(GROUP, None), message_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            service
+                .operation_by_reply(8000000000015, destination, message_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
     for current in [target(GROUP, None), target(USER as i64, None)] {
         assert!(
             service
@@ -335,6 +364,10 @@ async fn chat_queries_cannot_cross_actor_chat_topic_or_bot_boundaries() {
             .unwrap()
     );
     let disabled = service.with_group_access(false);
+    assert!(matches!(
+        disabled.operation_by_reply(USER, destination, 1001).await,
+        Err(DownloadError::Denied)
+    ));
     assert!(matches!(
         disabled.status(USER, id).await,
         Err(DownloadError::Denied)

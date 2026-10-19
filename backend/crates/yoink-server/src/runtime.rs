@@ -153,7 +153,7 @@ async fn run_impl(
     provided_store: Option<Arc<yoink_storage::Store>>,
     overrides: DependencyOverrides,
 ) -> Result<(), ServerError> {
-    let system = SystemService::new(env!("CARGO_PKG_VERSION"));
+    let system = SystemService::new(config.release_version.clone());
     let cancel = CancellationToken::new();
     let listener = TcpListener::bind(config.http_bind)
         .await

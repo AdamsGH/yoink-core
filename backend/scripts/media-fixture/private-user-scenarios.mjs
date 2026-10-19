@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { parseFormatReport } from './format-scenarios.mjs';
 
 export async function runPrivateUserScenarios(context) {
@@ -79,8 +79,7 @@ export async function runPrivateUserScenarios(context) {
     const choice = buttons(chooser).find(b => b.callback_data.startsWith('cut:q720:')).callback_data;
     botApi.setExpectedUpload({ method: 'sendvideo', filename: 'media.mp4', mimeType: 'video/mp4', preserveMdat: false });
     const admitted = await click(chooser, choice);
-    const admission = await waitFor(() => botApi.calls.slice(admitted.start).find(c => c.method === 'sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text)), 'ordinary-user cut admission');
-    const id = admission.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)[0];
+    const { operationId: id } = await admissionNotice(context, admitted.start);
     await h.succeeded(id);
     await h.inspectUpload('ordinary-user ask cut', { video: true, audio: true, durationMin: 0.3, durationMax: 0.8 });
     const frozen = await h.request(id);

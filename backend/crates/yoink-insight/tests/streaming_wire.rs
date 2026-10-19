@@ -15,8 +15,12 @@ struct Sink {
     text: Mutex<String>,
     first: Notify,
     fail: bool,
+    diagnostics: std::sync::Mutex<Vec<String>>,
 }
 impl DeltaSink for Sink {
+    fn diagnostic(&self, event: &yoink_insight::provider::StreamDiagnostic<'_>) {
+        self.diagnostics.lock().unwrap().push(format!("{event:?}"));
+    }
     fn delta<'a>(&'a self, text: &'a str) -> FutureResult<'a, ()> {
         Box::pin(async move {
             self.text.lock().await.push_str(text);
@@ -130,12 +134,21 @@ async fn deltas_arrive_before_terminal_for_all_shapes() {
         );
         assert_eq!(*sink.text.lock().await, "hé");
         task.await.unwrap();
+        let diagnostics = sink.diagnostics.lock().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("outcome: \"ok\""));
+        assert!(diagnostics[0].contains("text_bytes: 3"));
+        assert!(diagnostics[0].contains("first_delta_ms: Some("));
     }
 }
 #[tokio::test]
 async fn partial_stream_failure_never_falls_back() {
     for (last, code) in [
         ("", "stream_incomplete"),
+        (
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "response_truncated",
+        ),
         ("data: not-json\n\n", "parse_failed"),
         (
             "data: {\"error\":{\"message\":\"secret\"}}\n\n",
@@ -156,7 +169,62 @@ async fn partial_stream_failure_never_falls_back() {
             matches!(client.stream(&[r, fallback], "hello", &*sink, CancellationToken::new()).await, Err(Error::Code(c)) if c == code)
         );
         task.await.unwrap();
+        let diagnostics = sink.diagnostics.lock().unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains(code));
+        assert!(diagnostics[0].contains("deltas: 1"));
+        assert!(!diagnostics[0].contains("fixture-only"));
     }
+}
+#[tokio::test]
+async fn native_provider_token_limits_are_not_successful_completions() {
+    for (shape, first, last) in [
+        (
+            Shape::Anthropic,
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
+        ),
+        (
+            Shape::Gemini,
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"finishReason\":\"MAX_TOKENS\"}]}\n\n",
+        ),
+    ] {
+        let sink = Arc::new(Sink::default());
+        let (r, task) = server(shape, first, last, sink.clone()).await;
+        let client = support::completion(Duration::from_secs(3), 4096).await;
+        assert!(matches!(
+            client
+                .stream(&[r], "hello", &*sink, CancellationToken::new())
+                .await,
+            Err(Error::Code("response_truncated"))
+        ));
+        task.await.unwrap();
+        assert!(sink.diagnostics.lock().unwrap()[0].contains("end_reason: \"max_tokens\""));
+    }
+}
+
+#[tokio::test]
+async fn pre_cancelled_request_has_metadata_without_contacting_provider() {
+    let sink = Sink::default();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let client = support::completion(Duration::from_secs(3), 4096).await;
+    assert!(matches!(
+        client
+            .stream(
+                &[route("http://127.0.0.1:1".into(), Shape::OpenAi)],
+                "hello",
+                &sink,
+                cancel
+            )
+            .await,
+        Err(Error::Code("cancelled"))
+    ));
+    let diagnostics = sink.diagnostics.lock().unwrap();
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics[0].contains("outcome: \"cancelled\""));
+    assert!(diagnostics[0].contains("wire_bytes: 0"));
 }
 #[tokio::test]
 async fn delivery_failure_and_cancellation_abort_generation() {

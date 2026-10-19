@@ -13,6 +13,7 @@ export class BotApiFixture {
   #nextMessageId = 1000;
   #calls = [];
   #sendMode = 'success';
+  #textMode = 'success';
   #sendGate;
   #fileIds = new Set();
   #sendCalls = 0;
@@ -35,9 +36,10 @@ export class BotApiFixture {
   commandMenus = new CommandMenus();
   beforePollAcknowledgement;
 
-  constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024 }) {
+  constructor({ mediaBytes, maxRequestBytes = 3 * 1024 * 1024, maxUploadBytes = 2 * 1024 * 1024 }) {
     this.mediaBytes = mediaBytes;
     this.maxRequestBytes = maxRequestBytes;
+    this.maxUploadBytes = maxUploadBytes;
   }
   get error() { return this.#error; }
   get calls() { return this.#calls; }
@@ -68,6 +70,7 @@ export class BotApiFixture {
     return id;
   }
   setSendMode(mode) { this.#sendMode = mode; }
+  setTextMode(mode) { assert(['success','socket-drop-once'].includes(mode)); this.#textMode = mode; }
   setEditMode(mode, textIncludes) { this.#editMode = mode; this.#editFilter = textIncludes; }
   get progressMessages() { return [...this.#messages.values()]; }
   get downloadCalls() { return this.#downloadCalls; }
@@ -123,7 +126,7 @@ export class BotApiFixture {
     this.#sendMode = 'hold';
     return () => { release(); this.#sendGate = undefined; };
   }
-  enqueue(actor, chat, text, id, language = 'en', { thread, senderChat, isBot = false, entities, viaBot, replyToBot } = {}) {
+  enqueue(actor, chat, text, id, language = 'en', { thread, senderChat, isBot = false, entities, viaBot, replyToBot, replyToMessage } = {}) {
     const message = this.#message(actor, chat, text, id, undefined, thread);
     message.from.is_bot = isBot;
     if (senderChat) message.sender_chat = senderChat;
@@ -132,6 +135,11 @@ export class BotApiFixture {
     if (replyToBot) {
       message.reply_to_message = this.#message(replyToBot, chat, 'Fixture prompt', 1, undefined, thread);
       message.reply_to_message.from.is_bot = true;
+    }
+    if (replyToMessage !== undefined) {
+      const original = this.#messages.get(`${chat}:${replyToMessage}`);
+      assert(original, 'reply target must be a confirmed fixture message');
+      message.reply_to_message = structuredClone(original);
     }
     message.from.language_code = language;
     const updateId = this.#updateId++;
@@ -260,6 +268,7 @@ export class BotApiFixture {
       if (data.reply_markup) message.reply_markup = data.reply_markup;
       this.#messages.set(`${message.chat.id}:${message.message_id}`, message);
       this.#calls.push({ method, data, messageId: message.message_id });
+      if (this.#textMode === 'socket-drop-once') { this.#textMode = 'success'; res.destroy(); return; }
       res.end(JSON.stringify({ ok: true, result: message }));
     } else if (method === 'sendmessagedraft' || method === 'sendchataction') {
       const data = JSON.parse(body.toString('utf8'));
@@ -384,7 +393,7 @@ export class BotApiFixture {
     let cachedFileId;
     if (filePart) {
       this.#uploadCalls++;
-      assert(filePart.value.length > 0 && filePart.value.length <= 2 * 1024 * 1024, 'uploaded media must stay within fixture bounds');
+      assert(filePart.value.length > 0 && filePart.value.length <= this.maxUploadBytes, 'uploaded media must stay within fixture bounds');
       const contract = this.#expectedUpload;
       if (contract) assert.equal(method, contract.method, 'upload must use the scenario expected Telegram method');
       const filename = filePart.headers.match(/filename="([^"]+)"/)?.[1];

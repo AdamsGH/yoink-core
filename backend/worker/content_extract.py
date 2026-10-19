@@ -14,6 +14,8 @@ from youtube_captions import caption_tracks
 
 
 class HTMLText(HTMLParser):
+    BLOCKS = frozenset(('article', 'main', 'section', 'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'blockquote', 'li', 'tr', 'dl', 'dt', 'dd'))
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.stack = []
@@ -22,41 +24,58 @@ class HTMLText(HTMLParser):
         self.title = []
 
     def handle_starttag(self, tag, attrs):
+        if tag in self.BLOCKS or tag in ('br', 'hr'):
+            self._break()
         if tag not in ('br', 'hr', 'img', 'meta', 'link', 'input', 'source', 'wbr', 'area', 'base', 'embed', 'param', 'track', 'col'):
             self.stack.append(tag)
 
     def handle_endtag(self, tag):
+        if tag in self.BLOCKS:
+            self._break()
         if tag in self.stack:
             self.stack = self.stack[:len(self.stack) - 1 - self.stack[::-1].index(tag)]
 
     def handle_data(self, data):
         if 'title' in self.stack:
             self.title.append(data.strip())
-        if any(t in self.stack for t in ('script', 'style', 'nav', 'header', 'footer', 'aside', 'form', 'iframe', 'head')):
+        if any(t in self.stack for t in ('script', 'style', 'nav', 'footer', 'aside', 'form', 'iframe', 'head')):
             return
-        if data.strip():
-            self.all.append(data.strip())
-            if 'main' in self.stack or 'article' in self.stack:
-                self.main.append(data.strip())
+        in_main = 'main' in self.stack or 'article' in self.stack
+        if 'header' in self.stack and not in_main:
+            return
+        if 'pre' not in self.stack:
+            data = re.sub(r'\s+', ' ', data)
+        self.all.append(data)
+        if in_main:
+            self.main.append(data)
+
+    def _break(self):
+        self.all.append('\n\n')
+        if 'main' in self.stack or 'article' in self.stack:
+            self.main.append('\n\n')
+
+    def text(self, main=False):
+        return re.sub(r'\n{3,}', '\n\n', ''.join(self.main if main else self.all)).strip()
 
 
 def html_extract(html, url):
     parser = HTMLText()
     parser.feed(html)
     title = ' '.join(parser.title) or None
+    # Readability can mistake a landing page's code sample for its whole article.
+    if parser.text(main=True):
+        return parser.text(main=True), title, 'html-main'
     # Optional high-quality legacy extractors, all purely local.
     try:
         from readability import Document
         doc = Document(html, url=url)
         summary = HTMLText()
         summary.feed(doc.summary())
-        text = '\n'.join(summary.all)
+        text = summary.text()
         if len(text) > 200:
             return text, doc.title() or title, 'readability'
     except Exception:
         pass
-    if parser.main:
-        return '\n'.join(parser.main), title, 'html-main'
     try:
         import trafilatura
         text = trafilatura.extract(html, include_comments=False, include_tables=True)
@@ -64,7 +83,7 @@ def html_extract(html, url):
             return text, title, 'trafilatura'
     except Exception:
         pass
-    return '\n'.join(parser.all), title, 'raw-html'
+    return parser.text(), title, 'raw-html'
 
 
 def optional(call):
@@ -240,7 +259,7 @@ def web_fetch(transport, url, token):
         if llms:
             for link in re.findall(r'\[[^\]]+\]\((https?://[^)]+)\)', llms):
                 lp = urlsplit(link)
-                if lp.path.rstrip('/').removesuffix('/index.md').removesuffix('.md') == p.path.rstrip('/'):
+                if (lp.scheme, lp.netloc.lower()) == (p.scheme, p.netloc.lower()) and lp.path.rstrip('/').removesuffix('/index.md').removesuffix('.md') == p.path.rstrip('/'):
                     matched = link
                     break
     html = optional(lambda: transport.get(matched or url))

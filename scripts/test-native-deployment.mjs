@@ -9,7 +9,7 @@ test('default and rollback Compose select exclusive runtimes and confined native
   const root = mkdtempSync(join(tmpdir(), 'yoink-deployment-'));
   try {
     for (const file of ['docker-compose.yaml', 'docker-compose.legacy.yaml']) copyFileSync(file, join(root, file));
-    writeFileSync(join(root, '.env'), 'bot_token=123:fixture\nowner_id=42\napi_secret_key=fixture-secret\nyoink_domain=fixture.invalid\napi_id=123\napi_hash=fixture\n');
+    writeFileSync(join(root, '.env'), 'yoink_rust_image=yoink/rust-backend:0.1.0\nbot_token=123:fixture\nowner_id=42\napi_secret_key=fixture-secret\nyoink_domain=fixture.invalid\napi_id=123\napi_hash=fixture\n');
     const read = legacy => {
       const args = ['compose', '--project-directory', root, '-f', join(root, 'docker-compose.yaml')];
       if (legacy) args.push('-f', join(root, 'docker-compose.legacy.yaml'));
@@ -19,18 +19,25 @@ test('default and rollback Compose select exclusive runtimes and confined native
       return JSON.parse(result.stdout);
     };
     const native = read(false).services;
-    assert.equal(native.yoink.image, 'yoink/rust-backend:latest');
-    assert.equal(native.yoink.build.target, 'runtime');
+    assert.equal(native.yoink.image, 'yoink/rust-backend:0.1.0');
+    assert.equal(native.yoink.build, undefined);
     assert.equal(native.yoink.user, '10001:10001');
     assert.equal(native.yoink.environment.YOINK_RUST_BOT_API_FILE_ROOT, '/var/lib/telegram-bot-api');
     assert.equal(native.yoink.environment.YOINK_RUST_TELEGRAM_LOCAL_FILE_ROOT, '/telegram-files');
     assert(native.yoink.volumes.some(v => v.target === '/telegram-files' && v.read_only));
     assert(!native.yoink.volumes.some(v => v.target.startsWith('/app')));
     assert.equal(native['yoink-arq-worker'], undefined);
+    for (const service of ['yoink-postgres', 'yoink-redis', 'yoink-youtubei', 'bgutil', 'native-youtube-auth-init']) assert.equal(native[service], undefined);
+    assert.deepEqual(Object.keys(native).sort(), ['native-youtube-auth-gateway', 'tg-bot-api', 'yoink', 'yoink-frontend', 'yoink-nginx', 'yoink-proxy']);
     const gateway = native['native-youtube-auth-gateway'];
-    for (const service of ['yoink-youtubei', 'bgutil']) assert.equal(gateway.depends_on[service].condition, 'service_healthy');
-    assert.equal(gateway.pids_limit, 32);
-    assert.equal(Number(gateway.mem_limit), 134217728);
+    assert.deepEqual(Object.keys(gateway.depends_on), ['yoink-proxy']);
+    assert.equal(gateway.image, 'yoink/youtube-services:0.1.0');
+    assert.equal(gateway.build, undefined);
+    assert.equal(gateway.user, '10001:10001');
+    assert.equal(gateway.init, true);
+    assert.equal(gateway.read_only, true);
+    assert.equal(gateway.pids_limit, 192);
+    assert.equal(Number(gateway.mem_limit), 1610612736);
     assert.equal(gateway.ports, undefined);
     const rollback = read(true).services;
     assert.equal(rollback.yoink.image, 'yoink/yoink:latest');
@@ -38,6 +45,8 @@ test('default and rollback Compose select exclusive runtimes and confined native
     assert.equal(rollback.yoink.build.target, undefined);
     assert(!rollback.yoink.volumes.some(v => v.target === '/state'));
     assert(!rollback['yoink-arq-worker'].profiles?.length);
+    for (const service of ['yoink-postgres', 'yoink-redis', 'bgutil', 'yoink-youtubei']) assert(rollback[service]);
+    assert.equal(rollback['native-youtube-auth-gateway'], undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

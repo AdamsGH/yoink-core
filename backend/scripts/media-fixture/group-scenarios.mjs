@@ -67,7 +67,8 @@ export async function runGroupScenarios(context) {
     assert.equal(request.actor_id, user);
     assert.equal(request.target.chat_id, group);
     assert.equal(request.target.thread_id, 18);
-    const notice = sends().find(call => call.data.text.includes(first.operationId));
+    const noticeId = Number(await fixtureSql(`SELECT message_id FROM runtime_progress_notices WHERE operation_id='${first.operationId}'`));
+    const notice = sends().find(call => call.messageId === noticeId);
     assert.equal(notice.data.message_thread_id, 18);
     assert((await edits(first.operationId)).every(call => Number(call.data.chat_id) === group && call.data.message_id === notice.messageId));
     const mediaCount = botApi.sendCalls;

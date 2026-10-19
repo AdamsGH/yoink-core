@@ -51,3 +51,6 @@ const server = http.createServer(async (req, res) => {
 });
 server.requestTimeout = 300_000;
 server.listen(socket, () => chmodSync(socket, 0o600));
+const drain = () => { server.close(); server.closeIdleConnections(); };
+process.once('SIGTERM', drain);
+process.once('SIGINT', drain);

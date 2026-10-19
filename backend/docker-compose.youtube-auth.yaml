@@ -1,4 +1,4 @@
-# Experimental standalone operator topology. Not an override of production compose.
+# Isolated protocol fixture. Production packages these processes in one container.
 # Run from repo root with -f backend/docker-compose.youtube-auth.yaml.
 name: yoink-youtube-auth
 x-bounded: &bounded
@@ -17,7 +17,8 @@ services:
     user: "0:0"
     cap_add: [CHOWN, FOWNER]
     network_mode: none
-    command: [sh, -ec, 'chown 10001:10001 /socket; chmod 0700 /socket']
+    entrypoint: [sh, -ec]
+    command: ['chown 10001:10001 /socket; chmod 0700 /socket']
     volumes: [auth-socket:/socket]
     mem_limit: 64m
     cpus: 0.25
@@ -29,6 +30,10 @@ services:
       dockerfile: backend/Dockerfile.youtube-auth-gateway
     image: yoink-youtube-auth-gateway:review
     user: "10001:10001"
+    entrypoint: [node]
+    command: [--import, /opt/limits.mjs, /opt/adapter.mjs]
+    healthcheck:
+      disable: true
     depends_on:
       socket-init: {condition: service_completed_successfully}
       youtubei: {condition: service_started}

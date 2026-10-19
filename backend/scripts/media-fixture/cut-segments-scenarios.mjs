@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { withRussianPreference } from './language-fixture.mjs';
 
 const lit = value => value === null ? 'NULL' : typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
@@ -59,8 +59,7 @@ export async function runCutSegmentsScenarios(context) {
     return raw ? JSON.parse(raw) : null;
   }
   async function admit(from) {
-    const reply = await waitFor(() => botApi.calls.slice(from).find(c => c.method === 'sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text)), 'multi-cut operation admission');
-    return reply.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)[0];
+    return (await admissionNotice(context, from, { session: 'cut' })).operationId;
   }
   async function addSegment(origin, start, end) {
     const add = await callback(button(origin, 'cut:add:'), origin);

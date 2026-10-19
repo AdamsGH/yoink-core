@@ -363,7 +363,16 @@ class StructuralFallbackTests(unittest.TestCase):
         public = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('8.8.8.8', 443))
         private = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', 443))
         with network_guard.guard_context(()):
-            for answers in ([], [public, private], [(None,)]):
+            with mock.patch.object(network_guard, '_ORIGINAL_GETADDRINFO', return_value=[]):
+                baseline = network_guard.guard_failure_count()
+                for call in (lambda: network_guard.guarded_getaddrinfo('provider.example', 443),
+                             lambda: proxy_tunnel._resolve_pinned('provider.example', 443)):
+                    with self.assertRaises(network_guard.NetworkResolutionError) as unavailable:
+                        call()
+                    self.assertTrue(unavailable.exception.fallback_forbidden)
+                    self.assertEqual(unavailable.exception.failure_class, 'source_unavailable')
+                    self.assertEqual(network_guard.guard_failure_count(), baseline)
+            for answers in ([public, private], [(None,)]):
                 with mock.patch.object(network_guard, '_ORIGINAL_GETADDRINFO', return_value=answers):
                     baseline = network_guard.guard_failure_count()
                     with self.assertRaises(network_guard.NetworkPolicyError) as denied:

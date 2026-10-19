@@ -59,6 +59,7 @@ fn context<'a>(
         domain,
         no_cookie_domains: &[],
         identity,
+        system_proxy_domains: &[],
         system_proxy: None,
     }
 }
@@ -113,6 +114,7 @@ async fn disk_profile_preferences_and_frozen_cookie_credentials() {
                 domain: "sub.example.com",
                 no_cookie_domains: &no_cookie_domains,
                 identity: &actor,
+                system_proxy_domains: &[],
                 system_proxy: None,
             },
             0,

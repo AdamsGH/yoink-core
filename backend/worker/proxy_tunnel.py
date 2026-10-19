@@ -29,7 +29,7 @@ def _resolve_pinned(host: str, port: int, *, proxy: bool = False) -> tuple[str, 
     else:
         answers = network_guard.resolve_addresses(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         if not answers:
-            raise network_guard.NetworkPolicyError("network destination is not permitted")
+            raise network_guard.NetworkResolutionError("network destination resolution failed")
         addresses = []
         for answer in answers:
             try:

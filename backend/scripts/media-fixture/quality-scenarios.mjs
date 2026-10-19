@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { withRussianPreference } from './language-fixture.mjs';
 
 const options = ['best', '2160', '1440', '1080', '720', '480', '360', '240', '144'];
@@ -42,8 +42,7 @@ export async function runQualityScenarios(context) {
     return { start, ack };
   }
   async function admission(from) {
-    const reply = await waitFor(() => botApi.calls.slice(from).find(c => c.method === 'sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text)), 'quality operation admission');
-    return reply.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)[0];
+    return (await admissionNotice(context, from, { session: 'quality' })).operationId;
   }
   async function session() {
     return JSON.parse(await fixtureSql("SELECT json_object('id',id,'revision',revision,'stage',stage,'origin_message_id',origin_message_id,'last_message_id',last_message_id,'request_json',request_json,'selected',selected,'operation_id',operation_id) FROM runtime_quality_sessions WHERE actor_id=42 AND bot_id=123456 AND chat_id=42"));
@@ -124,7 +123,7 @@ export async function runQualityScenarios(context) {
     const upload = botApi.calls.slice(click.start).find(c => c.method === 'senddocument');
     assert.equal(upload.reply_to_message_id, draft.id,
       'delivery must reply to original Telegram request');
-    const noticeMessage = botApi.calls.slice(click.start).find(c => c.method === 'sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text)).messageId;
+    const noticeMessage = (await admissionNotice(context, click.start)).reply.messageId;
     assert.equal(await fixtureSql(`SELECT message_id FROM runtime_progress_notices WHERE operation_id='${operationId}'`), String(noticeMessage),
       'admission response must be registered as the operation progress message');
     await h.inspectUpload('quality-picked document', { video: true, audio: true, height: 120, durationMin: 0.35, durationMax: 0.8 });

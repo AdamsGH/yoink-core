@@ -11,8 +11,13 @@ integer('GATEWAY_MAX_QUEUE', 0, 0, 0);
 const deadline = integer('GATEWAY_DEADLINE_MS', 250000, 10, 270000);
 const createServer = http.createServer;
 http.createServer = function (listener) {
-  let active = 0;
+  let active = 0, poisoned = 0;
   return createServer.call(http, async (req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      req.resume();
+      res.writeHead(poisoned < limit ? 200 : 503).end();
+      return;
+    }
     if (active >= limit) { res.writeHead(503).end(); return; }
     active++;
     const timer = setTimeout(() => { req.destroy(); res.destroy(); }, deadline);
@@ -23,7 +28,8 @@ http.createServer = function (listener) {
       // lost PoToken response therefore poisons this admission slot until the
       // operator restarts BOTH gateway and bgutil; do not stack uncertain jobs.
       const uncertainPot = res[Symbol.for('yoink.youtube_auth.pot_dispatched')] && (!res.writableFinished || res.statusCode !== 200);
-      if (!uncertainPot) active--;
+      if (uncertainPot) poisoned++;
+      else active--;
     }
   });
 };

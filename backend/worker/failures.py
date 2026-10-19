@@ -32,6 +32,8 @@ def classify_error(exc: BaseException) -> str:
     messages = " ".join(str(item).lower() for item in chain)
     if any("limit" in type(item).__name__.lower() for item in chain) or "budget" in messages or "too large" in messages or "resource limit" in messages:
         return "resource_limit"
+    if "network destination resolution failed" in messages:
+        return "source_unavailable"
     if "network destination" in messages or "source address is not permitted" in messages:
         return "network_denied"
     for category, hints in (

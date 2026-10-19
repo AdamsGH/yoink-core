@@ -53,6 +53,15 @@ pub(super) struct Draft<'a> {
     pub(super) state: tokio::sync::Mutex<State>,
 }
 impl Draft<'_> {
+    pub(super) fn record(&self, stage: &str, details: serde_json::Value) {
+        super::diagnostics::record(
+            self.id,
+            self.identity.chat,
+            self.identity.message,
+            stage,
+            details,
+        );
+    }
     pub(super) async fn flush(&self, complete: bool) -> Result<(), Error> {
         self.flush_status(complete, false).await
     }
@@ -74,7 +83,7 @@ impl Draft<'_> {
         let body = if complete || failed || !s.text.is_empty() {
             s.text.clone()
         } else {
-            format!("{}\n/cancel {}", phase_text(s.phase, self.russian), self.id)
+            pending_text(s.phase, self.russian)
         };
         let rendered = FormattedText::markdown(source, &body)
             .map_err(|_| Error::Code("response_too_large"))?;
@@ -100,7 +109,7 @@ impl Draft<'_> {
                 .pages(4000)
                 .pop()
                 .ok_or(Error::Code("empty_content"))?;
-            match self
+            let outcome = self
                 .runtime
                 .delivery
                 .preview_transport()
@@ -110,8 +119,9 @@ impl Draft<'_> {
                     self.identity.message,
                     &page,
                 )
-                .await
-            {
+                .await;
+            self.record("preview", serde_json::json!({"outcome":format!("{:?}",outcome.outcome),"text_bytes":page.text().len(),"reason":outcome.reason,"http_status":outcome.http_status,"api_error_code":outcome.api_error_code}));
+            match outcome.outcome {
                 DraftOutcome::Unsupported => s.drafts = false,
                 DraftOutcome::Sent | DraftOutcome::Unavailable => {
                     s.previewed_bytes = s.text.len();
@@ -179,6 +189,7 @@ impl Draft<'_> {
                 i.edit = true;
             }
             let token = format!("{}:{index}:{}", self.base, s.revision);
+            self.record("sending", serde_json::json!({"part":index,"final":complete || failed,"text_bytes":chunk.text().len(),"edit":i.edit}));
             let outcome = self
                 .runtime
                 .delivery
@@ -188,6 +199,7 @@ impl Draft<'_> {
             s.revision += 1;
             match outcome {
                 TextOutcome::Confirmed(receipt) => {
+                    self.record("delivered", serde_json::json!({"part":index,"final":complete || failed,"receipt":receipt,"text_bytes":chunk.text().len()}));
                     if private_final {
                         final_receipts.push((receipt, signature));
                     } else if index < s.sent.len() {
@@ -197,6 +209,10 @@ impl Draft<'_> {
                     }
                 }
                 _ => {
+                    self.record(
+                        "delivery_unconfirmed",
+                        serde_json::json!({"part":index,"final":complete || failed}),
+                    );
                     self.cancel.cancel();
                     return Err(Error::Code("outbound_unknown"));
                 }
@@ -265,6 +281,17 @@ impl Draft<'_> {
     }
 }
 impl DeltaSink for Draft<'_> {
+    fn diagnostic(&self, event: &yoink_insight::provider::StreamDiagnostic<'_>) {
+        self.record(
+            "provider",
+            serde_json::json!({
+                "attempt":event.attempt,"shape":format!("{:?}",event.shape),"route":event.route,
+            "outcome":event.outcome,"end_reason":event.end_reason,"http_status":event.http_status,"wire_bytes":event.wire_bytes,
+                "text_bytes":event.text_bytes,"deltas":event.deltas,"elapsed_ms":event.elapsed_ms,
+                "first_delta_ms":event.first_delta_ms,
+            }),
+        );
+    }
     fn delta<'a>(&'a self, text: &'a str) -> FutureResult<'a, ()> {
         Box::pin(async move {
             self.runtime
@@ -297,6 +324,7 @@ impl DeltaSink for Draft<'_> {
             s.phase = Some(phase);
             s.source = source.into();
             s.alias = alias.map(str::to_owned);
+            self.record("phase", serde_json::json!({"phase":format!("{phase:?}")}));
             drop(s);
             if phase != Phase::Cached {
                 self.flush(false).await?;
@@ -317,6 +345,10 @@ fn header(command: &str, alias: Option<&str>, russian: bool) -> &'static str {
         (_, _, false) => "🔗 Summary",
     }
 }
+fn pending_text(phase: Option<Phase>, russian: bool) -> String {
+    format!("{}\n/cancel", phase_text(phase, russian))
+}
+
 fn phase_text(phase: Option<Phase>, russian: bool) -> &'static str {
     match (phase, russian) {
         (Some(Phase::Fetching), true) => "Получаю содержимое источника.",
@@ -327,5 +359,26 @@ fn phase_text(phase: Option<Phase>, russian: bool) -> &'static str {
         (Some(Phase::Generating), false) => "Generating the response.",
         (_, true) => "Обрабатываю запрос.",
         (_, false) => "Processing the request.",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_notices_use_cancellation_without_internal_ids() {
+        for phase in [
+            None,
+            Some(Phase::Fetching),
+            Some(Phase::Researching),
+            Some(Phase::Generating),
+        ] {
+            for russian in [false, true] {
+                let text = pending_text(phase, russian);
+                assert_eq!(text.lines().last(), Some("/cancel"));
+                assert_eq!(text.lines().count(), 2);
+            }
+        }
     }
 }

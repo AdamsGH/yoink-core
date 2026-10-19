@@ -57,6 +57,7 @@ pub struct TelegramConfig {
 
 #[derive(Debug)]
 pub struct Config {
+    pub release_version: String,
     pub music: Option<crate::product_config::MusicConfig>,
     pub stats: Option<crate::product_config::StatsConfig>,
     pub insight: Option<crate::insight_config::InsightConfig>,
@@ -113,6 +114,19 @@ impl Config {
             ));
         }
         let mut read = |key: &str| lookup(&format!("{PREFIX}{key}"));
+        let release_version =
+            read("RELEASE_VERSION")?.unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
+        if release_version.is_empty()
+            || release_version.len() > 128
+            || !release_version
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        {
+            return Err(invalid(
+                "RELEASE_VERSION",
+                "expected a release version label",
+            ));
+        }
         let http_bind = read("HTTP_BIND")?
             .unwrap_or_else(|| "127.0.0.1:8088".into())
             .parse()
@@ -414,6 +428,7 @@ impl Config {
             telegram.is_some(),
         )?;
         Ok(Self {
+            release_version,
             music,
             stats,
             insight,
@@ -477,9 +492,23 @@ mod tests {
     #[test]
     fn defaults_are_local_and_offline() {
         let config = config(&[]).unwrap();
+        assert_eq!(config.release_version, env!("CARGO_PKG_VERSION"));
         assert!(config.http_bind.ip().is_loopback());
         assert!(config.telegram.is_none());
         assert_eq!(config.shutdown_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn release_metadata_does_not_require_a_different_cargo_package_version() {
+        assert_eq!(
+            config(&[("YOINK_RUST_RELEASE_VERSION", "2.3.4")])
+                .unwrap()
+                .release_version,
+            "2.3.4"
+        );
+        for value in ["", "2.3.4\n", "<invalid>"] {
+            assert!(config(&[("YOINK_RUST_RELEASE_VERSION", value)]).is_err());
+        }
     }
 
     #[test]

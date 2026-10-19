@@ -6,6 +6,24 @@ use yoink_storage::OperationRecord;
 use crate::{DownloadError, DownloadService, map_store};
 
 impl DownloadService {
+    pub async fn operation_by_reply(
+        &self,
+        actor_id: u64,
+        current: DeliveryTarget,
+        message_id: i32,
+    ) -> Result<Option<OperationRecord>, DownloadError> {
+        self.authorize_chat(actor_id, current).await?;
+        let id = self
+            .store
+            .operation_by_reply(actor_id, current.bot_id(), current.chat_id(), message_id)
+            .await
+            .map_err(map_store)?;
+        match id {
+            Some(id) => self.status_in_chat(actor_id, id, current).await,
+            None => Ok(None),
+        }
+    }
+
     /// Applies to admission, execution, delivery and progress, including persisted jobs.
     pub fn with_group_access(mut self, enabled: bool) -> Self {
         self.groups_enabled = enabled;

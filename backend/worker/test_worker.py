@@ -29,6 +29,18 @@ class GuardTests(unittest.TestCase):
         network_guard._ALLOWED_ORIGINS = self.previous
         socket.getaddrinfo = network_guard._ORIGINAL_GETADDRINFO
 
+    def test_dns_failure_is_unavailable_not_policy_denial(self):
+        before = network_guard.guard_failure_count()
+        for error in (socket.gaierror(socket.EAI_NONAME, "not found"), TimeoutError("DNS timed out")):
+            with self.subTest(error=type(error).__name__), mock.patch.object(
+                network_guard, "_ORIGINAL_GETADDRINFO", side_effect=error,
+            ):
+                with self.assertRaises(network_guard.NetworkResolutionError) as caught:
+                    network_guard.validate_source_url("https://www.youtube.com/", ())
+                self.assertEqual(main._classify_error(caught.exception), "source_unavailable")
+                self.assertEqual(network_guard.guard_failure_count(), before)
+                self.assertTrue(caught.exception.fallback_forbidden)
+
     def test_filters_private_mixed_dns_and_all_sensitive_addresses(self):
         network_guard.install_guard(())
         public = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 80))
@@ -91,6 +103,7 @@ class ProtocolAndSettingsTests(unittest.TestCase):
             ("ffmpeg exited with code 146", "media_timeout"),
             ("Read timed out", "media_timeout"),
             ("network destination is not permitted", "network_denied"),
+            ("network destination resolution failed", "source_unavailable"),
         ):
             with self.subTest(expected=expected):
                 self.assertEqual(main._classify_error(DownloadError(message)), expected)

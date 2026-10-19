@@ -1,18 +1,5 @@
-Summarise the material into a tight, specific bullet list of at most 12
-items. Preserve the difference between what the source claims, what it
-demonstrates, and what remains unsupported.
+Give a concise, specific account of what matters in the material. Lead with its main point and practical significance, then explain the important reasoning, qualifications and consequences in short connected paragraphs. Do not mechanically enumerate every detail or recap the document's structure.
 
-Rules:
-- Each bullet must carry a concrete fact, claim, code reference, or
-  recommendation. Skip filler such as "the post discusses X".
-- Attribute disputed, evaluative, or weakly supported statements to the
-  source. Do not turn an author's assertion into an established fact.
-- Preserve names, versions, model identifiers, paths, error tokens, and
-  numbers verbatim.
-- Lead with the most important point, then descend by relevance.
-- Do not recap the source structure. State the actual point.
-- Call out contradictions, missing evidence, incomparable benchmarks,
-  conflicts of interest, and marketing claims when the supplied material
-  supports that judgment. Never invent an affiliation or motive.
-- No preamble, closing summary, or sign-off. Output only the bullets.
-- Reply in {lang}.
+For a product page, explain what the product is, what problem it addresses and what its stated capabilities and limitations mean in practice. Treat a code sample as an example, not as the entire product. Preserve names, versions, identifiers, numbers and code tokens. Attribute disputed or evaluative claims to the source. Mention missing evidence only when it materially affects a conclusion; do not append a disclaimer to ordinary descriptions.
+
+If the user asks a specific question, answer that question directly instead of summarizing the whole source. Respect the requested length, audience and format. Use paragraphs by default and lists only when requested or necessary for an actual set of steps. Use Markdown emphasis and inline code sparingly; no LaTeX. No generic preamble, sign-off or manufactured conclusion. Reply in {lang}.

@@ -10,6 +10,8 @@ import { isoBmffMdatPayloads } from './media-fixture/media-format.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { BotApiFixture } from './media-fixture/bot-api.mjs';
 import { runCommandMediaScenarios } from './media-fixture/command-scenarios.mjs';
+import { admissionNotice } from './media-fixture/command-harness.mjs';
+import { liveYoutubeConfiguration, runLiveYoutubeScenario } from './media-fixture/live-youtube.mjs';
 import { runPreferenceScenarios } from './media-fixture/preference-scenarios.mjs';
 import { runBatchScenarios } from './media-fixture/batch-scenarios.mjs';
 import { runProgressScenarios } from './media-fixture/progress-scenarios.mjs';
@@ -62,7 +64,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['native-products', 'all', 'admission', 'delivery', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [native-products|all|admission|delivery|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['live-youtube', 'native-products', 'all', 'admission', 'delivery', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [live-youtube|native-products|all|admission|delivery|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const selectedImages = configuredImages(process.env, {
   image: scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend:experimental',
   fixtureImage: scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend-fixture:experimental',
@@ -87,6 +89,7 @@ const cookieFileDir = path.join(tempRoot, 'cookie-files');
 const containers = new Set();
 const children = new Set();
 const userSessionTokens = new Set();
+let liveYoutube = { args: [] };
 const maxLog = 24 * 1024;
 let interrupted = false;
 let mediaBytes;
@@ -117,7 +120,7 @@ let nativeProductsEnabled = false;
 let userSessionFixture;
 const processRunner = createProcessRunner({ cwd: workspace, children, maxOutput: maxLog });
 const { capture: spawnCapture, docker } = processRunner;
-const containerLifecycle = createContainerLifecycle({ docker, capture: spawnCapture, containers, assert, runId });
+const containerLifecycle = createContainerLifecycle({ docker, capture: spawnCapture, containers, assert, runId, maxInput: scenario === 'live-youtube' ? 64 * 1024 * 1024 : 1024 * 1024 });
 const { startContainer } = containerLifecycle;
 // Explicit test-driver-only opt-in: existing images, current fixture executable and worker source.
 // This never changes production configuration or worker strategy selection.
@@ -130,7 +133,7 @@ const providerSourceArgs = localProviderSources ? [
   '--mount', `type=bind,source=${path.join(workspace, 'worker')},target=/opt/yoink-worker,readonly`,
 ] : [];
 const providerHelperLimits = scenario === 'provider-routing' ? ['--cpus','2','--memory','512m','--pids-limit','128'] : [];
-const helperContainer = (args, timeout, input) => containerLifecycle.helperContainer([...providerHelperLimits, ...providerSourceArgs, ...args], timeout, input);
+const helperContainer = (args, timeout, input, options) => containerLifecycle.helperContainer([...providerHelperLimits, ...providerSourceArgs, ...args], timeout, input, options);
 const nativeDb = createNativeDbClient({ getAppContainerId: () => appContainerId, getFixturePort: () => fixturePort, fixtureToken, volumeName, fixtureImage, helperContainer });
 const { query: nativeQuery, batch: nativeBatch } = nativeDb;
 async function cleanup() {
@@ -280,6 +283,7 @@ async function launchApp() {
     ...(youtubeAuthLimits ? ['--env',`YOINK_RUST_DOWNLOAD_MAX_BYTES=${youtubeAuthLimits.maxBytes}`, '--env',`YOINK_RUST_DOWNLOAD_MAX_ITEMS=${youtubeAuthLimits.maxItems}`] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
     ...(cacheTtlSeconds===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_CACHE_TTL_SECS=${cacheTtlSeconds}`]),
+    ...liveYoutube.args,
     '--entrypoint','yoink-fixture-server',fixtureImage]);
   await waitFor(async () => {
     try { return (await nativeQuery('SELECT 1')).trim() === '1'; }
@@ -340,10 +344,7 @@ async function restartInlineAppGracefully() {
   await launchApp();
 }
 async function operationForReply(fromIndex) {
-  return await waitFor(() => {
-    const reply=botApi.calls.slice(fromIndex).find(call=>call.method==='sendmessage'&&/[0-9a-f]{8}-[0-9a-f-]{27}/i.test(call.data.text));
-    return reply?.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0];
-  },'operation admission reply');
+  return (await admissionNotice({ botApi, fixtureSql, waitFor }, fromIndex)).operationId;
 }
 async function seedDatabase() {
   await docker(['volume','create',volumeName]);
@@ -368,6 +369,12 @@ async function seedFixtureRows() {
 }
 
 try {
+  if (scenario === 'live-youtube') {
+    liveYoutube = await liveYoutubeConfiguration(docker, value => userSessionTokens.add(value));
+    downloadTimeoutSeconds = 180;
+    workerSocketTimeoutSeconds = 15;
+    downloadMaxAttempts = 1;
+  }
   if (selectedImages.immutable) await fingerprintImages(docker, selectedImages);
   await mkdir(fixtureDir); await chmod(fixtureDir,0o777);
 await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 });
@@ -391,7 +398,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     '-hide_banner','-loglevel','error','-i','/fixture/sample.mp4','-frames:v','1','/fixture/image.png'],15000);
   const playlistMedia = [mediaBytes, await readFile(path.join(fixtureDir,'red.mp4'))];
   const imageBytes = await readFile(path.join(fixtureDir,'image.png'));
-  botApi=new BotApiFixture({mediaBytes}); apiPort=await botApi.start();
+  botApi=new BotApiFixture({mediaBytes, ...(scenario === 'live-youtube' ? { maxRequestBytes: 65 * 1024 * 1024, maxUploadBytes: 64 * 1024 * 1024 } : {})}); apiPort=await botApi.start();
   sourceFixture=new SourceHttpFixture({mediaBytes,cookieSecret,playlistMedia,imageBytes}); sourcePort=await sourceFixture.start();
   if (scenario === 'all' || scenario === 'adaptive') sourceFixture.adaptiveSource = await createAdaptiveSource({ fixtureDir, helperContainer, image });
   if (scenario === 'all' || scenario === 'formats') sourceFixture.formatSource = new FormatSource(cookieSecret);
@@ -414,8 +421,8 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     await waitFor(() => botApi.calls.some(call => call.method === 'sendmessage'), 'download admission reply');
     const admissionCall = botApi.calls.find(call => call.method === 'sendmessage');
     assert.equal(admissionCall.data.chat_id, 42);
-    const operationId = admissionCall.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0];
-    assert.ok(operationId, 'admission reply must contain its operation UUID');
+    const operationId = await waitFor(() => queryByMessage(replayMessageId), 'persisted admission');
+    assert(!admissionCall.data.text.includes(operationId), 'admission reply must not display its operation UUID');
 
     const succeeded = await waitFor(async () => {
       const row = await queryJob(operationId);
@@ -431,18 +438,18 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     const originalMediaSendCount = botApi.calls.filter(call => call.method === 'sendvideo' || call.method === 'senddocument').length;
     const replayCallStart = botApi.calls.length;
     botApi.enqueue(42, 42, `/download ${sourceUrl}`, replayMessageId);
-    botApi.enqueue(42, 42, `/job ${operationId}`);
+    botApi.enqueue(42, 42, '/job', undefined, 'en', { replyToMessage: admissionCall.messageId });
     botApi.enqueue(43, 43, `/job ${operationId}`);
     botApi.enqueue(42, -10042, `/download ${sourceUrl}`);
     botApi.enqueue(42, 42, `/cancel ${operationId}`);
     await waitFor(() => botApi.calls.slice(replayCallStart).some(call =>
-      call.method === 'sendmessage' && call.data.text.includes(operationId)), 'new existing-operation replay reply');
+      call.method === 'sendmessage' && call.data.text.trim() === 'This download was already submitted.'), 'new existing-operation replay reply');
     await waitFor(() => botApi.calls.slice(replayCallStart).filter(call => call.method === 'sendmessage').length >= 3, 'job and denial replies');
     assert.equal(botApi.calls.filter(call => call.method === 'sendvideo' || call.method === 'senddocument').length, originalMediaSendCount,
       'replayed admission and status/cancel/group commands must not redeliver media');
     assert.equal(sourceFixture.mediaRequests, initialSourceRequests, 'replayed update must not execute another download');
     const replies = botApi.calls.filter(call => call.method === 'sendmessage').map(call => call.data.text);
-    assert(replies.some(text => text.includes(operationId) && text.includes('succeeded')), 'owner /job must return the succeeded operation status');
+    assert(replies.some(text => !text.includes(operationId) && text.startsWith('Done.')), 'reply-based /job must return the completed download status without its UUID');
     const foreignStatus = await waitFor(() => botApi.calls.slice(replayCallStart).find(call =>
       call.method === 'sendmessage' && Number(call.data.chat_id) === 43), 'ordinary-user foreign-operation denial');
     assert.equal(foreignStatus.data.text, 'Operation not found.', 'ordinary users cannot inspect another actor\'s operation');
@@ -460,7 +467,8 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     await waitFor(() => sourceFixture.slowResponses.size > 0, 'active slow worker request');
     assert((await queryJob(cancelId)).startsWith('running|'), 'operation must be durably running before cancellation');
     const cancelReplyStart = botApi.calls.length;
-    botApi.enqueue(42, 42, `/cancel ${cancelId}`);
+    const cancelNotice = Number(await fixtureSql(`SELECT message_id FROM runtime_progress_notices WHERE operation_id='${cancelId}'`));
+    botApi.enqueue(42, 42, '/cancel', undefined, 'en', { replyToMessage: cancelNotice });
     await waitFor(async () => (await queryJob(cancelId)).startsWith('cancelled|'), 'cancelled active operation');
     await assertWorkspaceClean();
     assert.equal(botApi.sendCalls, beforeCancelMediaSends, 'cancelled download must not upload');
@@ -523,7 +531,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     await waitFor(async () => (await queryJob(deliveryUnknownId)).startsWith('delivery_unknown|'), 'ambiguous delivery status');
     const warningStart = botApi.calls.length;
     botApi.enqueue(42, 42, `/job ${deliveryUnknownId}`);
-    await waitFor(() => botApi.calls.slice(warningStart).some(call => call.method === 'sendmessage' && call.data.text.includes(deliveryUnknownId) && /could not be confirmed/i.test(call.data.text) && /check the chat before submitting again/i.test(call.data.text)), 'job delivery uncertainty warning');
+    await waitFor(() => botApi.calls.slice(warningStart).some(call => call.method === 'sendmessage' && !call.data.text.includes(deliveryUnknownId) && /could not be confirmed/i.test(call.data.text) && /check the chat before submitting again/i.test(call.data.text)), 'job delivery uncertainty warning');
     await restartApp();
     await sleep(6500);
     assert((await queryJob(deliveryUnknownId)).startsWith('delivery_unknown|'), 'restart must preserve ambiguous delivery state');
@@ -796,7 +804,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     summaries.push(await runCommandMediaScenarios(commandContext));
     summaries.push(await runPreferenceScenarios(commandContext));
   }
-  downloadTimeoutSeconds = 30;
+  downloadTimeoutSeconds = scenario === 'live-youtube' ? 180 : 30;
   cacheTtlSeconds = scenario === 'youtube-auth' ? 0 : 3600;
   if (scenario !== 'native-products') await restartApp();
   if (scenario === 'all' || scenario === 'delivery') summaries.push(await runBatchScenarios({ ...commandContext, playlistMedia, imageBytes, restartApp }));
@@ -808,6 +816,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
   if (scenario === 'all' || scenario === 'adaptive') summaries.push(await runAdaptiveScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'formats') summaries.push(await runFormatScenarios({ ...commandContext, restartApp, cookieSecret, proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
+  if (scenario === 'live-youtube') summaries.push(await runLiveYoutubeScenario(commandContext));
   if (scenario === 'private-user') summaries.push(await runPrivateUserScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'settings') summaries.push(await runSettingsScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'language') summaries.push(await runLanguageScenarios({ ...commandContext, restartApp }));

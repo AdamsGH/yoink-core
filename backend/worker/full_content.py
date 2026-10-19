@@ -59,6 +59,8 @@ def execute(r, settings, emit, prefix):
         # Single terminal within the EXISTING shared bound; never truncate JSON.
         if len(json.dumps(payload, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()) > MAX_WIRE:
             raise ContentError('content_too_large')
+    except guard.NetworkResolutionError:
+        payload = {**prefix, 'event': {'type': 'full_content_failed', 'error': 'content_http_error'}}
     except (guard.NetworkPolicyError, guard.NetworkValidationError):
         payload = {**prefix, 'event': {'type': 'full_content_failed', 'error': 'content_network_denied'}}
     except (TimeoutError, socket.timeout):

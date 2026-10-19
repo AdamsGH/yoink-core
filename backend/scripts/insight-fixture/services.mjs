@@ -83,7 +83,9 @@ export class Services {
     const prompt = JSON.stringify(body.messages);
     assert(prompt.includes(`Current UTC date: ${new Date().toISOString().slice(0,10)}`));
     assert(prompt.includes('Your training memory is not independent verification'));
-    assert(prompt.includes('say the claim is unverified, not false'));
+    assert(prompt.includes('cannot establish that a recent product or model does not exist'));
+    assert(prompt.includes('Missing external research is not evidence'));
+    assert(prompt.includes('Discuss uncertainty only where it changes the answer'));
     this.calls.push({kind:'completion',stream:body.stream===true,credential:req.headers.authorization.endsWith('-two')?'two':'one'});
     if(this.providerFailure){this.json(res,{error:{message:'fixture provider unavailable'}},503);return;}
     if(this.holdProvider)await this.hold(this.providers,res);

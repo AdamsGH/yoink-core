@@ -12,6 +12,116 @@ use yoink_storage::Store;
 const OWNER: u64 = 42;
 const BOT: i64 = 123456;
 
+#[tokio::test]
+async fn history_retry_uses_current_preferences_and_private_delivery() {
+    let (_dir, store, service) = setup(None).await;
+    seed(&store, None, false, 1).await;
+    service
+        .change_setting(
+            OWNER,
+            target(OWNER as i64, None, BOT),
+            SettingChange::new(SettingField::Quality, "720").unwrap(),
+            Some(1),
+        )
+        .await
+        .unwrap();
+    let admission = service
+        .retry_download(OWNER, "https://example.com/video")
+        .await
+        .unwrap();
+    let row = yoink_db::query("SELECT request FROM runtime_operations WHERE id=?1")
+        .bind(admission.operation_id.to_string())
+        .fetch_one(store.database())
+        .await
+        .unwrap();
+    let request: serde_json::Value =
+        serde_json::from_str(&row.try_get::<String, _>("request").unwrap()).unwrap();
+    assert_eq!(request["params"]["max_height"], 720);
+    assert_eq!(request["target"]["chat_id"], OWNER);
+    assert_eq!(request["target"]["thread_id"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn automatic_proxy_resolves_frozen_route_and_respects_personal_precedence() {
+    use yoink_downloads::profile::{NetworkContext, ProfileError, ProfileStore};
+    let (_dir, store, _service) = setup(Some("http://system.example:8080")).await;
+    let identities = IdentityStore::new(store.database().clone(), Some(OWNER as i64), false);
+    let identity = identities
+        .snapshot(OWNER as i64, None)
+        .await
+        .unwrap()
+        .unwrap();
+    let profile = ProfileStore::new(store.database().clone());
+    let domains = vec!["twitter.com".to_owned()];
+    let context = |automatic| NetworkContext {
+        actor_id: OWNER,
+        domain: "x.com",
+        identity: &identity,
+        no_cookie_domains: &[],
+        system_proxy: Some("http://system.example:8080"),
+        system_proxy_domains: if automatic { &domains } else { &[] },
+    };
+    for personal in [None, Some("http://personal.example:8080")] {
+        if personal.is_some() {
+            seed(&store, personal, false, 1).await;
+        }
+        let selected = profile.prepare_network(context(true), 0).await.unwrap();
+        let resolved = profile.resolve(context(true), &selected).await.unwrap();
+        assert_eq!(
+            resolved.proxy_url.as_deref(),
+            Some("http://system.example:8080")
+        );
+        assert!(matches!(
+            profile.resolve(context(false), &selected).await,
+            Err(ProfileError::StaleReference)
+        ));
+    }
+    seed(&store, Some("http://personal.example:8080"), true, 2).await;
+    let selected = profile.prepare_network(context(true), 0).await.unwrap();
+    assert_eq!(
+        profile
+            .resolve(context(true), &selected)
+            .await
+            .unwrap()
+            .proxy_url
+            .as_deref(),
+        Some("http://personal.example:8080")
+    );
+}
+
+#[tokio::test]
+async fn blocked_platforms_use_system_proxy_without_enabling_personal_proxy() {
+    for url in [
+        "https://x.com/example/status/123",
+        "https://www.youtube.com/watch?v=hvL1339luv0",
+        "https://youtu.be/hvL1339luv0",
+    ] {
+        let (_dir, store, service) = setup(Some("http://system.example:8080")).await;
+        let admitted = service
+            .submit(OWNER, url, "automatic-system-proxy")
+            .await
+            .unwrap();
+        let row = yoink_db::query("SELECT request FROM runtime_operations WHERE id=?1")
+            .bind(admitted.operation_id.to_string())
+            .fetch_one(store.database())
+            .await
+            .unwrap();
+        let request: serde_json::Value =
+            serde_json::from_str(&row.try_get::<String, _>("request").unwrap()).unwrap();
+        assert!(
+            request["network"]["proxy"].is_object(),
+            "Blocked platforms must use the configured system route: {request}"
+        );
+        assert!(
+            !service
+                .proxy_settings(OWNER, target(OWNER as i64, None, BOT))
+                .await
+                .unwrap()
+                .enabled
+        );
+    }
+}
+
 struct NoDelivery;
 impl Delivery for NoDelivery {
     fn bot_id(&self) -> i64 {

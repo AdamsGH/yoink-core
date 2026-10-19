@@ -16,7 +16,97 @@ use yoink_identity::IdentityStore;
 use yoink_storage::Store;
 const BOT: &str = "fixture-bot-secret";
 const SECRET: &str = "fixture-jwt-secret-at-least-32bytes";
+
+#[tokio::test]
+async fn history_lists_imported_and_native_downloads_with_actor_filters() {
+    let (_d, app, store) = history_fixture().await;
+    let owner = login(&app, 42).await;
+    let other = login(&app, 43).await;
+    yoink_db::raw_sql(include_str!("sql/history_seed.sql"))
+        .execute(store.database())
+        .await
+        .unwrap();
+    let path = "/api/v1/dl/downloads";
+    assert_eq!(
+        request(&app, "GET", path, None, Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, body) = request(&app, "GET", path, Some(&owner), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 2);
+    assert_eq!(body["items"][0]["url"], "https://x.com/example/status/123");
+    assert_eq!(
+        body["items"][0]["id"],
+        "00000000-0000-4000-8000-000000000001"
+    );
+    assert_eq!(body["items"][0]["status"], "error");
+    assert_eq!(body["items"][0]["created_at"], "2026-10-19T00:00:00Z");
+    let (_, other_body) = request(&app, "GET", path, Some(&other), Value::Null).await;
+    assert_eq!(other_body["total"], 0);
+    for query in [
+        "?domain=x.com",
+        "?status=error",
+        "?search=EXAMPLE%2FSTATUS",
+        "?date_from=2026-10-19",
+        "?limit=1&offset=1",
+    ] {
+        let (status, body) = request(
+            &app,
+            "GET",
+            &format!("{path}{query}"),
+            Some(&owner),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{query}: {body}");
+        assert_eq!(
+            body["items"].as_array().unwrap().len(),
+            1,
+            "{query}: {body}"
+        );
+    }
+    for query in ["?limit=0", "?offset=-1", "?date_from=bad", "?status=bad"] {
+        assert_eq!(
+            request(
+                &app,
+                "GET",
+                &format!("{path}{query}"),
+                Some(&owner),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    let (status, body) = request(
+        &app,
+        "GET",
+        "/api/v1/dl/downloads/domains",
+        Some(&owner),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["domains"], json!(["example.com", "x.com"]));
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/v1/dl/downloads/1/retry",
+            Some(&other),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
 async fn fixture() -> (tempfile::TempDir, Router) {
+    let (d, app, _) = history_fixture().await;
+    (d, app)
+}
+async fn history_fixture() -> (tempfile::TempDir, Router, Arc<Store>) {
     let d = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
@@ -60,7 +150,7 @@ async fn fixture() -> (tempfile::TempDir, Router) {
     );
     let system = SystemService::new("test");
     system.set_ready(true);
-    (d, router_with_auth(system, Some(state)))
+    (d, router_with_auth(system, Some(state)), store)
 }
 fn init_data(id: i64) -> String {
     let user = json!({"id":id,"first_name":"Test","username":"test"}).to_string();

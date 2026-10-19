@@ -1,10 +1,6 @@
 # Native deployment
 
-The default tracked Compose manifest now selects the Rust runtime. Build it with
-`just build yoink`; `just up` and `just restart yoink` retain the native service.
-The legacy ARQ worker has the explicit `legacy` profile and must stay stopped.
-PostgreSQL and its existing volumes remain available for rollback, not replication.
-The native service exposes the existing port 8000 and preserves the nginx/TLS edge.
+The default Compose stack has six services: the Rust backend, frontend, nginx, local Bot API, proxy facade and combined YouTube service. Build the backend with `just build yoink` and the YouTube service with `just build gateway`. PostgreSQL, Redis, ARQ and the old standalone YouTube helpers are excluded from default startup. They remain available through the legacy override for rollback; their data volumes are preserved. The native service exposes the existing port 8000 and preserves the nginx/TLS edge.
 
 ## Configuration
 
@@ -22,11 +18,11 @@ mounts; the database, search index and Stats import directory live in
 read-only at /telegram-files with explicit remote/local roots; grant UID 10001
 read/traverse access through ACLs, including default directory ACLs for new files.
 
-The Unix YouTube gateway has a dedicated private volume and only connects to the
-existing trusted youtubei/bgutil services. It has no host port. Its init service
-sets socket-directory ownership before startup. The production image contains no
-fixture server or refresh controls. Synthetic acceptance does not establish live
-account authorization or real PoToken issuance.
+The YouTube service packages youtubei, pinned bgutil 2.0.0 and the Unix gateway in one container. A supervisor fails the whole container if any component exits, drains the gateway before stopping providers and kills remaining process groups at the shutdown deadline. Its healthcheck probes all three processes without consuming download admission slots. Busy admission remains healthy; exhausted slots from uncertain PoToken responses fail readiness.
+
+All processes run as UID/GID 10001 with a read-only root, bounded tmpfs and resource ceilings. The private socket directory is owned by UID 10001 in the image, so Docker initializes fresh named volumes without a separate init service. Existing socket volumes must retain that ownership. Only the Unix socket is mounted into workers; no helper HTTP port is published.
+
+`yoink_youtube_image` selects an immutable SemVer image built from verified source snapshots; changing build inputs requires a new tag. Upstream stderr is suppressed because it can contain OAuth credentials; the supervisor logs component exits without request data. Synthetic acceptance does not establish live account authorization or real PoToken issuance.
 
 ## Source DNS
 
@@ -82,11 +78,7 @@ in `data/native-restore`; it never switches production. Both directories must be
 private and owned by UID/GID 10001. Archives are plaintext. The former PostgreSQL
 cron service is retained under `legacy-backup`, not a native backup schedule.
 
-When `yoink_rust_image` is pinned in the private `.env`, building a newer tag does
-not change that pin. Verify the new image and update the pin before deployment.
-Native schemas migrate/verify on startup; the former Alembic dispatcher fails
-closed. Default lint/test/verify recipes check Rust; `verify-py` remains an explicit
-container-only legacy reference check.
+Production images use the SemVer version in `backend/VERSION`. Use the [release recipes](../../backend/README.md#releases) to build immutable tags and deploy them. Deployment updates `yoink_rust_image` in the private `.env` and retains one previous version until Adams confirms behavior. Docker health does not confirm a release. Use `release-confirm` only after that confirmation. Native schemas migrate/verify on startup; the former Alembic dispatcher fails closed. Default lint/test/verify recipes check Rust; `verify-py` remains an explicit container-only legacy reference check.
 
 ## Verified production cutover
 
@@ -96,13 +88,7 @@ typed digests, foreign keys and allocators. Independent native archive/restore
 comparison verified the schema and all typed rows across 103 tables. PostgreSQL,
 Redis and private configuration snapshots remain retained for recovery.
 
-The active native runtime is pinned to
-`sha256:614fd92b9500f831588db17d0ad5d4f628cfbda7b36121a0941728432088c0e2`.
-Actual Telegram polling, production HTTPS, imported ordinary-account access,
-fresh-role admin denial and readiness passed. The diagnostic proxy was removed;
-the runtime uses the direct Bot API with no legacy worker or fixture entrypoint.
-Actual native backup and inactive restore passed; maintenance normally stopped
-and resumed the same original container. Archives are private plaintext.
+The historical cutover image was `sha256:614fd92b9500f831588db17d0ad5d4f628cfbda7b36121a0941728432088c0e2`. This is not the current deployment pin. Actual Telegram polling, production HTTPS, imported ordinary-account access, fresh-role admin denial and readiness passed. The diagnostic proxy was removed; the cutover runtime used the direct Bot API with no legacy worker or fixture entrypoint. Actual native backup and inactive restore passed; maintenance normally stopped and resumed the same original container. Archives are private plaintext.
 
 The matching image pair passed menu, native-product and real-browser acceptance;
 1,142 Rust tests passed. YouTube OAuth and PoToken issuance remain synthetic

@@ -14,6 +14,24 @@ clean-builds target='':
 test-build-resources:
     node --test scripts/build-resources.test.mjs
 
+build-youtube-services: check-build-space
+    node scripts/release.mjs tool youtube
+
+test-youtube-services:
+    node --test ../docker/youtube-bundle/test/supervisor.test.mjs ../docker/youtubei-service/test/gateway.test.mjs
+
+test-youtube-services-image:
+    node scripts/test-youtube-services-image.mjs
+
+insight-diagnostics since='24h' request='' snapshot='' match='':
+    node scripts/insight-diagnostics.mjs --since {{quote(since)}} --request {{quote(request)}} --snapshot {{quote(snapshot)}} --match {{quote(match)}}
+
+test-insight-diagnostics:
+    node --test scripts/insight-diagnostics/*.test.mjs
+
+test-insight-diagnostics-snapshot image:
+    docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 10001:10001 --memory 128m --pids-limit 16 --tmpfs /snapshots:rw,noexec,nosuid,size=4m,uid=10001,gid=10001,mode=700 --mount type=bind,source={{justfile_directory()}}/scripts/insight-diagnostics,target=/queries,readonly --mount type=bind,source={{justfile_directory()}}/../src/yoink/core/db/query.py,target=/query_loader.py,readonly --entrypoint /usr/local/bin/python {{quote(image)}} -I -B -m unittest discover -s /queries -p test_snapshot.py
+
 # Resolve new dependencies when intentionally updating Cargo.lock.
 fetch:
     cargo fetch
@@ -69,6 +87,57 @@ test: check-build-space
     cargo test --workspace --all-features --locked
     node scripts/build-resources.mjs check
 
+test-download-repair: check-build-space
+    cargo test --locked --all-features -j 1 -p yoink-downloads -p yoink-http -p yoink-server
+    node scripts/build-resources.mjs check
+
+release-init current previous='' previous_version='':
+    node scripts/release.mjs init {{quote(current)}} {{quote(previous)}} {{quote(previous_version)}}
+
+release-status:
+    node scripts/release.mjs status
+
+release-version part='patch':
+    node scripts/release.mjs version {{quote(part)}}
+
+release-build:
+    node scripts/release.mjs build
+
+release-deploy:
+    node scripts/release.mjs deploy
+
+release-confirm:
+    node scripts/release.mjs confirm
+
+release-rollback:
+    node scripts/release.mjs rollback
+
+release-discard:
+    node scripts/release.mjs discard
+
+release-clean-images:
+    node scripts/release.mjs cleanImages
+
+release-clean-legacy-cache:
+    node scripts/release.mjs cleanLegacyCache
+
+release-trim:
+    node scripts/release.mjs trim
+
+test-release:
+    node --test scripts/release.test.mjs
+
+test-release-config:
+    node scripts/release.mjs tool config
+
+test-download-proxy:
+    node scripts/release.mjs tool proxy
+
+test-release-build:
+    node scripts/test-release-build.mjs
+
+build-media-limited: release-build
+
 # Focused contracts or adapter verification while other crates are being integrated.
 check-crate crate features='': check-build-space
     cargo check --locked --message-format short -p {{quote(crate)}} --all-targets --features {{quote(features)}}
@@ -108,12 +177,16 @@ build-server: check-build-space
 smoke: build-server
     node --test scripts/smoke.mjs
 
+test-download-history-spa: build-server
+    cd ../frontend && VITE_DEV_TOKEN='' npm run build
+    node scripts/test-download-history-spa.mjs
+
 # Independent worker target avoids requiring an integrated Rust build for Python checks.
 build-worker:
-    docker build --quiet --target worker-runtime -t yoink/rust-worker:experimental .
+    node scripts/release.mjs tool worker
 
 build-content-worker: check-build-space
-    docker build --quiet --target content-worker -t yoink/rust-content-worker:experimental .
+    node scripts/release.mjs tool content
 
 # Python executes only in an isolated container. Its HTTP fixture uses loopback.
 test-worker pattern='test_*.py': build-worker
@@ -142,7 +215,7 @@ test-stats-search-oracle:
 test-stats-search: (test-crate "yoink-stats-search") test-stats-search-oracle
 
 verify-stats-search-container:
-    docker build --target stats-search-tests -t yoink/rust-stats-search-tests:experimental .
+    node scripts/release.mjs tool search
 
 # Offline import utility. PostgreSQL client dependencies stay outside yoink-server.
 build-import: check-build-space
@@ -160,7 +233,7 @@ test-import image='': build-import build-ops
 
 # Build and check the operator CLI against the pinned deployment compiler.
 build-import-image: check-build-space
-    docker build --target importer -t yoink/rust-importer:experimental .
+    node scripts/release.mjs tool importer
     docker run --rm --pull never --network none --read-only yoink/rust-importer:experimental --help
 
 verify-import: verify build-import-image (test-import "yoink/rust-importer:experimental")
@@ -176,7 +249,7 @@ restore source destination: build-ops
     target/debug/yoink-ops restore --source {{quote(source)}} --destination {{quote(destination)}}
 
 build-ops-image: check-build-space
-    docker build --target operations -t yoink/rust-operations:experimental .
+    node scripts/release.mjs tool operations
     docker run --rm --pull never --network none --read-only yoink/rust-operations:experimental --help
 
 # Production-shaped PostgreSQL import -> native backup -> restored native values.
@@ -186,13 +259,12 @@ test-ops image='': build-import build-ops
 
 verify-ops: verify build-ops-image (test-ops "yoink/rust-operations:experimental")
 
-# Opt-in image only, never changes the existing Compose deployment.
-build-media: check-build-space
-    docker build --target runtime -t yoink/rust-backend:experimental .
+# Build the immutable runtime candidate without changing the deployment.
+build-media: release-build
 
 # Isolated fixture controller is absent from the default production image.
 build-media-fixture: check-build-space
-    docker build --target media-fixture -t yoink/rust-backend-fixture:experimental .
+    node scripts/release.mjs tool fixture
 
 # Exact default launcher in the deployment's hardened, network-isolated profile.
 test-worker-launcher:
@@ -214,6 +286,9 @@ test-inbox-runtime server fixture ops importer='' frontend='' scenarios='':
 test-media scenario="all":
     node scripts/test-media.mjs {{quote(scenario)}}
 
+test-live-youtube url='https://www.youtube.com/watch?v=hvL1339luv0':
+    YOINK_MEDIA_LIVE_YOUTUBE_URL={{quote(url)}} node scripts/test-media.mjs live-youtube
+
 verify-media: build-media build-media-fixture test-worker test-worker-launcher test-media
 
 check-docs:
@@ -229,7 +304,7 @@ test-media-fixtures:
 test-http-contracts:
     node --test crates/yoink-http/tests/openapi-contracts.test.mjs
 
-verify: fmt check lint test smoke check-scripts check-schema-source test-media-fixtures test-http-contracts test-build-resources check-docs
+verify: fmt check lint test smoke check-scripts check-schema-source test-media-fixtures test-http-contracts test-build-resources test-release check-docs
 
 verify-db: verify test-db
 
@@ -493,6 +568,9 @@ test-inbox-content: check-build-space
 
 test-content-worker image pattern='test_*.py':
     docker run --rm --pull never --network none --memory 512m --cpus 1 --pids-limit 128 --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly {{quote(image)}} -B -m unittest discover -s /worker -p {{quote(pattern)}}
+
+check-worker-network image url proxy='':
+    docker run --rm --pull never --network yoink --read-only --cap-drop ALL --security-opt no-new-privileges --memory 128m --pids-limit 32 --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly {{quote(image)}} -B /worker/check_network.py {{quote(url)}} --proxy {{quote(proxy)}} --allowed-proxy-origin http://yoink-proxy:8080
 
 test-content-primitives image:
     docker run --rm --pull never --network none --memory 512m --cpus 1 --pids-limit 128 --workdir /worker --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly {{quote(image)}} -B -m unittest test_content_stage.StageTests

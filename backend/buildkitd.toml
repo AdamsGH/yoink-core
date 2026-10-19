@@ -1,0 +1,12 @@
+[worker.oci]
+  gc = true
+  max-parallelism = 1
+  reservedSpace = "1GB"
+  maxUsedSpace = "8GB"
+  minFreeSpace = "20GB"
+
+[[worker.oci.gcpolicy]]
+  all = true
+  reservedSpace = "1GB"
+  maxUsedSpace = "8GB"
+  minFreeSpace = "20GB"

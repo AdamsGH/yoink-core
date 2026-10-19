@@ -42,6 +42,7 @@ def guard_failure_count() -> int:
 
 
 class NetworkPolicyError(OSError):
+    failure_class = "network_denied"
     fallback_forbidden = True
     def __init__(self, message):
         record_guard_failure()
@@ -55,9 +56,22 @@ class NetworkValidationError(ValueError):
         super().__init__(message)
 
 
+class NetworkResolutionError(OSError):
+    """Unavailable DNS is retryable, not an SSRF policy rejection."""
+    failure_class = "source_unavailable"
+    fallback_forbidden = True
+
+
 def resolve_addresses(*args, **kwargs):
     try:
-        answers = _ORIGINAL_GETADDRINFO(*args, **kwargs)
+        try:
+            answers = _ORIGINAL_GETADDRINFO(*args, **kwargs)
+        except socket.gaierror:
+            if _BENCHMARK_DNS is None or _is_ip_address(args[0]):
+                raise
+            real = _BENCHMARK_DNS.addresses(args[0])
+            return [answer for address in real
+                    for answer in _ORIGINAL_GETADDRINFO(address, *args[1:], **kwargs)]
         if _BENCHMARK_DNS is not None and answers:
             from benchmark_dns import BENCHMARK
             addresses = [ipaddress.ip_address(a[4][0].split('%', 1)[0]) for a in answers]
@@ -67,7 +81,11 @@ def resolve_addresses(*args, **kwargs):
                 return [answer for address in real
                         for answer in _ORIGINAL_GETADDRINFO(address, *args[1:], **kwargs)]
         return answers
-    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException) as exc:
+    except (NetworkPolicyError, NetworkResolutionError):
+        raise
+    except (OSError, http.client.HTTPException) as exc:
+        raise NetworkResolutionError("network destination resolution failed") from exc
+    except (ValueError, KeyError, TypeError) as exc:
         raise NetworkPolicyError("network destination resolution failed") from exc
 
 
@@ -118,7 +136,7 @@ def _address_is_public(address: str) -> bool:
 def guarded_getaddrinfo(host, port, *args, **kwargs):
     results = resolve_addresses(host, port, *args, **kwargs)
     if not results:
-        raise NetworkPolicyError("network destination is not permitted")
+        raise NetworkResolutionError("network destination resolution failed")
     normalized_host = (
         host.decode("ascii", "ignore").rstrip(".").lower()
         if isinstance(host, bytes)
@@ -240,7 +258,7 @@ def validate_source_url(source_url: str, allowed_origins: tuple[str, ...]) -> No
     else:
         results = resolve_addresses(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         if not results:
-            raise NetworkPolicyError("network destination is not permitted")
+            raise NetworkResolutionError("network destination resolution failed")
         source_allowed = (host, port) in permitted or (host, port) in _ALLOWED_ORIGINS
         for result in results:
             try:

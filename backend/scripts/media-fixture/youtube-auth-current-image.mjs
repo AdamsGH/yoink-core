@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { createCookieBrowserProviderControl } from './cookie-browser-provider-control.mjs';
 
 const sql = value => `'${String(value).replaceAll("'", "''")}'`;
@@ -75,7 +75,7 @@ export async function runYoutubeAuthCurrentImage(context, { cookieId, credential
       const heldRow = await fixtureSql(`SELECT json_object('content',content,'updated_at',updated_at,'is_valid',is_valid) FROM cookies WHERE id=${cookieId}`);
       await refreshGate('release');
       if (mutation === 'none') {
-        const id = await waitFor(() => botApi.calls.slice(calls).find(c => c.method === 'sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text))?.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0], 'refreshed admission');
+        const { operationId: id } = await admissionNotice(context, calls);
         await h.succeeded(id);
         assert.equal(botApi.sendCalls, before + 1);
         assert((await fixtureSql(`SELECT content FROM cookies WHERE id=${cookieId}`)) !== heldContent, 'successful refresh must replace the expired credential');

@@ -743,7 +743,7 @@ impl Insight {
         let key = format!(
             "{:x}",
             Sha256::digest(format!(
-                "replay-v2:{uid}\n{}\n{}\n{routes:?}\n{}\n{lang}\n{custom:?}\n{alias:?}\n{token:?}\n{search}\n{instruction}\n{}",
+                "replay-v5:{uid}\n{}\n{}\n{routes:?}\n{}\n{lang}\n{custom:?}\n{alias:?}\n{token:?}\n{search}\n{instruction}\n{}",
                 url,
                 r.command,
                 routes
@@ -1045,6 +1045,9 @@ impl AuthorizedSink<'_> {
     }
 }
 impl crate::provider::DeltaSink for AuthorizedSink<'_> {
+    fn diagnostic(&self, event: &crate::provider::StreamDiagnostic<'_>) {
+        self.sink.diagnostic(event);
+    }
     fn delta<'a>(&'a self, text: &'a str) -> crate::FutureResult<'a, ()> {
         Box::pin(async move {
             self.require().await?;

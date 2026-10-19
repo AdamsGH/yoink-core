@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runCutScenarios(context) {
@@ -8,7 +8,6 @@ export async function runCutScenarios(context) {
   const url = `http://127.0.0.1:${sourcePort}/media?case=cut-dialog-private-marker`;
   let nextMessage = 7000;
   let nextCallback = 0;
-  const uuid = /[0-9a-f]{8}-[0-9a-f-]{27}/i;
   const count = () => fixtureSql('SELECT count(*) FROM runtime_operations');
   const buttons = reply => {
     const markup = reply.data.reply_markup;
@@ -44,9 +43,8 @@ export async function runCutScenarios(context) {
   }
   async function confirm(data) {
     const sent = await callback(data);
-    const reply = await waitFor(() => botApi.calls.slice(sent.from).find(call =>
-      call.method === 'sendmessage' && uuid.test(call.data.text)), 'cut admission response');
-    return { ...sent, operationId: reply.data.text.match(uuid)[0] };
+    const { operationId } = await admissionNotice(context, sent.from, { session: 'cut' });
+    return { ...sent, operationId };
   }
 
   const initialCount = await count();

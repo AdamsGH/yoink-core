@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { withRussianPreference } from './language-fixture.mjs';
 
 export async function runPlainUrlScenarios(context) {
@@ -87,9 +87,7 @@ export async function runPlainUrlScenarios(context) {
     botApi.setExpectedUpload({ method, preserveMdat: false, ...contract });
     const beforeGo = botApi.calls.length;
     botApi.enqueueCallback(42, 42, summary.messageId, go.callback_data);
-    const admitted = await waitFor(() => botApi.calls.slice(beforeGo).find(call => call.method === 'sendmessage'
-      && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(call.data.text)), 'timestamp clip admission');
-    const id = admitted.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)[0];
+    const { operationId: id } = await admissionNotice(context, beforeGo);
     await h.succeeded(id);
     assert.deepEqual((await h.request(id)).clip_range, { start_seconds: 0.2, end_seconds: 0.7 });
     await h.inspectUpload('URL timestamp dialog', { video: true, audio: true, durationMin: 0.35, durationMax: 0.8 });

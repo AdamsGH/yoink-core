@@ -3,5 +3,7 @@ target/
 .env.*
 .git/
 .pi/
+.release/
+VERSION
 **/__pycache__/
 **/*.pyc

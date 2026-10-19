@@ -36,8 +36,7 @@ def validate(r):
 
 
 def validate_destination(url):
-    guard._validate_source_request(url)
-    p = urlsplit(url)
+    p = guard._parse_http_url(url, 'invalid source')
     if p.hostname in ('r.jina.ai', 'curl.md'):
         # Providers are not an SSRF escape hatch, even after a redirect.
         if p.scheme != 'https' or p.netloc not in ('r.jina.ai', 'curl.md'):
@@ -46,6 +45,7 @@ def validate_destination(url):
         if urlsplit(original).hostname in ('r.jina.ai', 'curl.md'):
             raise guard.NetworkPolicyError('nested provider denied')
         guard.validate_source_url(original, ())
+    guard._validate_source_request(url)
 
 
 def run(r, settings):
@@ -79,6 +79,8 @@ def execute(r, settings, emit, prefix):
         if len(result['text'].encode()) > MAX_BYTES or (result['title'] is not None and len(result['title'].encode()) > 2000):
             raise ValueError('result too large')
         event = {'type': 'content_completed', 'result': result}
+    except guard.NetworkResolutionError:
+        event = {'type': 'failure', 'class': 'source_unavailable'}
     except (guard.NetworkPolicyError, guard.NetworkValidationError):
         event = {'type': 'content_denied'}
     except Exception:

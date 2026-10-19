@@ -38,6 +38,7 @@ mod cookie_url;
 mod cut;
 mod inline;
 mod inline_search;
+mod job_reply;
 pub use inline_search::InlineSearchConfig;
 mod lang;
 mod media_command;
@@ -973,32 +974,23 @@ fn operation_status(status: OperationStatus) -> Key {
 }
 
 fn operation_response(
-    id: Uuid,
+    _id: Uuid,
     status: OperationStatus,
     attempt: u32,
     delivered_message_id: Option<i64>,
     language: Language,
 ) -> String {
-    let id = id.to_string();
     let status_text = translate(language, operation_status(status), &[]);
     let mut reply = translate(
         language,
         Key::Operation,
-        &[
-            ("id", &id),
-            ("status", &status_text),
-            ("attempt", &attempt.to_string()),
-        ],
+        &[("status", &status_text), ("attempt", &attempt.to_string())],
     );
     if status == OperationStatus::DeliveryUnknown {
         reply.push_str(&translate(language, Key::DeliveryUnconfirmed, &[]));
     }
-    if let Some(message_id) = delivered_message_id {
-        reply.push_str(&translate(
-            language,
-            Key::DeliveredMessage,
-            &[("id", &message_id.to_string())],
-        ));
+    if delivered_message_id.is_some() {
+        reply.push_str(&translate(language, Key::DeliveredMessage, &[]));
     }
     reply
 }
@@ -1009,11 +1001,7 @@ fn admitted_response(admission: Admission, language: Language) -> String {
     } else {
         Key::ExistingOperation
     };
-    translate(
-        language,
-        key,
-        &[("id", &admission.operation_id.to_string())],
-    )
+    translate(language, key, &[])
 }
 
 fn chat_distribution(update: &Update) -> Option<ChatId> {
@@ -1071,6 +1059,18 @@ async fn handle_message_admitted(
         return Ok(());
     };
     if !system.snapshot().ready {
+        return Ok(());
+    }
+    if job_reply::try_handle(
+        &bot,
+        &message,
+        &bot_username,
+        downloads.as_ref(),
+        actor_id,
+        target,
+    )
+    .await
+    {
         return Ok(());
     }
     if product_dispatch::message(
@@ -1610,11 +1610,7 @@ async fn handle_message_admitted(
                 return Ok(());
             };
             match service.cancel_in_chat(actor_id, id, target).await {
-                Ok(true) => translate(
-                    language,
-                    Key::CancellationRequested,
-                    &[("id", &id.to_string())],
-                ),
+                Ok(true) => translate(language, Key::CancellationRequested, &[]),
                 Ok(false) => unknown_operation(language),
                 Err(error) => download_error_response(error, language).to_owned(),
             }
@@ -2249,6 +2245,28 @@ mod tests {
         let russian = format_status(&system, Language::Russian);
         assert!(russian.contains("готов"));
         assert!(russian.contains("запланированы и пока недоступны"));
+    }
+
+    #[test]
+    fn download_notices_do_not_display_internal_ids() {
+        let id = Uuid::new_v4();
+        for language in [Language::English, Language::Russian] {
+            let text =
+                operation_response(id, OperationStatus::Succeeded, 1, Some(987654321), language);
+            assert!(!text.contains(&id.to_string()));
+            assert!(!text.contains("987654321"));
+            for created in [false, true] {
+                let text = admitted_response(
+                    Admission {
+                        operation_id: id,
+                        created,
+                    },
+                    language,
+                );
+                assert!(!text.contains(&id.to_string()));
+                assert!(!text.contains('{'));
+            }
+        }
     }
 
     #[test]

@@ -15,6 +15,12 @@ pub(crate) enum DraftOutcome {
     Unsupported,
     Unavailable,
 }
+pub(crate) struct DraftResult {
+    pub outcome: DraftOutcome,
+    pub reason: &'static str,
+    pub http_status: Option<u16>,
+    pub api_error_code: Option<i64>,
+}
 impl PreviewTransport {
     pub(crate) fn new(bot: Bot, timeout: Duration) -> Self {
         Self { bot, timeout }
@@ -25,19 +31,35 @@ impl PreviewTransport {
         topic: Option<i32>,
         id: i32,
         text: &FormattedText,
-    ) -> DraftOutcome {
+    ) -> DraftResult {
         if chat <= 0 || id <= 0 || text.text().encode_utf16().count() > 4096 {
-            return DraftOutcome::Unavailable;
+            return DraftResult {
+                outcome: DraftOutcome::Unavailable,
+                reason: "invalid_draft",
+                http_status: None,
+                api_error_code: None,
+            };
         }
         let mut body =
             json!({"chat_id":chat,"draft_id":id,"text":text.text(),"entities":text.entities()});
         if let Some(topic) = topic {
             body["message_thread_id"] = topic.into();
         }
-        match self.request("sendMessageDraft", body).await {
-            Some(reply) if reply["ok"] == true && reply["result"] == true => DraftOutcome::Sent,
-            Some(reply) if reply["error_code"] == 404 => DraftOutcome::Unsupported,
-            Some(reply)
+        let (status, reply) = match self.request("sendMessageDraft", body).await {
+            Ok(reply) => reply,
+            Err(reason) => {
+                return DraftResult {
+                    outcome: DraftOutcome::Unavailable,
+                    reason,
+                    http_status: None,
+                    api_error_code: None,
+                };
+            }
+        };
+        let outcome = match &reply {
+            reply if reply["ok"] == true && reply["result"] == true => DraftOutcome::Sent,
+            reply if reply["error_code"] == 404 => DraftOutcome::Unsupported,
+            reply
                 if reply["error_code"] == 400
                     && reply["description"].as_str().is_some_and(|s| {
                         let s = s.to_ascii_lowercase();
@@ -49,6 +71,16 @@ impl PreviewTransport {
                 DraftOutcome::Unsupported
             }
             _ => DraftOutcome::Unavailable,
+        };
+        DraftResult {
+            outcome,
+            reason: match outcome {
+                DraftOutcome::Sent => "sent",
+                DraftOutcome::Unsupported => "unsupported",
+                DraftOutcome::Unavailable => "api_error",
+            },
+            http_status: Some(status),
+            api_error_code: reply["error_code"].as_i64(),
         }
     }
     pub(crate) async fn typing(&self, chat: i64, topic: Option<i32>) {
@@ -66,7 +98,7 @@ impl PreviewTransport {
             )
             .await;
     }
-    async fn request(&self, method: &str, body: Value) -> Option<Value> {
+    async fn request(&self, method: &str, body: Value) -> Result<(u16, Value), &'static str> {
         let request = async {
             let mut endpoint = self.bot.api_url();
             endpoint.set_path(&format!("/bot{}/{method}", self.bot.token()));
@@ -79,25 +111,33 @@ impl PreviewTransport {
                 .json(&body)
                 .send()
                 .await
-                .ok()?;
+                .map_err(|_| "transport_error")?;
+            let status = response.status().as_u16();
             if response
                 .content_length()
                 .is_some_and(|n| n > MAX_TEXT_RESPONSE_BYTES as u64)
             {
-                return None;
+                return Err("response_too_large");
             }
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.ok()? {
-                if bytes.len().checked_add(chunk.len())? > MAX_TEXT_RESPONSE_BYTES {
-                    return None;
+            while let Some(chunk) = response.chunk().await.map_err(|_| "transport_error")? {
+                if bytes
+                    .len()
+                    .checked_add(chunk.len())
+                    .ok_or("response_too_large")?
+                    > MAX_TEXT_RESPONSE_BYTES
+                {
+                    return Err("response_too_large");
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            serde_json::from_slice(&bytes).ok()
+            Ok((
+                status,
+                serde_json::from_slice(&bytes).map_err(|_| "invalid_response")?,
+            ))
         };
         tokio::time::timeout(self.timeout, request)
             .await
-            .ok()
-            .flatten()
+            .map_err(|_| "timeout")?
     }
 }

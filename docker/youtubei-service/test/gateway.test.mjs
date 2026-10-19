@@ -14,21 +14,23 @@ test('packaged gateway zero queue, configured deadline and upstream cancellation
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
   const origin = `http://127.0.0.1:${upstream.address().port}`;
   const child = spawn(process.execPath, ['--import', new URL('../../../backend/scripts/youtube-auth-gateway-limits.mjs', import.meta.url).pathname, new URL('../../../backend/worker/youtube_auth_adapter.mjs', import.meta.url).pathname], { env: { PATH: process.env.PATH, GATEWAY_MAX_CONCURRENCY: '1', GATEWAY_DEADLINE_MS: '200', YOINK_YOUTUBE_AUTH_SOCKET: socket, YOINK_TRUSTED_YOUTUBEI_URL: origin, YOINK_TRUSTED_BGUTIL_URL: origin }, stdio: 'ignore' });
-  const call = (path = '/info') => new Promise(resolve => {
-    const req = http.request({ socketPath: socket, path, method: 'POST' }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
-    req.on('error', () => resolve('closed')); req.end('{}');
+  const call = (path = '/info', method = 'POST') => new Promise(resolve => {
+    const req = http.request({ socketPath: socket, path, method }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', () => resolve('closed')); req.end(method === 'GET' ? undefined : '{}');
   });
   try {
     for (let n = 0; n < 100; n++) { try { await stat(socket); break; } catch { await sleep(10); } }
     const first = call();
     for (let n = 0; n < 100 && !entered; n++) await sleep(5);
     assert.ok(entered); assert.equal(await call(), 503);
+    assert.equal(await call('/health', 'GET'), 200, 'healthy busy admission must not fail Docker probes');
     assert.equal(await first, 'closed');
     for (let n = 0; n < 100 && !aborted; n++) await sleep(5);
     assert.ok(aborted);
     // Uncertain bgutil work cannot stack after losing its response.
     assert.equal(await call('/pot'), 'closed');
     assert.equal(await call(), 503);
+    assert.equal(await call('/health', 'GET'), 503, 'permanently uncertain provider work must fail readiness');
   } finally { child.kill(); await once(child, 'exit'); upstream.closeAllConnections(); upstream.close(); await rm(dir, { recursive: true, force: true }); }
 });
 

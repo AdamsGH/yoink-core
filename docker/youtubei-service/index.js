@@ -256,7 +256,7 @@ function extractVideoId(url) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const settings = config();
-  const server = createApp({ settings }).listen(settings.port);
+  const server = createApp({ settings }).listen(settings.port, process.env.HOST);
   server.requestTimeout = settings.deadlineMs;
   server.headersTimeout = Math.min(30000, settings.deadlineMs);
 }

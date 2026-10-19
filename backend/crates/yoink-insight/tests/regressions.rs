@@ -209,6 +209,91 @@ fn aliases_focus_and_language() {
     }
 }
 #[test]
+fn reviewer_question_is_last_task_without_repeating_the_role() {
+    let question = "на девопсячьем разложи в двух словах, что это и зачем?";
+    let request = telegram::parse(
+        &format!("/tldr https://deno.com/ nobullshit {question}"),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(request.alias.as_deref(), Some("nobullshit"));
+    assert_eq!(request.focus.as_deref(), Some(question));
+    let role = prompts::builtin("nobullshit")
+        .unwrap()
+        .replace("{lang}", "ru");
+    let prompt = prompts::build(
+        "tldr",
+        "ru",
+        "Deno is a Node-compatible runtime. CODE EXAMPLE IS NOT THE PRODUCT.",
+        Some("USER CUSTOM BULLET LIST"),
+        prompts::builtin("nobullshit"),
+        request.focus.as_deref(),
+        &[],
+    );
+    assert_eq!(prompt.matches(&role).count(), 1);
+    assert!(!prompt.contains("USER CUSTOM BULLET LIST"));
+    assert!(
+        prompt.find(question).unwrap() > prompt.find("CODE EXAMPLE IS NOT THE PRODUCT").unwrap()
+    );
+    assert!(prompt.contains("requested length, audience and format take priority"));
+    assert!(prompt.contains("ordinary technical knowledge"));
+    assert!(!prompt.contains("If evidence is absent or insufficient, say the claim is unverified"));
+    assert!(prompt.contains("one or two useful sentences with a position"));
+    assert!(prompt.contains("First-person judgments"));
+    assert!(
+        prompt.find("Reviewer voice reminder:").unwrap()
+            > prompt.find("Current UTC date:").unwrap()
+    );
+    assert!(prompt.ends_with("Do not fabricate experience, measurements or defects."));
+    assert!(
+        !prompts::build(
+            "tldr",
+            "ru",
+            "source",
+            Some("MY CUSTOM ROLE"),
+            None,
+            None,
+            &[]
+        )
+        .contains("Reviewer voice reminder:")
+    );
+}
+
+#[tokio::test]
+async fn telegram_reviewer_keeps_alias_and_focus_at_completion_boundary() {
+    struct QuestionCompletion;
+    impl Completion for QuestionCompletion {
+        fn complete<'a>(
+            &'a self,
+            _: &'a [Route],
+            prompt: &'a str,
+            _: CancellationToken,
+        ) -> FutureResult<'a, String> {
+            Box::pin(async move {
+                assert!(prompt.contains("Specific factual source with 42 examples"));
+                assert!(prompt.contains("на девопсячьем разложи в двух словах"));
+                assert!(prompt.contains("one or two useful sentences"));
+                assert!(prompt.contains("No bullet lists, numbered lists"));
+                assert!(!prompt.contains("Output only the bullets"));
+                Ok("A direct answer.".into())
+            })
+        }
+    }
+    let (_directory, mut service, _) = fixture().await;
+    service.completion = Arc::new(QuestionCompletion);
+    let result = telegram::execute(
+        &service,
+        1,
+        "/tldr https://deno.com/ nobullshit на девопсячьем разложи в двух словах, что это и зачем?",
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.result, "A direct answer.");
+    assert_eq!(result.alias.as_deref(), Some("nobullshit"));
+    assert!(!result.cached);
+}
+#[test]
 fn domain_globs() {
     assert!(prompts::glob("*.lwn.net", "www.lwn.net"));
     assert!(!prompts::glob("*.lwn.net", "evil-lwn.net"));

@@ -290,13 +290,7 @@ fn render(session: &QualitySession, language: Language) -> String {
                 .unwrap_or_default();
             translate(language, Key::QualityConfirming, &[("choice", &choice)])
         }
-        QualityStage::Submitted => {
-            let id = session
-                .operation_id
-                .map(|id| id.to_string())
-                .unwrap_or_default();
-            translate(language, Key::QualitySubmitted, &[("id", &id)])
-        }
+        QualityStage::Submitted => translate(language, Key::QualitySubmitted, &[]),
         QualityStage::Cancelled => translate(language, Key::QualityCancelled, &[]),
         QualityStage::Cutting => translate(language, Key::QualityCutting, &[]),
     }

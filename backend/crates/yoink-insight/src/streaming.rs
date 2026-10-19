@@ -4,9 +4,25 @@ use super::provider::{HttpCompletion, Route, Shape, contract, status};
 use crate::{Error, FutureResult, invalid};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+#[derive(Debug)]
+pub struct StreamDiagnostic<'a> {
+    pub attempt: usize,
+    pub shape: Shape,
+    pub route: &'static str,
+    pub outcome: &'a str,
+    pub end_reason: &'static str,
+    pub http_status: Option<u16>,
+    pub wire_bytes: usize,
+    pub text_bytes: usize,
+    pub deltas: usize,
+    pub elapsed_ms: u64,
+    pub first_delta_ms: Option<u64>,
+}
 /// Coordinator-owned delivery/Telegram editing. Text is plain untrusted model
 /// output, NOT Telegram HTML. Sink failures abort and prohibit provider fallback.
 pub trait DeltaSink: Send + Sync {
+    /// Metadata only. Implementations must not add credentials or generated text.
+    fn diagnostic(&self, _event: &StreamDiagnostic<'_>) {}
     fn delta<'a>(&'a self, text: &'a str) -> FutureResult<'a, ()>;
     fn phase<'a>(
         &'a self,
@@ -100,6 +116,12 @@ struct StreamState {
     text: String,
     terminal: bool,
     emitted: bool,
+    started: std::time::Instant,
+    first_delta_ms: Option<u64>,
+    deltas: usize,
+    wire_bytes: usize,
+    end_reason: &'static str,
+    http_status: Option<u16>,
 }
 impl StreamState {
     async fn event(
@@ -116,6 +138,7 @@ impl StreamState {
                 return Err(Error::Code("parse_failed"));
             }
             self.terminal = true;
+            self.end_reason = "done";
             return Ok(());
         }
         let value: Value = serde_json::from_str(event).map_err(|_| Error::Code("parse_failed"))?;
@@ -133,12 +156,34 @@ impl StreamState {
                 let finish = choice
                     .and_then(|c| c.get("finish_reason"))
                     .and_then(Value::as_str);
+                self.end_reason = match finish {
+                    Some("stop") => "stop",
+                    Some("length") => "length",
+                    Some("content_filter") => "content_filter",
+                    Some(_) => "other",
+                    None => self.end_reason,
+                };
+                if finish == Some("length") {
+                    return Err(Error::Code("response_truncated"));
+                }
                 if finish == Some("content_filter") {
                     return Err(Error::Code("content_blocked"));
                 }
                 (text, finish.is_some())
             }
             Shape::Anthropic => {
+                if value["type"] == "message_delta" {
+                    self.end_reason = match value["delta"]["stop_reason"].as_str() {
+                        Some("max_tokens") => "max_tokens",
+                        Some("end_turn") => "end_turn",
+                        Some("stop_sequence") => "stop_sequence",
+                        Some(_) => "other",
+                        None => self.end_reason,
+                    };
+                    if self.end_reason == "max_tokens" {
+                        return Err(Error::Code("response_truncated"));
+                    }
+                }
                 let text = if value["type"] == "content_block_delta"
                     && value["delta"]["type"] == "text_delta"
                 {
@@ -156,6 +201,16 @@ impl StreamState {
                 let finish = candidate
                     .and_then(|c| c.get("finishReason"))
                     .and_then(Value::as_str);
+                if let Some(reason) = finish {
+                    self.end_reason = match reason {
+                        "STOP" => "stop",
+                        "MAX_TOKENS" => "max_tokens",
+                        _ => "other",
+                    };
+                }
+                if finish == Some("MAX_TOKENS") {
+                    return Err(Error::Code("response_truncated"));
+                }
                 if finish.is_some_and(|f| !matches!(f, "STOP" | "MAX_TOKENS")) {
                     return Err(Error::Code("content_blocked"));
                 }
@@ -176,6 +231,9 @@ impl StreamState {
             // Mark before invoking a sink: delivery failure or authorization
             // failure may not be hidden by switching to a different provider.
             self.emitted = true;
+            self.deltas += 1;
+            self.first_delta_ms
+                .get_or_insert_with(|| self.started.elapsed().as_millis() as u64);
             sink.delta(&delta).await?;
             self.text.push_str(&delta);
         }
@@ -204,6 +262,7 @@ impl HttpCompletion {
             .send()
             .await
             .map_err(|_| Error::Code("provider_unavailable"))?;
+        state.http_status = Some(response.status().as_u16());
         if !response.status().is_success() {
             return Err(status(response.status().as_u16()));
         }
@@ -219,6 +278,7 @@ impl HttpCompletion {
             .await
             .map_err(|_| Error::Code("provider_unavailable"))?
         {
+            state.wire_bytes = state.wire_bytes.saturating_add(chunk.len());
             for event in decoder.push(&chunk)? {
                 state.event(route.shape, &event, sink).await?;
             }
@@ -249,29 +309,60 @@ impl HttpCompletion {
         if prompt.len() > 1024 * 1024 {
             return Err(invalid());
         }
-        let operation = async {
-            let mut last = Error::Code("no_route");
-            for route in routes {
-                let mut state = StreamState {
-                    text: String::new(),
-                    terminal: false,
-                    emitted: false,
-                };
-                match self.stream_attempt(route, prompt, sink, &mut state).await {
-                    Ok(text) => return Ok(text),
-                    Err(error) => {
-                        // Executable services/tldr.py retries gateway errors only
-                        // before any text is emitted. A BYOK route has no fallback.
-                        if state.emitted || route.is_byok() {
-                            return Err(error);
-                        }
-                        last = error;
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let mut last = Error::Code("no_route");
+        for (attempt, route) in routes.iter().enumerate() {
+            let mut state = StreamState {
+                text: String::new(),
+                terminal: false,
+                emitted: false,
+                started: std::time::Instant::now(),
+                first_delta_ms: None,
+                deltas: 0,
+                wire_bytes: 0,
+                end_reason: "absent",
+                http_status: None,
+            };
+            let (result, interrupted) = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => (Err(Error::Code("cancelled")), Some("cancelled")),
+                result = tokio::time::timeout_at(deadline, self.stream_attempt(route, prompt, sink, &mut state)) => match result {
+                    Ok(result) => (result, None),
+                    Err(_) => (Err(Error::Code("provider_unavailable")), Some("timeout")),
+                }
+            };
+            let outcome = interrupted
+                .map(str::to_owned)
+                .unwrap_or_else(|| match &result {
+                    Ok(_) => "ok".into(),
+                    Err(error) => error.to_string(),
+                });
+            sink.diagnostic(&StreamDiagnostic {
+                attempt: attempt + 1,
+                shape: route.shape,
+                route: route.via,
+                outcome: &outcome,
+                end_reason: state.end_reason,
+                http_status: state.http_status,
+                wire_bytes: state.wire_bytes,
+                text_bytes: result.as_ref().map_or(state.text.len(), String::len),
+                deltas: state.deltas,
+                elapsed_ms: state.started.elapsed().as_millis() as u64,
+                first_delta_ms: state.first_delta_ms,
+            });
+            match result {
+                Ok(text) => return Ok(text),
+                Err(error) => {
+                    // Executable services/tldr.py retries gateway errors only
+                    // before any text is emitted. A BYOK route has no fallback.
+                    if interrupted.is_some() || state.emitted || route.is_byok() {
+                        return Err(error);
                     }
+                    last = error;
                 }
             }
-            Err(last)
-        };
-        tokio::select! { biased; _=cancel.cancelled()=>Err(Error::Code("cancelled")), result=tokio::time::timeout(self.timeout, operation)=>result.unwrap_or(Err(Error::Code("provider_unavailable"))) }
+        }
+        Err(last)
     }
 }
 

@@ -139,20 +139,36 @@ impl MediaConfig {
                 i64::MAX as u64,
             )?,
         };
-        let network = DownloadNetworkConfig::new(system_proxy, no_cookie_domains)
-            .map_err(|_| {
+        let proxy_domains: Option<Vec<String>> =
+            network_setting(read, "DOWNLOAD_PROXY_DOMAINS_JSON")?
+                .map(|value| serde_json::from_str(&value))
+                .transpose()
+                .map_err(|_| {
+                    invalid(
+                        "DOWNLOAD_PROXY_DOMAINS_JSON",
+                        "expected a bounded JSON array of hostnames",
+                    )
+                })?;
+        let network =
+            DownloadNetworkConfig::new(system_proxy, no_cookie_domains).map_err(|_| {
                 invalid(
                     "DOWNLOAD_PROXY_URL",
                     "proxy or no-cookie domain configuration is invalid",
                 )
-            })?
-            .with_personal_cookie_limits(limits)
-            .map_err(|_| {
-                invalid(
-                    "YOINK_RUST_PERSONAL_COOKIE_GLOBAL_BYTES",
-                    "invalid personal cookie storage limits",
-                )
             })?;
+        let network = match proxy_domains {
+            Some(domains) => network
+                .with_system_proxy_domains(domains)
+                .map_err(|_| invalid("DOWNLOAD_PROXY_DOMAINS_JSON", "invalid proxy domains"))?,
+            None => network,
+        }
+        .with_personal_cookie_limits(limits)
+        .map_err(|_| {
+            invalid(
+                "YOINK_RUST_PERSONAL_COOKIE_GLOBAL_BYTES",
+                "invalid personal cookie storage limits",
+            )
+        })?;
         let origin = read("COOKIE_WEB_ORIGIN")?
             .map(|value| {
                 let origin = url::Url::parse(&value)

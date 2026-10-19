@@ -17,7 +17,7 @@ export async function runCommandMediaScenarios(context) {
     const replayCallStart = botApi.calls.length;
     botApi.enqueue(42, 42, `/video ${sourceUrl}`, video.messageId);
     await waitFor(() => botApi.calls.slice(replayCallStart).some(call =>
-      call.method === 'sendmessage' && call.data.text.includes(video.operationId)),
+      call.method === 'sendmessage' && call.data.text.trim() === 'This download was already submitted.'),
     'new same-message existing-operation replay reply');
     assert.equal(botApi.calls.filter(call => call.method === 'sendvideo').length, videoSends,
       'same Telegram message replay must not upload a second video');

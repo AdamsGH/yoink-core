@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { galleryImage } from './gallery-source.mjs';
 
 // Native polling -> confined real extraction -> answer -> actual selection.
@@ -183,8 +183,8 @@ export async function runInlineScenarios(context) {
     const queryState=await counts(); await lookup('cats'); assert.equal(await counts(),queryState,'lookup cannot edit a pending quality/cut chooser');
     botApi.setExpectedUpload({ method: 'sendvideo', filename: 'media.mp4', mimeType: 'video/mp4', preserveMdat: false });
     botApi.enqueueCallback(42,42,chooser.messageId,best.callback_data,{id:'inline-quality-best'});
-    const admitted=await waitFor(()=>botApi.calls.slice(start).find(call=>call.method==='sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(call.data.text)),'quality selection admission');
-    const operation=admitted.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)[0]; await h.succeeded(operation);
+    const { operationId: operation } = await admissionNotice(context, start);
+    await h.succeeded(operation);
     await h.inspectUpload('inline selected quality clip', { video: true, audio: true, durationMin: 0.35, durationMax: 0.8, height: 120 });
     botApi.setExpectedUpload(null);
     await command('/settings quality best');

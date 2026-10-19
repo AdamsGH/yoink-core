@@ -11,6 +11,33 @@ class BenchmarkDNS(unittest.TestCase):
     def tearDown(self):
         guard.restore_guard()
 
+    def test_dns_failure_uses_validated_https_answers_without_policy_bypass(self):
+        def lookup(host, port, *args, **kwargs):
+            if host == 'www.youtube.com':
+                raise socket.gaierror(socket.EAI_NONAME, 'not found')
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (host, port))]
+
+        for address, allowed in [('142.251.156.4', True), ('127.0.0.1', False), ('198.18.0.7', False)]:
+            with self.subTest(address=address), patch.object(guard, '_ORIGINAL_GETADDRINFO', side_effect=lookup), \
+                    patch('benchmark_dns.http.client.HTTPSConnection') as connection:
+                response = connection.return_value.getresponse.return_value
+                response.status = 200
+                response.read.return_value = json.dumps({'Status': 0, 'Answer': [{'type': 1, 'data': address}]}).encode()
+                with guard.guard_context((), dns_timeout=1):
+                    if allowed:
+                        guard.validate_source_url('https://www.youtube.com/', ())
+                        self.assertEqual(guard.resolve_addresses('www.youtube.com', 443)[0][4][0], address)
+                    else:
+                        with self.assertRaises(guard.NetworkPolicyError):
+                            guard.validate_source_url('https://www.youtube.com/', ())
+
+    def test_dns_and_https_outage_remains_retryable(self):
+        with patch.object(guard, '_ORIGINAL_GETADDRINFO', side_effect=socket.gaierror('not found')), \
+                patch('benchmark_dns.http.client.HTTPSConnection', side_effect=TimeoutError('DNS timeout')):
+            with guard.guard_context((), dns_timeout=1):
+                with self.assertRaises(guard.NetworkResolutionError):
+                    guard.validate_source_url('https://www.youtube.com/', ())
+
     def test_fake_ip_recovery_is_pinned_and_rejects_private_answers(self):
         def lookup(host, port, *args, **kwargs):
             address = '198.18.0.121' if host == 'www.youtube.com' else host
@@ -39,9 +66,21 @@ class BenchmarkDNS(unittest.TestCase):
             response = connection.return_value.getresponse.return_value
             response.status = 302
             response.read.return_value = b'{}'
-            with self.assertRaises(ValueError):
+            with self.assertRaises(guard.NetworkResolutionError):
                 Resolver(1).addresses('example.com')
             response.status = 200
             response.read.return_value = b'x' * 65537
-            with self.assertRaises(ValueError):
+            with self.assertRaises(guard.NetworkResolutionError):
                 Resolver(1).addresses('example.com')
+
+    def test_missing_or_malformed_https_answers_are_unavailable_not_policy_denials(self):
+        with patch('benchmark_dns.http.client.HTTPSConnection') as connection:
+            response = connection.return_value.getresponse.return_value
+            response.status = 200
+            for raw in (b'{', b'[]', b'{"Status":3}', b'{"Status":0}',
+                        b'{"Status":0,"Answer":[{"type":1}]}',
+                        b'{"Status":0,"Answer":[{"type":1,"data":"invalid"}]}'):
+                with self.subTest(raw=raw):
+                    response.read.return_value = raw
+                    with self.assertRaises(guard.NetworkResolutionError):
+                        Resolver(1).addresses('example.com')

@@ -111,6 +111,7 @@ async fn public_submit_admits_native_media_for_user_without_settings_row() {
                 domain: "127.0.0.1",
                 no_cookie_domains: &no_cookie_domains,
                 identity: &identity,
+                system_proxy_domains: &[],
                 system_proxy: None,
             },
             0,

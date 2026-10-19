@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { withRussianPreference } from './language-fixture.mjs';
 
 const heights = ['best', '2160', '1440', '1080', '720', '480', '360', '240', '144'];
@@ -60,8 +60,7 @@ export async function runCutQualityScenarios(context) {
     return updated(sent.from, ready);
   }
   async function admitted(from) {
-    const reply = await waitFor(() => botApi.calls.slice(from).find(c => c.method === 'sendmessage' && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text)), 'cut-quality operation admission');
-    return reply.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)[0];
+    return (await admissionNotice(context, from, { session: 'cut' })).operationId;
   }
   async function waitReply(from, chat = 42) {
     return waitFor(() => botApi.calls.slice(from).find(c => c.method === 'sendmessage' && Number(c.data.chat_id) === chat), 'private response after callback');

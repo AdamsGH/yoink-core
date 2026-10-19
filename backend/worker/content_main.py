@@ -45,9 +45,9 @@ def run(request, *, allowed_proxy_origins=(), validate_destination=None):
     url, options, config = validate(request)
     # No source or private proxy allowlist is accepted from untrusted requests.
     with guard.guard_context((), allowed_proxy_origins, dns_timeout=config['timeout_secs']):
-        guard.validate_source_url(url, ())
         if validate_destination:
             validate_destination(url)
+        guard.validate_source_url(url, ())
         guard.configure_proxy(config.get('proxy_url'))
         with proxy_route(config.get('proxy_url'), config['timeout_secs']) as proxy:
             transport = Transport(config['timeout_secs'], config['max_bytes'], proxy, validate_destination)
@@ -70,6 +70,8 @@ def main():
         if len(raw) > MAX_INPUT:
             raise ContentError('invalid_request')
         result = {'version': 1, 'content': run(json.loads(raw))}
+    except guard.NetworkResolutionError:
+        result = {'version': 1, 'error': 'content_http_error'}
     except (guard.NetworkPolicyError, guard.NetworkValidationError):
         result = {'version': 1, 'error': 'content_network_denied'}
     except ContentError as e:

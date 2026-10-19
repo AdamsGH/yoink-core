@@ -5,6 +5,7 @@ mod admin;
 mod auth;
 mod configuration;
 mod cookie_web;
+mod download_history;
 mod downloader_settings;
 mod groups;
 mod health;

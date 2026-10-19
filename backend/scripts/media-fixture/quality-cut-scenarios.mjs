@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { commandHarness } from './command-harness.mjs';
+import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { withRussianPreference } from './language-fixture.mjs';
 
 const lit = value => value === null ? 'NULL' : typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`;
@@ -159,8 +159,7 @@ export async function runQualityCutScenarios(context) {
     botApi.setExpectedUpload({ method: 'senddocument', filename: 'media.mp4', mimeType: 'video/mp4', preserveMdat: false });
     const uploads = botApi.uploadCalls;
     const picked = await callback(q144, chooser);
-    const operationId = await waitFor(() => botApi.calls.slice(picked.from).find(c => c.method === 'sendmessage'
-      && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text))?.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0], 'Cut operation admission');
+    const { operationId } = await admissionNotice(context, picked.from, { session: 'cut' });
     await h.succeeded(operationId);
     assert.equal(botApi.uploadCalls, uploads + 1, 'handoff performs one real upload');
     const admittedRequest = await h.request(operationId);
@@ -182,8 +181,7 @@ export async function runQualityCutScenarios(context) {
     const recovering = await message('/cut');
     const recoveryChoice = button(recovering, 'cut:q144:');
     const replay = await callback(recoveryChoice, recovering);
-    const replayedOperation = await waitFor(() => botApi.calls.slice(replay.from).find(c => c.method === 'sendmessage'
-      && /[0-9a-f]{8}-[0-9a-f-]{27}/i.test(c.data.text))?.data.text.match(/[0-9a-f]{8}-[0-9a-f-]{27}/i)?.[0], 'recovered cut operation identity');
+    const { operationId: replayedOperation } = await admissionNotice(context, replay.from, { session: 'cut' });
     assert.equal(replayedOperation, operationId, 'admission crash recovery reuses the linked operation');
     assert.equal(await count(), admittedCount, 'handoff recovery cannot create a second operation');
     assert.equal(botApi.uploadCalls, uploads + 1, 'handoff replay cannot upload twice');

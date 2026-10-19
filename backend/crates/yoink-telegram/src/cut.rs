@@ -367,7 +367,7 @@ fn render_values(
     stage: CutStage,
     start: Option<f64>,
     end: Option<f64>,
-    operation_id: Option<Uuid>,
+    _operation_id: Option<Uuid>,
     id: Uuid,
     revision: i64,
     language: Language,
@@ -382,14 +382,7 @@ fn render_values(
         ),
         CutStage::Quality => translate(language, Key::CutQualityTitle, &[]),
         CutStage::Confirming => translate(language, Key::CutConfirming, &[]),
-        CutStage::Submitted => translate(
-            language,
-            Key::CutSubmitted,
-            &[(
-                "id",
-                &operation_id.map(|id| id.to_string()).unwrap_or_default(),
-            )],
-        ),
+        CutStage::Submitted => translate(language, Key::CutSubmitted, &[]),
         CutStage::Cancelled => translate(language, Key::CutCancelled, &[]),
     };
     (tail, keyboard_values(stage, &[], id, revision, language))

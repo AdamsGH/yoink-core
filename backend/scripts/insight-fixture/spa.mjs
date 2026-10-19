@@ -15,7 +15,7 @@ export async function spa(c) {
     const frontend=await c.startContainer(['--network',c.network,'--security-opt','no-new-privileges','--pids-limit','64','--memory','128m',c.config['frontend-image']]);
     const frontendAddress=await c.docker(['inspect','--format',`{{(index .NetworkSettings.Networks "${c.network}").IPAddress}}`,frontend]);assert(isIPv4(frontendAddress),'owned frontend IPv4');
     await c.waitFor(async()=>{try{return (await fetch(`http://${frontendAddress}/`,{signal:AbortSignal.timeout(1000)})).ok;}catch{return false;}},'built frontend readiness');
-    const token=await c.login(42),calls=[],sockets=new Set();
+    const token=await c.login(42),calls=[],frontendCalls=[],sockets=new Set();
     const server=http.createServer((req,res)=>{
       if(req.url==='/__fixture_session'){res.setHeader('content-type','text/html');res.end('<!doctype html><title>Fixture session</title>');return;}
       const backend=req.url.startsWith('/api/') || req.url.startsWith('/health/');
@@ -26,8 +26,9 @@ export async function spa(c) {
       }
       const upstream=http.request(`http://${backend?`127.0.0.1:${c.httpPort}`:`${frontendAddress}:80`}${req.url}`,{method:req.method,headers:req.headers},reply=>{
         if(backend)calls.push({path:req.url,method:req.method,status:reply.statusCode,authenticated:req.headers.authorization===`Bearer ${token}`,credentialEdits});
+        else frontendCalls.push({path:new URL(req.url,'http://fixture').pathname,status:reply.statusCode,content_type:reply.headers['content-type']});
         res.writeHead(reply.statusCode,reply.headers);reply.pipe(res);
-      });upstream.once('error',()=>{res.statusCode=502;res.end();});req.pipe(upstream);res.once('close',()=>upstream.destroy());
+      });upstream.once('error',()=>{if(!backend)frontendCalls.push({path:new URL(req.url,'http://fixture').pathname,status:502});res.statusCode=502;res.end();});req.pipe(upstream);res.once('close',()=>upstream.destroy());
     });
     server.on('connection',s=>{sockets.add(s);s.once('close',()=>sockets.delete(s));});
     defer(async()=>{for(const s of sockets)s.destroy();await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));});
@@ -37,8 +38,12 @@ export async function spa(c) {
     await browser.request('Page.addScriptToEvaluateOnNewDocument',{source:`window.__fixtureErrors=[];addEventListener('error',e=>{if(window.__fixtureErrors.length<8)window.__fixtureErrors.push(String(e.message).slice(0,512));});`});
     await browser.navigate(origin+'/__fixture_session');await browser.evaluate(`localStorage.setItem('access_token',${JSON.stringify(token)});localStorage.setItem('yoink_lang','en');`);
     for(const [path,contracts] of [['/insight/settings',['settings/me','byok/me']],['/admin/insight-tldr',['config/tldr','config/byok']]]){
-      const before=calls.length;await browser.navigate(origin+path);
-      try{await c.waitFor(()=>contracts.every(suffix=>calls.slice(before).some(x=>x.path===`/api/v1/insight/${suffix}` && x.status===200 && x.authenticated)),`built SPA ${path} authenticated requests`);}catch(error){throw new Error(`${path}: ${JSON.stringify(calls.slice(before))}\n${await browser.evaluate('document.body.innerText.slice(0,1500)')}\n${JSON.stringify(await browser.evaluate('window.__fixtureErrors')).replaceAll(token,'[fixture-token]')}`,{cause:error});}
+      const before=calls.length,frontendBefore=frontendCalls.length;await browser.navigate(origin+path);
+      try{await c.waitFor(()=>contracts.every(suffix=>calls.slice(before).some(x=>x.path===`/api/v1/insight/${suffix}` && x.status===200 && x.authenticated)),`built SPA ${path} authenticated requests`);}catch(error){
+        const state=JSON.parse(await c.docker(['inspect','--format','{{json .State}}',frontend]));
+        const page=await browser.evaluate(`({path:location.pathname,ready:document.readyState,root_children:document.getElementById('root')?.childElementCount??0,scripts:document.scripts.length,errors:window.__fixtureErrors})`);
+        throw new Error(JSON.stringify({path,backend:calls.slice(before),frontend:frontendCalls.slice(frontendBefore),container:{running:state.Running,oom:state.OOMKilled,exit:state.ExitCode},page}).replaceAll(token,'[fixture-token]'),{cause:error});
+      }
       assert.equal(await browser.evaluate('location.pathname'),path);
     }
     // Current integrated CredentialInput IDs, real React input events and

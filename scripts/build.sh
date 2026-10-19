@@ -6,8 +6,7 @@ cd "$(git rev-parse --show-toplevel)"
 target="${1:-all}"
 no_cache="${2:-}"
 case "$no_cache" in 1|true|yes|on) cache=(--no-cache) ;; "") cache=() ;; *) echo "Invalid no_cache value: $no_cache (use 1/true/yes/on)" >&2; exit 2 ;; esac
-cache_bust=$(git rev-parse HEAD)
-common=(--build-arg CACHE_BUST="$cache_bust" "${cache[@]}")
+common=("${cache[@]}")
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
@@ -24,19 +23,36 @@ run_build() {
   fi
 }
 
+build_runtime() {
+  if [ -n "$no_cache" ]; then
+    echo 'Release images are immutable. Bump backend/VERSION instead of rebuilding a tag with no_cache.' >&2
+    return 2
+  fi
+  just --justfile backend/justfile release-build
+}
+
+build_gateway() {
+  if [ -n "$no_cache" ]; then
+    echo 'YouTube images are immutable. Change yoink_youtube_image to a new SemVer instead of rebuilding with no_cache.' >&2
+    return 2
+  fi
+  just --justfile backend/justfile build-youtube-services
+}
+
 case "$target" in
-  yoink)    just --justfile backend/justfile check-build-space; run_build yoink backend/Dockerfile yoink/rust-backend:latest backend; run_build gateway backend/Dockerfile.youtube-auth-gateway yoink/youtube-auth-gateway:native ;;
+  yoink)    build_runtime ;;
+  gateway)  build_gateway ;;
   frontend) run_build frontend docker/Dockerfile.frontend yoink/frontend:latest ;;
   nginx)    run_build nginx docker/Dockerfile.nginx yoink/nginx:latest ;;
   tg)       run_build tg docker/Dockerfile.tg-bot-api yoink/tg-bot-api:latest ;;
-  backup)   just --justfile backend/justfile check-build-space; run_build backup backend/Dockerfile yoink/rust-operations:native backend operations ;;
+  backup)   just --justfile backend/justfile build-ops-image ;;
   all)
-    just --justfile backend/justfile check-build-space; run_build yoink backend/Dockerfile yoink/rust-backend:latest backend; run_build gateway backend/Dockerfile.youtube-auth-gateway yoink/youtube-auth-gateway:native
+    build_runtime
+    build_gateway
     run_build frontend docker/Dockerfile.frontend yoink/frontend:latest
     run_build nginx docker/Dockerfile.nginx yoink/nginx:latest
     ;;
-  *) echo "Unknown target: $target" >&2; echo "Usage: $0 <yoink|frontend|nginx|tg|backup|all> [no_cache]" >&2; exit 2 ;;
+  *) echo "Unknown target: $target" >&2; echo "Usage: $0 <yoink|gateway|frontend|nginx|tg|backup|all> [no_cache]" >&2; exit 2 ;;
 esac
 
-docker image prune -f >/dev/null 2>&1 || true
 printf 'Build complete: %s\n' "$target"

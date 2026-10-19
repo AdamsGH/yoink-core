@@ -7,6 +7,10 @@ export async function spaContracts(c) {
   if (!c.config['frontend-image']) throw new Error('DEPENDENCY: --frontend-image immutable built SPA image required; existing browser-topology.mjs pins yoink-fixture-frontend:browser and nginx:alpine, so cannot be reused with coordinator immutable images');
   const frontendPort = await freePort();
   await c.startContainer(['--name', `yoink-inbox-spa-${frontendPort}`, '--env', 'NGINX_ENTRYPOINT_WORKER_PROCESSES_AUTOTUNE=1', '--pids-limit', '64', '--memory', '128m', '-p', `127.0.0.1:${frontendPort}:80`, c.config['frontend-image']]);
+  await c.waitFor(async () => {
+    try { return (await fetch(`http://127.0.0.1:${frontendPort}/`, { signal: AbortSignal.timeout(1000) })).ok; }
+    catch { return false; }
+  }, 'built Inbox frontend readiness');
   const token = await c.login(42), calls = [], sockets = new Set();
   const item = await c.request('/api/v1/inbox/items', { token, method: 'POST', body: { url: 'https://github.com/fixture/http' }, expected: 201 });
   await c.waitFor(async () => (await c.request(`/api/v1/inbox/items/${item.id}`, { token })).status === 'classified', 'SPA native content prerequisite');

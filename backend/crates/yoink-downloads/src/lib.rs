@@ -20,6 +20,7 @@ pub use personal_cookies::{
     CookieDomain, PersonalCookieEntry, PersonalCookiePage, PersonalCookieStatus,
 };
 pub use quality::{QualityChoice, QualitySession, QualityStage, TelegramSubmission};
+pub mod history;
 mod settings;
 mod user_settings;
 pub use settings::{EditableSettings, ProxySettings, ResetSettings, SettingChange, SettingField};
@@ -186,6 +187,7 @@ pub struct DownloadService {
 pub struct DownloadNetworkConfig {
     system_proxy: Option<String>,
     no_cookie_domains: Vec<String>,
+    system_proxy_domains: Vec<String>,
     personal_cookie_limits: PersonalCookieLimits,
 }
 
@@ -218,6 +220,14 @@ impl Default for PersonalCookieLimits {
     }
 }
 impl DownloadNetworkConfig {
+    pub fn with_system_proxy_domains(
+        mut self,
+        domains: Vec<String>,
+    ) -> Result<Self, DownloadError> {
+        self.system_proxy_domains = Self::new(None, domains)?.no_cookie_domains;
+        Ok(self)
+    }
+
     pub fn with_personal_cookie_limits(
         mut self,
         limits: PersonalCookieLimits,
@@ -266,6 +276,16 @@ impl DownloadNetworkConfig {
         Ok(Self {
             system_proxy,
             no_cookie_domains: normalized,
+            system_proxy_domains: [
+                "youtube.com",
+                "youtu.be",
+                "tiktok.com",
+                "e621.net",
+                "x.com",
+                "twitter.com",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
             personal_cookie_limits: PersonalCookieLimits::default(),
         })
     }
@@ -683,6 +703,7 @@ impl DownloadService {
             no_cookie_domains: &self.network_config.no_cookie_domains,
             identity,
             system_proxy: self.network_config.system_proxy.as_deref(),
+            system_proxy_domains: &self.network_config.system_proxy_domains,
         }
     }
 
