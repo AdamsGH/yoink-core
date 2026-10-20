@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { commandHarness } from './command-harness.mjs';
+import { assertPrivateCaption, assertSuccessCleanup } from './presentation.mjs';
 
 export async function runBatchScenarios(context) {
   const { botApi, sourcePort, sourceFixture, fixtureSql, queryJob, waitFor, assertWorkspaceClean, playlistMedia, imageBytes, restartApp } = context;
@@ -28,6 +29,10 @@ export async function runBatchScenarios(context) {
     assert.equal(botApi.lastGroupBytes.length, 2);
     assert.equal(await counts(pair.operationId), '2|2');
     assert.equal(await journal(pair.operationId), '0|2|sent|2');
+    const albumSend = botApi.calls.slice(pair.callStart).find(call => call.method === 'sendmediagroup');
+    assertPrivateCaption({ caption: albumSend.captions[0], parse_mode: albumSend.parse_modes[0], caption_above: albumSend.caption_above[0] }, `${origin}/playlist.html?count=2`);
+    assert.equal(albumSend.captions[1], undefined, 'album caption must appear only on the first item');
+    await assertSuccessCleanup(context, pair);
     await h.replay(command, pair);
     const sourceBefore = sourceFixture.mediaRequests;
     const cachedBefore = botApi.cachedCalls;
@@ -36,6 +41,9 @@ export async function runBatchScenarios(context) {
     assert.equal(botApi.cachedCalls, cachedBefore + 1, 'batch cache reuses the entire confirmed album');
     assert.equal(botApi.uploadCalls, before + 1);
     assert.equal(sourceFixture.mediaRequests, sourceBefore);
+    const cachedAlbum = botApi.calls.slice(cached.callStart).find(call => call.method === 'sendmediagroup');
+    assert.deepEqual(cachedAlbum.captions, albumSend.captions, 'album cache must preserve its first-item caption');
+    await assertSuccessCleanup(context, cached);
 
     botApi.setSendMode('invalid-file-id-once');
     const recoverySources = sourceFixture.mediaRequests;
@@ -80,6 +88,12 @@ export async function runBatchScenarios(context) {
     await terminal(broken.operationId, 'failed');
     assert.equal(botApi.sendCalls, sendsBefore, 'a failed source batch must not send its downloaded prefix');
     assert.equal(await journal(broken.operationId), '');
+    for (const retained of [unknown, partial, broken]) {
+      await waitFor(async () => await fixtureSql(`SELECT finished FROM runtime_progress_notices WHERE operation_id='${retained.operationId}'`) === '1', 'terminal failure notice');
+      const noticeId = Number(await fixtureSql(`SELECT message_id FROM runtime_progress_notices WHERE operation_id='${retained.operationId}'`));
+      assert(!botApi.calls.some(call => call.method === 'deletemessage' && call.data.chat_id === 42
+        && [retained.messageId, noticeId].includes(call.data.message_id)), 'failed, partial and uncertain deliveries must retain their messages');
+    }
     await assertWorkspaceClean();
   } finally {
     botApi.setSendMode('success');

@@ -63,12 +63,22 @@ export async function runGroupScenarios(context) {
     assert.equal(firstSend.chat_id, group);
     assert.equal(firstSend.message_thread_id, 18);
     assert.equal(firstSend.reply_to_message_id, first.messageId);
+    assert.equal(firstSend.parse_mode, 'HTML');
+    assert(firstSend.caption.includes(`<a href="tg://user?id=${user}">${user}</a>`));
+    assert(firstSend.caption.includes('>source</a>'));
+    assert.equal(firstSend.caption_above, false);
+    assert(botApi.calls.slice(first.callStart).some(call => call.method === 'sendchataction'
+      && call.data.chat_id === group && call.data.message_thread_id === 18 && call.data.action === 'upload_video'));
+    assert(!botApi.calls.slice(first.callStart).some(call => call.method === 'deletemessage'
+      && call.data.chat_id === group && call.data.message_id === first.messageId), 'group source messages must remain');
     const request = await h.request(first.operationId);
     assert.equal(request.actor_id, user);
     assert.equal(request.target.chat_id, group);
     assert.equal(request.target.thread_id, 18);
     const noticeId = Number(await fixtureSql(`SELECT message_id FROM runtime_progress_notices WHERE operation_id='${first.operationId}'`));
     const notice = sends().find(call => call.messageId === noticeId);
+    assert(botApi.calls.slice(first.callStart).some(call => call.method === 'deletemessage'
+      && call.data.chat_id === group && call.data.message_id === noticeId), 'group progress notice must be removed');
     assert.equal(notice.data.message_thread_id, 18);
     assert((await edits(first.operationId)).every(call => Number(call.data.chat_id) === group && call.data.message_id === notice.messageId));
     const mediaCount = botApi.sendCalls;

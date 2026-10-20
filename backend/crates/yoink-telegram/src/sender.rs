@@ -1,19 +1,24 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, future::Future, task::Poll, time::Duration};
 
 use teloxide::{
     ApiError, Bot, RequestError,
     payloads::{
-        SendAudioSetters, SendDocumentSetters, SendMediaGroupSetters, SendMessageSetters,
-        SendPhotoSetters, SendVideoSetters,
+        SendAudioSetters, SendChatActionSetters, SendDocumentSetters, SendMediaGroupSetters,
+        SendMessageSetters, SendPhotoSetters, SendVideoSetters,
     },
     prelude::{ChatId, Requester},
     types::{
-        InputFile, InputMedia, InputMediaAudio, InputMediaDocument, InputMediaPhoto,
-        InputMediaVideo, Message, MessageId, ReplyParameters, ThreadId,
+        ChatAction, InputFile, InputMedia, InputMediaAudio, InputMediaDocument, InputMediaPhoto,
+        InputMediaVideo, Message, MessageId, ParseMode, ReplyParameters, ThreadId,
     },
 };
+use tokio_util::sync::CancellationToken;
 use yoink_domain::{CachedMediaKind, DeliveryTarget};
-use yoink_downloads::{DeliveredMedia, DeliveryArtifact, DeliveryError, DeliveryFuture};
+use yoink_downloads::{
+    DeliveredMedia, DeliveryArtifact, DeliveryError, DeliveryFuture, DeliveryPresentation,
+};
+
+use crate::media_caption::MediaCaption;
 
 #[derive(Clone)]
 pub(super) struct TelegramDelivery {
@@ -133,21 +138,38 @@ fn input_file(artifact: DeliveryArtifact) -> InputFile {
     }
 }
 
-fn input_media(kind: MediaKind, artifact: DeliveryArtifact, spoiler: bool) -> InputMedia {
+fn input_media(
+    kind: MediaKind,
+    artifact: DeliveryArtifact,
+    spoiler: bool,
+    caption: Option<&MediaCaption>,
+) -> InputMedia {
     let file = input_file(artifact);
+    macro_rules! configure {
+        ($media:expr) => {{
+            let mut media = $media;
+            if let Some(caption) = caption {
+                media.caption = Some(caption.html.clone());
+                media.parse_mode = Some(ParseMode::Html);
+            }
+            media
+        }};
+    }
     match kind {
         MediaKind::Photo => {
-            let mut media = InputMediaPhoto::new(file);
+            let mut media = configure!(InputMediaPhoto::new(file));
             media.has_spoiler = spoiler;
+            media.show_caption_above_media = caption.is_some_and(|caption| caption.above);
             InputMedia::Photo(media)
         }
         MediaKind::Video => {
-            let mut media = InputMediaVideo::new(file);
+            let mut media = configure!(InputMediaVideo::new(file));
             media.has_spoiler = spoiler;
+            media.show_caption_above_media = caption.is_some_and(|caption| caption.above);
             InputMedia::Video(media)
         }
-        MediaKind::Audio => InputMedia::Audio(InputMediaAudio::new(file)),
-        MediaKind::Document => InputMedia::Document(InputMediaDocument::new(file)),
+        MediaKind::Audio => InputMedia::Audio(configure!(InputMediaAudio::new(file))),
+        MediaKind::Document => InputMedia::Document(configure!(InputMediaDocument::new(file))),
     }
 }
 
@@ -215,6 +237,7 @@ async fn send_single(
     artifact: DeliveryArtifact,
     thread: Option<ThreadId>,
     spoiler: bool,
+    caption: Option<&MediaCaption>,
 ) -> Result<Message, RequestError> {
     let chat = ChatId(target.chat_id());
     let file = input_file(artifact);
@@ -224,6 +247,11 @@ async fn send_single(
     macro_rules! configure {
         ($request:expr) => {{
             let mut request = $request;
+            if let Some(caption) = caption {
+                request = request
+                    .caption(caption.html.clone())
+                    .parse_mode(ParseMode::Html);
+            }
             if let Some(thread) = thread {
                 request = request.message_thread_id(thread);
             }
@@ -234,8 +262,16 @@ async fn send_single(
         }};
     }
     match kind {
-        MediaKind::Photo => configure!(bot.send_photo(chat, file).has_spoiler(spoiler)),
-        MediaKind::Video => configure!(bot.send_video(chat, file).has_spoiler(spoiler)),
+        MediaKind::Photo => configure!(
+            bot.send_photo(chat, file)
+                .has_spoiler(spoiler)
+                .show_caption_above_media(caption.is_some_and(|caption| caption.above))
+        ),
+        MediaKind::Video => configure!(
+            bot.send_video(chat, file)
+                .has_spoiler(spoiler)
+                .show_caption_above_media(caption.is_some_and(|caption| caption.above))
+        ),
         MediaKind::Audio => configure!(bot.send_audio(chat, file)),
         MediaKind::Document => configure!(bot.send_document(chat, file)),
     }
@@ -248,12 +284,21 @@ async fn send_group(
     artifacts: Vec<DeliveryArtifact>,
     thread: Option<ThreadId>,
     spoiler: bool,
+    caption: Option<&MediaCaption>,
 ) -> Result<Vec<Message>, RequestError> {
     let media: Vec<InputMedia> = kinds
         .iter()
         .copied()
         .zip(artifacts)
-        .map(|(kind, artifact)| input_media(kind, artifact, spoiler))
+        .enumerate()
+        .map(|(index, (kind, artifact))| {
+            input_media(
+                kind,
+                artifact,
+                spoiler,
+                if index == 0 { caption } else { None },
+            )
+        })
         .collect();
     let mut request = bot.send_media_group(ChatId(target.chat_id()), media);
     if let Some(thread) = thread {
@@ -266,6 +311,63 @@ async fn send_group(
         request = request.reply_parameters(reply);
     }
     request.await
+}
+
+async fn guard_upload_start<F>(
+    upload: F,
+    cancel: &CancellationToken,
+) -> Result<Vec<DeliveredMedia>, DeliveryError>
+where
+    F: Future<Output = Result<Vec<DeliveredMedia>, DeliveryError>>,
+{
+    tokio::pin!(upload);
+    let mut started = false;
+    std::future::poll_fn(|cx| {
+        if !started {
+            if cancel.is_cancelled() {
+                return Poll::Ready(Err(DeliveryError::Rejected));
+            }
+            // The first poll commits the send. Later cancellation cannot discard its receipt.
+            started = true;
+        }
+        upload.as_mut().poll(cx)
+    })
+    .await
+}
+
+async fn upload_action(
+    bot: &Bot,
+    target: DeliveryTarget,
+    kind: MediaKind,
+    thread: Option<ThreadId>,
+) {
+    let action = match kind {
+        MediaKind::Photo => ChatAction::UploadPhoto,
+        MediaKind::Video => ChatAction::UploadVideo,
+        MediaKind::Audio => ChatAction::UploadVoice,
+        MediaKind::Document => ChatAction::UploadDocument,
+    };
+    let mut request = bot.send_chat_action(ChatId(target.chat_id()), action);
+    if let Some(thread) = thread {
+        request = request.message_thread_id(thread);
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(4), request).await;
+}
+
+async fn upload_activity(
+    bot: &Bot,
+    target: DeliveryTarget,
+    kind: MediaKind,
+    thread: Option<ThreadId>,
+) {
+    // Telegram expires chat actions after five seconds. The upload future owns this loop.
+    let refresh = Duration::from_secs(4);
+    let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + refresh, refresh);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        upload_action(bot, target, kind, thread).await;
+    }
 }
 
 impl yoink_downloads::Delivery for TelegramDelivery {
@@ -301,6 +403,46 @@ impl yoink_downloads::Delivery for TelegramDelivery {
         send_as_file: bool,
         spoiler: bool,
         artifacts: Vec<DeliveryArtifact>,
+    ) -> DeliveryFuture<'_> {
+        self.deliver_media(
+            target,
+            send_as_file,
+            spoiler,
+            artifacts,
+            None,
+            CancellationToken::new(),
+        )
+    }
+
+    fn deliver_with_presentation(
+        &self,
+        target: DeliveryTarget,
+        send_as_file: bool,
+        spoiler: bool,
+        presentation: Option<DeliveryPresentation>,
+        activity_cancel: CancellationToken,
+        artifacts: Vec<DeliveryArtifact>,
+    ) -> DeliveryFuture<'_> {
+        self.deliver_media(
+            target,
+            send_as_file,
+            spoiler,
+            artifacts,
+            presentation,
+            activity_cancel,
+        )
+    }
+}
+
+impl TelegramDelivery {
+    fn deliver_media(
+        &self,
+        target: DeliveryTarget,
+        send_as_file: bool,
+        spoiler: bool,
+        artifacts: Vec<DeliveryArtifact>,
+        presentation: Option<DeliveryPresentation>,
+        activity_cancel: CancellationToken,
     ) -> DeliveryFuture<'_> {
         let bot = self.bot.clone();
         Box::pin(async move {
@@ -380,29 +522,102 @@ impl yoink_downloads::Delivery for TelegramDelivery {
                 return Err(DeliveryError::Rejected);
             }
             let thread = thread_id(target)?;
-            if artifacts.len() == 1 {
-                let message = send_single(
-                    &bot,
-                    target,
-                    kinds[0],
-                    artifacts
-                        .into_iter()
-                        .next()
-                        .ok_or(DeliveryError::Rejected)?,
-                    thread,
-                    spoiler,
-                )
-                .await
-                .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
-                let receipts = validate_messages(vec![message], &kinds, target.chat_id(), thread)?;
-                Ok(receipts)
+            let caption = presentation
+                .as_ref()
+                .and_then(|presentation| MediaCaption::new(target, presentation, &artifacts));
+            let kind = if kinds.contains(&MediaKind::Video) {
+                MediaKind::Video
             } else {
-                let messages = send_group(&bot, target, &kinds, artifacts, thread, spoiler)
+                kinds[0]
+            };
+            let upload = async {
+                if artifacts.len() == 1 {
+                    let message = send_single(
+                        &bot,
+                        target,
+                        kinds[0],
+                        artifacts
+                            .into_iter()
+                            .next()
+                            .ok_or(DeliveryError::Rejected)?,
+                        thread,
+                        spoiler,
+                        caption.as_ref(),
+                    )
                     .await
                     .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
-                validate_messages(messages, &kinds, target.chat_id(), thread)
+                    let receipts =
+                        validate_messages(vec![message], &kinds, target.chat_id(), thread)?;
+                    Ok(receipts)
+                } else {
+                    let messages = send_group(
+                        &bot,
+                        target,
+                        &kinds,
+                        artifacts,
+                        thread,
+                        spoiler,
+                        caption.as_ref(),
+                    )
+                    .await
+                    .map_err(|error| classify_delivery_error_for_origin(&error, is_cached))?;
+                    validate_messages(messages, &kinds, target.chat_id(), thread)
+                }
+            };
+            // Announce before polling the upload, including sends that finish in one poll.
+            tokio::select! {
+                biased;
+                _ = activity_cancel.cancelled() => return Err(DeliveryError::Rejected),
+                _ = upload_action(&bot, target, kind, thread) => {}
+            }
+            let upload = guard_upload_start(upload, &activity_cancel);
+            let activity = async {
+                tokio::select! {
+                    biased;
+                    _ = activity_cancel.cancelled() => {}
+                    _ = upload_activity(&bot, target, kind, thread) => {}
+                }
+                // Stop chat actions without abandoning a possibly accepted upload receipt.
+                std::future::pending::<()>().await;
+            };
+            tokio::select! {
+                biased;
+                result = upload => result,
+                _ = activity => Err(DeliveryError::Unknown),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod upload_start_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancellation_before_the_first_poll_cannot_start_a_send() {
+        let cancel = CancellationToken::new();
+        let upload = guard_upload_start(
+            async { panic!("cancelled send must not be polled") },
+            &cancel,
+        );
+        cancel.cancel();
+        assert!(matches!(upload.await, Err(DeliveryError::Rejected)));
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_the_first_poll_preserves_the_receipt() {
+        let cancel = CancellationToken::new();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let upload = guard_upload_start(async { rx.await.unwrap() }, &cancel);
+        tokio::pin!(upload);
+        assert!(matches!(futures::poll!(&mut upload), Poll::Pending));
+        cancel.cancel();
+        tx.send(Ok(vec![DeliveredMedia {
+            message_id: 1001,
+            file_id: None,
+        }]))
+        .unwrap();
+        assert_eq!(upload.await.unwrap()[0].message_id, 1001);
     }
 }
 
@@ -451,9 +666,13 @@ mod tests {
                 1024,
             )
             .unwrap();
-            let value =
-                serde_json::to_value(input_media(kind, DeliveryArtifact::Cached(cached), true))
-                    .unwrap();
+            let value = serde_json::to_value(input_media(
+                kind,
+                DeliveryArtifact::Cached(cached),
+                true,
+                None,
+            ))
+            .unwrap();
             if matches!(kind, MediaKind::Photo | MediaKind::Video) {
                 assert_eq!(value["has_spoiler"], true);
             } else {

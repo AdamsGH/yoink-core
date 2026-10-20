@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use teloxide::{
     prelude::*,
-    types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message},
+    types::{CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntity},
 };
 use uuid::Uuid;
 use yoink_domain::DeliveryTarget;
@@ -276,7 +276,7 @@ fn render(session: &CutSession, language: Language) -> (String, InlineKeyboardMa
         text = translate(
             language,
             Key::CutRanges,
-            &[("ranges", &ranges_display(&session.clips))],
+            &[("ranges", &ranges_display(&session.clips, language))],
         );
         if matches!(session.stage, CutStage::Start | CutStage::End) {
             let key = if session.stage == CutStage::Start {
@@ -347,13 +347,21 @@ fn selected_confirmation_keyboard(
     )
 }
 
-fn ranges_display(clips: &[yoink_domain::ClipRange]) -> String {
+fn ranges_display(clips: &[yoink_domain::ClipRange], language: Language) -> String {
     clips
         .iter()
         .enumerate()
         .map(|(index, clip)| {
+            let duration = translate(
+                language,
+                Key::CutDuration,
+                &[(
+                    "duration",
+                    &time_display(Some(clip.end_seconds() - clip.start_seconds())),
+                )],
+            );
             format!(
-                "{}. {}-{}",
+                "{}. {}-{}\n   {duration}",
                 index + 1,
                 time_display(Some(clip.start_seconds())),
                 time_display(Some(clip.end_seconds()))
@@ -361,6 +369,27 @@ fn ranges_display(clips: &[yoink_domain::ClipRange]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn session_entities(
+    text: &str,
+    clips: &[yoink_domain::ClipRange],
+    language: Language,
+) -> Vec<MessageEntity> {
+    let header = text.lines().next().unwrap_or_default();
+    let mut entities = vec![MessageEntity::bold(0, header.encode_utf16().count())];
+    if !clips.is_empty() {
+        let ranges = ranges_display(clips, language);
+        if let Some(byte_offset) = text.find(&ranges) {
+            let mut offset = text[..byte_offset].encode_utf16().count();
+            for line in ranges.lines() {
+                let length = line.encode_utf16().count();
+                entities.push(MessageEntity::code(offset, length));
+                offset += length + 1;
+            }
+        }
+    }
+    entities
 }
 
 fn render_values(
@@ -649,7 +678,8 @@ pub(super) async fn send_session(
     language: Language,
 ) {
     let (text, markup) = render(session, language);
-    let send = bot.send_message(source.chat.id, text);
+    let entities = session_entities(&text, &session.clips, language);
+    let send = bot.send_message(source.chat.id, text).entities(entities);
     if matches!(
         session.stage,
         CutStage::Ready | CutStage::Quality | CutStage::Confirming
@@ -769,9 +799,11 @@ pub(super) async fn handle_callback(
     match operation {
         Ok(Outcome::Updated(session)) => {
             let (text, markup) = render(&session, language);
+            let entities = session_entities(&text, &session.clips, language);
             let _ = bot.answer_callback_query(query.id).await;
             let _ = bot
                 .edit_message_text(message.chat.id, message.id, text)
+                .entities(entities)
                 .reply_markup(markup)
                 .await;
         }
@@ -914,11 +946,18 @@ mod tests {
             })
             .collect::<Vec<_>>();
         clips[19] = yoink_domain::ClipRange::new(1.0e300, f64::MAX).unwrap();
-        let shown = ranges_display(&clips);
+        let shown = ranges_display(&clips, Language::English);
         assert!(shown.contains("20. 1.000e300-1.798e308"));
         for language in [Language::English, Language::Russian] {
+            let shown = ranges_display(&clips, language);
             let summary = translate(language, Key::CutRanges, &[("ranges", &shown)]);
             assert!(summary.len() < 4096);
+            let entities = session_entities(&summary, &clips, language);
+            assert_eq!(entities.len(), 1 + clips.len() * 2);
+            assert!(shown.contains(&translate(language, Key::CutDuration, &[("duration", "1")])));
+            for entity in &entities {
+                assert!(entity.offset + entity.length <= summary.encode_utf16().count());
+            }
             let markup =
                 serde_json::to_value(keyboard_values(CutStage::Ready, &clips, id, 9, language))
                     .unwrap();

@@ -15,6 +15,7 @@ import { liveYoutubeConfiguration, runLiveYoutubeScenario } from './media-fixtur
 import { runPreferenceScenarios } from './media-fixture/preference-scenarios.mjs';
 import { runBatchScenarios } from './media-fixture/batch-scenarios.mjs';
 import { runProgressScenarios } from './media-fixture/progress-scenarios.mjs';
+import { runPresentationScenarios } from './media-fixture/presentation.mjs';
 import { runGroupScenarios } from './media-fixture/group-scenarios.mjs';
 import { startGallerySource } from './media-fixture/gallery-source.mjs';
 import { runProviderRoutingScenarios } from './media-fixture/provider-routing-scenarios.mjs';
@@ -64,7 +65,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const scenario = process.argv[2] ?? 'all';
-assert(['live-youtube', 'native-products', 'all', 'admission', 'delivery', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [live-youtube|native-products|all|admission|delivery|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
+assert(['presentation', 'live-youtube', 'native-products', 'all', 'admission', 'delivery', 'personal-controls', 'private-user', 'inline', 'youtube-auth', 'cookie-browser', 'provider-routing', 'deferred-media', 'gallery', 'subtitles', 'subtitle-settings', 'adaptive', 'formats', 'settings', 'language', 'onboarding', 'admin', 'menus', 'group-admin', 'membership', 'quotas', 'nsfw', 'cut', 'cut-quality', 'quality-cut', 'cut-segments', 'quality', 'urls', 'uncache', 'proxy', 'cookies', 'cookie-uploads', 'cookie-urls'].includes(scenario) && process.argv.length <= 3, 'usage: test-media.mjs [presentation|live-youtube|native-products|all|admission|delivery|personal-controls|private-user|inline|youtube-auth|cookie-browser|provider-routing|deferred-media|gallery|subtitles|subtitle-settings|adaptive|formats|settings|language|onboarding|admin|menus|group-admin|membership|quotas|nsfw|cut|cut-quality|quality-cut|cut-segments|quality|urls|uncache|proxy|cookies|cookie-uploads|cookie-urls]');
 const selectedImages = configuredImages(process.env, {
   image: scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend:experimental',
   fixtureImage: scenario === 'youtube-auth' ? 'yoink-native:youtube-auth-review' : 'yoink/rust-backend-fixture:experimental',
@@ -273,12 +274,12 @@ async function launchApp() {
     ...(galleryEnabled ? (galleryTrusted ? gallerySource.dockerArgs : gallerySource.untrustedDockerArgs) : []),
     '--env',`YOINK_RUST_WORKER_ALLOWED_PRIVATE_ORIGINS=${JSON.stringify(scenario === 'youtube-auth' ? [] : [`http://127.0.0.1:${sourcePort}`, ...(scenario === 'inline' && galleryEnabled ? ['https://www.youtube.com', 'https://youtube.com'] : []), ...(galleryEnabled ? ['https://imgbox.com', 'https://boards.4chan.org', 'https://a.4cdn.org', 'https://i.4cdn.org', 'https://instagram.com', 'https://www.instagram.com'] : [])])}`,
     '--env',`YOINK_RUST_WORKER_ALLOWED_PROXY_ORIGINS=${JSON.stringify(scenario === 'youtube-auth' ? [] : [`http://127.0.0.1:${proxyPort}`])}`,
-    '--env','YOINK_RUST_DOWNLOAD_LEASE_SECS=6','--env','YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1','--env','YOINK_RUST_DELIVERY_TIMEOUT_SECS=2',
+    '--env',`YOINK_RUST_DOWNLOAD_LEASE_SECS=${scenario === 'presentation' ? 30 : 6}`,'--env','YOINK_RUST_DOWNLOAD_HEARTBEAT_SECS=1','--env',`YOINK_RUST_DELIVERY_TIMEOUT_SECS=${scenario === 'presentation' ? 15 : 2}`,
     '--env','YOINK_RUST_SHUTDOWN_TIMEOUT_SECS=135','--env',`YOINK_RUST_DOWNLOAD_TIMEOUT_SECS=${downloadTimeoutSeconds}`,'--env',`YOINK_RUST_WORKER_SOCKET_TIMEOUT_SECS=${workerSocketTimeoutSeconds}`,
     '--env','YOINK_RUST_DOWNLOAD_RETRY_DELAY_SECS=1','--env','YOINK_RUST_DOWNLOAD_POLL_INTERVAL_MS=50',
     '--env','YOINK_RUST_DOWNLOAD_CONCURRENCY=1','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING=3','--env','YOINK_RUST_DOWNLOAD_MAX_PENDING_PER_USER=2',
     // The aggregate routing suite submits bursts; quotas have a separate default-limit scenario.
-    ...(['all', 'admission', 'delivery', 'private-user', 'inline', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
+    ...(['all', 'admission', 'delivery', 'presentation', 'private-user', 'inline', 'urls', 'nsfw', 'provider-routing'].includes(scenario) ? ['--env','YOINK_RUST_DOWNLOAD_QUOTA_MINUTE=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_HOUR=1000000','--env','YOINK_RUST_DOWNLOAD_QUOTA_DAY=1000000'] : []),
     ...(scenario === 'provider-routing' ? ['--env','YOINK_RUST_DOWNLOAD_MAX_BYTES=65536','--env','YOINK_RUST_DOWNLOAD_WORKSPACE_MAX_BYTES=196608','--env','YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=1'] : []),
     ...(youtubeAuthLimits ? ['--env',`YOINK_RUST_DOWNLOAD_MAX_BYTES=${youtubeAuthLimits.maxBytes}`, '--env',`YOINK_RUST_DOWNLOAD_MAX_ITEMS=${youtubeAuthLimits.maxItems}`] : []),
     ...(downloadMaxAttempts===undefined?[]:['--env',`YOINK_RUST_DOWNLOAD_MAX_ATTEMPTS=${downloadMaxAttempts}`]),
@@ -811,6 +812,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
   workerSocketTimeoutSeconds = 20;
   if (scenario !== 'native-products') await restartApp();
   if (scenario === 'all' || scenario === 'delivery') summaries.push(await runProgressScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'presentation') summaries.push(await runPresentationScenarios(commandContext));
   if (scenario === 'all' || scenario === 'subtitles') summaries.push(await runSubtitleScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'subtitle-settings') summaries.push(await runSubtitleSettingsScenarios({ ...commandContext, restartApp,
     proxyUrl: `http://${proxyUser}:${proxyPassword}@127.0.0.1:${proxyPort}` }));
@@ -827,7 +829,7 @@ await mkdir(path.join(cookieFileDir, 'allowed'), { recursive: true, mode: 0o755 
 if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
   if (scenario === 'group-admin') summaries.push(await runGroupAdminScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
   if (scenario === 'membership') summaries.push(await runMembershipScenarios({ ...commandContext, restartApp, appHttpPort, telegramToken: token }));
-  if (scenario === 'all' || scenario === 'cut') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));
+  if (scenario === 'all' || scenario === 'cut' || scenario === 'presentation') summaries.push(await runCutScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut-quality') summaries.push(await runCutQualityScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'quality-cut') summaries.push(await runQualityCutScenarios({ ...commandContext, restartApp }));
   if (scenario === 'all' || scenario === 'cut-segments') summaries.push(await runCutSegmentsScenarios({ ...commandContext, restartApp }));
@@ -881,7 +883,7 @@ if (scenario === 'menus') summaries.push(await runMenuScenarios({ ...commandCont
     restartApp });
   summaries.push(gallerySummary);
   }
-  if (scenario === 'all' || scenario === 'delivery' || scenario === 'urls') summaries.push(await runGroupScenarios({ ...commandContext, playlistMedia, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
+  if (scenario === 'all' || scenario === 'delivery' || scenario === 'urls' || scenario === 'presentation') summaries.push(await runGroupScenarios({ ...commandContext, playlistMedia, restartGroups: async enabled => { groupsEnabled = enabled; await restartApp(); } }));
   assertNoSecret(await docker(['logs', appContainerId]), 'application logs after failure and credential scenarios');
   assertNoSecret(JSON.stringify(botApi.calls), 'Telegram output after failure scenarios');
   if (scenario === 'native-products') await stopProductsGracefully();

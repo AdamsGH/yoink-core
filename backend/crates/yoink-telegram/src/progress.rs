@@ -129,6 +129,32 @@ fn classify(error: RequestError, interval: Duration) -> EditOutcome {
     }
 }
 
+fn classify_delete(error: RequestError, interval: Duration) -> EditOutcome {
+    match error {
+        RequestError::Api(ApiError::MessageToDeleteNotFound) => EditOutcome::Acknowledged,
+        error => classify(error, interval),
+    }
+}
+
+fn cleanup_messages(record: &OperationRecord, notice: &ProgressNotice) -> Vec<MessageId> {
+    if record.status != OperationStatus::Succeeded {
+        return Vec::new();
+    }
+    let mut messages = Vec::new();
+    if let Some(target) = record.target
+        && target.chat_id() > 0
+        && target.chat_id() as u64 == record.actor_id
+        && target.thread_id().is_none()
+        && let Some(id) = target.reply_to_message_id()
+    {
+        messages.push(MessageId(id));
+    }
+    if !notice.input_only() && !messages.contains(&MessageId(notice.message.message_id)) {
+        messages.push(MessageId(notice.message.message_id));
+    }
+    messages
+}
+
 async fn advance(
     service: &DownloadService,
     notice: &ProgressNotice,
@@ -169,6 +195,57 @@ async fn update(
             return;
         }
     };
+    if record.status == OperationStatus::Succeeded {
+        for id in cleanup_messages(&record, &notice) {
+            let result = tokio::time::timeout(
+                config.edit_timeout,
+                bot.delete_message(ChatId(message.chat_id), id).send(),
+            )
+            .await;
+            let outcome = match result {
+                Ok(Ok(_)) => EditOutcome::Acknowledged,
+                Ok(Err(error)) => classify_delete(error, config.interval),
+                Err(_) => EditOutcome::Retry(config.interval),
+            };
+            match outcome {
+                EditOutcome::Acknowledged => {}
+                EditOutcome::Stop => {
+                    tracing::warn!("Telegram success cleanup could not remove a message");
+                }
+                EditOutcome::Retry(delay) => {
+                    advance(service, &notice, None, false, delay).await;
+                    return;
+                }
+            }
+        }
+        // A late confirmed reply can still replace an already finished input-only reference.
+        let text = if notice.input_only() { None } else { Some("") };
+        advance(service, &notice, text, true, config.interval).await;
+        return;
+    }
+    if notice.input_only() {
+        advance(
+            service,
+            &notice,
+            None,
+            terminal(record.status),
+            config.interval,
+        )
+        .await;
+        return;
+    }
+    // A removed or inaccessible notice still tracks the eventual private-input cleanup.
+    if notice.last_text.as_deref() == Some("") {
+        advance(
+            service,
+            &notice,
+            None,
+            terminal(record.status),
+            config.interval,
+        )
+        .await;
+        return;
+    }
     let text = render(&record, Language::from_code(Some(&message.language)));
     let finished = terminal(record.status);
     if notice.last_text.as_deref() == Some(text.as_str()) {
@@ -194,13 +271,13 @@ async fn update(
         EditOutcome::Acknowledged => {
             advance(service, &notice, Some(&text), finished, config.interval).await
         }
-        EditOutcome::Stop => advance(service, &notice, None, true, config.interval).await,
+        EditOutcome::Stop => advance(service, &notice, Some(""), finished, config.interval).await,
         EditOutcome::Retry(delay) => advance(service, &notice, None, false, delay).await,
     }
 }
 
 /// One edit at most per interval, with durable fair scheduling. Dropping the future cancels work.
-/// Only known message IDs are edited, so retries after timeout or restart cannot duplicate media.
+/// Only confirmed message IDs are edited or deleted; recovery never resends media.
 pub(super) async fn run(bot: Bot, service: Option<DownloadService>, config: ProgressConfig) {
     let Some(service) = service else {
         std::future::pending::<()>().await;
@@ -347,6 +424,76 @@ mod tests {
             assert!(ProgressConfig::new(Duration::from_secs(1), invalid).is_err());
         }
         assert!(ProgressConfig::new(Duration::from_secs(1), Duration::from_secs(60)).is_ok());
+    }
+
+    #[test]
+    fn success_removes_the_private_input_and_notice_but_preserves_group_inputs() {
+        let notice = ProgressNotice {
+            message: yoink_storage::ProgressMessage {
+                operation_id: uuid::Uuid::nil(),
+                actor_id: 42,
+                bot_id: 123456,
+                chat_id: 42,
+                message_id: 1001,
+                language: "en".into(),
+            },
+            last_text: Some("Uploading.".into()),
+        };
+        let mut record = record(OperationStatus::Succeeded);
+        record.target =
+            Some(yoink_domain::DeliveryTarget::new(123456, 42, None, Some(17)).unwrap());
+        assert_eq!(
+            cleanup_messages(&record, &notice),
+            [MessageId(17), MessageId(1001)]
+        );
+        for target in [
+            yoink_domain::DeliveryTarget::new(123456, -100, None, Some(17)).unwrap(),
+            yoink_domain::DeliveryTarget::new(123456, -100, Some(7), Some(17)).unwrap(),
+            yoink_domain::DeliveryTarget::new(123456, 43, None, Some(17)).unwrap(),
+        ] {
+            record.target = Some(target);
+            assert_eq!(cleanup_messages(&record, &notice), [MessageId(1001)]);
+        }
+        for status in [
+            OperationStatus::Queued,
+            OperationStatus::Running,
+            OperationStatus::Delivering,
+            OperationStatus::Failed,
+            OperationStatus::Cancelled,
+            OperationStatus::DeliveryUnknown,
+            OperationStatus::DeliveryPartial,
+        ] {
+            record.status = status;
+            assert!(cleanup_messages(&record, &notice).is_empty());
+        }
+    }
+
+    #[test]
+    fn deletion_retries_are_idempotent_and_permanent_failures_stop() {
+        let interval = Duration::from_secs(2);
+        assert_eq!(
+            classify_delete(
+                RequestError::Api(ApiError::MessageToDeleteNotFound),
+                interval
+            ),
+            EditOutcome::Acknowledged
+        );
+        assert_eq!(
+            classify_delete(RequestError::Api(ApiError::MessageCantBeDeleted), interval),
+            EditOutcome::Stop
+        );
+        let delay = serde_json::from_value(serde_json::json!(3)).unwrap();
+        assert_eq!(
+            classify_delete(RequestError::RetryAfter(delay), interval),
+            EditOutcome::Retry(Duration::from_secs(3))
+        );
+        assert_eq!(
+            classify_delete(
+                RequestError::Api(ApiError::Unknown("Internal Server Error".into())),
+                interval
+            ),
+            EditOutcome::Retry(interval)
+        );
     }
 
     #[test]

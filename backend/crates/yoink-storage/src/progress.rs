@@ -4,7 +4,9 @@ use yoink_db::query;
 
 use crate::{Store, StoreError};
 
-/// A confirmed status message, never a request to send a new Telegram message.
+pub(crate) const INPUT_ONLY_NOTICE: &str = "[pending-input-cleanup]";
+
+/// A confirmed message reference, never a request to send a new Telegram message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgressMessage {
     pub operation_id: Uuid,
@@ -18,7 +20,14 @@ pub struct ProgressMessage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgressNotice {
     pub message: ProgressMessage,
+    /// Empty text suppresses edits to a removed notice. Input-only references carry a reserved marker.
     pub last_text: Option<String>,
+}
+
+impl ProgressNotice {
+    pub fn input_only(&self) -> bool {
+        self.last_text.as_deref() == Some(INPUT_ONLY_NOTICE)
+    }
 }
 
 impl ProgressMessage {
@@ -77,6 +86,7 @@ impl Store {
             .bind(message.chat_id)
             .bind(message.message_id)
             .bind(message.language.as_str())
+            .bind(INPUT_ONLY_NOTICE)
             .fetch_optional(self.database())
             .await
             .map(|row| row.is_some())

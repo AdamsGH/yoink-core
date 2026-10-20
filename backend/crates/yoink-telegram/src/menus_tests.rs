@@ -212,7 +212,7 @@ fn failures_are_safe_fixed_categories_and_rate_limit_is_not_shortened() {
     );
     assert_eq!(
         classify(&RequestError::Api(ApiError::BotBlocked), retry),
-        Failure::Unreachable
+        Failure::Unreachable(UnavailableScope::Target)
     );
     assert_eq!(
         classify(
@@ -239,6 +239,108 @@ fn failures_are_safe_fixed_categories_and_rate_limit_is_not_shortened() {
         }
         .valid()
     );
+}
+
+#[test]
+fn unavailable_targets_are_debug_only_and_real_failures_remain_redacted_warnings() {
+    use std::fmt::Write as _;
+    use tracing::{Event, Level, Metadata, Subscriber, field::Visit, span};
+
+    type Events = Arc<Mutex<Vec<(Level, String)>>>;
+    struct Capture(Events);
+    struct Fields(String);
+    impl Visit for Fields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            write!(&mut self.0, " {}={value:?}", field.name()).unwrap();
+        }
+    }
+    impl Subscriber for Capture {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+        fn event(&self, event: &Event<'_>) {
+            let mut fields = Fields(String::new());
+            event.record(&mut fields);
+            self.0
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), fields.0));
+        }
+        fn enter(&self, _: &span::Id) {}
+        fn exit(&self, _: &span::Id) {}
+    }
+
+    let events = Events::default();
+    let retry = Duration::from_secs(1);
+    let expected = [
+        (ApiError::BotBlocked, "bot_blocked"),
+        (ApiError::ChatNotFound, "chat_not_found"),
+        (ApiError::BotKicked, "bot_kicked"),
+        (ApiError::BotKickedFromSupergroup, "bot_kicked"),
+        (ApiError::GroupDeactivated, "group_deactivated"),
+        (ApiError::UserDeactivated, "user_deactivated"),
+        (ApiError::UserNotFound, "user_not_found"),
+        (
+            ApiError::Unknown("Bad Request: USER_ID_INVALID".into()),
+            "user_id_invalid",
+        ),
+    ];
+    tracing::subscriber::with_default(Capture(events.clone()), || {
+        for (error, _) in &expected {
+            assert_eq!(
+                report_failure(
+                    &RequestError::Api(error.clone()),
+                    retry,
+                    "chat_member",
+                    "delete_my_commands"
+                ),
+                Failure::Unreachable(
+                    if matches!(
+                        error,
+                        ApiError::ChatNotFound
+                            | ApiError::BotKicked
+                            | ApiError::BotKickedFromSupergroup
+                            | ApiError::GroupDeactivated
+                    ) {
+                        UnavailableScope::Chat
+                    } else {
+                        UnavailableScope::Target
+                    }
+                )
+            );
+        }
+        report_failure(
+            &RequestError::Api(ApiError::Unknown("token/SECRET".into())),
+            retry,
+            "global",
+            "set_my_commands",
+        );
+        report_failure(
+            &RequestError::RetryAfter(teloxide::types::Seconds::from_seconds(9)),
+            retry,
+            "chat",
+            "delete_my_commands",
+        );
+    });
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), expected.len() + 2);
+    for ((level, fields), (_, reason)) in events.iter().zip(&expected) {
+        assert_eq!(*level, Level::DEBUG);
+        assert!(fields.contains(reason));
+        assert!(fields.contains("chat_member"));
+        assert!(fields.contains("delete_my_commands"));
+    }
+    for (level, fields) in &events[expected.len()..] {
+        assert_eq!(*level, Level::WARN);
+        assert!(!fields.contains("SECRET"));
+    }
+    assert!(events[expected.len()].1.contains("retryable"));
+    assert!(events[expected.len() + 1].1.contains("rate_limited"));
 }
 
 #[tokio::test]
@@ -273,6 +375,145 @@ async fn personalized_language_removes_both_higher_precedence_overrides() {
     assert!(!state.saved.contains_key(&(private(43), "en".into())));
     assert!(!state.saved.contains_key(&(private(43), "ru".into())));
     assert_eq!(state.saved[&(private(43), "".into())], ru);
+}
+
+#[derive(Clone, Default)]
+struct ContactTransport {
+    calls: Arc<Mutex<Vec<BotCommandScope>>>,
+    failures: Arc<Mutex<HashMap<BotCommandScope, Failure>>>,
+}
+
+impl MenuApi for ContactTransport {
+    async fn apply(
+        &self,
+        scope: BotCommandScope,
+        _: &str,
+        _: Option<Vec<BotCommand>>,
+    ) -> Result<(), Failure> {
+        self.calls.lock().unwrap().push(scope.clone());
+        self.failures
+            .lock()
+            .unwrap()
+            .get(&scope)
+            .copied()
+            .map_or(Ok(()), Err)
+    }
+}
+
+fn guarded(
+    api: ContactTransport,
+    store: Arc<IdentityStore>,
+    source_id: i64,
+) -> ContactApi<ContactTransport> {
+    ContactApi {
+        api,
+        identities: Some(store),
+        source_id,
+        retry_delay: Duration::from_millis(1),
+    }
+}
+
+#[tokio::test]
+async fn menu_contact_guard_stops_api_calls_across_passes_and_worker_recreation() {
+    use yoink_identity::{MenuContact, MenuContactObservation};
+    let (_dir, store) = setup().await;
+    let transport = ContactTransport::default();
+    transport
+        .failures
+        .lock()
+        .unwrap()
+        .insert(private(43), Failure::Unreachable(UnavailableScope::Chat));
+    let api = guarded(transport.clone(), store.clone(), 123456);
+    for _ in 0..3 {
+        assert!(personalized(&api, private(43), vec![]).await.is_err());
+    }
+    assert_eq!(transport.calls.lock().unwrap().len(), 1);
+    let api = guarded(transport.clone(), store.clone(), 123456);
+    assert!(personalized(&api, private(43), vec![]).await.is_err());
+    assert_eq!(transport.calls.lock().unwrap().len(), 1);
+    let other_bot = guarded(transport.clone(), store.clone(), 654321);
+    assert!(personalized(&other_bot, private(43), vec![]).await.is_err());
+    assert_eq!(transport.calls.lock().unwrap().len(), 2);
+    transport.failures.lock().unwrap().clear();
+    store
+        .restore_menu_contact(
+            MenuContact {
+                source_id: 123456,
+                chat_id: 43,
+                user_id: 0,
+            },
+            MenuContactObservation {
+                occurred_at: 100,
+                update_id: 1,
+            },
+        )
+        .await
+        .unwrap();
+    personalized(&api, private(43), vec![]).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn menu_contact_guard_separates_member_rejections_from_missing_chats() {
+    let (_dir, store) = setup().await;
+    let transport = ContactTransport::default();
+    let api = guarded(transport.clone(), store, 123456);
+    let member = |user| BotCommandScope::ChatMember {
+        chat_id: Recipient::Id(ChatId(-100)),
+        user_id: UserId(user),
+    };
+    transport
+        .failures
+        .lock()
+        .unwrap()
+        .insert(member(43), Failure::Unreachable(UnavailableScope::Target));
+    assert!(api.apply(member(43), "en", None).await.is_err());
+    assert!(api.apply(member(43), "ru", None).await.is_err());
+    api.apply(member(44), "en", None).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 2);
+    transport
+        .failures
+        .lock()
+        .unwrap()
+        .insert(member(44), Failure::Unreachable(UnavailableScope::Chat));
+    assert!(api.apply(member(44), "ru", None).await.is_err());
+    assert!(api.apply(member(45), "en", None).await.is_err());
+    assert!(
+        api.apply(
+            BotCommandScope::ChatAdministrators {
+                chat_id: Recipient::Id(ChatId(-100))
+            },
+            "ru",
+            None
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(transport.calls.lock().unwrap().len(), 3);
+    api.apply(BotCommandScope::AllPrivateChats, "en", Some(vec![]))
+        .await
+        .unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn menu_contact_guard_keeps_transient_and_rate_limited_targets_retryable() {
+    let (_dir, store) = setup().await;
+    let transport = ContactTransport::default();
+    let api = guarded(transport.clone(), store, 123456);
+    for failure in [
+        Failure::Retry(Duration::from_secs(1)),
+        Failure::RateLimited(Duration::from_secs(9)),
+    ] {
+        transport
+            .failures
+            .lock()
+            .unwrap()
+            .insert(private(43), failure);
+        assert_eq!(api.apply(private(43), "en", None).await, Err(failure));
+        assert_eq!(api.apply(private(43), "ru", None).await, Err(failure));
+    }
+    assert_eq!(transport.calls.lock().unwrap().len(), 4);
 }
 
 async fn setup() -> (tempfile::TempDir, Arc<IdentityStore>) {

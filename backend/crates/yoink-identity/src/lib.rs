@@ -11,12 +11,14 @@ mod invalidation;
 mod language;
 pub mod m2m;
 mod membership;
+mod menu_contacts;
 pub mod nsfw;
 mod profile;
 pub use language::LanguagePreference;
 pub use membership::{
     MemberStatus, MembershipObservation, MembershipOutcome, MembershipSubject, ObservedTag,
 };
+pub use menu_contacts::{MenuContact, MenuContactLease, MenuContactObservation};
 pub use profile::{TrustedProfile, UserProfile, UserSettings};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,6 +70,8 @@ pub enum IdentityError {
     InvalidMembership,
     #[error("membership ordering key conflicts")]
     MembershipConflict,
+    #[error("menu contact state is invalid or exhausted")]
+    InvalidMenuContact,
 }
 
 impl From<yoink_db::Error> for IdentityError {

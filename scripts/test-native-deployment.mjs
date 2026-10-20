@@ -14,7 +14,7 @@ test('default and rollback Compose select exclusive runtimes and confined native
       const args = ['compose', '--project-directory', root, '-f', join(root, 'docker-compose.yaml')];
       if (legacy) args.push('-f', join(root, 'docker-compose.legacy.yaml'));
       args.push('config', '--format', 'json');
-      const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 30000, maxBuffer: 2 * 1024 * 1024 });
+      const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 30000, maxBuffer: 2 * 1024 * 1024, env: { PATH: process.env.PATH, HOME: process.env.HOME } });
       assert.equal(result.status, 0, 'isolated Compose configuration must parse');
       return JSON.parse(result.stdout);
     };

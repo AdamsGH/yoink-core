@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { commandHarness, admissionNotice } from './command-harness.mjs';
 import { withRussianPreference } from './language-fixture.mjs';
+import { assertPrivateCaption, assertSuccessCleanup } from './presentation.mjs';
 
 export async function runCutScenarios(context) {
   const { botApi, sourcePort, fixtureSql, waitFor, restartApp, assertWorkspaceClean } = context;
@@ -49,7 +50,7 @@ export async function runCutScenarios(context) {
 
   const initialCount = await count();
   try {
-    await message(`/cut ${url}`, { prefix: 'Clip start' });
+    const original = await message(`/cut ${url}`, { prefix: 'Clip start' });
     await message('not-a-time');
     const start = await message('0.2', { prefix: 'Clip end' });
     await restartApp();
@@ -58,6 +59,9 @@ export async function runCutScenarios(context) {
     await message('0.2', { messageId: start.messageId, prefix: 'Clip end' });
     await message('00:00.1');
     const ready = await message('0.7', { prefix: 'Clip summary' });
+    assert(ready.reply.data.text.includes('Duration: 0.5'), 'cut summary must include duration');
+    assert(ready.reply.data.entities?.some(entity => entity.type === 'bold'));
+    assert(ready.reply.data.entities?.some(entity => entity.type === 'code'));
     const oldGo = button(ready.reply, 'go');
     assert.equal(await count(), initialCount, 'drafts and invalid times must not admit jobs');
 
@@ -100,6 +104,10 @@ export async function runCutScenarios(context) {
     await h.inspectUpload('interactive cut', { video: true, audio: true, durationMin: 0.35, durationMax: 0.8 });
     const frozen = await h.request(admitted.operationId);
     assert.deepEqual(frozen.clip_range, { start_seconds: 0.2, end_seconds: 0.7 });
+    assert.equal(frozen.target.reply_to_message_id, original.messageId, 'cut cleanup must target the original URL command');
+    const sentMedia = botApi.calls.slice(admitted.from).find(call => call.method === method);
+    assertPrivateCaption(sentMedia, url, { above: !sendAsFile, range: '✂️ 00:00.2 → 00:00.7' });
+    await assertSuccessCleanup(context, { ...admitted, callStart: admitted.from, messageId: original.messageId });
     const afterAdmission = await count();
     await restartApp();
     const replay = await confirm(go);

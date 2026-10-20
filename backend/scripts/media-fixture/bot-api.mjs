@@ -25,6 +25,9 @@ export class BotApiFixture {
   #expectedAlbum;
   #sendPlan = [];
   #messages = new Map();
+  #deletedMessages = new Set();
+  #deleteMode = 'success';
+  #deleteFilter;
   #editMode = 'success';
   #editFilter;
   #documentFiles = new Map();
@@ -72,6 +75,11 @@ export class BotApiFixture {
   setSendMode(mode) { this.#sendMode = mode; }
   setTextMode(mode) { assert(['success','socket-drop-once'].includes(mode)); this.#textMode = mode; }
   setEditMode(mode, textIncludes) { this.#editMode = mode; this.#editFilter = textIncludes; }
+  setDeleteMode(mode, messageId) {
+    assert(['success', 'socket-drop-once', 'rate-limit-once', 'forbidden'].includes(mode));
+    this.#deleteMode = mode;
+    this.#deleteFilter = messageId;
+  }
   get progressMessages() { return [...this.#messages.values()]; }
   get downloadCalls() { return this.#downloadCalls; }
   setMenuMode(mode, chatId) {
@@ -120,10 +128,10 @@ export class BotApiFixture {
     file[endpoint === 'getFile' ? 'getFileGate' : 'fileGate'] = new Promise(resolve => { release = resolve; });
     return () => { release(); delete file[endpoint === 'getFile' ? 'getFileGate' : 'fileGate']; };
   }
-  holdNextUpload() {
+  holdNextUpload({ success = false } = {}) {
     let release;
     this.#sendGate = new Promise(resolve => { release = resolve; });
-    this.#sendMode = 'hold';
+    this.#sendMode = success ? 'hold-success' : 'hold';
     return () => { release(); this.#sendGate = undefined; };
   }
   enqueue(actor, chat, text, id, language = 'en', { thread, senderChat, isBot = false, entities, viaBot, replyToBot, replyToMessage } = {}) {
@@ -278,14 +286,27 @@ export class BotApiFixture {
         assert(typeof data.text === 'string' && data.text.length <= 4096);
         assert(Array.isArray(data.entities));
       } else {
-        assert.equal(data.action, 'typing');
+        assert(['typing', 'upload_video', 'upload_photo', 'upload_document', 'upload_voice'].includes(data.action));
       }
       this.#calls.push({ method, data, receivedAt: performance.now() });
       res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'deletemessage') {
       const data = JSON.parse(body.toString('utf8'));
-      this.#messages.delete(`${data.chat_id}:${data.message_id}`);
-      this.#calls.push({ method, data });
+      const fail = (code, description, parameters) => { res.statusCode = code; res.end(JSON.stringify({ ok: false, error_code: code, description, ...(parameters ? { parameters } : {}) })); };
+      const key = `${data.chat_id}:${data.message_id}`;
+      const mode = this.#deleteFilter === undefined || this.#deleteFilter === data.message_id ? this.#deleteMode : 'success';
+      const status = this.#deletedMessages.has(key) ? 'not-found' : mode;
+      this.#calls.push({ method, data, status, receivedAt: performance.now() });
+      if (status === 'rate-limit-once') {
+        this.#deleteMode = 'success';
+        fail(429, 'Too Many Requests: retry after 2', { retry_after: 2 });
+        return;
+      }
+      if (status === 'forbidden') { fail(400, "Bad Request: message can't be deleted"); return; }
+      if (status === 'not-found') { fail(400, 'Bad Request: message to delete not found'); return; }
+      this.#messages.delete(key);
+      this.#deletedMessages.add(key);
+      if (status === 'socket-drop-once') { this.#deleteMode = 'success'; res.destroy(); return; }
       res.end(JSON.stringify({ ok: true, result: true }));
     } else if (method === 'answerinlinequery') {
       const data = JSON.parse(body.toString('utf8'));
@@ -419,7 +440,8 @@ export class BotApiFixture {
     assert(Number.isSafeInteger(chat), 'media payload must carry chat_id');
     const threadId = data.message_thread_id === undefined ? undefined : Number(data.message_thread_id);
     const reply = typeof data.reply_parameters === 'string' ? JSON.parse(data.reply_parameters) : data.reply_parameters;
-    this.#calls.push({ method, status: this.#sendMode, cached: !!cachedFileId, uploadLength: filePart?.value.length ?? 0, chat_id: chat, message_thread_id: threadId, reply_to_message_id: reply?.message_id, has_spoiler: data.has_spoiler === true || data.has_spoiler === 'true', receivedAt: performance.now() });
+    const call = { method, status: this.#sendMode, cached: !!cachedFileId, uploadLength: filePart?.value.length ?? 0, chat_id: chat, message_thread_id: threadId, reply_to_message_id: reply?.message_id, has_spoiler: data.has_spoiler === true || data.has_spoiler === 'true', caption: data.caption, parse_mode: data.parse_mode, caption_above: data.show_caption_above_media === true || data.show_caption_above_media === 'true', receivedAt: performance.now() };
+    this.#calls.push(call);
     if (this.#sendMode === 'invalid-file-id-once') {
       assert(cachedFileId, 'invalid-ID fixture must target a cached send');
       this.#sendMode = 'success';
@@ -427,10 +449,11 @@ export class BotApiFixture {
       res.end(JSON.stringify({ ok: false, error_code: 400, description: 'Bad Request: wrong file identifier/HTTP URL specified' }));
       return;
     }
-    if (this.#sendMode === 'hold') {
+    if (['hold', 'hold-success'].includes(this.#sendMode)) {
+      const success = this.#sendMode === 'hold-success';
       await this.#sendGate;
-      res.destroy();
-      return;
+      if (!success) { res.destroy(); return; }
+      this.#sendMode = 'success';
     }
     if (this.#sendMode === 'socket-drop') { res.destroy(); return; }
     if (this.#sendMode === 'api-ambiguous') {
@@ -460,7 +483,10 @@ export class BotApiFixture {
       : kind === 'audio'
         ? { kind, value: { file_id: fileId, file_unique_id: `fixture-audio-unique-${this.#sendCalls}`, duration: 1, performer: 'Fixture', title: 'Fixture audio', mime_type: uploadedMimeType ?? 'audio/mpeg', file_size: fileSize } }
         : { kind, value: { file_id: fileId, file_unique_id: `fixture-document-unique-${this.#sendCalls}`, file_name: 'media.mp4', mime_type: 'video/mp4', file_size: fileSize } };
-    res.end(JSON.stringify({ ok: true, result: this.#message(123456, chat, null, 9000 + this.#sendCalls, attachment, this.#sendMode === 'wrong-thread' ? (threadId ?? 0) + 1 : threadId) }));
+    const message = this.#message(123456, chat, null, 9000 + this.#sendCalls, attachment, this.#sendMode === 'wrong-thread' ? (threadId ?? 0) + 1 : threadId);
+    call.messageId = message.message_id;
+    this.#messages.set(`${chat}:${message.message_id}`, message);
+    res.end(JSON.stringify({ ok: true, result: message }));
   }
   async #handleGroup(req, res, body) {
     this.#sendCalls++;
@@ -514,7 +540,7 @@ export class BotApiFixture {
     });
     assert.equal(used.size, files.size, 'album must not contain unreferenced files');
     if (cached) this.#cachedCalls++; else this.#uploadCalls++;
-    this.#calls.push({ method: 'sendmediagroup', status: this.#sendMode, cached, uploadLength: this.#lastGroupBytes.reduce((n, b) => n + b.length, 0), itemCount: media.length, chat_id: chat, message_thread_id: threadId, has_spoilers: media.map(item => item.has_spoiler === true), receivedAt: performance.now() });
+    this.#calls.push({ method: 'sendmediagroup', status: this.#sendMode, cached, uploadLength: this.#lastGroupBytes.reduce((n, b) => n + b.length, 0), itemCount: media.length, chat_id: chat, message_thread_id: threadId, has_spoilers: media.map(item => item.has_spoiler === true), captions: media.map(item => item.caption), parse_modes: media.map(item => item.parse_mode), caption_above: media.map(item => item.show_caption_above_media === true), receivedAt: performance.now() });
     if (this.#sendMode === 'socket-drop') { res.destroy(); return; }
     if (['api-error', 'api-ambiguous', 'rate-limit-once', 'invalid-file-id-once'].includes(this.#sendMode)) {
       const mode = this.#sendMode;

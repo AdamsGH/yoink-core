@@ -11,6 +11,39 @@ function fixtureMedia(payload = Buffer.alloc(128, 7)) {
   return Buffer.concat([ftyp, mdatHeader, payload]);
 }
 
+test('native upload actions preserve the forum topic', async t => {
+  const api = new BotApiFixture({ mediaBytes: fixtureMedia() });
+  const port = await api.start();
+  t.after(() => api.close());
+  for (const action of ['upload_video', 'upload_photo', 'upload_document', 'upload_voice']) {
+    const response = await fetch(`http://127.0.0.1:${port}/bottoken/sendChatAction`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: -100, message_thread_id: 7, action }),
+    });
+    assert.equal((await response.json()).result, true);
+    assert.equal(api.calls.at(-1).data.message_thread_id, 7);
+  }
+  assert.equal(api.error, undefined);
+});
+
+test('delete retries model lost acknowledgement, not-found and retry-after separately', async t => {
+  const api = new BotApiFixture({ mediaBytes: fixtureMedia() });
+  const port = await api.start();
+  t.after(() => api.close());
+  const remove = id => fetch(`http://127.0.0.1:${port}/bottoken/deleteMessage`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chat_id: 42, message_id: id }),
+  });
+  api.setDeleteMode('socket-drop-once', 77);
+  await assert.rejects(remove(77));
+  assert.equal((await (await remove(77)).json()).description, 'Bad Request: message to delete not found');
+  api.setDeleteMode('rate-limit-once', 78);
+  assert.equal((await (await remove(78)).json()).parameters.retry_after, 2);
+  assert.equal((await (await remove(78)).json()).result, true);
+  assert.deepEqual(api.calls.map(call => call.status), ['socket-drop-once', 'not-found', 'rate-limit-once', 'success']);
+  assert.equal(api.error, undefined);
+});
+
 async function postUpload(port, method, filename, mimeType, bytes) {
   const form = new FormData();
   form.set('chat_id', '42');

@@ -41,8 +41,10 @@ mod inline_search;
 mod job_reply;
 pub use inline_search::InlineSearchConfig;
 mod lang;
+mod media_caption;
 mod media_command;
 mod membership_update;
+mod menu_contact_update;
 mod menus;
 mod raw_polling;
 pub use menus::MenuConfig;
@@ -405,6 +407,18 @@ impl TelegramAdapter {
             });
             observer
         });
+        let contact_observer = self.identities.clone().map(|store| {
+            let source_id = i64::try_from(self.bot_id).expect("validated bot identity");
+            let observer: UpdateObserver = Arc::new(move |raw| {
+                let store = store.clone();
+                Box::pin(async move {
+                    menu_contact_update::observe(&store, source_id, &raw)
+                        .await
+                        .map_err(|_| TelegramError::PollingFailed)
+                })
+            });
+            observer
+        });
         let mut listener = raw_polling::RawPolling::new(
             self.http_client.clone(),
             self.polling_endpoint,
@@ -413,7 +427,7 @@ impl TelegramAdapter {
             observer,
         )
         .with_update_observer(product_dispatch::compose_observers(
-            self.update_observer,
+            product_dispatch::compose_observers(contact_observer, self.update_observer),
             self.stats.as_ref().map(StatsRuntime::observer),
         ));
         let stop = listener.stop_token();

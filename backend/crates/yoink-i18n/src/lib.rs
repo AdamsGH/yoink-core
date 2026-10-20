@@ -68,6 +68,7 @@ define_keys! {
     InlineBusy => "telegram.inline_busy";
     InlineUrlTitle => "telegram.inline_url_title";
     InlineUnknownTitle => "telegram.inline_unknown_title";
+    MediaSource => "telegram.media_source";
     InlineViews => "telegram.inline_views", ["count"];
     MediaArmed => "telegram.media_armed", ["mode"];
     NsfwMarked => "telegram.nsfw_marked";
@@ -121,6 +122,7 @@ define_keys! {
     CutChangeSegment => "telegram.cut_change_segment", ["index"];
     CutDeleteSegment => "telegram.cut_delete_segment", ["index"];
     CutBack => "telegram.cut_back";
+    CutDuration => "telegram.cut_duration", ["duration"];
     CutConfirming => "telegram.cut_confirming";
     CutQualityTitle => "telegram.cut_quality_title";
     CutSubmitted => "telegram.cut_submitted";

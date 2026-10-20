@@ -49,6 +49,8 @@ export async function runFormatScenarios(context) {
     const sent = await h.submit(command, options);
     await h.succeeded(sent.operationId);
     assert.equal(botApi.uploadCalls, before + 1);
+    const reportCall = botApi.calls.slice(sent.callStart).find(call => call.method === 'senddocument');
+    assert(reportCall && !reportCall.caption && !reportCall.parse_mode, 'metadata reports must not expose source URLs or titles through captions');
     const rows = parseFormatReport(botApi.lastUploadedBytes);
     if (command.includes('/direct.mp4')) assert(rows.some(row => row[1] === 'mp4' && row[5] === 'unknown' && row[6] === 'unknown' && row[7] === 'http'));
     else assert(rows.some(row => row[2] === '1280' && row[3] === '720' && row[5] === 'h264' && row[6] === 'aac' && row[7] === 'hls'));

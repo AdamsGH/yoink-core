@@ -109,8 +109,39 @@ impl IdentityStore {
         let tx = Transaction::new(&mut connection, TransactionBehavior::Immediate)
             .await
             .map_err(|_| IdentityError::Database)?;
-        let result = self.observe_in_transaction(&tx, observation).await;
-        let outcome = match result {
+        let result = async {
+            let outcome = self.observe_in_transaction(&tx, observation).await?;
+            let restored = if matches!(
+                outcome,
+                MembershipOutcome::Applied
+                    | MembershipOutcome::Suppressed
+                    | MembershipOutcome::UnknownGroup
+            ) {
+                let user_id = match &observation.subject {
+                    MembershipSubject::Bot => 0,
+                    MembershipSubject::User(profile) => profile.user_id,
+                };
+                crate::menu_contacts::observe(
+                    &tx,
+                    crate::MenuContact {
+                        source_id: observation.source_id,
+                        chat_id: observation.group_id,
+                        user_id,
+                    },
+                    crate::MenuContactObservation {
+                        occurred_at: observation.occurred_at.timestamp_micros(),
+                        update_id: observation.update_id,
+                    },
+                    observation.present,
+                )
+                .await?
+            } else {
+                false
+            };
+            Ok((outcome, restored))
+        }
+        .await;
+        let (outcome, contact_restored) = match result {
             Ok(outcome) => {
                 tx.commit().await.map_err(|_| IdentityError::Database)?;
                 outcome
@@ -121,7 +152,7 @@ impl IdentityStore {
             }
         };
         drop(connection);
-        if outcome == MembershipOutcome::Applied {
+        if outcome == MembershipOutcome::Applied || contact_restored {
             self.invalidate();
         }
         Ok(outcome)

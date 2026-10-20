@@ -29,6 +29,63 @@ async fn admitted(store: &Store, key: &str) -> ProgressMessage {
 }
 
 #[tokio::test]
+async fn input_cleanup_is_admitted_atomically_and_a_late_confirmed_notice_can_replace_it() {
+    let store = common::store().await;
+    let message = admitted(&store, "pending-input").await;
+    let pending = store
+        .due_progress_notice(message.bot_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(pending.input_only());
+    assert_eq!(pending.message.message_id, 17);
+    assert!(
+        !store
+            .register_progress_message(&ProgressMessage {
+                message_id: 17,
+                ..message.clone()
+            })
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .advance_progress_notice(&pending.message, None, true, Utc::now())
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .due_progress_notice(message.bot_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(store.register_progress_message(&message).await.unwrap());
+    let confirmed = store
+        .due_progress_notice(message.bot_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!confirmed.input_only());
+    assert_eq!(confirmed.message, message);
+    assert!(
+        !store
+            .advance_progress_notice(&pending.message, Some("stale"), true, Utc::now())
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .due_progress_notice(message.bot_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn reply_lookup_matches_input_and_progress_only_for_the_original_owner_and_route() {
     let store = common::store().await;
     let message = admitted(&store, "reply-lookup").await;
@@ -62,6 +119,53 @@ async fn reply_lookup_matches_input_and_progress_only_for_the_original_owner_and
         store.operation_by_reply(42, 123456, 42, 0).await,
         Err(StoreError::InvalidInput)
     ));
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn replies_to_delivered_album_items_survive_notice_cleanup_without_cross_route_access() {
+    let store = common::store().await;
+    let message = admitted(&store, "reply-after-cleanup").await;
+    store.register_progress_message(&message).await.unwrap();
+    let claim = store
+        .claim_for_bot("cleanup-worker", Duration::from_secs(30), message.bot_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(store.begin_delivery_batch(&claim, 2).await.unwrap());
+    assert!(store.begin_delivery_unit(&claim, 0, 2).await.unwrap());
+    assert!(
+        store
+            .complete_delivery_unit(&claim, 0, &[70001, 70002])
+            .await
+            .unwrap()
+    );
+    store
+        .advance_progress_notice(&message, Some(""), true, Utc::now())
+        .await
+        .unwrap();
+    for id in [17, 1001, 70001, 70002] {
+        assert_eq!(
+            store.operation_by_reply(42, 123456, 42, id).await.unwrap(),
+            Some(message.operation_id)
+        );
+        for (actor, bot, chat) in [(43, 123456, 42), (42, 654321, 42), (42, 123456, -100)] {
+            assert_eq!(
+                store
+                    .operation_by_reply(actor, bot, chat, id)
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+    }
+    assert!(
+        store
+            .due_progress_notice(message.bot_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     store.close().await.unwrap();
 }
 
@@ -204,6 +308,8 @@ async fn progress_retry_retains_acknowledged_text_and_finished_notice_cannot_res
 async fn invalid_progress_inputs_leave_registration_and_updates_unchanged() {
     let store = common::store().await;
     let message = admitted(&store, "progress-invalid").await;
+    let pending = store.due_progress_notice(message.bot_id).await.unwrap();
+    assert!(pending.as_ref().unwrap().input_only());
     for altered in [
         ProgressMessage {
             actor_id: u64::MAX,
@@ -223,12 +329,9 @@ async fn invalid_progress_inputs_leave_registration_and_updates_unchanged() {
             Err(StoreError::InvalidInput)
         ));
     }
-    assert!(
-        store
-            .due_progress_notice(message.bot_id)
-            .await
-            .unwrap()
-            .is_none()
+    assert_eq!(
+        store.due_progress_notice(message.bot_id).await.unwrap(),
+        pending
     );
     store.register_progress_message(&message).await.unwrap();
     assert!(matches!(

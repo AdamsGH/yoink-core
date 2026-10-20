@@ -386,6 +386,13 @@ impl Store {
             .map_err(|_| StoreError::Database)?
             .try_get("id")
             .map_err(|_| StoreError::Database)?;
+        // The source reference survives a lost admission-message acknowledgement.
+        query(include_str!("../sql/register_input_cleanup.sql"))
+            .bind(id)
+            .bind(crate::progress::INPUT_ONLY_NOTICE)
+            .execute(&*tx)
+            .await
+            .map_err(|_| StoreError::Database)?;
         if let Some(context) = telegram {
             let target = request.target().copied().ok_or(StoreError::InvalidInput)?;
             query(include_str!("../sql/deferred_media_consume.sql"))

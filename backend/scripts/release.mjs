@@ -153,11 +153,13 @@ export class Releases {
   read() {
     if (!existsSync(this.stateFile)) throw new Error('Initialize release state with release-init first.');
     const state = JSON.parse(readFileSync(this.stateFile, 'utf8'));
-    if (state.schema !== 1 || !state.current || (state.previous && state.candidate)) throw new Error('Invalid release state. Do not delete recovery state.');
-    for (const entry of [state.current, state.previous, state.candidate].filter(Boolean)) {
+    if (state.schema !== 1 || !state.current
+      || (state.superseded && (!state.previous || !['deploying', 'retiring', 'rolling-back'].includes(state.phase) || state.candidate))
+      || (state.phase === 'retiring' && !state.superseded)) throw new Error('Invalid release state. Do not delete recovery state.');
+    for (const entry of [state.current, state.previous, state.candidate, state.superseded].filter(Boolean)) {
       if (entry.image !== `${repository}:${version(entry.version)}` || !/^sha256:[a-f0-9]{64}$/.test(entry.id)) throw new Error('Invalid release image record.');
     }
-    state.highestVersion ??= [state.current, state.previous, state.candidate].filter(Boolean).map(e => e.version).reduce((a, b) => newer(a, b) ? a : b);
+    state.highestVersion ??= [state.current, state.previous, state.candidate, state.superseded].filter(Boolean).map(e => e.version).reduce((a, b) => newer(a, b) ? a : b);
     version(state.highestVersion);
     return state;
   }
@@ -188,17 +190,23 @@ export class Releases {
     renameSync(`${file}.release-new`, file);
   }
 
-  ready(entry) {
+  ready(entry, optional = false) {
     this.assertImage(entry);
-    const result = JSON.parse(this.run(['inspect', 'yoink', '--format', '{"image":{{json .Image}},"state":{{json .State}}}']));
+    const inspection = this.run(['inspect', 'yoink', '--format', '{"image":{{json .Image}},"state":{{json .State}}}'], { optional });
+    if (inspection === null) return false;
+    const result = JSON.parse(inspection);
     if (result.image !== entry.id || !result.state.Running || result.state.Health?.Status !== 'healthy') {
+      if (optional) return false;
       throw new Error(`Running yoink must be healthy and use ${entry.image}.`);
     }
+    return true;
   }
 
   start(entry) {
-    this.assertImage(entry);
+    // Compose can fail before stopping the old poller; recovery must not recreate it.
+    const alreadyRunning = this.ready(entry, true);
     this.pin(entry.image);
+    if (alreadyRunning) return;
     // Root justfile dotenv exports otherwise override the newly written .env pin.
     const env = { ...process.env, yoink_rust_image: entry.image };
     this.run(['compose', 'config', '--quiet'], { env });
@@ -295,6 +303,7 @@ export class Releases {
       search: ['stats-search-tests', 'yoink/rust-stats-search-tests:experimental'],
       config: ['server-config-tests', null],
       proxy: ['download-proxy-tests', null],
+      menus: ['telegram-menu-tests', null],
     };
     if (!Object.hasOwn(tools, name)) throw new Error('Unknown backend tool image.');
     const [target, image] = tools[name];
@@ -318,7 +327,6 @@ export class Releases {
       console.log(`Already built: ${existing.image}`);
       return state;
     }
-    if (!state.confirmed || state.previous) throw new Error('Confirm the current release before building another version.');
     if (state.candidate) throw new Error('Deploy or discard the existing candidate first.');
     if (!newer(ver, state.highestVersion)) throw new Error(`VERSION must exceed the last built version ${state.highestVersion}. Discarded versions cannot be reused.`);
     const image = `${repository}:${ver}`;
@@ -349,10 +357,14 @@ export class Releases {
 
   deploy() {
     const state = this.read();
+    if (state.phase === 'retiring') return this.finishReplacement(state);
     if (state.phase) throw new Error('Interrupted deployment. Run release-rollback.');
     if (!state.candidate) { this.ready(state.current); this.pin(state.current.image); return state; }
+    this.assertImage(state.current);
+    if (state.previous) this.assertImage(state.previous);
     const before = structuredClone(state);
-    state.previous = state.current;
+    if (state.previous) state.superseded = state.current;
+    else state.previous = state.current;
     state.current = state.candidate;
     delete state.candidate;
     state.confirmed = false;
@@ -363,13 +375,28 @@ export class Releases {
       this.run(['image', 'tag', state.current.image, `${repository}:experimental`]);
     } catch (error) {
       try {
-        this.start(state.previous);
-        this.run(['image', 'tag', state.previous.image, `${repository}:experimental`]);
+        this.start(before.current);
+        this.run(['image', 'tag', before.current.image, `${repository}:experimental`]);
         this.write(before);
       }
       catch (recovery) { throw new Error(`${error.message} Automatic rollback failed: ${recovery.message}. Recovery state retained; run release-rollback.`); }
       throw new Error(`${error.message} Previous release restored; candidate retained.`);
     }
+    if (state.superseded) {
+      state.phase = 'retiring';
+      this.write(state);
+      return this.finishReplacement(state);
+    }
+    delete state.phase;
+    this.write(state);
+    return state;
+  }
+
+  finishReplacement(state) {
+    this.ready(state.current);
+    this.assertImage(state.previous);
+    this.remove(state.superseded);
+    delete state.superseded;
     delete state.phase;
     this.write(state);
     return state;
@@ -378,12 +405,16 @@ export class Releases {
   rollback() {
     const state = this.read();
     if (!state.previous) throw new Error('No previous release retained.');
-    const target = state.previous;
+    const canRestoreSuperseded = state.superseded && this.image(state.superseded.image, true);
+    const target = canRestoreSuperseded ? state.superseded : state.previous;
     state.phase = 'rolling-back';
     this.write(state);
     this.start(target);
     this.run(['image', 'tag', target.image, `${repository}:experimental`]);
-    state.previous = state.current;
+    if (canRestoreSuperseded) {
+      state.candidate = state.current;
+    } else state.previous = state.current;
+    delete state.superseded;
     state.current = target;
     state.confirmed = false;
     delete state.phase;
@@ -478,7 +509,7 @@ async function main() {
     if (action === 'trim') { manager.ensureBuilder(); manager.finishBuilder(); return; }
     if (action === 'tool') { manager.tool(args[0]); return; }
     const state = action === 'init' ? manager.initialize(...args) : action === 'status' ? manager.read() : manager[action]();
-    console.log(JSON.stringify({ current: state.current.image, confirmed: state.confirmed, previous: state.previous?.image ?? null, candidate: state.candidate?.image ?? null, phase: state.phase ?? null }, null, 2));
+    console.log(JSON.stringify({ current: state.current.image, confirmed: state.confirmed, previous: state.previous?.image ?? null, candidate: state.candidate?.image ?? null, superseded: state.superseded?.image ?? null, phase: state.phase ?? null }, null, 2));
   });
 }
 

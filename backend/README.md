@@ -9,7 +9,6 @@ Native Rust bot/API with shared Turso 0.7.2 storage and integrated Download, Mus
 ```sh
 cd backend
 just release-status
-just release-confirm # Only after Adams confirms the current release works.
 just release-version patch # Or minor / major.
 just release-build
 just release-deploy
@@ -17,7 +16,11 @@ just release-deploy
 just release-confirm
 ```
 
-`release-deploy` atomically updates only `yoink_rust_image` in `.env`, recreates only `yoink`, and checks readiness. Failed deployment attempts restore the previous version. `release-rollback` restores the retained previous version without rebuilding. Confirmation deletes the previous image; the next build is blocked until confirmation. Before deployment, `release-discard` can remove an unwanted candidate. A current release and candidate, or an unconfirmed current release and previous release, are the only retained production versions. Internal image IDs remain in the ignored `.release/state.json` for tag integrity checks, not in `.env`.
+`release-deploy` atomically updates only `yoink_rust_image` in `.env`, recreates only `yoink`, and checks readiness. Failed startup restores the runtime active immediately before deployment. `release-rollback` restores the retained previous version without rebuilding. Confirmation deletes the previous image, but is not required to build a newer fix. Before deployment, `release-discard` can remove an unwanted candidate. Internal image IDs remain in the ignored `.release/state.json` for tag integrity checks, not in `.env`.
+
+While a release awaits human confirmation, a newer candidate can temporarily coexist with the current release and its retained rollback anchor. Deploying that candidate preserves the anchor and leaves `confirmed=false`. Only after readiness succeeds does deployment remove the superseded, unconfirmed runtime. There is at most one candidate and, after successful deployment, only the current release and one rollback version. No synthetic confirmation or anchor deletion is needed to ship a fix.
+
+Interrupted deployment retains all recovery references. If status shows `phase=retiring`, repeat `release-deploy` to recheck readiness and finish scoped image cleanup, or run `release-rollback`. Recovery restores the immediate pre-deployment runtime if its image remains; after that image was removed, rollback uses the retained anchor. If the intended runtime is already healthy and uses the exact retained image, recovery restores its pin without recreating the container. An in-use image is never removed. Resolve interrupted deployment before building or confirming another release.
 
 Discarded versions cannot be reused. Release state retains the highest built version even after rollback. Builds use a verified source snapshot, so later working-tree edits cannot change an in-flight release. Image rollback does not restore database contents or downgrade schemas. Check schema compatibility before deployment. Incompatible schema changes require an explicit migration and recovery decision.
 
@@ -46,6 +49,8 @@ curl http://127.0.0.1:8088/api/v1/system
 ```
 
 For the real media path and its delivery-uncertainty rules, see [the media slice guide](../docs/backend/media-slice.md). The [downloader compatibility matrix](../docs/backend/downloads-parity.md) separates accessible commands, engine capabilities and remaining legacy behavior. `just verify-media` builds separate runtime and test-controller images, then tests the Python worker and full download-to-upload path against a disposable native database volume and a fixture Bot API.
+
+`just test-media presentation` checks linked-title captions, cache parity, native upload activity and cancellation, success-only private message cleanup, interactive cut formatting and group routing against isolated fixtures. `just test-media delivery` also checks restart-safe cleanup and retention of messages after failed, partial or uncertain delivery. `just test-live-youtube` checks the real public download, uploaded media, caption and cleanup without the production Telegram token.
 
 For native database tests, see [development prerequisites and verification](../docs/backend/development.md). `just test-db` uses private temporary files and the real server binary without Docker or a PostgreSQL server. Media tests and all Python work remain inside containers. The separate [PostgreSQL importer](../docs/backend/import.md) is verified against disposable Alembic fixtures, including a real TLS import through its pinned-compiler container. The [backup/restore utility](../docs/backend/backup-restore.md) is verified on isolated data, including container disk exhaustion and process crashes. Source migration requires a stopped-writer import and equivalence verification before activation; isolated candidates are not final cutover evidence.
 

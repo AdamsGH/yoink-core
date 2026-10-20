@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { commandHarness } from './command-harness.mjs';
+import { assertPrivateCaption, assertSuccessCleanup } from './presentation.mjs';
 
 export async function liveYoutubeConfiguration(docker, registerSecret) {
   const env = new Map(JSON.parse(await docker(['inspect', 'yoink', '--format', '{{json .Config.Env}}'])).map(value => {
@@ -57,9 +58,11 @@ export async function runLiveYoutubeScenario(context) {
       '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,height', '-of', 'json', '-i', 'pipe:0'], 15000, media, { allowEarlyStdinClose: true }));
     assert(probe.streams.some(stream => stream.codec_type === 'video'));
     assert(probe.streams.some(stream => stream.codec_type === 'audio'));
+    assertPrivateCaption(botApi.calls.slice(admitted.callStart).find(call => call.method === 'sendvideo'), url);
+    await assertSuccessCleanup(context, admitted);
     await assertWorkspaceClean();
     assert.equal(botApi.error, undefined);
-    return `live YouTube automatic route, native admission, real confined download and isolated multipart upload verified (${media.length} bytes)`;
+    return `live YouTube route, native admission, real download/upload, linked-title caption and private input/progress cleanup verified (${media.length} bytes)`;
   } finally {
     botApi.setExpectedUpload(null);
   }

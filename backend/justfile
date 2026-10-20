@@ -133,6 +133,9 @@ test-release-config:
 test-download-proxy:
     node scripts/release.mjs tool proxy
 
+test-telegram-menus:
+    node scripts/release.mjs tool menus
+
 test-release-build:
     node scripts/test-release-build.mjs
 

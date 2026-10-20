@@ -103,6 +103,7 @@ function fixture(t, base = os.tmpdir()) {
     if (args[0] === 'ps') return inUse.size ? 'foreign-container' : '';
     if (args[0] === 'compose') {
       if (args[1] === 'up') {
+        if (fail.has('recreate-before-stop')) throw new Error('stale container inventory');
         const ref = env?.yoink_rust_image ?? process.env.yoink_rust_image ?? readFileSync(path.join(root, '.env'), 'utf8').match(/^yoink_rust_image=(.*)$/m)[1];
         running = images.get(ref).Id;
         if (fail.has(ref)) throw new Error('startup failed');
@@ -162,7 +163,6 @@ test('adoption changes only the image pin and retains rollback without restartin
   assert.equal(f.manager.read().previous.version, '0.1.0-legacy.1');
   assert.equal(f.manager.read().confirmed, false);
   assert(!f.calls.some(a => a[0] === 'compose'));
-  assert.throws(() => f.next(), /Confirm/);
 });
 
 test('lock rejects concurrent releases and releases after failure', t => {
@@ -210,11 +210,185 @@ test('healthy deployment still requires confirmation and retains exactly one rol
   assert.equal(state.previous.version, '0.1.0');
   assert.equal(state.confirmed, false);
   writeFileSync(path.join(f.backend, 'VERSION'), '0.1.2\n');
-  assert.throws(() => f.manager.build(), /Confirm/);
+  assert.equal(f.manager.build().candidate.version, '0.1.2');
   f.manager.confirm();
   assert.equal(f.manager.read().previous, null);
   assert(!f.images.has(`${repository}:0.1.0`));
   assert(f.images.has(`${repository}:0.1.1`));
+});
+
+test('unconfirmed releases accept a newer candidate without accepting or deleting rollback', t => {
+  const f = fixture(t);
+  const state = f.next();
+  assert.equal(state.confirmed, false);
+  assert.equal(state.current.version, '0.1.0');
+  assert.equal(state.previous.version, '0.1.0-legacy.1');
+  assert.equal(state.candidate.version, '0.1.1');
+  assert.equal(f.manager.read().candidate.version, '0.1.1');
+  assert(!f.calls.some(a => a[0] === 'compose' || (a[0] === 'image' && a[1] === 'rm')));
+  writeFileSync(path.join(f.backend, 'VERSION'), '0.1.2\n');
+  assert.throws(() => f.manager.build(), /existing candidate/);
+  f.manager.discard();
+  assert.equal(f.manager.read().previous.version, '0.1.0-legacy.1');
+  writeFileSync(path.join(f.backend, 'VERSION'), '0.1.1\n');
+  assert.throws(() => f.manager.build(), /Discarded versions/);
+});
+
+test('replacement retains the rollback anchor across successive unconfirmed fixes', t => {
+  const f = fixture(t);
+  f.next();
+  let state = f.manager.deploy();
+  assert.equal(state.current.version, '0.1.1');
+  assert.equal(state.previous.version, '0.1.0-legacy.1');
+  assert.equal(state.confirmed, false);
+  assert(!f.images.has(`${repository}:0.1.0`));
+  assert(f.images.has(`${repository}:0.1.0-legacy.1`));
+  writeFileSync(path.join(f.backend, 'VERSION'), '0.1.2\n');
+  f.manager.build();
+  state = f.manager.deploy();
+  assert.equal(state.current.version, '0.1.2');
+  assert.equal(state.previous.version, '0.1.0-legacy.1');
+  assert(!f.images.has(`${repository}:0.1.1`));
+  assert.equal(f.manager.rollback().current.version, '0.1.0-legacy.1');
+});
+
+test('failed replacement restores the immediate runtime without losing the older anchor', t => {
+  const f = fixture(t);
+  f.next();
+  f.fail.add(`${repository}:0.1.1`);
+  assert.throws(() => f.manager.deploy(), /Previous release restored/);
+  const state = f.manager.read();
+  assert.equal(state.current.version, '0.1.0');
+  assert.equal(state.previous.version, '0.1.0-legacy.1');
+  assert.equal(state.candidate.version, '0.1.1');
+  assert.equal(state.confirmed, false);
+  assert(f.images.has(`${repository}:0.1.0`));
+  assert.match(readFileSync(path.join(f.root, '.env'), 'utf8'), /yoink_rust_image=yoink\/rust-backend:0.1.0\n/);
+});
+
+test('failed recreation restores the pin without recreating the unchanged healthy runtime', t => {
+  const f = fixture(t);
+  f.next();
+  f.fail.add('recreate-before-stop');
+  assert.throws(() => f.manager.deploy(), /Previous release restored/);
+  const state = f.manager.read();
+  assert.equal(state.current.version, '0.1.0');
+  assert.equal(state.previous.version, '0.1.0-legacy.1');
+  assert.equal(state.candidate.version, '0.1.1');
+  assert.equal(state.phase, undefined);
+  assert.equal(f.calls.filter(a => a[0] === 'compose' && a[1] === 'up').length, 1);
+  assert.match(readFileSync(path.join(f.root, '.env'), 'utf8'), /yoink_rust_image=yoink\/rust-backend:0.1.0\n/);
+});
+
+test('explicit recovery skips Compose when the superseded runtime never stopped', t => {
+  const f = fixture(t);
+  f.next();
+  const state = f.manager.read();
+  state.superseded = state.current;
+  state.current = state.candidate;
+  delete state.candidate;
+  state.phase = 'deploying';
+  f.manager.write(state);
+  f.fail.add('recreate-before-stop');
+  const recovered = f.manager.rollback();
+  assert.equal(recovered.current.version, '0.1.0');
+  assert.equal(recovered.previous.version, '0.1.0-legacy.1');
+  assert.equal(recovered.candidate.version, '0.1.1');
+  assert.equal(recovered.phase, undefined);
+  assert(!f.calls.some(a => a[0] === 'compose'));
+});
+
+test('failed replacement recovery persists all images and rollback restores the pre-deploy state', t => {
+  const f = fixture(t);
+  f.next();
+  f.fail.add(`${repository}:0.1.1`); f.fail.add(`${repository}:0.1.0`);
+  assert.throws(() => f.manager.deploy(), /Automatic rollback failed/);
+  let state = f.manager.read();
+  assert.equal(state.phase, 'deploying');
+  assert.equal(state.superseded.version, '0.1.0');
+  assert.equal(state.previous.version, '0.1.0-legacy.1');
+  assert.throws(() => f.manager.confirm(), /Recover/);
+  f.fail.clear();
+  state = f.manager.rollback();
+  assert.equal(state.current.version, '0.1.0');
+  assert.equal(state.previous.version, '0.1.0-legacy.1');
+  assert.equal(state.candidate.version, '0.1.1');
+  assert.equal(state.phase, undefined);
+  assert.equal(state.superseded, undefined);
+  assert.equal(f.manager.deploy().current.version, '0.1.1');
+});
+
+test('retirement refuses in-use images and can resume or roll back after restart', t => {
+  for (const recover of ['deploy', 'rollback']) {
+    const f = fixture(t);
+    f.next();
+    f.inUse.add(f.old.Id);
+    assert.throws(() => f.manager.deploy(), /referenced/);
+    assert.equal(f.manager.read().phase, 'retiring');
+    assert.equal(f.manager.read().superseded.version, '0.1.0');
+    assert(f.images.has(`${repository}:0.1.0-legacy.1`));
+    assert.throws(() => f.manager.confirm(), /Recover/);
+    assert.throws(() => f.manager.cleanImages(), /Recover/);
+    const restarted = new Releases(f.root, f.manager.run);
+    f.inUse.clear();
+    const state = restarted[recover]();
+    assert.equal(state.phase, undefined);
+    assert.equal(state.superseded, undefined);
+    assert.equal(state.previous.version, '0.1.0-legacy.1');
+    assert.equal(state.current.version, recover === 'deploy' ? '0.1.1' : '0.1.0');
+    assert.equal(state.confirmed, false);
+  }
+});
+
+test('a crash after retirement deletion can resume cleanup or restore the retained anchor', t => {
+  for (const recover of ['deploy', 'rollback']) {
+    const f = fixture(t);
+    f.next();
+    const write = f.manager.write.bind(f.manager);
+    f.manager.write = state => {
+      if (!state.phase) throw new Error('interrupted state write');
+      write(state);
+    };
+    assert.throws(() => f.manager.deploy(), /interrupted state write/);
+    assert.equal(f.manager.read().phase, 'retiring');
+    assert(!f.images.has(`${repository}:0.1.0`));
+    const restarted = new Releases(f.root, f.manager.run);
+    const state = restarted[recover]();
+    assert.equal(state.phase, undefined);
+    assert.equal(state.current.version, recover === 'deploy' ? '0.1.1' : '0.1.0-legacy.1');
+    assert.equal(state.previous.version, recover === 'deploy' ? '0.1.0-legacy.1' : '0.1.1');
+    assert.equal(state.confirmed, false);
+  }
+});
+
+test('retirement rechecks readiness before deleting any superseded image', t => {
+  const f = fixture(t);
+  f.next();
+  f.inUse.add(f.old.Id);
+  assert.throws(() => f.manager.deploy(), /referenced/);
+  f.inUse.clear();
+  f.setHealthy(false);
+  assert.throws(() => f.manager.deploy(), /healthy/);
+  assert(f.images.has(`${repository}:0.1.0`));
+  assert(f.images.has(`${repository}:0.1.0-legacy.1`));
+  assert.equal(f.manager.read().phase, 'retiring');
+});
+
+test('replacement verifies the retained anchor before startup and before retirement', t => {
+  const f = fixture(t);
+  f.next();
+  f.images.set(`${repository}:0.1.0-legacy.1`, f.old);
+  assert.throws(() => f.manager.deploy(), /Immutable/);
+  assert(!f.calls.some(a => a[0] === 'compose'));
+  assert.equal(f.manager.read().candidate.version, '0.1.1');
+  f.images.set(`${repository}:0.1.0-legacy.1`, f.previous);
+  f.inUse.add(f.old.Id);
+  assert.throws(() => f.manager.deploy(), /referenced/);
+  f.inUse.clear();
+  f.images.set(`${repository}:0.1.0-legacy.1`, f.old);
+  assert.throws(() => f.manager.deploy(), /Immutable/);
+  assert(f.images.has(`${repository}:0.1.0`));
+  assert.equal(f.manager.read().phase, 'retiring');
 });
 
 test('deploy and rollback override stale image exports inherited from root just dotenv', t => {

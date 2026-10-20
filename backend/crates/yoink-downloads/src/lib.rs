@@ -73,6 +73,15 @@ impl std::fmt::Debug for DeliveredMedia {
 
 pub type DiagnosticFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
+#[derive(Clone)]
+pub struct DeliveryPresentation {
+    pub actor_id: u64,
+    pub source_url: url::Url,
+    pub clips: Vec<yoink_domain::ClipRange>,
+    pub language: String,
+    pub first_unit: bool,
+}
+
 pub trait Delivery: Send + Sync {
     /// Optional diagnostics run only after confirmed receipts have been persisted.
     /// The service owns timeout/shutdown cancellation; adapters must not detach work.
@@ -96,6 +105,18 @@ pub trait Delivery: Send + Sync {
         } else {
             self.deliver(target, send_as_file, artifacts)
         }
+    }
+    /// The token stops transient activity, not receipt processing for a possibly accepted upload.
+    fn deliver_with_presentation(
+        &self,
+        target: DeliveryTarget,
+        send_as_file: bool,
+        spoiler: bool,
+        _presentation: Option<DeliveryPresentation>,
+        _activity_cancel: CancellationToken,
+        artifacts: Vec<DeliveryArtifact>,
+    ) -> DeliveryFuture<'_> {
+        self.deliver_with_policy(target, send_as_file, spoiler, artifacts)
     }
     fn bot_id(&self) -> i64;
     fn deliver(
@@ -1112,10 +1133,25 @@ impl DownloadService {
                 .iter()
                 .filter_map(|index| artifacts[*index].take())
                 .collect();
-            let delivery = self.delivery.deliver_with_policy(
+            let activity_cancel = shutdown.child_token();
+            let delivery = self.delivery.deliver_with_presentation(
                 target,
                 claim.request.params().send_as_file(),
                 spoiler,
+                (claim.request.media_mode() != DomainMediaMode::Formats).then(|| {
+                    DeliveryPresentation {
+                        actor_id: claim.request.actor_id(),
+                        source_url: claim.request.source_url().clone(),
+                        clips: if claim.request.params().clips().is_empty() {
+                            claim.request.clip_range().into_iter().collect()
+                        } else {
+                            claim.request.params().clips().to_vec()
+                        },
+                        language: identity.language.clone(),
+                        first_unit: ordinal == 0,
+                    }
+                }),
+                activity_cancel.clone(),
                 media,
             );
             tokio::pin!(delivery);
@@ -1137,11 +1173,11 @@ impl DownloadService {
                             _ => DeliveryOutcome::Unknown,
                         };
                     }
-                    _ = &mut deadline => break DeliveryOutcome::Unknown,
+                    _ = &mut deadline => { activity_cancel.cancel(); break DeliveryOutcome::Unknown; },
                     event = heartbeat_rx.recv(), if !heartbeat_closed => match event {
-                        Some(HeartbeatEvent::Database | HeartbeatEvent::Stale) => { heartbeat_failed = true; },
-                        Some(HeartbeatEvent::Cancelled) => { cancellation_seen = true; },
-                        None => heartbeat_closed = true,
+                        Some(HeartbeatEvent::Database | HeartbeatEvent::Stale) => { heartbeat_failed = true; activity_cancel.cancel(); },
+                        Some(HeartbeatEvent::Cancelled) => { cancellation_seen = true; activity_cancel.cancel(); },
+                        None => { heartbeat_closed = true; activity_cancel.cancel(); },
                     },
                 }
             };

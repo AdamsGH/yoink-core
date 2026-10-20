@@ -32,6 +32,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target,sharing=locked \
     cargo test --locked --release -p yoink-downloads --test proxy_settings
 
+FROM rust-source AS telegram-menu-tests
+COPY --from=node:22.16.0-bookworm-slim@sha256:048ed02c5fd52e86fda6fbd2f6a76cf0d4492fd6c6fee9e2c463ed5108da0e34 /usr/local/bin/node /usr/bin/node
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target,sharing=locked \
+    cargo test --locked -p yoink-identity -p yoink-telegram --all-features
+
 # Fixture controls are built separately and never copied into the default runtime.
 FROM rust-build AS fixture-build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
