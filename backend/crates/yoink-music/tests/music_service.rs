@@ -492,6 +492,35 @@ fn utf16_cards_and_locales() {
     );
 }
 
+#[test]
+fn music_failures_have_distinct_localized_recovery_messages() {
+    let errors = [
+        MusicError::InvalidInput,
+        MusicError::Denied,
+        MusicError::SourceUnavailable,
+        MusicError::ResourceLimit,
+        MusicError::Cancelled,
+        MusicError::Persistence,
+        MusicError::DeliveryUnknown,
+        MusicError::DeliveryRejected,
+        MusicError::Conflict,
+    ];
+    for language in ["en", "ru"] {
+        let messages: std::collections::HashSet<_> = errors
+            .iter()
+            .map(|error| error_message(*error, language))
+            .collect();
+        assert_eq!(messages.len(), errors.len());
+        for error in errors {
+            assert_eq!(error_message(error, "ru-RU"), error_message(error, "ru"));
+            assert_ne!(error_message(error, "en"), error_message(error, "ru"));
+        }
+    }
+    assert!(error_message(MusicError::DeliveryRejected, "en").contains("Telegram"));
+    assert!(error_message(MusicError::Persistence, "en").contains("state"));
+    assert!(error_message(MusicError::Conflict, "en").contains("new message"));
+}
+
 struct CachedPersistence(NativeMusicPersistence, Option<Arc<Authority>>);
 impl MusicPersistence for CachedPersistence {
     fn audio_log(&self, log: AudioDownloadLog) -> MusicFuture<'_, ()> {

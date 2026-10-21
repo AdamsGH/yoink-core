@@ -370,7 +370,13 @@ async fn personalized_language_removes_both_higher_precedence_overrides() {
         },
         Language::Russian,
     );
-    personalized(&api, private(43), ru.clone()).await.unwrap();
+    let cleaned = CleanedApi::new(api.clone());
+    personalized(&cleaned, private(43), ru.clone())
+        .await
+        .unwrap();
+    personalized(&cleaned, private(43), ru.clone())
+        .await
+        .unwrap();
     let state = api.state.lock().unwrap();
     assert!(!state.saved.contains_key(&(private(43), "en".into())));
     assert!(!state.saved.contains_key(&(private(43), "ru".into())));
@@ -398,6 +404,69 @@ impl MenuApi for ContactTransport {
             .copied()
             .map_or(Ok(()), Err)
     }
+}
+
+#[tokio::test]
+async fn successful_cleanup_is_reused_but_sets_invalidate_it() {
+    let transport = ContactTransport::default();
+    let api = CleanedApi::new(transport.clone());
+    personalized(&api, private(43), vec![]).await.unwrap();
+    personalized(&api, private(43), vec![]).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 4);
+    api.apply(private(43), "en", Some(vec![])).await.unwrap();
+    personalized(&api, private(43), vec![]).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 7);
+    personalized(&api, private(44), vec![]).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 10);
+    let restarted = CleanedApi::new(transport.clone());
+    personalized(&restarted, private(43), vec![]).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 13);
+}
+
+#[tokio::test]
+async fn cleanup_cache_overflow_keeps_cleanup_active() {
+    let transport = ContactTransport::default();
+    let api = CleanedApi::new(transport.clone());
+    for user in 1..=MAX_CLEANED_OVERRIDES as i64 {
+        api.apply(private(user), "ru", None).await.unwrap();
+    }
+    let overflow = private(MAX_CLEANED_OVERRIDES as i64 + 1);
+    api.apply(overflow.clone(), "ru", None).await.unwrap();
+    api.apply(overflow, "ru", None).await.unwrap();
+    assert_eq!(api.deleted.lock().unwrap().len(), MAX_CLEANED_OVERRIDES);
+    assert_eq!(
+        transport.calls.lock().unwrap().len(),
+        MAX_CLEANED_OVERRIDES + 2
+    );
+}
+
+#[tokio::test]
+async fn failed_cleanup_and_uncertain_sets_remain_retryable() {
+    let transport = ContactTransport::default();
+    let api = CleanedApi::new(transport.clone());
+    let failure = Failure::Retry(Duration::from_millis(1));
+    transport
+        .failures
+        .lock()
+        .unwrap()
+        .insert(private(43), failure);
+    assert_eq!(api.apply(private(43), "ru", None).await, Err(failure));
+    transport.failures.lock().unwrap().clear();
+    api.apply(private(43), "ru", None).await.unwrap();
+    api.apply(private(43), "ru", None).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 2);
+    transport
+        .failures
+        .lock()
+        .unwrap()
+        .insert(private(43), failure);
+    assert_eq!(
+        api.apply(private(43), "ru", Some(vec![])).await,
+        Err(failure)
+    );
+    transport.failures.lock().unwrap().clear();
+    api.apply(private(43), "ru", None).await.unwrap();
+    assert_eq!(transport.calls.lock().unwrap().len(), 4);
 }
 
 fn guarded(

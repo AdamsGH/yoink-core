@@ -172,14 +172,36 @@ pub fn error_message(error: MusicError, language: &str) -> &'static str {
         (Russian, MusicError::Denied) => "Нет доступа к музыке.",
         (Russian, MusicError::InvalidInput) => "Вставьте поддерживаемую музыкальную ссылку.",
         (Russian, MusicError::DeliveryUnknown) => {
-            "Результат отправки аудио неизвестен. Повторная отправка отключена."
+            "Результат отправки музыки неизвестен. Автоматическая повторная отправка отключена."
         }
-        (Russian, _) => "Не удалось получить музыку. Попробуйте позже.",
+        (Russian, MusicError::SourceUnavailable) => {
+            "Музыкальный источник недоступен. Попробуйте позже."
+        }
+        (Russian, MusicError::ResourceLimit) => "Музыка превышает допустимый лимит ресурсов.",
+        (Russian, MusicError::Cancelled) => "Обработка музыки отменена.",
+        (Russian, MusicError::Persistence) => {
+            "Не удалось сохранить состояние обработки музыки. Попробуйте позже."
+        }
+        (Russian, MusicError::DeliveryRejected) => "Telegram отклонил отправку музыки.",
+        (Russian, MusicError::Conflict) => {
+            "Этот запрос уже обрабатывался с другими данными. Отправьте новое сообщение."
+        }
         (English, MusicError::Denied) => "Music access denied.",
         (English, MusicError::InvalidInput) => "Paste a supported music link.",
         (English, MusicError::DeliveryUnknown) => {
-            "Audio delivery is uncertain. Automatic resend is disabled."
+            "Music delivery is uncertain. Automatic resend is disabled."
         }
-        _ => "Could not fetch music. Try again later.",
+        (English, MusicError::SourceUnavailable) => {
+            "The music source is unavailable. Try again later."
+        }
+        (English, MusicError::ResourceLimit) => "Music exceeds the resource limit.",
+        (English, MusicError::Cancelled) => "Music processing was cancelled.",
+        (English, MusicError::Persistence) => {
+            "Could not save music processing state. Try again later."
+        }
+        (English, MusicError::DeliveryRejected) => "Telegram rejected music delivery.",
+        (English, MusicError::Conflict) => {
+            "This request already used different data. Send a new message."
+        }
     }
 }

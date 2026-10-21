@@ -272,6 +272,59 @@ pub(crate) trait MenuApi {
     ) -> impl std::future::Future<Output = Result<(), Failure>> + Send;
 }
 
+// The serialized reconciler owns these scopes. Recheck legacy overrides on
+// startup, but do not delete the same absent override on every identity change.
+const MAX_CLEANED_OVERRIDES: usize = 8192;
+pub(crate) struct CleanedApi<A> {
+    api: A,
+    deleted: std::sync::Mutex<std::collections::HashSet<(BotCommandScope, String)>>,
+}
+impl<A> CleanedApi<A> {
+    fn new(api: A) -> Self {
+        Self {
+            api,
+            deleted: Default::default(),
+        }
+    }
+}
+impl<A: MenuApi + Sync> MenuApi for CleanedApi<A> {
+    async fn apply(
+        &self,
+        scope: BotCommandScope,
+        locale: &str,
+        commands: Option<Vec<BotCommand>>,
+    ) -> Result<(), Failure> {
+        let key = (scope.clone(), locale.to_owned());
+        let deleting = commands.is_none();
+        {
+            let mut deleted = self
+                .deleted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if deleting && deleted.contains(&key) {
+                return Ok(());
+            }
+            // A set with a lost response can restore an override, too.
+            if !deleting {
+                deleted.remove(&key);
+            }
+        }
+        self.api.apply(scope, locale, commands).await?;
+        if deleting {
+            let mut deleted = self
+                .deleted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Overflow only costs extra API calls. Never retain unbounded
+            // historical scopes or skip cleanup without a successful response.
+            if deleted.len() < MAX_CLEANED_OVERRIDES {
+                deleted.insert(key);
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct ContactApi<A> {
     api: A,
     identities: Option<Arc<IdentityStore>>,
@@ -418,7 +471,7 @@ async fn personalized(
     api.apply(scope, "", Some(commands)).await
 }
 
-pub(crate) struct Menus<A = ContactApi<BotApi>> {
+pub(crate) struct Menus<A = ContactApi<CleanedApi<BotApi>>> {
     api: A,
     config: MenuConfig,
     identities: Option<Arc<IdentityStore>>,
@@ -448,7 +501,7 @@ impl Menus {
         let changes = identities.as_ref().map(|store| store.subscribe_changes());
         Self {
             api: ContactApi {
-                api: BotApi { bot, config },
+                api: CleanedApi::new(BotApi { bot, config }),
                 identities: identities.clone(),
                 source_id,
                 retry_delay: config.retry_delay,

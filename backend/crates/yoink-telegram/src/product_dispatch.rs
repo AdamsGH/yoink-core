@@ -330,6 +330,22 @@ pub(crate) async fn message(
                 .handle_observed_message(message, actor as i64, chrono::Utc::now(), *max_age)
                 .await
         };
+        if let Err(error) = &result
+            && !matches!(
+                error,
+                yoink_music::MusicError::Denied
+                    | yoink_music::MusicError::Cancelled
+                    | yoink_music::MusicError::InvalidInput
+            )
+        {
+            tracing::warn!(
+                error = ?error,
+                explicit,
+                chat_id = message.chat.id.0,
+                message_id = message.id.0,
+                "Music message handling failed"
+            );
+        }
         match result {
             Ok(true) => return true,
             Ok(false) => return false,

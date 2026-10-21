@@ -70,8 +70,8 @@ pub trait MusicWorker: Send + Sync {
     ) -> MusicFuture<'_, Vec<ValidatedArtifact>>;
 }
 fn map_executor(e: ExecutorError) -> MusicError {
-    if let ExecutorError::Worker(class) = &e {
-        tracing::warn!(failure_class = ?class, "Music worker rejected operation");
+    if !matches!(e, ExecutorError::Cancelled) {
+        tracing::warn!(failure = ?e, "Music worker execution failed");
     }
     match e {
         ExecutorError::Cancelled => MusicError::Cancelled,
