@@ -1,5 +1,5 @@
 # Experimental images only. They do not replace the Python deployment.
-FROM rust:1.88-bookworm AS rust-source
+FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS rust-source
 WORKDIR /build
 ENV CARGO_BUILD_JOBS=1
 COPY Cargo.toml Cargo.lock ./
@@ -74,7 +74,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target,sharing=locked \
     cargo test --locked -p yoink-stats-search
 
-FROM python:3.12-slim-bookworm AS worker-runtime
+FROM python:3.12-slim-bookworm@sha256:5d9e6adc9abd558bc0ce05f9ab16cef71328916fc9728f6b81e337af86a737e2 AS worker-runtime
 RUN apt-get update \
     && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

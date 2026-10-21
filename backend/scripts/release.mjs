@@ -4,6 +4,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, re
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkSpace } from './build-resources.mjs';
+import { reportedBuild } from './build-report.mjs';
 
 export const repository = 'yoink/rust-backend';
 export const builder = 'yoink-core-release';
@@ -100,11 +101,13 @@ export function snapshot(backend, expectedHash) {
   }
 }
 
-export function execute(args, { cwd, live = false, optional = false, env = process.env, timeout = 1800000 } = {}) {
-  const result = spawnSync('docker', args, { cwd, env, encoding: 'utf8', stdio: live ? 'inherit' : 'pipe', timeout, maxBuffer: 16 * 1024 ** 2 });
+export function execute(args, { cwd, live = false, optional = false, env = process.env, timeout = 1800000, reportBase } = {}) {
+  const result = reportBase
+    ? reportedBuild(args, { cwd, env, timeout, reportBase })
+    : spawnSync('docker', args, { cwd, env, encoding: 'utf8', stdio: live ? 'inherit' : 'pipe', timeout, maxBuffer: 16 * 1024 ** 2 });
   if (result.error || result.status !== 0) {
     if (optional) return null;
-    throw new Error(`docker ${args.slice(0, 3).join(' ')} failed: ${result.error?.message ?? result.stderr ?? result.status}`);
+    throw new Error(`docker ${args.slice(0, 3).join(' ')} failed: ${result.error?.message ?? result.stderr ?? result.status}${reportBase ? `. See ${reportBase}.log` : ''}`);
   }
   return result.stdout?.trim() ?? '';
 }
@@ -254,8 +257,18 @@ export class Releases {
     this.run(['buildx', 'prune', '--builder', builder, '--all', '--force', '--max-used-space', '8gb', '--min-free-space', '20gb', '--reserved-space', '1gb'], { live: true });
   }
 
-  finishBuilder() {
-    try { this.trim(); }
+  cacheReport(reportBase, phase) {
+    const records = this.run(['buildx', 'du', '--builder', builder, '--format', 'json'], { optional: true });
+    if (records === null) return;
+    mkdirSync(path.dirname(reportBase), { recursive: true });
+    writeFileSync(`${reportBase}.cache-${phase}.jsonl`, `${records}\n`, { mode: 0o600 });
+  }
+
+  finishBuilder(reportBase) {
+    try {
+      this.trim();
+      if (reportBase) this.cacheReport(reportBase, 'after');
+    }
     finally { this.run(['buildx', 'stop', builder]); }
   }
 
@@ -342,15 +355,17 @@ export class Releases {
     }
     this.ensureBuilder();
     let context;
+    const reportBase = path.join(this.backend, 'target', 'media-reports', 'releases', ver);
     try {
+      this.cacheReport(reportBase, 'before');
       context = snapshot(this.backend, hash);
-      this.run(['buildx', 'build', '--builder', builder, '--load', '--progress=plain', '--target', 'runtime', '--build-arg', `YOINK_RELEASE_VERSION=${ver}`, '--label', `org.opencontainers.image.version=${ver}`, '--label', `io.yoink.input-sha256=${hash}`, '--tag', image, context], { live: true });
+      this.run(['buildx', 'build', '--builder', builder, '--load', '--progress=plain', '--target', 'runtime', '--build-arg', `YOINK_RELEASE_VERSION=${ver}`, '--label', `org.opencontainers.image.version=${ver}`, '--label', `io.yoink.input-sha256=${hash}`, '--tag', image, context], { reportBase });
       state.candidate = { version: ver, image, id: this.image(image).Id, inputHash: hash };
       state.highestVersion = ver;
       this.write(state);
     } finally {
       if (context) rmSync(context, { recursive: true, force: true });
-      this.finishBuilder();
+      this.finishBuilder(reportBase);
     }
     return state;
   }

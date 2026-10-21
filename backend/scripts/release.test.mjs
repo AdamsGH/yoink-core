@@ -521,7 +521,7 @@ test('terminal cancellation removes source snapshot and lock, trims cache and st
   writeFileSync(path.join(f.backend, 'VERSION'), '0.1.1\n');
   const scripts = path.join(f.backend, 'scripts');
   mkdirSync(scripts);
-  for (const name of ['release.mjs', 'build-resources.mjs']) cpSync(new URL(name, import.meta.url), path.join(scripts, name));
+  for (const name of ['release.mjs', 'build-resources.mjs', 'build-report.mjs']) cpSync(new URL(name, import.meta.url), path.join(scripts, name));
   const bin = path.join(f.root, 'bin');
   mkdirSync(bin);
   writeFileSync(path.join(bin, 'docker'), `#!${process.execPath}
@@ -552,6 +552,8 @@ if (args[0] === 'buildx' && args[1] === 'build') {
     assert.notEqual(result.code, 0);
     assert(!existsSync(path.join(f.backend, '.release', 'lock')));
     assert(!readdirSync(path.join(f.backend, 'target')).some(name => name.startsWith('release-context-')));
+    const report = JSON.parse(readFileSync(path.join(f.backend, 'target', 'media-reports', 'releases', '0.1.1.json'), 'utf8'));
+    assert.notEqual(report.exitCode, 0);
     const calls = readFileSync(path.join(f.root, 'calls'), 'utf8').trim().split('\n').map(JSON.parse);
     assert(calls.some(a => a[0] === 'buildx' && a[1] === 'prune'));
     assert(calls.some(a => a[0] === 'buildx' && a[1] === 'stop'));

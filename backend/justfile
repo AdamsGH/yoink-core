@@ -125,7 +125,7 @@ release-trim:
     node scripts/release.mjs trim
 
 test-release:
-    node --test scripts/release.test.mjs
+    node --test scripts/release.test.mjs scripts/build-report.test.mjs
 
 test-release-config:
     node scripts/release.mjs tool config
