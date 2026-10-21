@@ -150,7 +150,7 @@ impl MusicCard {
             return;
         }
         if !self.text.is_empty() {
-            self.text.push_str("\n\n");
+            self.text.push('\n');
         }
         let offset = self.text.encode_utf16().count();
         let name: String = display_name

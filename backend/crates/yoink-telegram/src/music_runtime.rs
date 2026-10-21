@@ -794,8 +794,7 @@ impl MusicRuntime {
         } else {
             "Share"
         };
-        let results: Vec<_> = answer.results.into_iter().enumerate().map(|(i,mut card)| {
-            card.add_requester(actor.user_id, &query.from.full_name());
+        let results: Vec<_> = answer.results.into_iter().enumerate().map(|(i,card)| {
             serde_json::json!({
                 "type":"article", "id":i.to_string(), "title":card.title,
                 "thumbnail_url":card.thumbnail_url,

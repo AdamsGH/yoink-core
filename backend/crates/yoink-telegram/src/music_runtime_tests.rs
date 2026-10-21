@@ -666,7 +666,7 @@ async fn card_reply_hidden_links_and_inline_flags_entities() {
         assert!(head.contains("sendMessage"));
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["reply_parameters"]["message_id"], 11);
-        assert_eq!(v["text"], "Artist <&> - Song 🎵\nSpotify\n\nRequester 🎵");
+        assert_eq!(v["text"], "Artist <&> - Song 🎵\nSpotify\nRequester 🎵");
         assert_eq!(v["entities"][0]["offset"], 21);
         assert_eq!(v["entities"][0]["length"], 7);
         assert_eq!(
@@ -692,8 +692,15 @@ async fn card_reply_hidden_links_and_inline_flags_entities() {
             "Share"
         );
         assert_eq!(
-            v["results"][0]["input_message_content"]["entities"][1]["url"],
-            "tg://user?id=42"
+            v["results"][0]["input_message_content"]["message_text"],
+            "Artist <&> - Song 🎵\nSpotify"
+        );
+        assert_eq!(
+            v["results"][0]["input_message_content"]["entities"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
         );
         assert_eq!(
             v["results"][0]["input_message_content"]["entities"][0]["offset"],
@@ -997,7 +1004,7 @@ async fn artist_cards_use_supplied_entities_and_never_send_audio() {
         let (mut s, _) = listener.accept().await.unwrap();
         let (_, body) = request(&mut s).await;
         let v: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(v["text"], "Artist 🎵 <&>\nrock\nSpotify\n\nRequester 🎵");
+        assert_eq!(v["text"], "Artist 🎵 <&>\nrock\nSpotify\nRequester 🎵");
         assert_eq!(
             v["link_preview_options"]["url"],
             "https://example.com/artist.jpg"
@@ -1087,6 +1094,9 @@ async fn long_command_metadata_uses_requester_only_audio_caption() {
         assert_eq!(multipart_field(&body, "title"), "x".repeat(1000));
         assert_eq!(multipart_field(&body, "performer"), "a".repeat(100));
         let caption = MusicCard::audio_caption(42, "Requester 🎵");
+        assert_eq!(caption.text, "Requester 🎵");
+        assert_eq!(caption.entities[0].offset, 0);
+        assert_eq!(caption.entities[0].url, "tg://user?id=42");
         assert_eq!(multipart_field(&body, "caption"), caption.text);
         assert!(caption.text.encode_utf16().count() <= 1024);
         assert_eq!(
