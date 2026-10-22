@@ -1,7 +1,7 @@
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -11,7 +11,8 @@ use yoink_domain::{
     MediaMode,
 };
 use yoink_downloads::{
-    DeliveredMedia, Delivery, DeliveryArtifact, DeliveryFuture, DownloadConfig, DownloadService,
+    DeliveredMedia, Delivery, DeliveryArtifact, DeliveryFuture, DeliveryPresentation,
+    DownloadConfig, DownloadService,
 };
 use yoink_executor::{Executor, ExecutorConfig};
 use yoink_identity::IdentityStore;
@@ -22,6 +23,7 @@ struct Recorder {
     calls: AtomicUsize,
     revoke: bool,
     outcome: AtomicUsize,
+    presentations: Mutex<Vec<DeliveryPresentation>>,
 }
 impl Delivery for Recorder {
     fn bot_id(&self) -> i64 {
@@ -29,6 +31,20 @@ impl Delivery for Recorder {
     }
     fn deliver(&self, _: DeliveryTarget, _: bool, _: Vec<DeliveryArtifact>) -> DeliveryFuture<'_> {
         panic!("must use policy-aware delivery")
+    }
+    fn deliver_with_presentation(
+        &self,
+        target: DeliveryTarget,
+        send_as_file: bool,
+        spoiler: bool,
+        presentation: Option<DeliveryPresentation>,
+        _: tokio_util::sync::CancellationToken,
+        media: Vec<DeliveryArtifact>,
+    ) -> DeliveryFuture<'_> {
+        if let Some(presentation) = presentation {
+            self.presentations.lock().unwrap().push(presentation);
+        }
+        self.deliver_with_policy(target, send_as_file, spoiler, media)
     }
     fn deliver_with_policy(
         &self,
@@ -107,6 +123,7 @@ async fn fixture_worker(
         calls: AtomicUsize::new(0),
         revoke,
         outcome: AtomicUsize::new(0),
+        presentations: Mutex::new(Vec::new()),
     });
     let identities = Arc::new(IdentityStore::new(
         store.database().clone(),
@@ -237,6 +254,37 @@ async fn finish(
     runner.await.unwrap().unwrap();
     result.unwrap()
 }
+#[tokio::test]
+async fn group_presentation_prefers_username_then_name_without_requiring_either() {
+    for (username, first_name, expected) in [
+        (Some("meiumo"), Some("Name"), Some("@meiumo")),
+        (None, Some("Name"), Some("Name")),
+        (None, None, None),
+    ] {
+        let (_dir, store, delivery, service) = fixture(false).await;
+        IdentityStore::new(store.database().clone(), Some(42), false)
+            .register(&yoink_identity::TrustedProfile {
+                user_id: 44,
+                username: username.map(str::to_owned),
+                first_name: first_name.map(str::to_owned),
+                photo_url: None,
+            })
+            .await
+            .unwrap();
+        warm(&store, &service, true, 1).await;
+        yoink_db::raw_sql(include_str!("nsfw_clean_rules.sql"))
+            .execute(store.database())
+            .await
+            .unwrap();
+        let record = finish(&store, service, -100).await;
+        assert_eq!(record.status, OperationStatus::Succeeded, "{record:?}");
+        let presentations = delivery.presentations.lock().unwrap();
+        assert_eq!(presentations.len(), 1);
+        assert_eq!(presentations[0].actor_id, 44);
+        assert_eq!(presentations[0].actor_label.as_deref(), expected);
+    }
+}
+
 #[tokio::test]
 async fn nsfw_cached_metadata_group_block_and_private_spoiler() {
     for chat in [-100, 44] {

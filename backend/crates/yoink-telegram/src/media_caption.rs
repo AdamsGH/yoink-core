@@ -56,11 +56,17 @@ impl MediaCaption {
         let url = escape(presentation.source_url.as_str());
         let private = target.chat_id() > 0 && target.thread_id().is_none();
         if !private {
+            let label = presentation
+                .actor_label
+                .as_deref()
+                .filter(|label| !label.trim().is_empty())
+                .map(escape)
+                .unwrap_or_else(|| presentation.actor_id.to_string());
             return Some(Self {
                 html: format!(
                     "<a href=\"tg://user?id={}\">{}</a>\n\n<a href=\"{url}\">{}</a>",
                     presentation.actor_id,
-                    presentation.actor_id,
+                    label,
                     escape(&source),
                 ),
                 above: false,
@@ -140,6 +146,7 @@ mod tests {
     fn presentation() -> DeliveryPresentation {
         DeliveryPresentation {
             actor_id: 42,
+            actor_label: None,
             source_url: "https://example.com/watch?v=1&lang=en".parse().unwrap(),
             clips: vec![],
             language: "en".into(),
@@ -150,12 +157,10 @@ mod tests {
     #[test]
     fn private_caption_preserves_literal_title_and_source_hyperlink() {
         let target = DeliveryTarget::new(1, 42, None, None).unwrap();
-        let caption = MediaCaption::new(
-            target,
-            &presentation(),
-            &[artifact("A <title> & \"quote\"")],
-        )
-        .unwrap();
+        let mut presentation = presentation();
+        presentation.actor_label = Some("@requester".into());
+        let caption =
+            MediaCaption::new(target, &presentation, &[artifact("A <title> & \"quote\"")]).unwrap();
         assert_eq!(
             caption.html,
             "<a href=\"https://example.com/watch?v=1&amp;lang=en\"><b>A &lt;title&gt; &amp; &quot;quote&quot;</b></a>"
@@ -216,5 +221,27 @@ mod tests {
         );
         assert!(!caption.html.contains("private title"));
         assert!(!caption.above);
+    }
+
+    #[test]
+    fn group_caption_uses_the_requester_label_and_escapes_html() {
+        let target = DeliveryTarget::new(1, -100, Some(7), None).unwrap();
+        let mut presentation = presentation();
+        presentation.actor_id = 675556762;
+        for (label, escaped) in [
+            ("@meiumo", "@meiumo"),
+            ("A <name> & friend", "A &lt;name&gt; &amp; friend"),
+            (" ", "675556762"),
+        ] {
+            presentation.actor_label = Some(label.into());
+            let caption =
+                MediaCaption::new(target, &presentation, &[artifact("private title")]).unwrap();
+            assert!(
+                caption
+                    .html
+                    .starts_with(&format!("<a href=\"tg://user?id=675556762\">{escaped}</a>"))
+            );
+            assert!(!caption.html.contains("private title"));
+        }
     }
 }

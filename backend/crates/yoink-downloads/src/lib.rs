@@ -76,6 +76,7 @@ pub type DiagnosticFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 #[derive(Clone)]
 pub struct DeliveryPresentation {
     pub actor_id: u64,
+    pub actor_label: Option<String>,
     pub source_url: url::Url,
     pub clips: Vec<yoink_domain::ClipRange>,
     pub language: String,
@@ -1121,6 +1122,21 @@ impl DownloadService {
                     break;
                 }
             };
+            let actor_label = if ordinal == 0 && target.chat_id() < 0 && !is_formats {
+                self.identities
+                    .current_profile(claim.request.actor_id() as i64)
+                    .await
+                    .ok()
+                    .and_then(|profile| {
+                        profile
+                            .username
+                            .filter(|name| !name.trim().is_empty())
+                            .map(|name| format!("@{}", name.trim().trim_start_matches('@')))
+                            .or_else(|| profile.first_name.filter(|name| !name.trim().is_empty()))
+                    })
+            } else {
+                None
+            };
             if !self
                 .store
                 .begin_delivery_unit(&claim, ordinal, unit.len() as u32)
@@ -1141,6 +1157,7 @@ impl DownloadService {
                 (claim.request.media_mode() != DomainMediaMode::Formats).then(|| {
                     DeliveryPresentation {
                         actor_id: claim.request.actor_id(),
+                        actor_label,
                         source_url: claim.request.source_url().clone(),
                         clips: if claim.request.params().clips().is_empty() {
                             claim.request.clip_range().into_iter().collect()
