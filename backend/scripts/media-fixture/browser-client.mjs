@@ -24,6 +24,7 @@ export class CdpPipe extends EventEmitter {
     this.pending = new Map();
     this.nextId = 0;
     this.buffer = Buffer.alloc(0);
+    this.bytesReceived = 0;
     this.failure = null;
     this.readable = readable;
     this.writable = writable;
@@ -56,6 +57,7 @@ export class CdpPipe extends EventEmitter {
 
   consume(chunk) {
     if (this.failure) return;
+    this.bytesReceived += chunk.length;
     this.buffer = Buffer.concat([this.buffer, chunk]);
     for (;;) {
       const end = this.buffer.indexOf(0);
@@ -116,6 +118,8 @@ export function isAllowedRequest(url, origin) {
  * No blanket certificate bypass, no debugging listener and no sandbox bypass.
  * Returned request defaults to the attached page session; browserRequest does not.
  * Profiles use profileParentDirectory and are removed on close or startup failure.
+ * startupTimeoutMs covers launch and initial CDP setup. commandTimeoutMs applies
+ * after the browser is ready, so it cannot prematurely cancel a cold launch.
  * Requires Chromium 151's ordered Network.setBlockedURLs allow/block patterns.
  * HTTP(S) resource requests are origin-restricted. WebSocket/WebTransport/WebRTC
  * constructors are disabled in page and worker contexts by a bootstrap guard.
@@ -146,6 +150,17 @@ export async function launchBrowser({
   bounded(commandTimeoutMs, 'command timeout');
   bounded(shutdownTimeoutMs, 'shutdown timeout');
   const profileDirectory = await mkdtemp(join(profileParentDirectory, 'yoink-browser-'));
+  const startedAt = performance.now();
+  const stderrCategories = new Set();
+  const recordStderr = chunk => {
+    const text = chunk.toString();
+    for (const [name, pattern] of [
+      ['sandbox', /sandbox|namespace/i], ['dbus', /dbus|bus\.cc/i],
+      ['gpu', /gpu|gl_factory|viz_main/i], ['memory', /out of memory|oom|allocation failed/i],
+      ['profile', /singleton|profile.*lock/i], ['crashpad', /crashpad/i],
+    ]) if (pattern.test(text)) stderrCategories.add(name);
+  };
+  let stage = 'spawn';
   let child, pipe, closing, timer;
   let exited = false;
   const signalGroup = signal => {
@@ -185,6 +200,7 @@ export async function launchBrowser({
       } finally {
         pipe?.readable.destroy();
         pipe?.writable.destroy();
+        child?.stderr?.destroy();
         await rm(profileDirectory, { recursive: true, force: true });
       }
     })();
@@ -201,8 +217,10 @@ export async function launchBrowser({
       '--disable-features=MediaRouter,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater',
       ...(certificateSpki ? [`--ignore-certificate-errors-spki-list=${certificateSpki}`] : []),
     ];
-    child = spawn(executablePath, args, { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
-    pipe = new CdpPipe(child.stdio[4], child.stdio[3], { commandTimeoutMs });
+    child = spawn(executablePath, args, { detached: true, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    child.stderr.on('data', recordStderr);
+    child.stderr.on('error', () => { stderrCategories.add('unavailable'); });
+    pipe = new CdpPipe(child.stdio[4], child.stdio[3], { commandTimeoutMs: startupTimeoutMs });
     child.once('error', () => { exited = true; pipe.fail(failure('Browser launch failed')); });
     child.once('exit', () => { exited = true; pipe.fail(failure('Browser exited')); });
     pipe.on('failure', () => { void close().catch(() => {}); });
@@ -257,21 +275,27 @@ export async function launchBrowser({
       }
     });
     const initialize = async () => {
+      stage = 'version';
       const version = await pipe.request('Browser.getVersion');
       const major = Number(/\/(\d+)\./.exec(version.product ?? '')?.[1]);
       if (!Number.isInteger(major) || major < 151) throw failure('Chromium 151 or newer is required');
+      stage = 'target';
       await pipe.request('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
       const { targetId } = await pipe.request('Target.createTarget', { url: 'about:blank' });
       const attached = sessions.get(targetId);
       if (!attached) throw failure('Browser page attachment failed');
+      stage = 'page-setup';
       await attached.ready;
       return { targetId, sessionId: attached.sessionId };
     };
-    const ready = await Promise.race([
-      initialize(),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(failure('Browser startup timed out')), startupTimeoutMs); }),
-    ]);
+    const startupDeadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(failure('Browser startup timed out')), startupTimeoutMs);
+    });
+    const ready = await Promise.race([initialize(), startupDeadline]);
     clearTimeout(timer);
+    pipe.timeout = commandTimeoutMs;
+    child.stderr.off('data', recordStderr);
+    child.stderr.resume();
     const request = (method, params = {}, sessionId = ready.sessionId, options) => pipe.request(method, params, sessionId, options);
     return {
       ...ready, profileDirectory, pid: child.pid, close,
@@ -321,6 +345,8 @@ export async function launchBrowser({
       },
     };
   } catch (error) {
+    const processState = !child?.pid ? 'not-started' : exited ? 'exited' : 'running';
+    error.cause ??= failure(`Browser startup: stage=${stage}, elapsed=${Math.round(performance.now() - startedAt)}ms, process=${processState}, exit=${child?.exitCode ?? child?.signalCode ?? 'none'}, received=${pipe?.bytesReceived ?? 0}, stderr=${[...stderrCategories].sort().join('|') || 'none'}`);
     pipe?.fail(failure('Browser startup failed'));
     await close();
     throw error;

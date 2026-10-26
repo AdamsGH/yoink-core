@@ -150,9 +150,16 @@ test('bounded startup failure removes its owned profile', async () => {
   try {
     const executablePath = join(directory, 'silent-browser');
     const recordFile = join(directory, 'record.json');
-    await writeFile(executablePath, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ pid: process.pid, args: process.argv.slice(2) }));\nprocess.on('SIGTERM', () => {});\nsetInterval(() => {}, 1000);\n`, { mode: 0o700 });
+    await writeFile(executablePath, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ pid: process.pid, args: process.argv.slice(2) }));\nconsole.error('DBus bus.cc credential-never-output');\nprocess.on('SIGTERM', () => {});\nsetInterval(() => {}, 1000);\n`, { mode: 0o700 });
     const certificateSpki = `${'A'.repeat(43)}=`;
-    await assert.rejects(launchBrowser({ origin: 'https://fixture.test', executablePath, certificateSpki, startupTimeoutMs: 500, shutdownTimeoutMs: 50 }), /startup timed out/);
+    await assert.rejects(launchBrowser({ origin: 'https://fixture.test', executablePath, certificateSpki, startupTimeoutMs: 500, shutdownTimeoutMs: 50 }), error => {
+      assert.match(error.message, /startup timed out/);
+      assert.match(error.cause.message, /stage=version/);
+      assert.match(error.cause.message, /received=0/);
+      assert.match(error.cause.message, /stderr=dbus/);
+      assert.doesNotMatch(error.cause.message, /credential|fixture\.test|AAAA/);
+      return true;
+    });
     const record = JSON.parse(await readFile(recordFile, 'utf8'));
     processGone(record.pid);
     assert.equal(record.args.includes('--remote-debugging-pipe'), true);
@@ -195,6 +202,22 @@ test('Chromium about:blank smoke: attached session, bootstrap, invalid operation
   await browser.close();
   await absent(browser.profileDirectory);
   processGone(browser.pid);
+});
+
+test('Chromium startup uses its own deadline before runtime command limits apply', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yoink-browser-delayed-'));
+  const executable = process.env.YOINK_FIXTURE_CHROMIUM ?? '/usr/bin/chromium';
+  const launcher = join(directory, 'delayed.cjs');
+  let browser;
+  try {
+    await writeFile(launcher, `#!${process.execPath}\nconst { spawn } = require('node:child_process');\nsetTimeout(() => {\n  const child = spawn(${JSON.stringify(executable)}, process.argv.slice(2), { stdio: ['ignore', 'ignore', 'ignore', 3, 4] });\n  child.once('error', () => process.exit(1));\n  child.once('exit', code => process.exit(code ?? 1));\n}, 400);\n`, { mode: 0o700 });
+    browser = await launchBrowser({ origin: 'https://fixture.test', executablePath: launcher, commandTimeoutMs: 200 });
+    assert.equal(await browser.evaluate('6 * 7'), 42);
+    await assert.rejects(browser.evaluate('new Promise(() => {})'), /CDP command timed out: Runtime.evaluate/);
+  } finally {
+    await browser?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('Chromium process failure rejects pending requests and automatically cleans up', { timeout: 30000 }, async () => {

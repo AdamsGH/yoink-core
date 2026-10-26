@@ -15,7 +15,34 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      YOINK_FIXTURE_CHROMIUM: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - name: Verify worker fixture runtime
+        run: |
+          node --version
+          node -p process.execPath
+          if test -x /usr/bin/node; then /usr/bin/node --version; else echo 'No system Node; fixtures must use PATH.'; fi
+      - name: Verify browser fixture prerequisites
+        run: |
+          test -x "$YOINK_FIXTURE_CHROMIUM"
+          "$YOINK_FIXTURE_CHROMIUM" --version
+          just --justfile backend/justfile test-media-fixtures
+
   verify:
+    needs: browser
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -43,16 +70,6 @@ jobs:
           toolchain: '1.99.1'
           components: rustfmt, clippy
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
-      - name: Verify worker fixture runtime
-        run: |
-          node --version
-          node -p process.execPath
-          if test -x /usr/bin/node; then /usr/bin/node --version; else echo 'No system Node; fixtures must use PATH.'; fi
-      - name: Verify browser fixture prerequisites
-        run: |
-          test -x "$YOINK_FIXTURE_CHROMIUM"
-          "$YOINK_FIXTURE_CHROMIUM" --version
-          just --justfile backend/justfile test-media-fixtures
       - name: Install build prerequisites
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
       - name: Reserve build space on the disposable runner
@@ -184,11 +201,12 @@ jobs:
 
   required:
     if: always()
-    needs: [verify, containers]
+    needs: [browser, verify, containers]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every verification and image build
         env:
+          BROWSER: ${{ needs.browser.result }}
           VERIFIED: ${{ needs.verify.result }}
           BUILT: ${{ needs.containers.result }}
-        run: test "$VERIFIED" = success && test "$BUILT" = success
+        run: test "$BROWSER" = success && test "$VERIFIED" = success && test "$BUILT" = success

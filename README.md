@@ -36,6 +36,14 @@ Provision the Bot API dependency before `just up`. The supplied Compose configur
 
 GitHub CI runs `just verify`, builds the SPA, scans all five repository histories, and builds the six release images. The optional custom TDLight build is excluded from the release matrix. Master publishes commit-addressed `sha-COMMIT` tags. Release tags must match `backend/VERSION` and publish SemVer image tags. Publication never deploys or modifies production data. Existing image tags cannot move to another source commit.
 
+Use `just ci-local` before remote CI on Linux amd64. It requires a local Docker daemon with Buildx and a configured Git commit identity. Keep 40 GiB free on the project and Docker storage filesystems. The containerd image store must use its standard `/var/lib/containerd` location.
+
+The default runs the actual workflow's `browser` and `verify` jobs as `pull_request`. Use `just ci-local browser` for the browser preflight alone. The runner pins act 0.2.89, Ubuntu 24.04, Chrome 155.0.8059.39 and Node 24 for actions. The workflow selects Node 22 for tests.
+
+The disposable snapshot includes full histories, tracked edits and the named helper files. Dirty submodules, missing tracked files and source symlinks stop the run. Live environment files, tokens, user configuration and unrelated untracked files stay outside the snapshot. act skips checkout to preserve local edits. Only source verification runs locally. Image publication remains a final GitHub check.
+
+Run this helper only for trusted workflows. Its privileged controller uses its own Docker daemon, not the production Docker socket. It mounts only the snapshot and uses bridge networks and bounded resources. Cleanup removes owned containers, volumes, images, caches and temporary files on success, failure or cancellation. A 512 KiB log tail remains in `backend/target/ci-local-logs/`. Cleanup failures are errors.
+
 GHCR initially creates private packages, even for public repositories. After the first publication, the package owner must set each package's visibility to public in GitHub Package settings and verify anonymous pulls. Until then, registry authentication is required.
 
 ## Services

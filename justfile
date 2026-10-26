@@ -147,6 +147,13 @@ backup action="run" target="latest":
 verify-host:
     @scripts/verify-host.sh
 
+# Run the real pull_request verify gate or its browser preflight locally.
+ci-local job="verify":
+    env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin node scripts/ci/local.mjs {{quote(job)}}
+
+test-ci-local:
+    node --test scripts/ci/local.test.mjs
+
 # Usage: just lint                  full repo (src + plugins)
 #        just lint --fix            autofix both trees
 #        just lint src/yoink        scope to a path
@@ -187,6 +194,7 @@ verify-fe *args="":
 
 # Native backend, deployment contracts and frontend verification.
 verify:
+    just test-ci-local
     just --justfile backend/justfile verify
     node --test scripts/test-native-deployment.mjs
     just test-publication
