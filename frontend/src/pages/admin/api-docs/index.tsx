@@ -45,6 +45,9 @@ export default function ApiDocsPage() {
             content: spec,
             theme: 'default',
             hideClientButton: true,
+            // Keep private schemas and API usage out of hosted Scalar services.
+            agent: { disabled: true },
+            telemetry: false,
             authentication: {
               preferredSecurityScheme: 'HTTPBearer',
               securitySchemes: {

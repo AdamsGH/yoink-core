@@ -173,8 +173,13 @@ test-inbox-frontend:
 test-insight-frontend:
     node --test plugins/yoink-insight/frontend/tests/credentials.test.mjs
 
-# Frontend verify: translations, Inbox/Insight regressions and integrated tsc.
+# Audit production and build dependencies. Registry failures block verification.
+audit-fe:
+    cd frontend && npm run audit:deps
+
+# Frontend verify: dependency audit, translations, plugin regressions and tsc.
 verify-fe *args="":
+    just audit-fe
     just verify-i18n
     just test-inbox-frontend
     just test-insight-frontend
