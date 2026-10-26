@@ -379,8 +379,9 @@ async fn fixture_with(bot: Bot, download: bool, mode: WorkerMode) -> Fixture {
     });
     std::fs::create_dir(dir.path().join("work")).unwrap();
     let executor = Executor::new(ExecutorConfig {
-        program: "/usr/bin/node".into(),
+        program: "/usr/bin/env".into(),
         args: vec![
+            "node".into(),
             format!(
                 "{}/tests/music_runtime_audio.mjs",
                 env!("CARGO_MANIFEST_DIR")

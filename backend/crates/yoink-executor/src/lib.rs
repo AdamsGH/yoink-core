@@ -1698,10 +1698,14 @@ mod tests {
         extra: Vec<String>,
     ) -> Executor {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixture.mjs");
-        let mut args = vec![fixture.to_string_lossy().into_owned(), mode.to_owned()];
+        let mut args = vec![
+            "node".into(),
+            fixture.to_string_lossy().into_owned(),
+            mode.to_owned(),
+        ];
         args.extend(extra);
         Executor::new(ExecutorConfig {
-            program: PathBuf::from("/usr/bin/node"),
+            program: PathBuf::from("/usr/bin/env"),
             args,
             workspace_root: root.to_path_buf(),
             timeout,
@@ -1801,6 +1805,7 @@ mod tests {
     fn full_fixture(mode: &str, root: &Path, marker: Option<&Path>) -> Executor {
         let mut executor = process_executor(mode, root);
         executor.config.args = vec![
+            "node".into(),
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/full_content_fixture.mjs")
                 .to_string_lossy()

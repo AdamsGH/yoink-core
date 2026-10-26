@@ -131,9 +131,10 @@ async fn fixture_worker(
         false,
     ));
     let executor = Executor::new(ExecutorConfig {
-        program: PathBuf::from(if fresh { "/usr/bin/node" } else { "/bin/false" }),
+        program: PathBuf::from(if fresh { "/usr/bin/env" } else { "/bin/false" }),
         args: if fresh {
             vec![
+                "node".into(),
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("tests/nsfw_worker.mjs")
                     .to_string_lossy()

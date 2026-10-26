@@ -914,8 +914,9 @@ mod direct_links_wire_tests {
         let root = temp.path().join("worker");
         std::fs::create_dir(&root).unwrap();
         let executor = yoink_executor::Executor::new(yoink_executor::ExecutorConfig {
-            program: "/usr/bin/node".into(),
+            program: "/usr/bin/env".into(),
             args: vec![
+                "node".into(),
                 concat!(
                     env!("CARGO_MANIFEST_DIR"),
                     "/../yoink-downloads/tests/remaining_worker.mjs"

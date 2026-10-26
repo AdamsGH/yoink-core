@@ -148,11 +148,14 @@ async fn music_search_audio_precedes_slow_youtube_and_failure_falls_back() {
         let (_dir, native) = persistence().await;
         let workspace = tempfile::tempdir().unwrap();
         let executor = yoink_executor::Executor::new(yoink_executor::ExecutorConfig {
-            program: "/usr/bin/node".into(),
-            args: vec![format!(
-                "{}/tests/music_audio_fixture.mjs",
-                env!("CARGO_MANIFEST_DIR")
-            )],
+            program: "/usr/bin/env".into(),
+            args: vec![
+                "node".into(),
+                format!(
+                    "{}/tests/music_audio_fixture.mjs",
+                    env!("CARGO_MANIFEST_DIR")
+                ),
+            ],
             workspace_root: workspace.path().into(),
             timeout: Duration::from_secs(1),
             processing_timeout: Duration::from_secs(1),

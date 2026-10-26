@@ -101,8 +101,11 @@ async fn fixture_config(
         .await
         .unwrap();
     let executor = Executor::new(ExecutorConfig {
-        program: "/usr/bin/node".into(),
-        args: vec![concat!(env!("CARGO_MANIFEST_DIR"), "/tests/remaining_worker.mjs").into()],
+        program: "/usr/bin/env".into(),
+        args: vec![
+            "node".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/remaining_worker.mjs").into(),
+        ],
         workspace_root: root,
         timeout: Duration::from_secs(30),
         processing_timeout: Duration::from_secs(20),
