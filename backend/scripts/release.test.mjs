@@ -61,7 +61,7 @@ test('YouTube builds reuse identical immutable tags and reject changed inputs', 
   assert(!readdirSync(path.join(root, 'backend/target')).some(name => name.startsWith('youtube-context-')));
 });
 
-function fixture(t, base = os.tmpdir()) {
+function fixture(t, base = os.tmpdir(), initialized = true) {
   const root = mkdtempSync(path.join(base, 'yoink-release-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const backend = path.join(root, 'backend');
@@ -83,6 +83,7 @@ function fixture(t, base = os.tmpdir()) {
   const fail = new Set();
   const inUse = new Set();
   let healthy = true;
+  let containerPresent = initialized;
   const run = (args, { optional, env } = {}) => {
     calls.push(args);
     if (args[0] === 'image' && args[1] === 'inspect') {
@@ -99,7 +100,7 @@ function fixture(t, base = os.tmpdir()) {
       }).join('\n');
     }
     if (args[0] === 'inspect' && args[1] === '--format') return [...inUse].join('\n');
-    if (args[0] === 'inspect') return JSON.stringify({ image: running, state: { Running: true, Health: { Status: healthy ? 'healthy' : 'unhealthy' } } });
+    if (args[0] === 'inspect') return containerPresent ? JSON.stringify({ image: running, state: { Running: true, Health: { Status: healthy ? 'healthy' : 'unhealthy' } } }) : null;
     if (args[0] === 'ps') return inUse.size ? 'foreign-container' : '';
     if (args[0] === 'compose') {
       if (args[1] === 'up') {
@@ -125,10 +126,90 @@ function fixture(t, base = os.tmpdir()) {
     throw new Error(`Unexpected command ${args.join(' ')}`);
   };
   const manager = new Releases(root, run);
-  manager.locked(() => manager.initialize('old', 'previous', '0.1.0-legacy.1'));
+  if (initialized) manager.locked(() => manager.initialize('old', 'previous', '0.1.0-legacy.1'));
   const next = () => { writeFileSync(path.join(backend, 'VERSION'), '0.1.1\n'); return manager.build(); };
-  return { root, backend, manager, calls, images, add, fail, inUse, old, previous, next, setHealthy: value => { healthy = value; } };
+  return { root, backend, manager, calls, images, add, fail, inUse, old, previous, next, setHealthy: value => { healthy = value; }, setContainerPresent: value => { containerPresent = value; } };
 }
+
+test('first build initializes a fresh checkout without starting a poller and is repeatable', t => {
+  const f = fixture(t, os.tmpdir(), false);
+  const state = f.manager.locked(() => f.manager.build());
+  assert.equal(state.current.image, 'yoink/rust-backend:0.1.0');
+  assert.equal(state.current.inputHash, inputHash(f.backend));
+  assert.equal(state.previous, null);
+  assert.equal(state.confirmed, false);
+  assert.match(readFileSync(path.join(f.root, '.env'), 'utf8'), /secret=untouched\nyoink_rust_image=yoink\/rust-backend:0.1.0/);
+  f.manager.locked(() => f.manager.build());
+  assert.equal(f.calls.filter(args => args[1] === 'build').length, 1);
+  assert(!f.calls.some(args => ['compose', 'start', 'stop', 'run'].includes(args[0])));
+});
+
+test('bootstrap refuses existing deployments and preserves state after failed builds', t => {
+  const f = fixture(t, os.tmpdir(), false);
+  f.setContainerPresent(true);
+  assert.throws(() => f.manager.locked(() => f.manager.build()), /Existing yoink container/);
+  f.setContainerPresent(false);
+  f.fail.add('build');
+  assert.throws(() => f.manager.locked(() => f.manager.build()), /compile failed/);
+  assert(!existsSync(f.manager.stateFile));
+  assert.match(readFileSync(path.join(f.root, '.env'), 'utf8'), /yoink_rust_image=old/);
+  f.fail.clear();
+  const image = f.add('yoink/rust-backend:0.1.0');
+  assert.throws(() => f.manager.locked(() => f.manager.build()), /Unregistered immutable image/);
+  image.Config.Labels = { 'io.yoink.input-sha256': inputHash(f.backend), 'org.opencontainers.image.version': '0.1.0' };
+  f.manager.locked(() => f.manager.build());
+  assert.equal(f.manager.read().current.id, image.Id);
+});
+
+test('fresh checkout adopts only a downloaded runtime with matching source and version labels', t => {
+  const f = fixture(t, os.tmpdir(), false);
+  const image = f.add('ghcr.io/adamsgh/yoink-core/backend:0.1.0');
+  assert.throws(() => f.manager.locked(() => f.manager.build()), /does not match this checkout/);
+  assert(!existsSync(f.manager.stateFile));
+  image.Config.Labels = { 'io.yoink.input-sha256': inputHash(f.backend), 'org.opencontainers.image.version': '0.1.0' };
+  const state = f.manager.locked(() => f.manager.build());
+  assert.equal(state.current.id, image.Id);
+  assert.equal(f.images.get('yoink/rust-backend:0.1.0').Id, image.Id);
+  assert(!f.calls.some(args => args[0] === 'buildx' || args[0] === 'compose'));
+});
+
+test('bootstrap persistence failures leave the old pin or durable retry state', t => {
+  for (const failAt of [1, 2]) {
+    const f = fixture(t, os.tmpdir(), false);
+    const write = f.manager.write.bind(f.manager);
+    let writes = 0;
+    f.manager.write = state => {
+      if (++writes === failAt) throw new Error('simulated storage failure');
+      write(state);
+    };
+    assert.throws(() => f.manager.locked(() => f.manager.build()), /storage failure/);
+    if (failAt === 1) {
+      assert(!existsSync(f.manager.stateFile));
+      assert.match(readFileSync(path.join(f.root, '.env'), 'utf8'), /yoink_rust_image=old/);
+    } else {
+      assert.equal(f.manager.read().phase, 'bootstrapping');
+      assert.throws(() => f.manager.deploy(), /Run release-build/);
+    }
+    f.manager.write = write;
+    const state = f.manager.locked(() => f.manager.build());
+    assert.equal(state.phase, undefined);
+    assert.equal(state.current.image, 'yoink/rust-backend:0.1.0');
+    assert.equal(f.calls.filter(args => args[1] === 'build').length, 1);
+  }
+});
+
+test('bootstrap retries a failed environment pin without discarding the built image', t => {
+  const f = fixture(t, os.tmpdir(), false);
+  const pin = f.manager.pin.bind(f.manager);
+  f.manager.pin = () => { throw new Error('simulated environment write failure'); };
+  assert.throws(() => f.manager.locked(() => f.manager.build()), /environment write failure/);
+  assert.equal(f.manager.read().phase, 'bootstrapping');
+  assert.match(readFileSync(path.join(f.root, '.env'), 'utf8'), /yoink_rust_image=old/);
+  f.manager.pin = pin;
+  f.manager.locked(() => f.manager.build());
+  assert.equal(f.manager.read().phase, undefined);
+  assert.equal(f.calls.filter(args => args[1] === 'build').length, 1);
+});
 
 test('SemVer validation, precedence and explicit bumping', () => {
   for (const bad of ['1.02.3', '../1.2.3', '1.2', 'v1.2.3', '1.2.3+build', '1.2.3-01']) assert.throws(() => version(bad));

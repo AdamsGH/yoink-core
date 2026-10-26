@@ -19,6 +19,18 @@ export function youtubeImage(root) {
   return image;
 }
 
+export const youtubeInputs = ['backend/Dockerfile.youtube-auth-gateway', 'backend/worker/youtube_auth_adapter.mjs', 'backend/scripts/youtube-auth-gateway-limits.mjs', 'docker/youtubei-service/package.json', 'docker/youtubei-service/package-lock.json', 'docker/youtubei-service/index.js', 'docker/youtubei-service/lifecycle.mjs', 'docker/youtube-bundle/supervisor.mjs', 'docker/youtube-bundle/health.mjs'];
+
+export function youtubeInputHash(root) {
+  const hash = createHash('sha256');
+  for (const file of youtubeInputs) {
+    const info = lstatSync(path.join(root, file));
+    if (!info.isFile()) throw new Error(`Expected a regular YouTube build input: ${file}`);
+    hash.update(`${file}\0${info.mode & 0o777}\0`).update(readFileSync(path.join(root, file))).update('\0');
+  }
+  return hash.digest('hex');
+}
+
 export function handleInterrupts() {
   // Let synchronous Docker calls unwind through cleanup after terminal cancellation.
   process.on('SIGINT', () => { process.exitCode = 130; });
@@ -275,17 +287,7 @@ export class Releases {
   tool(name) {
     if (name === 'youtube') {
       const image = youtubeImage(this.root);
-      const inputs = ['backend/Dockerfile.youtube-auth-gateway', 'backend/worker/youtube_auth_adapter.mjs', 'backend/scripts/youtube-auth-gateway-limits.mjs', 'docker/youtubei-service/package.json', 'docker/youtubei-service/package-lock.json', 'docker/youtubei-service/index.js', 'docker/youtubei-service/lifecycle.mjs', 'docker/youtube-bundle/supervisor.mjs', 'docker/youtube-bundle/health.mjs'];
-      const hashInputs = root => {
-        const hash = createHash('sha256');
-        for (const file of inputs) {
-          const info = lstatSync(path.join(root, file));
-          if (!info.isFile()) throw new Error(`Expected a regular YouTube build input: ${file}`);
-          hash.update(`${file}\0${info.mode & 0o777}\0`).update(readFileSync(path.join(root, file))).update('\0');
-        }
-        return hash.digest('hex');
-      };
-      const fingerprint = hashInputs(this.root);
+      const fingerprint = youtubeInputHash(this.root);
       const existing = this.image(image, true);
       if (existing) {
         if (existing.Config.Labels?.['io.yoink.youtube-input-sha256'] !== fingerprint) throw new Error('YouTube image tag is immutable. Set yoink_youtube_image to a new SemVer.');
@@ -297,11 +299,11 @@ export class Releases {
         mkdirSync(target, { recursive: true });
         const context = mkdtempSync(path.join(target, 'youtube-context-'));
         try {
-          for (const file of inputs) {
+          for (const file of youtubeInputs) {
             mkdirSync(path.dirname(path.join(context, file)), { recursive: true });
             cpSync(path.join(this.root, file), path.join(context, file), { preserveTimestamps: true });
           }
-          if (hashInputs(context) !== fingerprint || hashInputs(this.root) !== fingerprint) throw new Error('YouTube build inputs changed while taking the snapshot.');
+          if (youtubeInputHash(context) !== fingerprint || youtubeInputHash(this.root) !== fingerprint) throw new Error('YouTube build inputs changed while taking the snapshot.');
           this.run(['buildx', 'build', '--builder', builder, '--load', '--progress=plain', '--file', path.join(context, 'backend/Dockerfile.youtube-auth-gateway'), '--label', `io.yoink.youtube-input-sha256=${fingerprint}`, '--tag', image, context], { live: true });
         } finally { rmSync(context, { recursive: true, force: true }); }
       } finally { this.finishBuilder(); }
@@ -329,7 +331,9 @@ export class Releases {
   }
 
   build() {
+    if (!existsSync(this.stateFile)) return this.bootstrap();
     const state = this.read();
+    if (state.phase === 'bootstrapping') return this.finishBootstrap(state);
     if (state.phase) throw new Error('Interrupted deployment. Run release-rollback before building.');
     const ver = version(readFileSync(path.join(this.backend, 'VERSION'), 'utf8').trim());
     const hash = inputHash(this.backend);
@@ -342,16 +346,52 @@ export class Releases {
     }
     if (state.candidate) throw new Error('Deploy or discard the existing candidate first.');
     if (!newer(ver, state.highestVersion)) throw new Error(`VERSION must exceed the last built version ${state.highestVersion}. Discarded versions cannot be reused.`);
+    state.candidate = this.buildImage(ver, hash);
+    state.highestVersion = ver;
+    this.write(state);
+    return state;
+  }
+
+  bootstrap() {
+    if (existsSync(this.stateFile)) throw new Error('Release state already initialized.');
+    if (this.run(['inspect', 'yoink'], { optional: true }) !== null) {
+      throw new Error('Existing yoink container without release state. Adopt it with release-init; bootstrap never replaces a deployment.');
+    }
+    const ver = version(readFileSync(path.join(this.backend, 'VERSION'), 'utf8').trim());
+    const hash = inputHash(this.backend);
+    const published = `ghcr.io/adamsgh/yoink-core/backend:${ver}`;
+    if (!this.image(`${repository}:${ver}`, true)) {
+      const downloaded = this.image(published, true);
+      if (downloaded) {
+        if (downloaded.Config?.Labels?.['io.yoink.input-sha256'] !== hash || downloaded.Config?.Labels?.['org.opencontainers.image.version'] !== ver) {
+          throw new Error('Downloaded runtime does not match this checkout. Use its matching release tag.');
+        }
+        this.run(['image', 'tag', published, `${repository}:${ver}`]);
+      }
+    }
+    const current = this.buildImage(ver, hash);
+    const state = { schema: 1, current, previous: null, confirmed: false, highestVersion: ver, phase: 'bootstrapping' };
+    this.write(state);
+    return this.finishBootstrap(state);
+  }
+
+  finishBootstrap(state) {
+    this.assertImage(state.current);
+    if (state.current.inputHash !== inputHash(this.backend)) throw new Error('Bootstrap inputs changed. Restore the matching checkout before retrying release-build.');
+    this.pin(state.current.image);
+    delete state.phase;
+    this.write(state);
+    return state;
+  }
+
+  buildImage(ver, hash) {
     const image = `${repository}:${ver}`;
     const orphan = this.image(image, true);
     if (orphan) {
       if (orphan.Config?.Labels?.['io.yoink.input-sha256'] !== hash || orphan.Config?.Labels?.['org.opencontainers.image.version'] !== ver) {
         throw new Error(`Unregistered immutable image exists: ${image}. Inspect it before continuing.`);
       }
-      state.candidate = { version: ver, image, id: orphan.Id, inputHash: hash };
-      state.highestVersion = ver;
-      this.write(state);
-      return state;
+      return { version: ver, image, id: orphan.Id, inputHash: hash };
     }
     this.ensureBuilder();
     let context;
@@ -360,18 +400,16 @@ export class Releases {
       this.cacheReport(reportBase, 'before');
       context = snapshot(this.backend, hash);
       this.run(['buildx', 'build', '--builder', builder, '--load', '--progress=plain', '--target', 'runtime', '--build-arg', `YOINK_RELEASE_VERSION=${ver}`, '--label', `org.opencontainers.image.version=${ver}`, '--label', `io.yoink.input-sha256=${hash}`, '--tag', image, context], { reportBase });
-      state.candidate = { version: ver, image, id: this.image(image).Id, inputHash: hash };
-      state.highestVersion = ver;
-      this.write(state);
+      return { version: ver, image, id: this.image(image).Id, inputHash: hash };
     } finally {
       if (context) rmSync(context, { recursive: true, force: true });
       this.finishBuilder(reportBase);
     }
-    return state;
   }
 
   deploy() {
     const state = this.read();
+    if (state.phase === 'bootstrapping') throw new Error('Interrupted initialization. Run release-build before deployment.');
     if (state.phase === 'retiring') return this.finishReplacement(state);
     if (state.phase) throw new Error('Interrupted deployment. Run release-rollback.');
     if (!state.candidate) { this.ready(state.current); this.pin(state.current.image); return state; }

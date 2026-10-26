@@ -4,6 +4,10 @@ Native Rust bot/API with shared Turso 0.7.2 storage and integrated Download, Mus
 
 ## Releases
 
+On a new installation, `just build all` from the repository root builds and initializes the first runtime without starting it. It requires `.env` but no previous image or private release state. Compilation failures leave both `.env` and release state unchanged.
+
+Initialization persists recovery state before updating `.env`. Repeat `release-build` if status reports `phase=bootstrapping`. Initialization refuses any existing `yoink` container. Adopt an existing healthy installation with `release-init` instead. For prebuilt releases, follow the root [quick start](../README.md#quick-start).
+
 `VERSION` is the SemVer version of the deployable bundle, including Rust and Python workers. Cargo package versions are independent. Image tags are immutable. Version changes affect image metadata, not Rust compilation inputs. The image supplies `YOINK_RUST_RELEASE_VERSION` to the typed runtime configuration, so `/api/v1/system` reports the release version without recompilation. Standalone Cargo runs fall back to the package version.
 
 ```sh
@@ -60,7 +64,7 @@ For native database tests, see [development prerequisites and verification](../d
 
 The [Stats search component](../docs/backend/stats-search.md) uses a separate Tantivy index with durable native change tracking. Its approved tokenizer contract and explicit PostgreSQL differences are covered by a shared corpus. Stats commands, analytics and import routes are integrated into the shared runtime.
 
-The standalone [Turso evaluation](experiments/turso/README.md) and [decision 0002](../docs/decisions/0002-turso-evaluation.md) retain the original feasibility checks. The Rust runtime now uses native Turso. The running Python deployment and its PostgreSQL database are unchanged.
+The standalone [Turso evaluation](experiments/turso/README.md) and [decision 0002](../docs/decisions/0002-turso-evaluation.md) retain the original feasibility checks. The Rust runtime now uses native Turso. The legacy PostgreSQL database remains a historical recovery snapshot, not a current writable copy of native data.
 
 Never start another poller with the production token. Stop the legacy poller before activating native; competing `getUpdates` consumers can consume updates or interrupt service.
 

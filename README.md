@@ -17,14 +17,24 @@ For legacy split-deploy scenarios run `yoink` + `yoink-api` in separate containe
 
 ## Quick start
 
+Clone with `git clone --recurse-submodules https://github.com/AdamsGH/yoink-core.git`. Use Docker with Compose 2.24.4+, Node.js 22+, Rust 1.88+, `just`, and the host ACL utilities. Configure a reachable SOCKS proxy in `.env`; the default points to the host's port 1080. Do not use the production bot token while another poller is active.
+
 ```bash
 cp .env.example .env        # fill in required vars
 just data-dirs              # create private data directories (sudo required)
-just build all              # build native runtime, YouTube service and web images
+just build all              # build runtime, YouTube, frontend, nginx and Bot API
 just up                     # start services
 just build backup           # build the native archive operator
 # Native schemas migrate and verify automatically at startup.
 ```
+
+The first runtime build initializes private release state and updates only the runtime image pin in `.env`. It does not start a container. If a `yoink` container already exists without release state, the build refuses automatic initialization. Use the adoption procedure in [backend releases](backend/README.md#releases) instead.
+
+For a published `vMAJOR.MINOR.PATCH` checkout, replace `just build all` with `just pull-images` followed by `just build yoink`. The latter validates and adopts the downloaded runtime without rebuilding it. `just pull-images` also downloads the archive operator, so omit `just build backup`. Images are available under `ghcr.io/adamsgh/yoink-core/{backend,frontend,nginx,tg-bot-api,youtube-services,importer,operations}:MAJOR.MINOR.PATCH`. These images target Linux amd64. Plugin code and frontends are included in the runtime and SPA; plugin repositories do not define independent services.
+
+GitHub CI runs `just verify`, builds the SPA, scans all five repository histories, and builds every deployable image. Master publishes commit-addressed `sha-COMMIT` tags. Release tags must match `backend/VERSION` and publish SemVer image tags. Publication never deploys or modifies production data. Existing image tags cannot move to another source commit.
+
+GHCR initially creates private packages, even for public repositories. After the first publication, the package owner must set each package's visibility to public in GitHub Package settings and verify anonymous pulls. Until then, registry authentication is required.
 
 ## Services
 
@@ -48,6 +58,7 @@ PostgreSQL, Redis, ARQ and the old standalone YouTube helpers are excluded from 
 
 ```
 just build [yoink|gateway|frontend|tg|backup|all]
+just pull-images                # download images for the checked-out release
 just up [service]
 just down
 just restart <service>
@@ -68,10 +79,10 @@ just proxy-init
 just backup
 just backup restore [list|latest|FILE]
 just backup [up|down|logs]
-just lint [--fix] [path]          # ruff check inside container
-just verify-py [test-path]        # lint + pytest
-just verify-fe                    # tsc across core + plugin frontends
-just verify                       # full: verify-py + verify-fe
+just lint                       # native workspace Clippy
+just verify-py [test-path]       # explicit legacy container lint + pytest
+just verify-fe                   # i18n, Inbox/Insight regressions and frontend tsc
+just verify                      # Rust, deployment, publication and frontend checks
 ```
 
 ## Environment variables

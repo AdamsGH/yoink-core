@@ -1,0 +1,13 @@
+# Public loopback TLS key, documented in the adjacent fixture README. Never a production credential.
+e1aaa6c141b3b7bb899524d8ed60d5060c3444c6:backend/crates/yoink-insight/tests/fixtures/trust/localhost.key:private-key:1
+# Synthetic authentication values in test-only code.
+417088fb04e8f86840110d781a08fa3ce2bbc3e6:backend/crates/yoink-server/src/auth_config.rs:generic-api-key:123
+417088fb04e8f86840110d781a08fa3ce2bbc3e6:backend/scripts/smoke.mjs:generic-api-key:119
+# Prose about HLS encryption keys, not an API credential.
+bda98856a851dc4b1852576d25f9091e6931bee1:docs/backend/media-slice.md:generic-api-key:13
+a1f50a1792306681498c64a86cea85f4f4d7c943:docs/backend/media-slice.md:generic-api-key:13
+42989f2a6b1287347dcacf52200021fd3a79f1dd:docs/backend/media-slice.md:generic-api-key:13
+97df18eee0f56195cae42d03d608c95af4df235c:docs/backend/media-slice.md:generic-api-key:13
+617f62d04c7206c5ba77f248552c393f1da49b04:docs/backend/media-slice.md:generic-api-key:13
+# Shared YouTube TV OAuth application constant, not a user credential. Identical to the public constant in https://github.com/JuanBindez/pytubefix/blob/6f2e17f585bc82c04e11537027e6f8f59002c250/pytubefix/innertube.py.
+1669f488ddab67479addf976fc2c968bcd5980f0:src/yoink_dl/services/yttv_oauth.py:generic-api-key:14

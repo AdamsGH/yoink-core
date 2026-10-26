@@ -20,9 +20,14 @@ default:
 build target="all" no_cache="":
     @scripts/build.sh "{{target}}" "{{no_cache}}"
 
+# Download a published release without starting or replacing containers.
+pull-images:
+    node scripts/container-images.mjs pull
+
 # Create host-side data directories required by volume mounts
 data-dirs:
-    mkdir -p data/cookies data/kasm/profile/chromium data/tg-bot-api
+    mkdir -p data/cookies data/kasm/profile/chromium
+    sudo -n install -d -m 0700 -o 101 -g 101 data/tg-bot-api
     sudo -n install -d -m 0700 -o 10001 -g 10001 data/native data/native/work data/native/work/downloads data/native-backups data/native-restore
     sudo -n setfacl -m u:10001:rx,d:u:10001:rx data/tg-bot-api
 
@@ -165,17 +170,29 @@ verify-i18n:
 test-inbox-frontend:
     node --test plugins/yoink-inbox/frontend/tests/frontend.test.mjs
 
-# Frontend verify: translations + Inbox regressions + tsc across core and plugins.
+test-insight-frontend:
+    node --test plugins/yoink-insight/frontend/tests/credentials.test.mjs
+
+# Frontend verify: translations, Inbox/Insight regressions and integrated tsc.
 verify-fe *args="":
     just verify-i18n
     just test-inbox-frontend
+    just test-insight-frontend
     just tsc {{args}}
 
 # Native backend, deployment contracts and frontend verification.
 verify:
     just --justfile backend/justfile verify
     node --test scripts/test-native-deployment.mjs
+    just test-publication
     just verify-fe
+
+test-publication:
+    node --test scripts/container-images.test.mjs scripts/registry-image.test.mjs
+
+# Verify committed HEAD with public submodule remotes, not uncommitted changes.
+test-clean-checkout:
+    node scripts/test-clean-checkout.mjs
 
 # Run tests inside a container against yoink_test DB in the existing postgres.
 # Usage: just test [path]

@@ -1,6 +1,6 @@
 ARCHITECTURE.md
 AGENTS.md
-**/node_modules/
+**/node_modules
 .vscode/
 *.code-workspace
 **/__pycache__/

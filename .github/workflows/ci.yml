@@ -1,0 +1,170 @@
+name: Verify and publish
+
+on:
+  pull_request:
+  push:
+    branches: [master, rewrite/rust-backend]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      matrix: ${{ steps.images.outputs.matrix }}
+      registry: ${{ steps.images.outputs.registry }}
+      tag: ${{ steps.images.outputs.tag }}
+      version: ${{ steps.images.outputs.version }}
+      runtime_hash: ${{ steps.images.outputs.runtime_hash }}
+      youtube_hash: ${{ steps.images.outputs.youtube_hash }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: '1.88.0'
+          components: rustfmt, clippy
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - name: Install build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Reserve build space on the disposable runner
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+      - name: Cache Cargo downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock') }}
+      - name: Scan all repository histories
+        run: |
+          for repo in . plugins/yoink-dl plugins/yoink-insight plugins/yoink-music plugins/yoink-stats; do
+            docker run --rm --network none --mount type=bind,src="$PWD",dst=/repo,readonly \
+              zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+              git "/repo/$repo" --log-opts=--all --redact=100 --gitleaks-ignore-path=/repo/.gitleaksignore
+          done
+      - name: Install frontend dependencies
+        run: |
+          npm ci --prefix frontend
+          for plugin in yoink-dl yoink-stats yoink-insight yoink-inbox; do
+            ln -s "$PWD/frontend/node_modules" "plugins/$plugin/frontend/node_modules"
+          done
+      - name: Verify source and deployment contracts
+        run: just verify
+      - name: Build frontend
+        run: npm run build --prefix frontend
+      - name: Verify publication contracts
+        run: |
+          just test-publication
+          docker run --rm --network none --mount type=bind,src="$PWD",dst=/repo,readonly \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            /repo/.github/workflows/ci.yml
+      - name: Resolve image metadata
+        id: images
+        run: node scripts/container-images.mjs metadata
+      - name: Remove disposable build outputs
+        if: always()
+        run: |
+          just --justfile backend/justfile clean-builds
+          rm -rf frontend/node_modules frontend/dist
+          for plugin in yoink-dl yoink-stats yoink-insight yoink-inbox; do
+            rm -f "plugins/$plugin/frontend/node_modules"
+          done
+
+  containers:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.verify.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          name: yoink-core-release
+          driver-opts: |
+            image=moby/buildkit:v0.33.1
+            memory=3g
+            memory-swap=3g
+            cpu-period=100000
+            cpu-quota=100000
+          buildkitd-config: backend/buildkitd.toml
+      - name: Reserve build space on the disposable runner
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+      - name: Check build-space budget
+        run: node backend/scripts/build-resources.mjs check
+      - name: Authenticate to GHCR
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Preserve immutable published tags
+        id: published
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+        env:
+          GHCR_IMAGE: ${{ needs.verify.outputs.registry }}/${{ matrix.name }}
+          GHCR_TAG: ${{ needs.verify.outputs.tag }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/registry-image.mjs
+      - name: Build and publish image
+        if: steps.published.outputs.exists != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) }}
+          tags: ${{ needs.verify.outputs.registry }}/${{ matrix.name }}:${{ needs.verify.outputs.tag }}
+          build-args: YOINK_RELEASE_VERSION=${{ needs.verify.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.verify.outputs.version }}
+            io.yoink.input-sha256=${{ needs.verify.outputs.runtime_hash }}
+            io.yoink.youtube-input-sha256=${{ needs.verify.outputs.youtube_hash }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: Trim and stop the dedicated builder
+        if: always()
+        run: |
+          docker buildx prune --builder yoink-core-release --force --max-used-space 8gb
+          docker buildx stop yoink-core-release
+
+  required:
+    if: always()
+    needs: [verify, containers]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every verification and image build
+        env:
+          VERIFIED: ${{ needs.verify.result }}
+          BUILT: ${{ needs.containers.result }}
+        run: test "$VERIFIED" = success && test "$BUILT" = success

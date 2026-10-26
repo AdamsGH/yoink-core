@@ -8,6 +8,7 @@ WORKDIR /src
 
 # Verified upstream revision for the repository-owned patches below.
 ARG TDLIGHT_COMMIT=4b08ca4ea328b5503bbe5989944867b57af0a722
+ARG BUILD_JOBS=1
 
 # Fetch the pinned source and initialize submodules in one cacheable layer.
 RUN git init . \
@@ -24,7 +25,7 @@ RUN patch -p1 < /tmp/tdlight-forum-extras.patch \
 
 # Configure + build + strip in one layer to avoid intermediate bloat
 RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
- && cmake --build build --target install -j "$(nproc)" \
+ && cmake --build build --target install -j "${BUILD_JOBS}" \
  && strip /usr/local/bin/telegram-bot-api
 
 FROM alpine:3.21

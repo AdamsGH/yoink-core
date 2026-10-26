@@ -18,7 +18,7 @@ rm -rf frontend/node_modules/.vite
 
 ( cd frontend && npm install )
 
-for p in yoink-dl yoink-stats yoink-insight; do
+for p in yoink-dl yoink-stats yoink-insight yoink-inbox; do
     rm -rf "plugins/$p/frontend/node_modules"
     ln -sf "$(pwd)/frontend/node_modules" "plugins/$p/frontend/node_modules"
     echo "linked $p"
