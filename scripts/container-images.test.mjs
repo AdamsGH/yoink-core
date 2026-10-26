@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,6 +31,15 @@ test('publication normalizes registry names and rejects version/tag mismatches',
   }
   assert.throws(() => metadata('owner/repo/other', sha, 'refs/heads/master', '0.1.4'));
   assert.throws(() => metadata('owner/repo', 'HEAD', 'refs/heads/master', '0.1.4'));
+});
+
+test('the example environment parses through the actual just dotenv loader', t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'yoink-env-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  cpSync('.env.example', path.join(root, '.env'));
+  writeFileSync(path.join(root, 'justfile'), 'set dotenv-load := true\ncheck:\n    @test "$backup_cron_schedule" = "0 3 * * *"\n');
+  const result = spawnSync('just', ['check'], { cwd: root, encoding: 'utf8', timeout: 30000, env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('image download never starts containers or changes release state', t => {
