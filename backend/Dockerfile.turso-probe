@@ -1,6 +1,6 @@
 # Isolated compatibility check using the server's current Rust toolchain.
 # Never copies deployment config or opens an existing Yoink database.
-FROM rust:1.88-bookworm
+FROM rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
 WORKDIR /probe
 ENV CARGO_BUILD_JOBS=4
 COPY experiments/turso/ ./

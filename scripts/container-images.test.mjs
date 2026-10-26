@@ -20,6 +20,15 @@ test('every deployable image has a checked-in Dockerfile and unique package', ()
   assert.match(readFileSync('scripts/build.sh', 'utf8'), /all\)[\s\S]*run_build tg/);
 });
 
+test('development, CI and release images use the same pinned Rust compiler', () => {
+  const toolchain = readFileSync('backend/rust-toolchain.toml', 'utf8').match(/channel\s*=\s*"(\d+\.\d+\.\d+)"/)[1];
+  const runtime = readFileSync('backend/Dockerfile', 'utf8').match(/^FROM (rust:\S+)/m)[1];
+  const probe = readFileSync('backend/Dockerfile.turso-probe', 'utf8').match(/^FROM (rust:\S+)/m)[1];
+  assert(runtime.startsWith(`rust:${toolchain}-bookworm@sha256:`));
+  assert.equal(probe, runtime);
+  assert(readFileSync('.github/workflows/ci.yml', 'utf8').includes(`toolchain: '${toolchain}'`));
+});
+
 test('publication normalizes registry names and rejects version/tag mismatches', () => {
   const sha = 'a'.repeat(40);
   assert.deepEqual(metadata('AdamsGH/yoink-core', sha, 'refs/heads/master', '0.1.4'), {

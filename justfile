@@ -189,6 +189,7 @@ verify:
 
 test-publication:
     node --test scripts/container-images.test.mjs scripts/registry-image.test.mjs
+    node --check scripts/test-container-image.mjs
 
 # Verify committed HEAD with public submodule remotes, not uncommitted changes.
 test-clean-checkout:

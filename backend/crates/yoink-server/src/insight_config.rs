@@ -206,23 +206,20 @@ impl InsightConfig {
             number(read, "INSIGHT_RESPONSE_MAX_BYTES", 1048576, 1024, 4194304)? as usize;
         let content_proxy = read("INSIGHT_CONTENT_PROXY")?;
         let mut allowed_proxy_origins = vec![];
-        for (key, proxy) in [("INSIGHT_CONTENT_PROXY", &content_proxy)] {
-            if let Some(p) = proxy {
-                let u = url::Url::parse(p)
-                    .map_err(|_| invalid(key, "invalid operator HTTP(S) proxy"))?;
-                if p.len() > 2048
-                    || !matches!(u.scheme(), "http" | "https")
-                    || u.host_str().is_none()
-                    || u.path() != "/"
-                    || u.query().is_some()
-                    || u.fragment().is_some()
-                {
-                    return Err(invalid(key, "invalid operator HTTP(S) proxy"));
-                }
-                if key == "INSIGHT_CONTENT_PROXY" {
-                    allowed_proxy_origins.push(u.origin().ascii_serialization());
-                }
+        if let Some(p) = &content_proxy {
+            let key = "INSIGHT_CONTENT_PROXY";
+            let u =
+                url::Url::parse(p).map_err(|_| invalid(key, "invalid operator HTTP(S) proxy"))?;
+            if p.len() > 2048
+                || !matches!(u.scheme(), "http" | "https")
+                || u.host_str().is_none()
+                || u.path() != "/"
+                || u.query().is_some()
+                || u.fragment().is_some()
+            {
+                return Err(invalid(key, "invalid operator HTTP(S) proxy"));
             }
+            allowed_proxy_origins.push(u.origin().ascii_serialization());
         }
         let device_base_url =
             read("INSIGHT_OAUTH_DEVICE_BASE")?.unwrap_or_else(|| "https://github.com".into());

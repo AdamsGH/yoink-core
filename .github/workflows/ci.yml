@@ -38,7 +38,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
-          toolchain: '1.88.0'
+          toolchain: '1.99.1'
           components: rustfmt, clippy
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - name: Install build prerequisites
@@ -126,14 +126,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Preserve immutable published tags
         id: published
-        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+        if: github.event_name != 'pull_request'
         env:
           GHCR_IMAGE: ${{ needs.verify.outputs.registry }}/${{ matrix.name }}
           GHCR_TAG: ${{ needs.verify.outputs.tag }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/registry-image.mjs
-      - name: Build and publish image
+      - name: Build release image
         if: steps.published.outputs.exists != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -141,7 +141,7 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) }}
+          load: true
           tags: ${{ needs.verify.outputs.registry }}/${{ matrix.name }}:${{ needs.verify.outputs.tag }}
           build-args: YOINK_RELEASE_VERSION=${{ needs.verify.outputs.version }}
           labels: |
@@ -152,6 +152,18 @@ jobs:
             io.yoink.youtube-input-sha256=${{ needs.verify.outputs.youtube_hash }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: Smoke Rust release images
+        if: steps.published.outputs.exists != 'true' && contains(fromJSON('["backend","operations","importer"]'), matrix.name)
+        env:
+          COMPONENT: ${{ matrix.name }}
+          IMAGE: ${{ needs.verify.outputs.registry }}/${{ matrix.name }}:${{ needs.verify.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: node scripts/test-container-image.mjs "$COMPONENT" "$IMAGE" "$VERSION"
+      - name: Publish verified image
+        if: steps.published.outputs.exists != 'true' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+        env:
+          IMAGE: ${{ needs.verify.outputs.registry }}/${{ matrix.name }}:${{ needs.verify.outputs.tag }}
+        run: docker push "$IMAGE"
       - name: Trim and stop the dedicated builder
         if: always()
         run: |

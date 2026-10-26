@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Use the Rust toolchain declared by [backend/Cargo.toml](../../backend/Cargo.toml), Node.js 22+, `just`, and Docker where a container check is specified. All Python commands run inside Docker only. Never run host `uv`, `pip`, `python`, or `pytest`.
+Use the Rust toolchain pinned in [backend/rust-toolchain.toml](../../backend/rust-toolchain.toml), Node.js 22+, `just`, and Docker where a container check is specified. Cargo's `rust-version` declares minimum language compatibility, not the release compiler. All Python commands run inside Docker only. Never run host `uv`, `pip`, `python`, or `pytest`.
 
 ## Commands
 
@@ -16,7 +16,7 @@ Run Rust workspace commands from the repository root:
 | `cd backend && just test` | Workspace tests. |
 | `cd backend && just test-quota` | Focused deterministic native quota/active-safety, service admission/draft replay, config and EN/RU transport contracts. |
 | `cd backend && just check-quota` | Focused all-target Clippy for storage, downloads, server, Telegram and i18n. |
-| `cd backend && just verify-ops` | Workspace checks, Rust 1.88 operator image, and synthetic 41-table import/backup/restore with host/container CLIs and real ENOSPC checks. |
+| `cd backend && just verify-ops` | Workspace checks, the pinned Rust operator image, and synthetic 41-table import/backup/restore with host/container CLIs and real ENOSPC checks. |
 | `cd backend && just verify` | Formatting, lint, Rust and fixture unit tests, smoke checks, recursive script syntax checks, canonical schema generation checks, and documentation link checks. |
 | `cd backend && just test-storage-db` | Native storage contracts using private temporary file databases. No PostgreSQL or Docker required. |
 | `cd backend && just test-profile-db` | Native profile and credential contracts using private temporary databases. No PostgreSQL or Docker required. |

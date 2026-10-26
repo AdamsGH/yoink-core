@@ -359,16 +359,6 @@ export class Releases {
     }
     const ver = version(readFileSync(path.join(this.backend, 'VERSION'), 'utf8').trim());
     const hash = inputHash(this.backend);
-    const published = `ghcr.io/adamsgh/yoink-core/backend:${ver}`;
-    if (!this.image(`${repository}:${ver}`, true)) {
-      const downloaded = this.image(published, true);
-      if (downloaded) {
-        if (downloaded.Config?.Labels?.['io.yoink.input-sha256'] !== hash || downloaded.Config?.Labels?.['org.opencontainers.image.version'] !== ver) {
-          throw new Error('Downloaded runtime does not match this checkout. Use its matching release tag.');
-        }
-        this.run(['image', 'tag', published, `${repository}:${ver}`]);
-      }
-    }
     const current = this.buildImage(ver, hash);
     const state = { schema: 1, current, previous: null, confirmed: false, highestVersion: ver, phase: 'bootstrapping' };
     this.write(state);
@@ -392,6 +382,15 @@ export class Releases {
         throw new Error(`Unregistered immutable image exists: ${image}. Inspect it before continuing.`);
       }
       return { version: ver, image, id: orphan.Id, inputHash: hash };
+    }
+    const published = `ghcr.io/adamsgh/yoink-core/backend:${ver}`;
+    const downloaded = this.image(published, true);
+    if (downloaded) {
+      if (downloaded.Config?.Labels?.['io.yoink.input-sha256'] !== hash || downloaded.Config?.Labels?.['org.opencontainers.image.version'] !== ver) {
+        throw new Error('Downloaded runtime does not match this checkout. Use its matching release tag.');
+      }
+      this.run(['image', 'tag', published, image]);
+      return { version: ver, image, id: downloaded.Id, inputHash: hash };
     }
     this.ensureBuilder();
     let context;

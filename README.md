@@ -17,7 +17,7 @@ For legacy split-deploy scenarios run `yoink` + `yoink-api` in separate containe
 
 ## Quick start
 
-Clone with `git clone --recurse-submodules https://github.com/AdamsGH/yoink-core.git`. Use Docker with Compose 2.24.4+, Node.js 22+, Rust 1.88+, `just`, and the host ACL utilities. Configure a reachable SOCKS proxy in `.env`; the default points to the host's port 1080. Do not use the production bot token while another poller is active.
+Clone with `git clone --recurse-submodules https://github.com/AdamsGH/yoink-core.git`. Use Docker with Compose 2.24.4+, Node.js 22+, the pinned Rust 1.99.1 toolchain, `just`, and the host ACL utilities. Configure a reachable SOCKS proxy in `.env`; the default points to the host's port 1080. Do not use the production bot token while another poller is active.
 
 ```bash
 cp .env.example .env        # fill in required vars

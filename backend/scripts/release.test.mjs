@@ -173,6 +173,20 @@ test('fresh checkout adopts only a downloaded runtime with matching source and v
   assert(!f.calls.some(args => args[0] === 'buildx' || args[0] === 'compose'));
 });
 
+test('an existing installation registers a downloaded release as a candidate without deploying', t => {
+  const f = fixture(t);
+  writeFileSync(path.join(f.backend, 'VERSION'), '0.1.1\n');
+  const image = f.add('ghcr.io/adamsgh/yoink-core/backend:0.1.1');
+  assert.throws(() => f.manager.locked(() => f.manager.build()), /does not match this checkout/);
+  assert.equal(f.manager.read().candidate, undefined);
+  image.Config.Labels = { 'io.yoink.input-sha256': inputHash(f.backend), 'org.opencontainers.image.version': '0.1.1' };
+  const state = f.manager.locked(() => f.manager.build());
+  assert.equal(state.current.id, f.old.Id);
+  assert.equal(state.candidate.id, image.Id);
+  assert.match(readFileSync(path.join(f.root, '.env'), 'utf8'), /yoink_rust_image=yoink\/rust-backend:0.1.0/);
+  assert(!f.calls.some(args => args[0] === 'buildx' || args[0] === 'compose'));
+});
+
 test('bootstrap persistence failures leave the old pin or durable retry state', t => {
   for (const failAt of [1, 2]) {
     const f = fixture(t, os.tmpdir(), false);

@@ -332,7 +332,9 @@ fn hex_nibble(b: u8) -> Option<u8> {
 fn decode_hex(value: &str) -> Result<Vec<u8>, AuthError> {
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| Ok((hex_nibble(p[0]).ok_or(AuthError)? << 4) | hex_nibble(p[1]).ok_or(AuthError)?))
         .collect()
 }

@@ -32,11 +32,11 @@ just verify-turso
 just verify-turso-container
 ```
 
-`verify-turso` checks formatting, Clippy with warnings denied, and tests. The observed host compiler was Rust 1.97.1. `verify-turso-container` compiles and runs the tests with the existing server compiler, Rust 1.88, and disables network access during compilation and test execution. Dependency fetching is a separate build step. Both suites have a 90-second deadline after compilation.
+`verify-turso` checks formatting, Clippy with warnings denied, and tests. The observed host compiler was Rust 1.97.1. `verify-turso-container` compiles and runs the tests with the pinned server compiler and disables network access during compilation and test execution. Dependency fetching is a separate build step. Both suites have a 90-second deadline after compilation.
 
-The original evaluation passed 13 parent tests. Both current checks pass **14 tests, 0 failed, 1 ignored** after adding the 48-case rowid-FK regression. The ignored item is the crash-child entrypoint, invoked explicitly by the passing SIGKILL parent test. It is not missing crash coverage. The original PostgreSQL-backed server baseline passed 135 tests with 16 integration tests ignored. Those historical counts do not describe the current native runtime.
+The original evaluation passed 13 parent tests. Recorded follow-up checks passed **14 tests, 0 failed, 1 ignored** after adding the 48-case rowid-FK regression. The ignored item is the crash-child entrypoint, invoked explicitly by the passing SIGKILL parent test. It is not missing crash coverage. The original PostgreSQL-backed server baseline passed 135 tests with 16 integration tests ignored. Those historical counts do not describe the current native runtime.
 
-The package declares Rust 1.88 and its lockfile selects Roaring 0.11.3. Unconstrained resolution initially selected Roaring 0.11.5, which needs Rust 1.90. The server compiler and dependency lockfile remain unchanged.
+The package declares Rust 1.88 and its lockfile selects Roaring 0.11.3. Unconstrained resolution initially selected Roaring 0.11.5, which needs Rust 1.90. The original evaluation did not change the server compiler or dependency lockfile.
 
 ## Foreign-key RESTRICT regression probe
 

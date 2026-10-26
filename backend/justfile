@@ -1,6 +1,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# All commands run from this experimental workspace, never the Python backend.
+# Recipes run from the native backend directory.
 default:
     @just --list
 
@@ -80,7 +80,7 @@ check: check-build-space
     node scripts/build-resources.mjs check
 
 lint: check-build-space
-    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    cargo clippy --workspace --all-targets --all-features --locked --keep-going -- -D warnings
     node scripts/build-resources.mjs check
 
 test: check-build-space

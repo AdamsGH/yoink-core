@@ -1,5 +1,4 @@
-# Experimental images only. They do not replace the Python deployment.
-FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS rust-source
+FROM rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS rust-source
 WORKDIR /build
 ENV CARGO_BUILD_JOBS=1
 COPY Cargo.toml Cargo.lock ./
@@ -57,7 +56,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release -p yoink-import \
     && cp target/release/yoink-import /
 
-# Backup/restore is a separate operator binary. Test its safety contracts on Rust 1.88.
+# Backup/restore is a separate operator binary with the same pinned release compiler.
 FROM rust-source AS operations-build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

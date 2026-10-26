@@ -29,7 +29,7 @@ The 300-second default deadline, SIGINT, and SIGTERM request cooperative cancell
 
 ## Container CLI
 
-`just build-ops-image` tests and builds the binary with Rust 1.88 as `yoink/rust-operations:experimental`. It contains neither Python nor the server entrypoint. Match the operator UID/GID to the files on the mounted filesystem. For example, with an already-private state directory containing the stopped source DB:
+`just build-ops-image` tests and builds the binary with the pinned Rust toolchain as `yoink/rust-operations:experimental`. It contains neither Python nor the server entrypoint. Match the operator UID/GID to the files on the mounted filesystem. For example, with an already-private state directory containing the stopped source DB:
 
 ```sh
 docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777 -e TMPDIR=/tmp -e TURSO_TMPDIR=/tmp --mount type=bind,source=/private/yoink,target=/state yoink/rust-operations:experimental backup --source /state/state.db --destination /state/snapshot.ybk
