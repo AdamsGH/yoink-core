@@ -5,6 +5,7 @@ import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promi
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
+import { spawnSync } from 'node:child_process';
 import { CdpPipe, isAllowedRequest, launchBrowser } from './browser-client.mjs';
 
 function transport() {
@@ -119,10 +120,29 @@ test('input validation and spawn failure do not leak profiles', async () => {
     await assert.rejects(launchBrowser({ ...options, origin: 'https://fixture.test/path' }), /exact HTTP/);
     await assert.rejects(launchBrowser({ ...options, certificateSpki: 'secret' }), /SPKI/);
     await assert.rejects(launchBrowser({ ...options, startupTimeoutMs: 0 }), /startup timeout/);
+    await assert.rejects(launchBrowser({ ...options, executablePath: 'chromium' }), /absolute browser executable/);
     await assert.rejects(launchBrowser({ ...options, profileParentDirectory: 'relative' }), /absolute profile parent/);
     await assert.rejects(launchBrowser({ ...options, executablePath: '/definitely/missing/chromium' }), /Browser launch failed/);
     assert.deepEqual(await readdir(directory), []);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('browser executable environment override applies before launch', () => {
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { launchBrowser } from ${JSON.stringify(new URL('./browser-client.mjs', import.meta.url).href)};
+    let browser;
+    try {
+      await assert.rejects(async () => {
+        browser = await launchBrowser({ origin: 'https://fixture.test', startupTimeoutMs: 500, commandTimeoutMs: 200, shutdownTimeoutMs: 50 });
+      }, /Browser launch failed/);
+    } finally { await browser?.close(); }
+  `], {
+    env: { ...process.env, YOINK_FIXTURE_CHROMIUM: '/definitely/missing/chromium' },
+    encoding: 'utf8', timeout: 5000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('bounded startup failure removes its owned profile', async () => {

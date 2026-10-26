@@ -18,6 +18,8 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      YOINK_FIXTURE_CHROMIUM: /usr/bin/google-chrome
     outputs:
       matrix: ${{ steps.images.outputs.matrix }}
       registry: ${{ steps.images.outputs.registry }}
@@ -46,6 +48,11 @@ jobs:
           node --version
           node -p process.execPath
           if test -x /usr/bin/node; then /usr/bin/node --version; else echo 'No system Node; fixtures must use PATH.'; fi
+      - name: Verify browser fixture prerequisites
+        run: |
+          test -x "$YOINK_FIXTURE_CHROMIUM"
+          "$YOINK_FIXTURE_CHROMIUM" --version
+          just --justfile backend/justfile test-media-fixtures
       - name: Install build prerequisites
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
       - name: Reserve build space on the disposable runner

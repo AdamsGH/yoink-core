@@ -4,6 +4,8 @@
 
 Use the Rust toolchain pinned in [backend/rust-toolchain.toml](../../backend/rust-toolchain.toml), Node.js 22+, `just`, and Docker where a container check is specified. Cargo's `rust-version` declares minimum language compatibility, not the release compiler. All Python commands run inside Docker only. Never run host `uv`, `pip`, `python`, or `pytest`.
 
+Browser fixtures require Chromium or Google Chrome 151+ and the OpenSSL CLI. Set `YOINK_FIXTURE_CHROMIUM` to an absolute browser executable if it is not `/usr/bin/chromium`. The browser sandbox must work without bypass flags.
+
 ## Commands
 
 Run Rust workspace commands from the repository root:

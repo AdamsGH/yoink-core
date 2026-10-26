@@ -126,7 +126,7 @@ export async function launchBrowser({
   origin,
   certificateSpki,
   bootstrapScript = '',
-  executablePath = '/usr/bin/chromium',
+  executablePath = process.env.YOINK_FIXTURE_CHROMIUM ?? '/usr/bin/chromium',
   profileParentDirectory = tmpdir(),
   startupTimeoutMs = 15000,
   commandTimeoutMs = 10000,
@@ -140,6 +140,7 @@ export async function launchBrowser({
   }
   if (certificateSpki !== undefined && !/^[A-Za-z0-9+/]{43}=$/.test(certificateSpki)) throw failure('Invalid certificate SPKI hash');
   if (typeof bootstrapScript !== 'string') throw failure('Invalid bootstrap script');
+  if (typeof executablePath !== 'string' || !isAbsolute(executablePath)) throw failure('Expected an absolute browser executable');
   if (typeof profileParentDirectory !== 'string' || !isAbsolute(profileParentDirectory)) throw failure('Expected an absolute profile parent directory');
   bounded(startupTimeoutMs, 'startup timeout');
   bounded(commandTimeoutMs, 'command timeout');
