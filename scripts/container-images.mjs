@@ -9,7 +9,6 @@ export const images = [
   { name: 'importer', context: 'backend', file: 'backend/Dockerfile', target: 'importer' },
   { name: 'frontend', context: '.', file: 'docker/Dockerfile.frontend', target: '' },
   { name: 'nginx', context: '.', file: 'docker/Dockerfile.nginx', target: '' },
-  { name: 'tg-bot-api', context: '.', file: 'docker/Dockerfile.tg-bot-api', target: '' },
   { name: 'youtube-services', context: '.', file: 'backend/Dockerfile.youtube-auth-gateway', target: '' },
 ];
 

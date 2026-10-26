@@ -51,7 +51,6 @@ case "$target" in
     build_gateway
     run_build frontend docker/Dockerfile.frontend yoink/frontend:latest
     run_build nginx docker/Dockerfile.nginx yoink/nginx:latest
-    run_build tg docker/Dockerfile.tg-bot-api yoink/tg-bot-api:latest
     ;;
   *) echo "Unknown target: $target" >&2; echo "Usage: $0 <yoink|gateway|frontend|nginx|tg|backup|all> [no_cache]" >&2; exit 2 ;;
 esac

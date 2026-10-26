@@ -22,7 +22,7 @@ Clone with `git clone --recurse-submodules https://github.com/AdamsGH/yoink-core
 ```bash
 cp .env.example .env        # fill in required vars
 just data-dirs              # create private data directories (sudo required)
-just build all              # build runtime, YouTube, frontend, nginx and Bot API
+just build all              # build runtime, YouTube, frontend and nginx
 just up                     # start services
 just build backup           # build the native archive operator
 # Native schemas migrate and verify automatically at startup.
@@ -30,9 +30,11 @@ just build backup           # build the native archive operator
 
 The first runtime build initializes private release state and updates only the runtime image pin in `.env`. It does not start a container. If a `yoink` container already exists without release state, the build refuses automatic initialization. Use the adoption procedure in [backend releases](backend/README.md#releases) instead.
 
-For a published `vMAJOR.MINOR.PATCH` checkout, replace `just build all` with `just pull-images` followed by `just build yoink`. The latter validates and adopts the downloaded runtime without rebuilding it. `just pull-images` also downloads the archive operator, so omit `just build backup`. Images are available under `ghcr.io/adamsgh/yoink-core/{backend,frontend,nginx,tg-bot-api,youtube-services,importer,operations}:MAJOR.MINOR.PATCH`. These images target Linux amd64. Plugin code and frontends are included in the runtime and SPA; plugin repositories do not define independent services.
+For a published `vMAJOR.MINOR.PATCH` checkout, replace `just build all` with `just pull-images` followed by `just build yoink`. The latter validates and adopts the downloaded runtime without rebuilding it. `just pull-images` also downloads the archive operator, so omit `just build backup`. Images are available under `ghcr.io/adamsgh/yoink-core/{backend,frontend,nginx,youtube-services,importer,operations}:MAJOR.MINOR.PATCH`. These images target Linux amd64. Plugin code and frontends are included in the runtime and SPA; plugin repositories do not define independent services.
 
-GitHub CI runs `just verify`, builds the SPA, scans all five repository histories, and builds every deployable image. Master publishes commit-addressed `sha-COMMIT` tags. Release tags must match `backend/VERSION` and publish SemVer image tags. Publication never deploys or modifies production data. Existing image tags cannot move to another source commit.
+Provision the Bot API dependency before `just up`. The supplied Compose configuration still expects `yoink/tg-bot-api:latest`; existing installations keep that image unchanged. On a fresh host, the legacy compatibility option is an explicit `just build tg`, which compiles patched TDLight. Neither `just build all`, `just pull-images`, nor release CI builds or downloads it. A different Bot API image requires its own compatible service configuration; the release helpers do not replace this dependency automatically.
+
+GitHub CI runs `just verify`, builds the SPA, scans all five repository histories, and builds the six release images. The optional custom TDLight build is excluded from the release matrix. Master publishes commit-addressed `sha-COMMIT` tags. Release tags must match `backend/VERSION` and publish SemVer image tags. Publication never deploys or modifies production data. Existing image tags cannot move to another source commit.
 
 GHCR initially creates private packages, even for public repositories. After the first publication, the package owner must set each package's visibility to public in GitHub Package settings and verify anonymous pulls. Until then, registry authentication is required.
 
@@ -397,12 +399,12 @@ Single Alembic chain covering core and all plugins:
 | 0044 | insight_user_settings: use_search column (AI Search toggle) |
 | 0045 | insight_user_byok table (per-user Bring-Your-Own-Key configuration) |
 
-## Custom Bot API server
+## Legacy custom Bot API server
 
-Built from [tdlight-telegram-bot-api](https://github.com/tdlight-team/tdlight-telegram-bot-api) with `docker/patches/tdlight-forum-extras.patch`. Adds methods for forum topics, message viewers, chat history, etc.
+The explicit compatibility build uses [tdlight-telegram-bot-api](https://github.com/tdlight-team/tdlight-telegram-bot-api) with `docker/patches/tdlight-forum-extras.patch`. It adds methods for forum topics, message viewers and chat history. This dependency is not part of the Rust release build or GHCR image set.
 
 ```bash
-just build tg   # ~10 min first build, cached thereafter
+just build tg   # explicit legacy TDLight source build
 ```
 
 Current server version: **9.5**.
