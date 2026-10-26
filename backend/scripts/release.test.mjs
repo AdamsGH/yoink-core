@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { Releases, bump, newer, version, inputHash, snapshot, repository, legacyCacheOrder } from './release.mjs';
+import { Releases, bump, newer, version, inputHash, snapshot, repository, legacyCacheOrder, youtubeInputHash, youtubeInputs } from './release.mjs';
 
 test('bootstrap failure attempts bounded cleanup of the owned builder', () => {
   const calls = [];
@@ -273,6 +273,51 @@ test('build fingerprints ignore docs but cover worker and source changes', t => 
   assert.equal(inputHash(backend), initial);
   writeFileSync(path.join(backend, 'worker', 'engine.py'), 'source');
   assert.notEqual(inputHash(backend), initial);
+});
+
+test('fingerprints use Git file modes and snapshots normalize copies without changing source permissions', t => {
+  const { backend } = fixture(t);
+  const file = path.join(backend, 'worker', 'engine.py');
+  writeFileSync(file, 'source');
+  chmodSync(file, 0o644);
+  const regular = inputHash(backend);
+  for (const mode of [0o600, 0o640, 0o664, 0o601]) {
+    chmodSync(file, mode);
+    assert.equal(inputHash(backend), regular);
+  }
+  chmodSync(file, 0o600);
+  const context = snapshot(backend, regular);
+  assert.equal(lstatSync(path.join(context, 'worker', 'engine.py')).mode & 0o777, 0o644);
+  assert.equal(lstatSync(file).mode & 0o777, 0o600);
+  chmodSync(file, 0o700);
+  const executable = inputHash(backend);
+  assert.notEqual(executable, regular);
+  for (const mode of [0o744, 0o755]) {
+    chmodSync(file, mode);
+    assert.equal(inputHash(backend), executable);
+  }
+  chmodSync(file, 0o700);
+  const executableContext = snapshot(backend, executable);
+  assert.equal(lstatSync(path.join(executableContext, 'worker', 'engine.py')).mode & 0o777, 0o755);
+  assert.equal(lstatSync(file).mode & 0o777, 0o700);
+});
+
+test('YouTube fingerprints ignore checkout read/write permissions but retain executable status and content', t => {
+  const { root } = fixture(t);
+  for (const file of youtubeInputs) {
+    const target = path.join(root, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, file, { mode: 0o644 });
+  }
+  const file = path.join(root, youtubeInputs[0]);
+  const regular = youtubeInputHash(root);
+  chmodSync(file, 0o600);
+  assert.equal(youtubeInputHash(root), regular);
+  chmodSync(file, 0o744);
+  assert.notEqual(youtubeInputHash(root), regular);
+  chmodSync(file, 0o644);
+  appendFileSync(file, 'changed');
+  assert.notEqual(youtubeInputHash(root), regular);
 });
 
 test('release context is a verified immutable snapshot, not the mutable working tree', t => {

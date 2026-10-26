@@ -26,6 +26,8 @@ For a prebuilt upgrade, check out its published Git release tag and run `just pu
 
 Auxiliary services need separate recreation and compatible image pins. Runtime rollback does not restore their images.
 
+Build fingerprints use Git-compatible file modes: regular files are `0644`, and owner-executable files are `0755`. Local read/write permissions do not change the fingerprint. Build snapshots normalize copied files and directories without modifying source permissions. Content changes and executable-status changes still invalidate the fingerprint.
+
 While a release awaits human confirmation, a newer candidate can temporarily coexist with the current release and its retained rollback anchor. Deploying that candidate preserves the anchor and leaves `confirmed=false`. Only after readiness succeeds does deployment remove the superseded, unconfirmed runtime. There is at most one candidate and, after successful deployment, only the current release and one rollback version. No synthetic confirmation or anchor deletion is needed to ship a fix.
 
 Interrupted deployment retains all recovery references. If status shows `phase=retiring`, repeat `release-deploy` to recheck readiness and finish scoped image cleanup, or run `release-rollback`. Recovery restores the immediate pre-deployment runtime if its image remains; after that image was removed, rollback uses the retained anchor. If the intended runtime is already healthy and uses the exact retained image, recovery restores its pin without recreating the container. An in-use image is never removed. Resolve interrupted deployment before building or confirming another release.

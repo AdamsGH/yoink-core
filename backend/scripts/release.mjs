@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkSpace } from './build-resources.mjs';
@@ -21,12 +21,29 @@ export function youtubeImage(root) {
 
 export const youtubeInputs = ['backend/Dockerfile.youtube-auth-gateway', 'backend/worker/youtube_auth_adapter.mjs', 'backend/scripts/youtube-auth-gateway-limits.mjs', 'docker/youtubei-service/package.json', 'docker/youtubei-service/package-lock.json', 'docker/youtubei-service/index.js', 'docker/youtubei-service/lifecycle.mjs', 'docker/youtube-bundle/supervisor.mjs', 'docker/youtube-bundle/health.mjs'];
 
+// Git tracks owner-executable status, not local read/write permissions.
+function inputMode(info) {
+  return info.mode & 0o100 ? 0o755 : 0o644;
+}
+
+function normalizeSnapshot(directory) {
+  for (const name of readdirSync(directory)) {
+    const file = path.join(directory, name);
+    const info = lstatSync(file);
+    if (info.isSymbolicLink()) throw new Error(`Build inputs must not be symlinks: ${file}`);
+    if (info.isDirectory()) {
+      chmodSync(file, 0o755);
+      normalizeSnapshot(file);
+    } else if (info.isFile()) chmodSync(file, inputMode(info));
+  }
+}
+
 export function youtubeInputHash(root) {
   const hash = createHash('sha256');
   for (const file of youtubeInputs) {
     const info = lstatSync(path.join(root, file));
     if (!info.isFile()) throw new Error(`Expected a regular YouTube build input: ${file}`);
-    hash.update(`${file}\0${info.mode & 0o777}\0`).update(readFileSync(path.join(root, file))).update('\0');
+    hash.update(`${file}\0${inputMode(info)}\0`).update(readFileSync(path.join(root, file))).update('\0');
   }
   return hash.digest('hex');
 }
@@ -86,7 +103,7 @@ export function inputHash(backend) {
         if (!['target', '__pycache__', '.git'].includes(name)) visit(path.join(relative, name));
       }
     } else if (info.isFile() && !relative.endsWith('.pyc')) {
-      hash.update(`${relative}\0${info.mode & 0o777}\0`);
+      hash.update(`${relative}\0${inputMode(info)}\0`);
       hash.update(readFileSync(full)); hash.update('\0');
     }
   };
@@ -105,6 +122,7 @@ export function snapshot(backend, expectedHash) {
         filter: source => !['target', '__pycache__', '.git'].includes(path.basename(source)) && !source.endsWith('.pyc'),
       });
     }
+    normalizeSnapshot(context);
     if (inputHash(context) !== expectedHash || inputHash(backend) !== expectedHash) throw new Error('Build inputs changed while taking the snapshot. Retry after edits finish.');
     return context;
   } catch (error) {
@@ -303,6 +321,7 @@ export class Releases {
             mkdirSync(path.dirname(path.join(context, file)), { recursive: true });
             cpSync(path.join(this.root, file), path.join(context, file), { preserveTimestamps: true });
           }
+          normalizeSnapshot(context);
           if (youtubeInputHash(context) !== fingerprint || youtubeInputHash(this.root) !== fingerprint) throw new Error('YouTube build inputs changed while taking the snapshot.');
           this.run(['buildx', 'build', '--builder', builder, '--load', '--progress=plain', '--file', path.join(context, 'backend/Dockerfile.youtube-auth-gateway'), '--label', `io.yoink.youtube-input-sha256=${fingerprint}`, '--tag', image, context], { live: true });
         } finally { rmSync(context, { recursive: true, force: true }); }
