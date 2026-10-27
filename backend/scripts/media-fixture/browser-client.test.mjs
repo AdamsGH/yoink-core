@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
+import { createServer as createSocketServer } from 'node:net';
 import { spawnSync } from 'node:child_process';
 import { CdpPipe, isAllowedRequest, launchBrowser } from './browser-client.mjs';
 
@@ -145,6 +146,24 @@ test('browser executable environment override applies before launch', () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('startup diagnostics remain visible in TAP without disclosing stderr contents', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yoink-browser-tap-'));
+  try {
+    const executable = join(directory, 'silent.cjs');
+    const fixture = join(directory, 'failure.test.mjs');
+    await writeFile(executable, `#!${process.execPath}\nconsole.error('dbus private-stderr-value');\nsetInterval(() => {}, 1000);\n`, { mode: 0o700 });
+    await writeFile(fixture, `import test from 'node:test';\nimport { launchBrowser } from ${JSON.stringify(new URL('./browser-client.mjs', import.meta.url).href)};\ntest('expected startup failure', () => launchBrowser({ origin: 'https://fixture.test', executablePath: ${JSON.stringify(executable)}, startupTimeoutMs: 300, shutdownTimeoutMs: 50 }));\n`);
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', fixture], { env, encoding: 'utf8', timeout: 5000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /Browser startup: stage=version/);
+    assert.match(result.stdout, /received=0, stderr=dbus/);
+    assert.doesNotMatch(result.stdout, /private-stderr-value/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('bounded startup failure removes its owned profile', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'yoink-browser-test-'));
   try {
@@ -217,6 +236,48 @@ test('Chromium startup uses its own deadline before runtime command limits apply
   } finally {
     await browser?.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Chromium startup ignores the parent desktop bus and home directories', { timeout: 30000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yoink-browser-desktop-'));
+  const home = join(directory, 'parent-home');
+  const socketPath = join(directory, 'desktop-bus');
+  const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'DBUS_SYSTEM_BUS_ADDRESS'];
+  const previous = new Map(keys.map(key => [key, process.env[key]]));
+  const sockets = new Set();
+  let connections = 0, browser;
+  const bus = createSocketServer(socket => {
+    connections++;
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  try {
+    await mkdir(home);
+    for (const key of keys.filter(key => key.startsWith('XDG_'))) await mkdir(join(directory, key), { mode: 0o700 });
+    await new Promise(resolve => bus.listen(socketPath, resolve));
+    process.env.HOME = home;
+    for (const key of keys.filter(key => key.startsWith('XDG_'))) process.env[key] = join(directory, key);
+    process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${socketPath}`;
+    process.env.DBUS_SYSTEM_BUS_ADDRESS = `unix:path=${socketPath}`;
+    browser = await launchBrowser({ origin: 'https://fixture.test' });
+    assert.equal(await browser.evaluate('6 * 7'), 42);
+    assert.equal(connections, 0);
+    assert.deepEqual(await readdir(home), []);
+    for (const key of keys.filter(key => key.startsWith('XDG_'))) assert.deepEqual(await readdir(join(directory, key)), []);
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    for (const socket of sockets) socket.destroy();
+    const closed = await Promise.allSettled([
+      browser?.close(),
+      bus.listening ? new Promise(resolve => bus.close(resolve)) : undefined,
+    ]);
+    await rm(directory, { recursive: true, force: true });
+    const errors = closed.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, 'Browser desktop isolation cleanup failed');
   }
 });
 

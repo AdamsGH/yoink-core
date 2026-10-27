@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { readFileSync, readlinkSync } from 'node:fs';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -15,6 +16,24 @@ const bounded = (value, name) => {
   return value;
 };
 const failure = message => new Error(message);
+
+function processDiagnostics(pid) {
+  if (!pid) return 'unavailable';
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    let wait = 'unavailable';
+    try { wait = readFileSync(`/proc/${pid}/wchan`, 'utf8').trim().replace(/[^A-Za-z0-9_]/g, ''); } catch {}
+    const descriptor = fd => {
+      try {
+        const link = readlinkSync(`/proc/${pid}/fd/${fd}`);
+        return link.startsWith('socket:') ? 'socket' : link.startsWith('pipe:') ? 'pipe' : 'other';
+      } catch { return 'unavailable'; }
+    };
+    const number = index => /^\d+$/.test(fields[index] ?? '') ? fields[index] : 'unavailable';
+    return `state:${/^[A-Z]$/.test(fields[0]) ? fields[0] : 'unavailable'}|wait:${wait}|threads:${number(17)}|majorFaults:${number(9)}|userTicks:${number(11)}|systemTicks:${number(12)}|fd3:${descriptor(3)}|fd4:${descriptor(4)}`;
+  } catch { return 'unavailable'; }
+}
 
 /** Null-delimited CDP transport. Errors deliberately exclude protocol payloads. */
 export class CdpPipe extends EventEmitter {
@@ -118,6 +137,8 @@ export function isAllowedRequest(url, origin) {
  * No blanket certificate bypass, no debugging listener and no sandbox bypass.
  * Returned request defaults to the attached page session; browserRequest does not.
  * Profiles use profileParentDirectory and are removed on close or startup failure.
+ * HOME/XDG state and D-Bus addresses stay inside the owned profile. Headless
+ * fixtures do not use the caller's desktop services or certificate databases.
  * startupTimeoutMs covers launch and initial CDP setup. commandTimeoutMs applies
  * after the browser is ready, so it cannot prematurely cancel a cold launch.
  * Requires Chromium 151's ordered Network.setBlockedURLs allow/block patterns.
@@ -207,6 +228,7 @@ export async function launchBrowser({
     return closing;
   };
   try {
+    await Promise.all(['config', 'cache', 'data'].map(name => mkdir(join(profileDirectory, name), { mode: 0o700 })));
     const args = [
       '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profileDirectory}`,
       '--no-startup-window', '--no-first-run', '--no-default-browser-check',
@@ -217,7 +239,17 @@ export async function launchBrowser({
       '--disable-features=MediaRouter,OptimizationHints,AutofillServerCommunication,CertificateTransparencyComponentUpdater',
       ...(certificateSpki ? [`--ignore-certificate-errors-spki-list=${certificateSpki}`] : []),
     ];
-    child = spawn(executablePath, args, { detached: true, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    const env = {
+      ...process.env,
+      HOME: profileDirectory,
+      XDG_CONFIG_HOME: join(profileDirectory, 'config'),
+      XDG_CACHE_HOME: join(profileDirectory, 'cache'),
+      XDG_DATA_HOME: join(profileDirectory, 'data'),
+      XDG_RUNTIME_DIR: profileDirectory,
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${encodeURIComponent(join(profileDirectory, 'session-bus'))}`,
+      DBUS_SYSTEM_BUS_ADDRESS: `unix:path=${encodeURIComponent(join(profileDirectory, 'system-bus'))}`,
+    };
+    child = spawn(executablePath, args, { detached: true, env, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
     child.stderr.on('data', recordStderr);
     child.stderr.on('error', () => { stderrCategories.add('unavailable'); });
     pipe = new CdpPipe(child.stdio[4], child.stdio[3], { commandTimeoutMs: startupTimeoutMs });
@@ -346,7 +378,9 @@ export async function launchBrowser({
     };
   } catch (error) {
     const processState = !child?.pid ? 'not-started' : exited ? 'exited' : 'running';
-    error.cause ??= failure(`Browser startup: stage=${stage}, elapsed=${Math.round(performance.now() - startedAt)}ms, process=${processState}, exit=${child?.exitCode ?? child?.signalCode ?? 'none'}, received=${pipe?.bytesReceived ?? 0}, stderr=${[...stderrCategories].sort().join('|') || 'none'}`);
+    const context = `Browser startup: stage=${stage}, elapsed=${Math.round(performance.now() - startedAt)}ms, process=${processState}, exit=${child?.exitCode ?? child?.signalCode ?? 'none'}, received=${pipe?.bytesReceived ?? 0}, stderr=${[...stderrCategories].sort().join('|') || 'none'}, proc=${processDiagnostics(child?.pid)}`;
+    error.cause ??= failure(context);
+    error.message += ` (${context})`;
     pipe?.fail(failure('Browser startup failed'));
     await close();
     throw error;
