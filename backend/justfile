@@ -195,6 +195,9 @@ build-content-worker: check-build-space
 test-worker pattern='test_*.py': build-worker
     docker run --rm --pull never --network none --entrypoint python --mount type=bind,source={{justfile_directory()}}/worker,target=/worker,readonly yoink/rust-worker:experimental -B -m unittest discover -s /worker -p {{quote(pattern)}}
 
+lint-worker +paths:
+    docker run --rm --mount type=bind,source={{justfile_directory()}}/worker,target=/app/worker,readonly --workdir /app --entrypoint sh yoink/yoink:latest -c 'uv pip install --system ruff -q && ruff check --no-cache --select F "$@"' sh {{paths}}
+
 # Inspect pinned worker dependency APIs without host Python or network access.
 inspect-worker-symbol module symbol='':
     docker run --rm --pull never --network none --entrypoint python yoink/rust-worker:experimental -B -c 'import importlib, inspect, functools, sys; m = importlib.import_module(sys.argv[1]); print(inspect.getsource(functools.reduce(getattr, sys.argv[2].split("."), m)) if sys.argv[2] else "\n".join(sorted(k for k,v in vars(m).items() if inspect.isfunction(v) or inspect.isclass(v))))' {{quote(module)}} {{quote(symbol)}}

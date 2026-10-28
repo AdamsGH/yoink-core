@@ -78,3 +78,51 @@ class ClipHlsTests(unittest.TestCase):
                          'video', 100, 4, 'ffmpeg', _ffmpeg_args, lambda *args: self.fail('must not encode'), 10)
         self.assertEqual(caught.exception.failure_class, 'resource_limit')
         self.assertEqual(remaining, [4])
+
+    def test_long_video_manifest_downloads_only_the_requested_short_clip(self):
+        manifest = ('#EXTM3U\n' + ''.join(
+            f'#EXTINF:6,\nsegment-{index}.ts?signature={"x" * 1400}\n'
+            for index in range(1251)
+        ) + '#EXT-X-ENDLIST\n').encode()
+        self.assertGreater(len(manifest), 1024 * 1024)
+        fetched = []
+        class Downloader:
+            def urlopen(self, request):
+                fetched.append(request.url)
+                response = io.BytesIO(manifest if request.url.endswith('.m3u8') else b'fragment')
+                response.url = request.url
+                return response
+        def run(command, timeout, maximum):
+            self.assertEqual(command[command.index('-ss') + 1], '1.0')
+            self.assertEqual(command[command.index('-t') + 1], '32.0')
+            source = Path(command[command.index('-i') + 1])
+            self.assertEqual(source.read_bytes(), b'fragment' * 6)
+            Path(command[-1]).write_bytes(b'output')
+        track = {'protocol': 'm3u8_native', 'url': 'https://example.org/index.m3u8'}
+        with tempfile.TemporaryDirectory() as directory:
+            outputs = download(track, [{'start_seconds': 7363, 'end_seconds': 7395}], Path(directory),
+                               Downloader(), {}, 'video', 4 * 1024 * 1024, 8 * 1024 * 1024,
+                               'ffmpeg', _ffmpeg_args, run, 10)
+            self.assertEqual([p.read_bytes() for p in outputs], [b'output'])
+        self.assertEqual(fetched, [track['url']] + [
+            f'https://example.org/segment-{index}.ts?signature={"x" * 1400}'
+            for index in range(1227, 1233)
+        ])
+
+    def test_manifest_read_remains_bounded(self):
+        for maximum in (1024, 32 * 1024 * 1024):
+            with self.subTest(maximum=maximum):
+                limit = min(maximum, 16 * 1024 * 1024)
+                response = io.BytesIO(b'x' * (limit + 1))
+                response.url = 'https://example.org/index.m3u8'
+                class Downloader:
+                    def urlopen(self, request):
+                        return response
+                track = {'protocol': 'm3u8_native', 'url': response.url}
+                with tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaises(MediaFailure) as caught:
+                        download(track, [{'start_seconds': 0, 'end_seconds': 1}], Path(directory),
+                                 Downloader(), {}, 'video', maximum, maximum,
+                                 'ffmpeg', _ffmpeg_args, lambda *args: self.fail('must not encode'), 10)
+                self.assertEqual(caught.exception.failure_class, 'resource_limit')
+                self.assertTrue(response.closed)

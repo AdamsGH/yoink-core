@@ -241,9 +241,7 @@ async fn send_single(
 ) -> Result<Message, RequestError> {
     let chat = ChatId(target.chat_id());
     let file = input_file(artifact);
-    let reply = target
-        .reply_to_message_id()
-        .map(|id| ReplyParameters::new(MessageId(id)));
+    let reply = media_reply(target);
     macro_rules! configure {
         ($request:expr) => {{
             let mut request = $request;
@@ -304,13 +302,18 @@ async fn send_group(
     if let Some(thread) = thread {
         request = request.message_thread_id(thread);
     }
-    if let Some(reply) = target
-        .reply_to_message_id()
-        .map(|id| ReplyParameters::new(MessageId(id)))
-    {
+    if let Some(reply) = media_reply(target) {
         request = request.reply_parameters(reply);
     }
     request.await
+}
+
+fn media_reply(target: DeliveryTarget) -> Option<ReplyParameters> {
+    // Private input messages are deleted after delivery. Keep their IDs only for cleanup.
+    target
+        .reply_to_message_id()
+        .filter(|_| target.chat_id() < 0)
+        .map(|id| ReplyParameters::new(MessageId(id)))
 }
 
 async fn guard_upload_start<F>(
@@ -647,6 +650,100 @@ fn classify_delivery_error_for_origin(error: &RequestError, cached: bool) -> Del
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn media_wire_omits_private_replies_but_preserves_group_replies_and_topics() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for (chat, topic) in [(43, None), (-43, None), (-43, Some(8))] {
+            for grouped in [false, true] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let mut chunk = [0; 4096];
+                    let (header_end, length) = loop {
+                        let n = stream.read(&mut chunk).await.unwrap();
+                        assert!(n > 0);
+                        bytes.extend_from_slice(&chunk[..n]);
+                        if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&bytes[..end]);
+                            let length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (key, value) = line.split_once(':')?;
+                                    key.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().unwrap())
+                                })
+                                .unwrap();
+                            break (end + 4, length);
+                        }
+                    };
+                    while bytes.len() < header_end + length {
+                        let n = stream.read(&mut chunk).await.unwrap();
+                        assert!(n > 0);
+                        bytes.extend_from_slice(&chunk[..n]);
+                    }
+                    let body = String::from_utf8(bytes[header_end..].to_vec()).unwrap();
+                    let response =
+                        r#"{"ok":false,"error_code":400,"description":"Bad Request: fixture"}"#;
+                    stream.write_all(format!(
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                        response.len()
+                    ).as_bytes()).await.unwrap();
+                    body
+                });
+                let bot = Bot::with_client(
+                    "123:fixture",
+                    reqwest::Client::builder().no_proxy().build().unwrap(),
+                )
+                .set_api_url(url::Url::parse(&format!("http://{address}/")).unwrap());
+                let target = DeliveryTarget::new(123, chat, topic, Some(10)).unwrap();
+                let thread = thread_id(target).unwrap();
+                let result = if grouped {
+                    send_group(
+                        &bot,
+                        target,
+                        &[MediaKind::Photo; 2],
+                        vec![
+                            cached(CachedMediaKind::Photo, "one", 1),
+                            cached(CachedMediaKind::Photo, "two", 1),
+                        ],
+                        thread,
+                        false,
+                        None,
+                    )
+                    .await
+                    .map(|_| ())
+                } else {
+                    send_single(
+                        &bot,
+                        target,
+                        MediaKind::Photo,
+                        cached(CachedMediaKind::Photo, "one", 1),
+                        thread,
+                        false,
+                        None,
+                    )
+                    .await
+                    .map(|_| ())
+                };
+                assert!(result.is_err());
+                let body = server.await.unwrap();
+                assert_eq!(body.contains("reply_parameters"), chat < 0, "{body}");
+                assert_eq!(
+                    body.contains("message_thread_id"),
+                    topic.is_some(),
+                    "{body}"
+                );
+                if chat < 0 {
+                    assert!(body.contains(r#""message_id":10"#), "{body}");
+                }
+                assert_eq!(target.reply_to_message_id(), Some(10));
+            }
+        }
+    }
+
     #[test]
     fn nsfw_spoiler_applies_only_to_supported_photo_video_input_media() {
         for kind in [

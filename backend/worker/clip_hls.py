@@ -53,7 +53,8 @@ def download(info, clips, workspace: Path, dl, options, mode, maximum, total_max
         raise MediaFailure('unsupported_source')
     manifests = []
     for track in tracks:
-        body, final_url = _read(dl, track['url'], track.get('http_headers') or {}, min(maximum, 1024 * 1024))
+        # The index covers the full video even when the requested clip is short.
+        body, final_url = _read(dl, track['url'], track.get('http_headers') or {}, min(maximum, 16 * 1024 * 1024))
         try:
             manifests.append((body.decode('utf-8'), final_url))
         except UnicodeDecodeError as exc:
