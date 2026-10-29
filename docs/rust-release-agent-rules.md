@@ -6,3 +6,11 @@
 - Run backend Cargo checks through `backend/justfile`. Use the repository's dev/test profiles; enable symbols only for a specific debugging session, in a temporary target directory that you remove afterward.
 - Give workers focused crate checks in their isolated worktrees. Use workspace/all-feature recipes for coordinator verification. Different feature graphs duplicate artifacts in a shared target. The coordinator owns shared Docker images. After integrating verified work, stop its host builds and remove its disposable host artifacts with `just clean-builds`; preserve source changes and reports.
 - Use one target directory per active worktree. Reuse it across checks instead of creating per-call targets. Before a build, `check-build-space` must pass. If it fails, stop builds and clean inactive artifacts before retrying.
+
+## Publication
+
+Local deployment and remote publication are separate outcomes. `release-build` and `release-deploy` do not publish images or create a GitHub Release. Use the [publication contract](../README.md#quick-start) for image distribution and the [local release procedure](../backend/README.md#releases) for deployment.
+
+1. Commit verified source and `backend/VERSION`. Push the release commit and its matching `vMAJOR.MINOR.PATCH` tag. Keep published tags on their original commits.
+2. Track the tag-triggered `.github/workflows/ci.yml` run. Its `required` job must succeed before reporting image publication complete. The workflow and `scripts/container-images.mjs` own the image matrix and tag rules.
+3. Publish the GitHub Release on that tag with concise English notes. Report local runtime readiness and remote publication separately. Retain the rollback anchor until Adams confirms behavior.
