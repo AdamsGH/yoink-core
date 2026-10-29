@@ -11,6 +11,6 @@
 
 Local deployment and remote publication are separate outcomes. `release-build` and `release-deploy` do not publish images or create a GitHub Release. Use the [publication contract](../README.md#quick-start) for image distribution and the [local release procedure](../backend/README.md#releases) for deployment.
 
-1. Commit verified source and `backend/VERSION`. Push the release commit and its matching `vMAJOR.MINOR.PATCH` tag. Keep published tags on their original commits.
+1. Bump `backend/VERSION` and match the runtime image pin in `.env.example` to it. The `release-version` helper updates only `backend/VERSION`. Commit verified source and both version files. Push the release commit and its matching `vMAJOR.MINOR.PATCH` tag. Keep published tags on their original commits.
 2. Track the tag-triggered `.github/workflows/ci.yml` run. Its `required` job must succeed before reporting image publication complete. The workflow and `scripts/container-images.mjs` own the image matrix and tag rules.
 3. Publish the GitHub Release on that tag with concise English notes. Report local runtime readiness and remote publication separately. Retain the rollback anchor until Adams confirms behavior.
