@@ -1,0 +1,297 @@
+[
+  {
+    "title": "Documentation",
+    "pages": [
+      {
+        "title": "Documentation",
+        "source": "docs/README.md",
+        "slug": "Home"
+      }
+    ]
+  },
+  {
+    "title": "Operations",
+    "pages": [
+      {
+        "title": "Native backup and restore",
+        "source": "docs/operations/backup-restore.md",
+        "slug": "Operations-Backup-Restore"
+      },
+      {
+        "title": "Configuration",
+        "source": "docs/operations/configuration.md",
+        "slug": "Operations-Configuration"
+      },
+      {
+        "title": "Deployment and rollback",
+        "source": "docs/operations/deployment.md",
+        "slug": "Operations-Deployment"
+      },
+      {
+        "title": "PostgreSQL data import",
+        "source": "docs/operations/import.md",
+        "slug": "Operations-Import"
+      },
+      {
+        "title": "Installation",
+        "source": "docs/operations/installation.md",
+        "slug": "Operations-Installation"
+      },
+      {
+        "title": "Image publication",
+        "source": "docs/operations/publication.md",
+        "slug": "Operations-Publication"
+      },
+      {
+        "title": "Local releases",
+        "source": "docs/operations/releases.md",
+        "slug": "Operations-Releases"
+      },
+      {
+        "title": "User-mode Telegram session",
+        "source": "docs/operations/user-session.md",
+        "slug": "Operations-User-Session"
+      },
+      {
+        "title": "YouTube services",
+        "source": "docs/operations/youtube-services.md",
+        "slug": "Operations-Youtube-Services"
+      }
+    ]
+  },
+  {
+    "title": "Downloads",
+    "pages": [
+      {
+        "title": "Downloads",
+        "source": "docs/features/downloads/README.md",
+        "slug": "Downloads"
+      },
+      {
+        "title": "Downloader commands and compatibility",
+        "source": "docs/features/downloads/compatibility.md",
+        "slug": "Downloads-Compatibility"
+      },
+      {
+        "title": "Cookies and YouTube authentication",
+        "source": "docs/features/downloads/cookies.md",
+        "slug": "Downloads-Cookies"
+      },
+      {
+        "title": "Native deferred private media",
+        "source": "docs/features/downloads/deferred-media.md",
+        "slug": "Downloads-Deferred-Media"
+      },
+      {
+        "title": "Download history and automatic proxy routing",
+        "source": "docs/features/downloads/history.md",
+        "slug": "Downloads-History"
+      },
+      {
+        "title": "Native downloader inline lookup",
+        "source": "docs/features/downloads/inline-search.md",
+        "slug": "Downloads-Inline-Search"
+      },
+      {
+        "title": "Native downloader NSFW policy",
+        "source": "docs/features/downloads/nsfw.md",
+        "slug": "Downloads-Nsfw"
+      },
+      {
+        "title": "Downloader settings",
+        "source": "docs/features/downloads/settings.md",
+        "slug": "Downloads-Settings"
+      }
+    ]
+  },
+  {
+    "title": "Music and Stats",
+    "pages": [
+      {
+        "title": "Music",
+        "source": "docs/features/music.md",
+        "slug": "Music"
+      },
+      {
+        "title": "Stats full-text search",
+        "source": "docs/features/stats-search.md",
+        "slug": "Stats-Search"
+      },
+      {
+        "title": "Stats",
+        "source": "docs/features/stats.md",
+        "slug": "Stats"
+      }
+    ]
+  },
+  {
+    "title": "Insight",
+    "pages": [
+      {
+        "title": "Insight",
+        "source": "docs/features/insight/README.md",
+        "slug": "Insight"
+      },
+      {
+        "title": "Insight service contracts",
+        "source": "docs/features/insight/contracts.md",
+        "slug": "Insight-Contracts"
+      },
+      {
+        "title": "Insight diagnostics",
+        "source": "docs/features/insight/diagnostics.md",
+        "slug": "Insight-Diagnostics"
+      },
+      {
+        "title": "Insight runtime and configuration",
+        "source": "docs/features/insight/runtime.md",
+        "slug": "Insight-Runtime"
+      }
+    ]
+  },
+  {
+    "title": "Inbox",
+    "pages": [
+      {
+        "title": "Inbox",
+        "source": "docs/features/inbox/README.md",
+        "slug": "Inbox"
+      },
+      {
+        "title": "Inbox content processing",
+        "source": "docs/features/inbox/content.md",
+        "slug": "Inbox-Content"
+      },
+      {
+        "title": "Inbox durability and compatibility",
+        "source": "docs/features/inbox/contracts.md",
+        "slug": "Inbox-Contracts"
+      },
+      {
+        "title": "Inbox runtime",
+        "source": "docs/features/inbox/runtime.md",
+        "slug": "Inbox-Runtime"
+      },
+      {
+        "title": "Inbox Telegram delivery",
+        "source": "docs/features/inbox/telegram.md",
+        "slug": "Inbox-Telegram"
+      }
+    ]
+  },
+  {
+    "title": "Architecture",
+    "pages": [
+      {
+        "title": "Access control and identity",
+        "source": "docs/architecture/access-control.md",
+        "slug": "Architecture-Access-Control"
+      },
+      {
+        "title": "HTTP API",
+        "source": "docs/architecture/api.md",
+        "slug": "Architecture-Api"
+      },
+      {
+        "title": "Frontend architecture",
+        "source": "docs/architecture/frontend.md",
+        "slug": "Architecture-Frontend"
+      },
+      {
+        "title": "Runtime architecture",
+        "source": "docs/architecture/overview.md",
+        "slug": "Architecture-Overview"
+      },
+      {
+        "title": "Persistence and recovery",
+        "source": "docs/architecture/persistence.md",
+        "slug": "Architecture-Persistence"
+      },
+      {
+        "title": "Native Music and Stats composition",
+        "source": "docs/architecture/products.md",
+        "slug": "Architecture-Products"
+      },
+      {
+        "title": "Worker protocol",
+        "source": "docs/architecture/worker-protocol.md",
+        "slug": "Architecture-Worker-Protocol"
+      }
+    ]
+  },
+  {
+    "title": "Development",
+    "pages": [
+      {
+        "title": "Documentation and Wiki",
+        "source": "docs/development/documentation.md",
+        "slug": "Development-Documentation"
+      },
+      {
+        "title": "Local GitHub CI",
+        "source": "docs/development/local-ci.md",
+        "slug": "Development-Local-Ci"
+      },
+      {
+        "title": "Media acceptance fixtures",
+        "source": "docs/development/media-fixtures.md",
+        "slug": "Development-Media-Fixtures"
+      },
+      {
+        "title": "Development and verification",
+        "source": "docs/development/verification.md",
+        "slug": "Development-Verification"
+      },
+      {
+        "title": "Worker development",
+        "source": "docs/development/workers.md",
+        "slug": "Development-Workers"
+      }
+    ]
+  },
+  {
+    "title": "Fixtures",
+    "pages": [
+      {
+        "title": "Inbox actual-process fixture",
+        "source": "docs/development/fixtures/inbox.md",
+        "slug": "Development-Fixtures-Inbox"
+      },
+      {
+        "title": "Insight focused verification",
+        "source": "docs/development/fixtures/insight-contracts.md",
+        "slug": "Development-Fixtures-Insight-Contracts"
+      },
+      {
+        "title": "Native Insight actual-process fixture",
+        "source": "docs/development/fixtures/insight.md",
+        "slug": "Development-Fixtures-Insight"
+      },
+      {
+        "title": "YouTube service fixtures",
+        "source": "docs/development/fixtures/youtube.md",
+        "slug": "Development-Fixtures-Youtube"
+      }
+    ]
+  },
+  {
+    "title": "Historical decisions",
+    "pages": [
+      {
+        "title": "0001: Separate ownership of legacy and Rust database objects",
+        "source": "docs/architecture/decisions/0001-database-ownership.md",
+        "slug": "Architecture-Decisions-0001-Database-Ownership"
+      },
+      {
+        "title": "0002: Historical Turso evaluation",
+        "source": "docs/architecture/decisions/0002-turso-evaluation.md",
+        "slug": "Architecture-Decisions-0002-Turso-Evaluation"
+      },
+      {
+        "title": "0003: Native Turso runtime",
+        "source": "docs/architecture/decisions/0003-native-turso-runtime.md",
+        "slug": "Architecture-Decisions-0003-Native-Turso-Runtime"
+      }
+    ]
+  }
+]

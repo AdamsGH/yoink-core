@@ -1,5 +1,5 @@
 //! Native Stats search with an authoritative Turso source and a derived Tantivy index.
-//! See docs/backend/stats-search.md for the approved versioned matching contract.
+//! See docs/features/stats-search.md for the approved versioned matching contract.
 mod engine;
 mod service;
 mod source;

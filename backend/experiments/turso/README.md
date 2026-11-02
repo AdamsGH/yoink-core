@@ -2,7 +2,7 @@
 
 ## Result
 
-Native `turso = 0.7.2` passes the tested queue, transaction and recovery contracts. It is a viable candidate for the next storage implementation slice, not approval to replace the running PostgreSQL deployment. The experiment stays outside the server workspace and has its own committed Cargo.lock. It uses neither libSQL nor Turso Cloud, and enables no experimental features.
+This historical experiment tested native `turso = 0.7.2` queue, transaction, and recovery contracts. The deployed application now uses native Turso. The experiment is not the production storage implementation. The experiment stays outside the server workspace and has its own committed Cargo.lock. It uses neither libSQL nor Turso Cloud, and enables no experimental features.
 
 All test data is synthetic and lives in temporary directories. No fixture reads deployment settings or a production database. One Rust process owns one `Database` handle with independent connections. A crash-test child owns a different disposable file and exits before the parent reopens it.
 
@@ -50,7 +50,7 @@ Run the focused probe from `backend/`: `cargo test --manifest-path experiments/t
 
 Turso 0.7.2 rejects a bind parameter in `VACUUM INTO` with `VACUUM INTO requires a string literal path`. Its path extractor also strips surrounding quotes without decoding SQL-doubled apostrophes. A destination containing an apostrophe therefore produced a differently named file in the initial test.
 
-The fixture's `backup_into` substitutes a restricted literal path from a SQL file. It rejects quote and NUL characters before executing SQL and checks that the requested nonempty file exists afterward. Spaces are covered. This restriction does not fix native arbitrary-path handling, and the fixture helper is not a production backup API. The separate [operator implementation](../../../docs/backend/backup-restore.md) uses an owned directory descriptor and a fixed `/proc/self/fd/<fd>/snapshot.db` literal, supporting quoted destination paths without interpolating user-controlled SQL.
+The fixture's `backup_into` substitutes a restricted literal path from a SQL file. It rejects quote and NUL characters before executing SQL and checks that the requested nonempty file exists afterward. Spaces are covered. This restriction does not fix native arbitrary-path handling, and the fixture helper is not a production backup API. The separate [operator implementation](../../../docs/operations/backup-restore.md) uses an owned directory descriptor and a fixed `/proc/self/fd/<fd>/snapshot.db` literal, supporting quoted destination paths without interpolating user-controlled SQL.
 
 ## Limits and next decision
 
@@ -60,4 +60,4 @@ The proposed ownership is one backend process. Multiple processes sharing the li
 
 Stats full-text search is still a migration gate because Turso 0.7.2 marks FTS experimental. SQLite file-format compatibility does not imply complete SQL compatibility or a tested downgrade route. The next implementation must port actual repository queries, decide search semantics and verify data conversion and rollback before cutover.
 
-See [decision 0002](../../../docs/decisions/0002-turso-evaluation.md). [Decision 0001](../../../docs/decisions/0001-database-ownership.md) still governs the implemented PostgreSQL runtime.
+See [decision 0002](../../../docs/architecture/decisions/0002-turso-evaluation.md). [Decision 0001](../../../docs/architecture/decisions/0001-database-ownership.md) still governs the implemented PostgreSQL runtime.

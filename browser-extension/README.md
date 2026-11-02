@@ -1,40 +1,41 @@
-# Yoink Cookie Sync - Browser Extension
+# Yoink Cookie Sync
 
-Sends your browser cookies to Yoink bot so it can download authenticated content (TikTok, Instagram, YouTube, etc.) on your behalf.
+This Chromium extension sends selected browser cookies to your Yoink instance. The bot can use those credentials for authenticated media requests.
 
-## How it works
+Cookies can grant account access. Use this extension only with an instance and operator you trust.
 
-1. In Telegram, send `/cookie token` to your Yoink bot - it replies with a short-lived single-use token (10 min TTL)
-2. Paste the token into the extension popup
-3. Extension reads cookies for configured domains via `chrome.cookies` API (includes httpOnly)
-4. Cookies are posted to your Yoink instance in Netscape format and stored per-user in the database
-5. Bot uses your cookies for yt-dlp downloads until they expire
+## Install
 
-The token is single-use and short-lived - no persistent auth is stored in the extension.
+1. Open `chrome://extensions` in Chrome, Chromium, or Edge.
+2. Enable Developer mode.
+3. Select Load unpacked.
+4. Select this `browser-extension/` directory.
 
-## Installation (Chrome / Chromium / Edge)
+## Send cookies
 
-1. Open `chrome://extensions`
-2. Enable **Developer mode** (top right toggle)
-3. Click **Load unpacked**
-4. Select the `browser-extension/` directory from the yoink-core repo
+1. Sign in to the required provider in this browser.
+2. Open the extension popup.
+3. Set Bot URL to your instance's HTTPS origin.
+4. Send `/cookie token` to your bot.
+5. Paste the token into the popup.
+6. Select Send Cookies.
 
-## Usage
+The token expires after ten minutes and permits one successful submission. Validation or authorization failure does not constitute successful consumption.
 
-1. Open the extension popup
-2. Set **Bot URL** to your Yoink instance (e.g. `https://yoink.example.com`)
-3. Make sure you're logged into TikTok / YouTube / etc. in this browser
-4. Send `/cookie token` to your bot, copy the token
-5. Paste the token and click **Send Cookies**
+The extension reads selected cookies, including HttpOnly cookies, through the browser API. It submits Netscape-format content to `/api/v1/dl/cookies/submit`.
 
 ## Domains
 
-Default: `youtube.com`, `tiktok.com`, `instagram.com`, `x.com`, `twitter.com`
+Defaults are `youtube.com`, `tiktok.com`, `instagram.com`, and `x.com`.
 
-Add/remove domains in the popup. Use **+Current** to add the domain of the currently open tab.
+Edit the list in the popup. Use +Current to add the active tab's domain.
 
-## Security
+## Security and limits
 
-- Cookies are sent directly to your own Yoink server over HTTPS
-- Token is single-use and expires in 10 minutes
-- No third-party servers involved
+Use HTTPS. The popup does not enforce the scheme, so entering an HTTP URL can expose the token and cookie contents.
+
+The popup stores the Bot URL and domain list in browser sync storage. It does not persist the submission token.
+
+Cookies expire or become invalid when a provider changes a session. Submission does not guarantee that a provider will accept a later download.
+
+See [cookie contracts](../docs/features/downloads/cookies.md) for authorization, limits, and replacement behavior.

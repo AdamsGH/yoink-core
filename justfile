@@ -199,10 +199,20 @@ verify-fe *args="":
 # Native backend, deployment contracts and frontend verification.
 verify:
     just test-ci-local
+    just test-docs
     just --justfile backend/justfile verify
     node --test scripts/test-native-deployment.mjs
     just test-publication
     just verify-fe
+
+check-docs:
+    node scripts/documentation.mjs check
+
+test-docs:
+    node --test scripts/documentation.test.mjs
+
+wiki directory="backend/target/wiki":
+    node scripts/documentation.mjs wiki {{quote(directory)}}
 
 test-publication:
     node --test scripts/container-images.test.mjs scripts/registry-image.test.mjs
