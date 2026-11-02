@@ -6,6 +6,7 @@ import path from 'node:path';
 export const MAX_TARGET_BYTES = 16 * 1024 ** 3;
 export const MIN_FREE_BYTES = 20 * 1024 ** 3;
 const artifactNames = new Set(['debug', 'release', 'tmp', 'turso-probe', 'turso-probe-call-args', '.rustc_info.json', 'CACHEDIR.TAG']);
+const preservedNames = new Set(['media-reports', 'ci-local-logs', 'wiki', '.future-incompat-report.json']);
 
 async function targetExists(target) {
   try {
@@ -41,16 +42,16 @@ export async function checkSpace(workspace) {
 export async function cleanArtifacts(target) {
   if (!await targetExists(target)) return;
   const entries = await readdir(target);
-  const unknown = entries.filter(name => !['media-reports', '.future-incompat-report.json'].includes(name) && !artifactNames.has(name));
+  const unknown = entries.filter(name => !preservedNames.has(name) && !artifactNames.has(name));
   if (unknown.length) throw new Error(`Refusing cleanup with unknown target entries: ${unknown.join(', ')}. Inspect them first.`);
   for (const name of entries.filter(name => artifactNames.has(name))) {
     await rm(path.join(target, name), { recursive: true, force: true });
   }
-  console.log(`Removed build artifacts from ${target}; media-reports preserved.`);
+  console.log(`Removed build artifacts from ${target}; reports and Wiki export preserved.`);
 }
 
 export async function cleanWorkspace(workspace, scope = '') {
-  if (scope && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(scope) || scope === 'media-reports' || artifactNames.has(scope))) {
+  if (scope && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(scope) || preservedNames.has(scope) || artifactNames.has(scope))) {
     throw new Error('Cleanup target must be one named Cargo target directory under target/, not a path or report directory.');
   }
   const target = path.join(workspace, 'target');

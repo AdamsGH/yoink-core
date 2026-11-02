@@ -62,3 +62,23 @@ test('cleanup preserves reports, refuses unknown entries and symlink targets', a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('cleanup retains CI logs and Wiki output without treating them as Cargo targets', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'yoink-build-deliverables-'));
+  try {
+    const target = path.join(dir, 'target');
+    await mkdir(path.join(target, 'debug'), { recursive: true });
+    for (const name of ['ci-local-logs', 'wiki']) {
+      await mkdir(path.join(target, name));
+      await writeFile(path.join(target, name, 'evidence.md'), 'retained');
+      await assert.rejects(cleanWorkspace(dir, name), /Cleanup target/);
+    }
+    await cleanWorkspace(dir);
+    assert.deepEqual((await readdir(target)).sort(), ['ci-local-logs', 'wiki']);
+    for (const name of ['ci-local-logs', 'wiki']) {
+      assert.equal(await readFile(path.join(target, name, 'evidence.md'), 'utf8'), 'retained');
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
