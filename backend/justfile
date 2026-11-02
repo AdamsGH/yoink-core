@@ -307,8 +307,9 @@ check-scripts:
     node scripts/check-scripts.mjs
 
 # Deterministic transport/lifecycle fixture contracts without Docker.
+# Serialize files so cold Chrome launches do not compete for CI storage.
 test-media-fixtures:
-    node --test scripts/media-fixture/*.test.mjs
+    node --test --test-concurrency=1 scripts/media-fixture/*.test.mjs
 
 test-http-contracts:
     node --test crates/yoink-http/tests/openapi-contracts.test.mjs
