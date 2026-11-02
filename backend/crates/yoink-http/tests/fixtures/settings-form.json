@@ -1,0 +1,20 @@
+{
+  "quality": "best",
+  "codec": "vp09",
+  "container": "mkv",
+  "audio_codec": "mp3",
+  "proxy_enabled": false,
+  "proxy_url": null,
+  "keyboard": "2x3",
+  "subs_enabled": false,
+  "subs_auto": false,
+  "subs_always_ask": false,
+  "subs_lang": "en",
+  "split_size": 1073741824,
+  "nsfw_blur": false,
+  "mediainfo": false,
+  "send_as_file": false,
+  "gallery_zip": false,
+  "use_pool_cookies": true,
+  "youtube_auth_mode": "cookies"
+}

@@ -15,8 +15,14 @@ pub struct UserSettingsPatch {
     pub quality: Option<String>,
     pub codec: Option<String>,
     pub container: Option<String>,
+    pub audio_codec: Option<String>,
     pub proxy_enabled: Option<bool>,
-    pub proxy_url: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "proxy_url_patch",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub proxy_url: Option<Option<String>>,
     pub keyboard: Option<String>,
     pub subs_enabled: Option<bool>,
     pub subs_auto: Option<bool>,
@@ -30,12 +36,21 @@ pub struct UserSettingsPatch {
     pub use_pool_cookies: Option<bool>,
     pub youtube_auth_mode: Option<String>,
 }
+
+// Preserve omission separately from an explicit null, which removes the saved URL.
+fn proxy_url_patch<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
 impl UserSettingsPatch {
     pub fn validate(&self) -> Result<(), DownloadError> {
         for (field, value) in [
             (SettingField::Quality, &self.quality),
             (SettingField::Codec, &self.codec),
             (SettingField::Container, &self.container),
+            (SettingField::AudioCodec, &self.audio_codec),
             (SettingField::Keyboard, &self.keyboard),
             (SettingField::SubtitleLanguage, &self.subs_lang),
         ] {
@@ -46,7 +61,7 @@ impl UserSettingsPatch {
         if let Some(size) = self.split_size {
             SettingChange::new(SettingField::SplitSize, &size.to_string())?;
         }
-        if let Some(url) = &self.proxy_url {
+        if let Some(Some(url)) = &self.proxy_url {
             crate::profile::validate_proxy(url).map_err(|_| DownloadError::InvalidPreferences)?;
         }
         if self
@@ -219,12 +234,24 @@ impl DownloadService {
 mod tests {
     use super::*;
     #[test]
-    fn patch_contract_is_closed_and_null_proxy_is_ignored() {
+    fn patch_contract_is_closed_and_proxy_clear_is_explicit() {
         let patch: UserSettingsPatch =
             serde_json::from_str(r#"{"proxy_url":null,"split_size":524288000,"keyboard":"OFF"}"#)
                 .unwrap();
         assert!(patch.validate().is_ok());
-        assert!(patch.proxy_url.is_none());
+        assert_eq!(patch.proxy_url, Some(None));
+        assert_eq!(
+            serde_json::to_value(&patch).unwrap()["proxy_url"],
+            serde_json::Value::Null
+        );
+        let omitted: UserSettingsPatch = serde_json::from_str("{}").unwrap();
+        assert!(omitted.proxy_url.is_none());
+        assert!(
+            serde_json::to_value(omitted)
+                .unwrap()
+                .get("proxy_url")
+                .is_none()
+        );
         for bad in [
             r#"{"args_json":{}}"#,
             r#"{"user_id":42}"#,
@@ -236,6 +263,7 @@ mod tests {
             r#"{"split_size":1}"#,
             r#"{"proxy_url":"file:///etc/passwd"}"#,
             r#"{"keyboard":"shell"}"#,
+            r#"{"audio_codec":"shell"}"#,
         ] {
             assert!(
                 serde_json::from_str::<UserSettingsPatch>(bad)

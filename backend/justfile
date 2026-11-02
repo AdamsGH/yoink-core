@@ -184,6 +184,9 @@ test-download-history-spa: build-server
     cd ../frontend && VITE_DEV_TOKEN='' npm run build
     node scripts/test-download-history-spa.mjs
 
+settings-spa-fixture: build-server
+    VITE_DEV_TOKEN='' node ../frontend/scripts/settings-spa-fixture.mjs
+
 # Independent worker target avoids requiring an integrated Rust build for Python checks.
 build-worker:
     node scripts/release.mjs tool worker

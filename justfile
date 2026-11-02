@@ -180,6 +180,9 @@ test-inbox-frontend:
 test-insight-frontend:
     node --test plugins/yoink-insight/frontend/tests/credentials.test.mjs
 
+test-downloader-frontend:
+    node --test plugins/yoink-dl/frontend/tests/settings.test.mjs
+
 # Audit production and build dependencies. Registry failures block verification.
 audit-fe:
     cd frontend && npm run audit:deps
@@ -190,6 +193,7 @@ verify-fe *args="":
     just verify-i18n
     just test-inbox-frontend
     just test-insight-frontend
+    just test-downloader-frontend
     just tsc {{args}}
 
 # Native backend, deployment contracts and frontend verification.

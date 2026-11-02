@@ -722,8 +722,7 @@ async fn remaining_settings_patch_reset_and_pool_permission_contract() {
     let null_proxy = service
         .patch_user_settings(
             43,
-            serde_json::from_value(serde_json::json!({"proxy_url":null,"use_pool_cookies":true}))
-                .unwrap(),
+            serde_json::from_value(serde_json::json!({"use_pool_cookies":true})).unwrap(),
             Some(after.revision),
         )
         .await

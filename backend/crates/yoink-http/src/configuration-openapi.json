@@ -1603,7 +1603,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Omit to preserve the saved URL. Send null to remove it."
           },
           "keyboard": {
             "anyOf": [
@@ -1716,6 +1717,16 @@
             ]
           },
           "youtube_auth_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "audio_codec": {
             "anyOf": [
               {
                 "type": "string"

@@ -205,3 +205,14 @@ test('typed authentication and settings fields agree with source declarations', 
     assert.deepEqual(Object.keys(request(path, method).properties).sort(), fields.sort(), name);
   }
 });
+
+test('downloader form fixture covers the complete writable contract, including audio codec', () => {
+  const form = JSON.parse(read('backend/crates/yoink-http/tests/fixtures/settings-form.json'));
+  const patch = request('/api/v1/dl/settings', 'patch');
+  assert.deepEqual(Object.keys(form).sort(), Object.keys(patch.properties).sort());
+  for (const [field, value] of Object.entries(form)) {
+    assert.ok(patch.properties[field].anyOf.some(type => type.type === (value === null ? 'null' : typeof value === 'number' ? 'integer' : typeof value)), field);
+  }
+  assert.equal(form.nsfw_blur, false);
+  assert.equal(form.audio_codec, 'mp3');
+});

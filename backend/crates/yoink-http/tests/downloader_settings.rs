@@ -235,13 +235,16 @@ async fn downloader_frontend_settings_get_patch_credentials_null_pool_and_closed
         saved["proxy_url"],
         "https://fixture:secret@proxy.example:3128"
     );
+    let (status, preserved) =
+        request(&app, "PATCH", path, Some(&user), json!({"nsfw_blur":false})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(preserved["proxy_url"], saved["proxy_url"]);
     let (status, saved) =
         request(&app, "PATCH", path, Some(&user), json!({"proxy_url":null})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        saved["proxy_url"],
-        "https://fixture:secret@proxy.example:3128"
-    );
+    assert_eq!(saved["proxy_url"], Value::Null);
+    let (_, reread) = request(&app, "GET", path, Some(&user), Value::Null).await;
+    assert_eq!(reread["proxy_url"], Value::Null);
     let (_, own) = request(&app, "GET", path, Some(&owner), Value::Null).await;
     assert_eq!(own["proxy_url"], Value::Null);
     assert_eq!(own["has_pool_access"], true);
@@ -256,6 +259,70 @@ async fn downloader_frontend_settings_get_patch_credentials_null_pool_and_closed
             request(&app, "PATCH", path, Some(&user), bad).await.0,
             StatusCode::UNPROCESSABLE_ENTITY
         );
+    }
+}
+
+#[tokio::test]
+async fn settings_form_payload_persists_audio_and_checks_every_supported_choice() {
+    let (_dir, app) = fixture().await;
+    let token = login(&app, 43).await;
+    let path = "/api/v1/dl/settings";
+    let form: Value = serde_json::from_str(include_str!("fixtures/settings-form.json")).unwrap();
+    let (status, saved) = request(&app, "PATCH", path, Some(&token), form.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    for (field, expected) in form.as_object().unwrap() {
+        assert_eq!(&saved[field], expected, "{field}");
+    }
+    let (_, current) = request(&app, "GET", path, Some(&token), Value::Null).await;
+    assert_eq!(current["audio_codec"], "mp3");
+    assert_eq!(current["nsfw_blur"], false);
+    for field in yoink_downloads::SettingField::ALL {
+        for choice in field.choices() {
+            let value = match field {
+                yoink_downloads::SettingField::SplitSize => json!(choice.parse::<i64>().unwrap()),
+                _ if ["true", "false"].contains(choice) => json!(*choice == "true"),
+                _ => json!(choice),
+            };
+            let (status, body) = request(
+                &app,
+                "PATCH",
+                path,
+                Some(&token),
+                json!({field.name(): value}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{}={choice}: {body}", field.name());
+            assert_eq!(body[field.name()], value);
+        }
+    }
+    // A later unrelated edit must not restore the default audio codec.
+    let (status, body) = request(
+        &app,
+        "PATCH",
+        path,
+        Some(&token),
+        json!({"audio_codec":"opus"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = request(
+        &app,
+        "PATCH",
+        path,
+        Some(&token),
+        json!({"nsfw_blur":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["audio_codec"], "opus");
+    for invalid in [
+        json!({"audio_codec":"shell"}),
+        json!({"codec":"vp9"}),
+        json!({"container":"webm"}),
+        json!({"split_size":1048576000_i64}),
+    ] {
+        let (status, _) = request(&app, "PATCH", path, Some(&token), invalid).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }
 
