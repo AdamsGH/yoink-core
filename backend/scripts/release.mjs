@@ -345,6 +345,7 @@ export class Releases {
     try {
       const tags = image ? ['--load', '--tag', image] : ['--output=type=cacheonly'];
       if (name === 'operations') tags.push('--tag', 'yoink/rust-operations:experimental');
+      if (name === 'config') tags.push('--build-context', `inline-config-docs=${path.join(this.root, 'docs/features/downloads')}`);
       this.run(['buildx', 'build', '--builder', builder, '--progress=plain', '--target', target, ...tags, this.backend], { live: true });
     } finally { this.finishBuilder(); }
   }

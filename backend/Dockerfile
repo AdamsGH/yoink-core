@@ -19,7 +19,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp target/release/yoink-server target/release/yoink-worker-launcher /
 
 FROM rust-source AS server-config-tests
-COPY docs/inline-search.env.example ./docs/inline-search.env.example
+# The test-release-config recipe supplies this canonical documentation context.
+COPY --from=inline-config-docs inline-search.env.example /docs/features/downloads/inline-search.env.example
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target,sharing=locked \

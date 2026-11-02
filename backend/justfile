@@ -127,7 +127,7 @@ release-trim:
 test-release:
     node --test scripts/release.test.mjs scripts/build-report.test.mjs
 
-test-release-config:
+test-release-config: check-build-space
     node scripts/release.mjs tool config
 
 test-download-proxy:

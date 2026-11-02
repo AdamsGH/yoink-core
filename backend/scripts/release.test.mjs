@@ -628,6 +628,19 @@ test('tool builds use bounded builder and cannot overwrite production tags', t =
   assert.equal(f.manager.read().current.version, '0.1.0');
 });
 
+test('configuration image tests consume the canonical documentation context without publishing', t => {
+  const f = fixture(t);
+  const before = readFileSync(f.manager.stateFile, 'utf8');
+  f.manager.tool('config');
+  const build = f.calls.find(args => args[0] === 'buildx' && args[1] === 'build');
+  assert.equal(build[build.indexOf('--target') + 1], 'server-config-tests');
+  assert.equal(build[build.indexOf('--build-context') + 1], `inline-config-docs=${path.join(f.root, 'docs/features/downloads')}`);
+  assert(build.includes('--output=type=cacheonly'));
+  assert(!build.includes('--push'));
+  assert(!build.includes('--load'));
+  assert.equal(readFileSync(f.manager.stateFile, 'utf8'), before);
+});
+
 test('interrupted build registration recovers only matching labelled artifacts', t => {
   const f = fixture(t);
   f.manager.confirm();
