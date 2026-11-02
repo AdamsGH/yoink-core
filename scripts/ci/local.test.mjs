@@ -147,6 +147,8 @@ test('controller exposes only a disposable checkout and private Docker data volu
 test('real workflow selection, empty secret files, sandbox and inner socket remain mandatory', () => {
   const controller = readFileSync(new URL('./controller.sh', import.meta.url), 'utf8');
   assert.match(controller, /act pull_request --workflows \.github\/workflows\/ci\.yml --job "\$job"/);
+  assert.match(controller, /^GODEBUG=http2client=0 act pull_request/m);
+  assert(!controller.includes('export GODEBUG'));
   for (const option of ['env', 'secret', 'var', 'input']) assert(controller.includes(`--${option}-file /ci/empty`));
   assert.match(controller, /--container-daemon-socket \/var\/run\/docker\.sock/);
   assert.match(controller, /test ! -e \/var\/run\/docker\.sock/);

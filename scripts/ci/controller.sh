@@ -77,7 +77,8 @@ docker run --rm --network=bridge $options --entrypoint bash "$image" -euo pipefa
 
 # --bind deliberately keeps act's default checkout skip. Remote checkout cannot
 # fetch the temporary snapshot commit. All other workflow steps stay unchanged.
-act pull_request --workflows .github/workflows/ci.yml --job "$job" \
+# GitHub cancelled HTTP/2 action downloads. Keep HTTP/1.1 local to act's client.
+GODEBUG=http2client=0 act pull_request --workflows .github/workflows/ci.yml --job "$job" \
     --eventpath /ci/event.json --actor AdamsGH \
     --platform "ubuntu-24.04=$image" --container-architecture linux/amd64 \
     --bind --pull=false --rebuild=false --rm --network bridge \
