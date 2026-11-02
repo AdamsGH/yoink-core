@@ -730,11 +730,12 @@ mod tests {
 
     #[test]
     fn inline_example_uses_real_consumer_and_invalid_values_fail_closed() {
-        let values: Vec<_> = include_str!("../../../docs/inline-search.env.example")
-            .lines()
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(|line| line.split_once('=').unwrap())
-            .collect();
+        let values: Vec<_> =
+            include_str!("../../../../docs/features/downloads/inline-search.env.example")
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| line.split_once('=').unwrap())
+                .collect();
         let parsed = config(&values).unwrap();
         let search = parsed.telegram.unwrap().inline_search;
         assert_eq!(search.concurrency, 3);

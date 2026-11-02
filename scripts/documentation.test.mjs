@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -141,4 +142,22 @@ test('publication documentation covers exactly the current image matrix', async 
   const document = await readFile(path.join(repositoryRoot, 'docs/operations/publication.md'), 'utf8');
   const documented = [...document.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]).sort();
   assert.deepEqual(documented, images.map((image) => image.name).sort());
+});
+
+test('literal Rust documentation inputs remain tracked and readable after moves', async () => {
+  const files = execFileSync('git', ['ls-files', '-z', '--', 'backend', 'docs'], { cwd: repositoryRoot, encoding: 'utf8' }).split('\0').filter(Boolean);
+  const tracked = new Set(files);
+  let checked = 0;
+  for (const file of files.filter(file => file.endsWith('.rs'))) {
+    const source = await readFile(path.join(repositoryRoot, file), 'utf8');
+    for (const match of source.matchAll(/include_(?:str|bytes)!\s*\(\s*"([^"\n]*docs\/[^"\n]+)"\s*\)/g)) {
+      const target = path.resolve(repositoryRoot, path.dirname(file), match[1]);
+      const relative = path.relative(repositoryRoot, target);
+      assert(tracked.has(relative), `${file} embeds an untracked documentation input: ${relative}`);
+      assert((await stat(target)).isFile(), `${file} must embed a regular documentation file`);
+      await readFile(target);
+      checked++;
+    }
+  }
+  assert(checked > 0, 'Expected native Rust documentation inputs to be checked.');
 });
