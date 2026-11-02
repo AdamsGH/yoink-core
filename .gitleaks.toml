@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Media fixture coverage prose, not a credential"
+condition = "AND"
+paths = ['''^docs/development/media-fixtures\.md$''']
+regexTarget = "match"
+regexes = ['''^access changes, retry/cancellation/quota $''']

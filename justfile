@@ -154,6 +154,12 @@ ci-local job="verify":
 test-ci-local:
     node --test scripts/ci/local.test.mjs
 
+check-secrets:
+    node scripts/ci/secrets.mjs
+
+test-secrets:
+    node --test scripts/ci/secrets.test.mjs
+
 # Usage: just lint                  full repo (src + plugins)
 #        just lint --fix            autofix both trees
 #        just lint src/yoink        scope to a path
@@ -198,6 +204,8 @@ verify-fe *args="":
 
 # Native backend, deployment contracts and frontend verification.
 verify:
+    just check-secrets
+    just test-secrets
     just test-ci-local
     just test-docs
     just --justfile backend/justfile verify

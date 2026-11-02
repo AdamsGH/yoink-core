@@ -1451,13 +1451,24 @@ async fn active_music_worker_drop_and_cancel_reap_before_runtime_drain() {
                         tokio::time::sleep(Duration::from_millis(5)).await
                     }
                     Ok(_) => break,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+                    // procfs can return ESRCH when the process exits during the read.
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::NotFound
+                            || e.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+                    {
+                        break;
+                    }
                     Err(e) => panic!("descendant inspection failed: {e}"),
                 }
             }
         })
         .await
-        .unwrap();
+        .unwrap_or_else(|error| {
+            let stat = std::fs::read_to_string(format!("/proc/{child}/stat"));
+            panic!(
+                "descendant {child} remained live after runtime drain (abort={abort}): {error}; stat={stat:?}"
+            );
+        });
         assert!(
             f._dir
                 .path()

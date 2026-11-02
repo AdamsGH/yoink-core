@@ -8,7 +8,9 @@ The default native checks do not require a production database or bot token.
 
 | Command | Purpose |
 | --- | --- |
-| `just verify` | Native checks, deployment/publication contracts, and frontend verification. |
+| `just verify` | Secret-history scanning, native checks, deployment/publication contracts, and frontend verification. |
+| `just check-secrets` | Full Git-history scans for core and every submodule with the shared secret policy. |
+| `just test-secrets` | Real-scanner regressions for narrow exceptions, inherited rules, and history coverage. |
 | `just verify-fe` | Dependency audit, translations, frontend regressions, and TypeScript checks. |
 | `just --justfile backend/justfile verify` | Backend formatting, lint, tests, smoke checks, schema/script checks, and documentation. |
 | `just check-docs` | Repository documentation and Wiki navigation checks. |
@@ -17,6 +19,8 @@ The default native checks do not require a production database or bot token.
 | `just verify-py` | Explicit legacy container-only Python checks. |
 
 `just test` and `just lint` select native Rust checks. They are not aliases for legacy pytest or Ruff.
+
+After committing changes, run `just check-secrets` before pushing, including documentation-only updates. History scanning does not inspect uncommitted text. Link and prose checks cannot detect secret-scanner regressions. Exceptions in `.gitleaks.toml` must retain default detection rules and pass negative controls with synthetic credentials.
 
 See [local CI](local-ci.md) for its resource and isolation requirements.
 
